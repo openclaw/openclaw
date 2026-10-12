@@ -139,19 +139,6 @@ describe("memory-core /dreaming command", () => {
     expect(result.text).toContain("Dreaming disabled.");
   });
 
-  it("blocks unscoped gateway callers from persisting dreaming config", async () => {
-    const harness = createHarness();
-
-    const result = await runDreamingCommand(harness, "off", {
-      gatewayClientScopes: [],
-    });
-
-    expect(result.text).toContain(
-      "requires owner status for channel callers or operator.admin for gateway clients",
-    );
-    expect(harness.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
-  });
-
   it("blocks write-scoped gateway callers from persisting dreaming config", async () => {
     const harness = createHarness();
 

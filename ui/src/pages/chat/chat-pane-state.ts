@@ -1,9 +1,15 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ArtifactDownloadResult, GatewaySessionRow } from "../../api/types.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { isChatControlCommand } from "../../lib/chat/commands.ts";
+import {
+  resolveControlUiFollowUpMode,
+  resolveControlUiServerQueueMode,
+} from "../../lib/chat/follow-up-mode.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
 type SelectedSessionProjectionState = {
   chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
@@ -27,7 +33,6 @@ export function applySelectedSessionProjection(
 }
 
 const MAX_TRACKED_SESSION_ROWS = 256;
-const CHAT_ARTIFACT_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 export class SessionParticipationTracker {
   private readonly lastBlocked = new Map<string, boolean>();
@@ -52,7 +57,14 @@ export class SessionParticipationTracker {
           : params.session.visibility !== undefined &&
             params.session.visibility !== "shared" &&
             params.session.sharingRole === "viewer";
-      this.remember(params.sessionKey, blocked);
+      this.lastBlocked.delete(params.sessionKey);
+      this.lastBlocked.set(params.sessionKey, blocked);
+      if (this.lastBlocked.size > MAX_TRACKED_SESSION_ROWS) {
+        const oldest = this.lastBlocked.keys().next().value;
+        if (oldest) {
+          this.lastBlocked.delete(oldest);
+        }
+      }
       return blocked;
     }
     // The selected session has no row. Absence is NOT a revocation signal:
@@ -63,68 +75,85 @@ export class SessionParticipationTracker {
     // session does not flicker enabled; a completed absence never blocks. The
     // redaction case (a session hidden from a non-owner) is handled once the
     // explicit revocation signal lands (openclaw/openclaw#112760).
-    if (params.listLoading) {
-      return this.lastBlocked.get(params.sessionKey) === true;
-    }
-    return false;
-  }
-
-  private remember(sessionKey: string, blocked: boolean): void {
-    this.lastBlocked.delete(sessionKey);
-    this.lastBlocked.set(sessionKey, blocked);
-    if (this.lastBlocked.size <= MAX_TRACKED_SESSION_ROWS) {
-      return;
-    }
-    const oldest = this.lastBlocked.keys().next().value;
-    if (oldest) {
-      this.lastBlocked.delete(oldest);
-    }
+    return params.listLoading && this.lastBlocked.get(params.sessionKey) === true;
   }
 }
 
-export function resolveAssistantAttachmentAuthToken(state: {
-  hello?: { auth?: { deviceToken?: string | null } | null } | null;
-  password?: string | null;
-  settings?: { token?: string | null } | null;
-}) {
-  return resolveControlUiAuthToken(state);
-}
-
-export async function resolveChatArtifactDownload(
-  state: { connected: boolean; client?: GatewayBrowserClient | null },
-  params: { sessionKey: string; artifactId: string },
-): Promise<{ url: string; expiresAt?: string } | null> {
-  if (!state.connected || !state.client) {
-    return null;
-  }
-  const result = await state.client.request<ArtifactDownloadResult | null>(
-    "artifacts.download",
-    params,
-    { timeoutMs: CHAT_ARTIFACT_DOWNLOAD_TIMEOUT_MS },
-  );
-  const url = typeof result?.url === "string" ? result.url.trim() : "";
-  if (!url) {
-    return null;
-  }
-  const expiresAt = typeof result?.expiresAt === "string" ? result.expiresAt.trim() : undefined;
-  return { url, ...(expiresAt ? { expiresAt } : {}) };
-}
-
-export function dismissChatError(state: {
-  chatError?: string | null;
-  lastError: string | null;
-  lastErrorCode?: string | null;
-}) {
+export function dismissChatError(state: { chatError?: string | null; lastError: string | null }) {
   state.lastError = null;
-  state.lastErrorCode = null;
   state.chatError = null;
 }
 
-export function initialHistorySubmitState(state: ChatState, unavailable: boolean) {
+export function chatSubmitState(
+  state: ChatState & Pick<ChatPageHost, "handleChatDraftChange">,
+  unavailable: boolean,
+  nativeChat: boolean,
+) {
   const historyLoad = getChatHistoryLoadState(state);
   const failure = unavailable && historyLoad.phase === "failed" ? historyLoad.message : null;
+  const pendingReason = nativeChat ? chatSendPendingReason(state, state.sessionKey) : null;
+  const connectionPendingReason = nativeChat
+    ? chatSendPendingReason({ client: state.client, connected: state.connected }, state.sessionKey)
+    : null;
+  const controlCommand = isChatControlCommand(state.chatMessage);
   return {
-    submitDisabledReason: unavailable ? (failure ?? t("chat.thread.loading")) : null,
-    submitPending: unavailable && historyLoad.phase !== "failed",
+    ...(connectionPendingReason && !controlCommand ? { canSend: false } : {}),
+    submitDisabledReason:
+      pendingReason ?? (unavailable ? (failure ?? t("chat.thread.loading")) : null),
+    submitPending: pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
+    onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {
+      state.handleChatDraftChange(...args);
+      // Nonempty draft edits can skip a pane render, but this gate depends on command intent.
+      if (pendingReason && controlCommand !== isChatControlCommand(state.chatMessage)) {
+        state.requestUpdate?.();
+      }
+    },
+  };
+}
+
+export function resolveChatPaneFollowUpMode(
+  state: Pick<ChatPageHost, "settings" | "chatEffectiveQueueMode" | "chatQueueModeOverride">,
+  session: GatewaySessionRow | undefined,
+  runtimeConfig: ApplicationContext["runtimeConfig"]["state"],
+) {
+  return resolveControlUiFollowUpMode(
+    state.settings.chatFollowUpMode,
+    resolveControlUiServerQueueMode(runtimeConfig.configSnapshot?.runtimeConfig, {
+      configNeedsApply: runtimeConfig.configNeedsApply,
+      effectiveMode: state.chatEffectiveQueueMode,
+      sessionMetadataLoaded: session !== undefined || state.chatEffectiveQueueMode !== undefined,
+      sessionMode: state.chatQueueModeOverride,
+    }),
+  );
+}
+
+// Catalog panes have no live run; stable empty inputs preserve their transcript cache.
+const emptyTranscriptItems: [] = [];
+
+export function projectChatPaneTranscript(
+  state: Pick<
+    ChatPageHost,
+    | "chatMessages"
+    | "chatToolMessages"
+    | "guardianNotices"
+    | "chatStreamSegments"
+    | "chatStream"
+    | "chatReasoning"
+    | "chatStreamStartedAt"
+    | "chatRunUsageById"
+  >,
+  catalogMessages: unknown[] | null,
+  runId: string | null,
+) {
+  return {
+    messages: catalogMessages ?? state.chatMessages,
+    toolMessages: catalogMessages ? emptyTranscriptItems : state.chatToolMessages,
+    guardianNotices: catalogMessages ? emptyTranscriptItems : state.guardianNotices,
+    streamSegments: catalogMessages ? emptyTranscriptItems : state.chatStreamSegments,
+    stream: catalogMessages ? null : state.chatStream,
+    reasoning: catalogMessages ? null : state.chatReasoning,
+    streamStartedAt: catalogMessages ? null : state.chatStreamStartedAt,
+    runId: catalogMessages ? null : runId,
+    runUsageById: catalogMessages ? undefined : state.chatRunUsageById,
   };
 }

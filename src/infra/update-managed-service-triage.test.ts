@@ -1,11 +1,28 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { useTriageLeaseDatabaseFixture } from "./triage-lease-fixture.test-support.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import { createTriageBoundary } from "./update-managed-service-triage.test-support.js";
+
+useTriageLeaseDatabaseFixture();
+
+let controllerReceipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  controllerReceipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await controllerReceipts?.close();
+});
 
 const boundaries: Awaited<ReturnType<typeof createTriageBoundary>>[] = [];
 afterEach(async () => {
@@ -23,35 +40,66 @@ async function start(...args: Parameters<typeof createTriageBoundary>) {
 async function ready(boundary: Awaited<ReturnType<typeof start>>) {
   expect(await boundary.response(), boundary.stderr()).toBe("OPENCLAW_UPDATE_HANDOFF_READY");
 }
-async function fixing(boundary: Awaited<ReturnType<typeof start>>) {
-  // One readiness budget covers the fixer and its complete descendant placement.
-  await vi.waitFor(
-    async () => {
-      const events = await boundary.readEvents();
-      expect(
-        events.filter((event) => event.kind === "branch"),
-        `${await boundary.log().catch(() => boundary.stderr())}\nEvents: ${events.map((event) => event.kind).join(", ")}`,
-      ).toHaveLength(1);
-      expect(
-        (await boundary.members()).filter((member) => member.alive).length,
-      ).toBeGreaterThanOrEqual(4);
-    },
-    { timeout: 15_000 },
+async function fixing(boundary: Awaited<ReturnType<typeof start>>, signal: AbortSignal) {
+  if (!boundaries.includes(boundary)) {
+    throw new Error("Branch readiness requires cleanup registered with afterEach");
+  }
+  await expectFixerPlacement(boundary, signal);
+}
+async function expectFixerPlacement(
+  boundary: Awaited<ReturnType<typeof start>>,
+  signal: AbortSignal,
+) {
+  await boundary.waitForBranch(signal);
+  const events = await boundary.readEvents();
+  expect(
+    events.filter((event) => event.kind === "branch"),
+    `${await boundary.log().catch(() => boundary.stderr())}\nEvents: ${events.map((event) => event.kind).join(", ")}`,
+  ).toHaveLength(1);
+  expect((await boundary.members()).filter((member) => member.alive).length).toBeGreaterThanOrEqual(
+    4,
   );
 }
-async function closed(boundary: Awaited<ReturnType<typeof start>>) {
-  await vi.waitFor(
-    async () => {
-      const events = await boundary.readEvents();
-      expect(
-        events.some((event) => event.kind === "scope-stopped"),
-        `${await boundary.log()}\nEvents: ${JSON.stringify(events)}`,
-      ).toBe(true);
-      expect((await boundary.members()).filter((member) => member.alive)).toEqual([]);
-    },
-    { timeout: 5000 },
-  );
+
+// Native stop signals foreign descendants but does not join them. The fixture
+// owns no ChildProcess handles for those PIDs; only the test signal bounds this census.
+async function expectExtinction(check: () => void | Promise<void>, signal: AbortSignal) {
+  let failure: unknown;
+  try {
+    for (;;) {
+      try {
+        await check();
+        return;
+      } catch (error) {
+        failure = error;
+      }
+      await withinTest(
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 20);
+        }),
+        signal,
+      );
+    }
+  } catch (cause) {
+    throw new Error(
+      `Fixture processes did not exit before the test was aborted: ${String(failure)}`,
+      {
+        cause,
+      },
+    );
+  }
+}
+async function closed(boundary: Awaited<ReturnType<typeof start>>, signal: AbortSignal) {
+  // The continuation can stop its scope after the helper has already been killed.
+  await boundary.waitForEvent("scope-stopped", signal, true);
   const events = await boundary.readEvents();
+  expect(
+    events.some((event) => event.kind === "scope-stopped"),
+    `${await boundary.log()}\nEvents: ${JSON.stringify(events)}`,
+  ).toBe(true);
+  await expectExtinction(async () => {
+    expect((await boundary.members()).filter((member) => member.alive)).toEqual([]);
+  }, signal);
   const attached = events.findIndex((event) => event.kind === "attached");
   const afterAttachment = events.slice(Math.max(0, attached));
   expect(afterAttachment.filter((event) => event.kind === "start")).toEqual([]);
@@ -59,9 +107,9 @@ async function closed(boundary: Awaited<ReturnType<typeof start>>) {
 }
 
 describe("managed triage attachment cutover (synthetic native boundary)", () => {
-  itUnix.each(["helper", "executor"] as const)(
+  itUnix.for(["helper", "executor"] as const)(
     "joins a controller started by the %s before fixture cleanup",
-    async (owner) => {
+    async (owner, { signal }) => {
       const coordination = await fs.mkdtemp(path.join(os.tmpdir(), "triage-controller-"));
       const receipt = path.join(coordination, "ready.json");
       let controller: { pid: number; start: number | null } | undefined;
@@ -71,15 +119,19 @@ describe("managed triage attachment cutover (synthetic native boundary)", () => 
         boundary = await createTriageBoundary("startup", undefined, undefined, async (root) => {
           const native = path.join(root, "bin", "systemctl");
           const script = await fs.readFile(native, "utf8");
-          const shebangEnd = script.indexOf("\n") + 1;
           await fs.writeFile(
             native,
-            script.slice(0, shebangEnd) +
+            script.replace(
+              "const args = process.argv.slice(2);",
               `if (process.argv.includes('--fixture-pause')) {
   require('node:fs').writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({pid:process.pid}));
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-}\n` +
-              script.slice(shebangEnd),
+  ${fixtureReceiptClientSource(controllerReceipts.endpoint).replace('import { createConnection as connectFixtureReceipts } from "node:net";', 'const { createConnection: connectFixtureReceipts } = require("node:net");')}
+  sendReceipt(${JSON.stringify(receipt)}, 'ready');
+  setInterval(() => {}, 1000);
+  return;
+}
+const args = process.argv.slice(2);`,
+            ),
           );
           const filename = path.join(root, owner === "helper" ? "handoff.cjs" : "candidate.mjs");
           const source = await fs.readFile(filename, "utf8");
@@ -97,12 +149,19 @@ describe("managed triage attachment cutover (synthetic native boundary)", () => 
         });
         await ready(boundary);
         expect(await boundary.control("commit")).toBe("committed");
-        await fixing(boundary);
-        await vi.waitFor(async () => {
-          const { pid } = JSON.parse(await fs.readFile(receipt, "utf8"));
-          controller = { pid, start: getFileLockProcessStartTime(pid) };
-          expect(isPidAlive(pid)).toBe(true);
-        });
+        await expectFixerPlacement(boundary, signal);
+        await withinTest(
+          Promise.race([
+            controllerReceipts.waitFor(receipt, "ready"),
+            // The controller writes the PID before reporting; an early helper exit
+            // must consult that record because the socket and exit are unordered.
+            boundary.exit.then(() => fs.access(receipt)),
+          ]),
+          signal,
+        );
+        const { pid } = JSON.parse(await fs.readFile(receipt, "utf8"));
+        controller = { pid, start: getFileLockProcessStartTime(pid) };
+        expect(isPidAlive(pid)).toBe(true);
         expect(
           (await boundary.readEvents()).filter((event) => event.pid === controller!.pid),
         ).toEqual([]);
@@ -113,18 +172,21 @@ describe("managed triage attachment cutover (synthetic native boundary)", () => 
         );
         await expect(fs.access(boundary.root)).rejects.toThrow();
       } finally {
-        if (
-          controller &&
-          isPidAlive(controller.pid) &&
-          getFileLockProcessStartTime(controller.pid) === controller.start
-        ) {
-          process.kill(controller.pid, "SIGKILL");
-          await vi.waitFor(() => expect(isPidAlive(controller!.pid)).toBe(false));
+        try {
+          if (
+            controller &&
+            isPidAlive(controller.pid) &&
+            getFileLockProcessStartTime(controller.pid) === controller.start
+          ) {
+            process.kill(controller.pid, "SIGKILL");
+            await expectExtinction(() => expect(isPidAlive(controller!.pid)).toBe(false), signal);
+          }
+        } finally {
+          if (boundary && !cleanupAttempted) {
+            await boundary.cleanup();
+          }
+          await fs.rm(coordination, { recursive: true, force: true });
         }
-        if (boundary && !cleanupAttempted) {
-          await boundary.cleanup();
-        }
-        await fs.rm(coordination, { recursive: true, force: true });
       }
     },
   );
@@ -270,9 +332,9 @@ fsp.readFile=async function(...args) {
     },
   );
 
-  itUnix.each(["received", "lost"] as const)(
+  itUnix.for(["received", "lost"] as const)(
     "keeps one helper-owned repair when the commit acknowledgment is %s",
-    async (acknowledgment) => {
+    async (acknowledgment, { signal }) => {
       const boundary = await start("update", undefined, undefined, async (root) => {
         const updater = path.join(root, "updater.cjs");
         let source = await fs.readFile(updater, "utf8");
@@ -308,7 +370,7 @@ process.emit=function(kind,message,...args){
       expect(await boundary.control("park")).toBe("parked");
       expect(await boundary.control("commit")).toBe("committed");
       boundary.parent.kill();
-      await fixing(boundary);
+      await fixing(boundary, signal);
       const events = await boundary.readEvents();
       expect(events.filter((event) => event.kind === "updater")).toHaveLength(1);
       expect(events.filter((event) => event.kind === "commit-dispatched")).toHaveLength(1);
@@ -330,11 +392,11 @@ process.emit=function(kind,message,...args){
       );
       expect(JSON.parse(String(boundary.readLease()!.payload_json)).action.phase).toBe("running");
       await boundary.native("stop");
-      await closed(boundary);
+      await closed(boundary, signal);
     },
   );
 
-  itUnix("releases a partial native fixture when setup rejects", async () => {
+  itUnix("releases a partial native fixture when setup rejects", async ({ signal }) => {
     const failure = new Error("fixture setup rejected");
     let root: string | undefined;
     let parent: { parentPid: number; parentStartIdentity: string } | undefined;
@@ -350,24 +412,27 @@ process.emit=function(kind,message,...args){
       expect(isPidAlive(parent!.parentPid)).toBe(false);
       await expect(fs.access(root!)).rejects.toThrow();
     } finally {
-      // The pre-fix regression deliberately leaves this exact synthetic parent alive.
-      if (
-        parent &&
-        isPidAlive(parent.parentPid) &&
-        String(getFileLockProcessStartTime(parent.parentPid)) === parent.parentStartIdentity
-      ) {
-        process.kill(parent.parentPid, "SIGKILL");
-        await vi.waitFor(() => expect(isPidAlive(parent!.parentPid)).toBe(false));
-      }
-      if (root) {
-        await fs.rm(root, { recursive: true, force: true });
+      try {
+        // The pre-fix regression deliberately leaves this exact synthetic parent alive.
+        if (
+          parent &&
+          isPidAlive(parent.parentPid) &&
+          String(getFileLockProcessStartTime(parent.parentPid)) === parent.parentStartIdentity
+        ) {
+          process.kill(parent.parentPid, "SIGKILL");
+          await expectExtinction(() => expect(isPidAlive(parent!.parentPid)).toBe(false), signal);
+        }
+      } finally {
+        if (root) {
+          await fs.rm(root, { recursive: true, force: true });
+        }
       }
     }
   });
 
-  itUnix.each(["startup", "update"] as const)(
+  itUnix.for(["startup", "update"] as const)(
     "retires updater role only in the admitted %s fixer and its descendants",
-    async (mode) => {
+    async (mode, { signal }) => {
       const boundary = await start(mode);
       await ready(boundary);
       if (mode === "update") {
@@ -377,7 +442,7 @@ process.emit=function(kind,message,...args){
       if (mode === "update") {
         boundary.parent.kill();
       }
-      await fixing(boundary);
+      await fixing(boundary, signal);
       const events = await boundary.readEvents();
       expect(events.find((event) => event.kind === "fixer")).toMatchObject({
         handoff: null,
@@ -403,19 +468,43 @@ process.emit=function(kind,message,...args){
         const sentinel = boundary.readSentinel();
         expect(sentinel).toBeDefined();
         await boundary.native("stop");
-        await closed(boundary);
+        await closed(boundary, signal);
         expect(boundary.readSentinel()).toEqual(sentinel);
       }
     },
   );
 
-  itUnix.each(["active", "inactive"] as const)(
+  itUnix.for(["active", "inactive"] as const)(
     "keeps the fixer alive during %s primary maintenance",
-    async (primary) => {
-      const boundary = await start("startup", undefined, primary);
+    async (primary, { signal }) => {
+      const boundary = await start("startup", undefined, primary, async (root) => {
+        const file = path.join(root, "maintenance.mjs");
+        const source = await fs.readFile(file, "utf8");
+        await fs.writeFile(
+          file,
+          source.replace(
+            "if(process.argv[2]==='inactive'){",
+            `
+const write = fs.writeFileSync;
+fs.writeFileSync = function(file, ...args) {
+  if (typeof file === "string" && file.startsWith(primaryFile)) {
+    // Observe the real controller between truncate and write, not only after publication.
+    write(file, "");
+    const scope = JSON.parse(fs.readFileSync(root + "/scope.json", "utf8")).name;
+    const probe = process.getBuiltinModule("child_process").spawnSync(
+      process.execPath, [root + "/bin/systemctl", "--user", "show", scope], {encoding:"utf8"},
+    );
+    event("primary-snapshot-observed", {status:probe.status});
+  }
+  return write(file, ...args);
+};
+if(process.argv[2]==='inactive'){`,
+          ),
+        );
+      });
       await ready(boundary);
       expect(await boundary.control("commit")).toBe("committed");
-      await fixing(boundary);
+      await fixing(boundary, signal);
       const events = await boundary.readEvents();
       expect(events.filter((event) => event.kind === "stop")).toEqual([]);
       expect(
@@ -432,24 +521,27 @@ process.emit=function(kind,message,...args){
           "outside",
         );
       } else {
+        expect(events.find((event) => event.kind === "primary-snapshot-observed")).toMatchObject({
+          status: 0,
+        });
         expect(events.find((event) => event.kind === "doctor-maintenance")).toMatchObject({
           admitted: true,
         });
         expect(events.find((event) => event.kind === "maintenance-refused")).toBeUndefined();
       }
       await boundary.native("stop");
-      await closed(boundary);
+      await closed(boundary, signal);
     },
   );
 
   itUnix(
     "admits once without parking, survives an intended restart and cancels after parent exit",
-    async () => {
+    async ({ signal }) => {
       const boundary = await start();
       await ready(boundary);
       expect((await boundary.readEvents()).filter((event) => event.kind === "stop")).toEqual([]);
       expect(await boundary.control("commit")).toBe("committed");
-      await fixing(boundary);
+      await fixing(boundary, signal);
       await boundary.native("restart");
       expect(boundary.helper.exitCode).toBeNull();
       expect((await boundary.readEvents()).filter((event) => event.kind === "fixer")).toHaveLength(
@@ -461,7 +553,7 @@ process.emit=function(kind,message,...args){
       boundary.parent.kill();
       await parentExit;
       await boundary.native("stop");
-      await closed(boundary);
+      await closed(boundary, signal);
       expect(await boundary.replay()).toContain("HANDOFF_BUSY");
       expect((await boundary.readEvents()).filter((event) => event.kind === "fixer")).toHaveLength(
         1,
@@ -469,74 +561,51 @@ process.emit=function(kind,message,...args){
     },
   );
 
-  itUnix("admits unsafe update triage with preserved activation and deferred health", async () => {
-    const boundary = await start("update");
-    await ready(boundary);
-    expect(await boundary.control("park")).toBe("parked");
-    expect(await boundary.control("commit")).toBe("committed");
-    boundary.parent.kill();
-    await fixing(boundary);
-    const events = await boundary.readEvents();
-    const kinds = events.map((event) => event.kind);
-    expect(events.find((event) => event.kind === "fixer")?.failure?.gateway).toBe("preserve");
-    expect(await boundary.log()).toContain('{"status":"error","reason":"original failure"}');
-    expect(await boundary.log()).toContain("exited code=7 signal=null");
-    expect(kinds.filter((kind) => kind === "updater")).toHaveLength(1);
-    expect(kinds.filter((kind) => kind === "triage-queued")).toHaveLength(1);
-    expect(
-      kinds.filter((kind) => kind === "start" || kind === "restart" || kind === "restore-failed"),
-    ).toEqual([]);
-    expect(kinds.indexOf("attached")).toBeLessThan(kinds.indexOf("fixer"));
-    await boundary.native("stop");
-    await closed(boundary);
-  });
+  itUnix(
+    "retargets the completed update owner after package-to-Git exposure",
+    async ({ signal }) => {
+      const boundary = await start("update", undefined, undefined, undefined, true);
+      await ready(boundary);
+      const before = boundary.readLease()!;
+      const helper = JSON.parse(String(before.payload_json)).helper;
+      expect(await boundary.control("park")).toBe("parked");
+      expect(await boundary.control("commit")).toBe("committed");
+      boundary.parent.kill();
+      await boundary.waitForEvent("triage-queued", signal);
+      expect(
+        (await boundary.readEvents()).filter((event) => event.kind === "triage-queued"),
+      ).toHaveLength(1);
+      await fixing(boundary, signal);
+      const destination = boundary.readLease(boundary.candidateRoot)!;
+      expect(boundary.readLease()).toBeUndefined();
+      expect(destination.owner).toBe(before.owner);
+      expect(JSON.parse(String(destination.payload_json))).toMatchObject({
+        helper,
+        action: { kind: "triage", phase: "running" },
+      });
+      expect(
+        (await boundary.readEvents()).find((event) => event.kind === "fixer")?.failure,
+      ).toMatchObject({
+        installationRoot: boundary.candidateRoot,
+        error: "original failure",
+        gateway: "preserve",
+      });
+      expect(await boundary.log()).toContain("exited code=7 signal=null");
+      const sentinel = boundary.readSentinel()!;
+      expect(JSON.parse(String(sentinel.payload_json))).toMatchObject({
+        stats: { root: boundary.installRoot },
+      });
+      await boundary.native("stop");
+      await closed(boundary, signal);
+      expect(boundary.readSentinel()).toEqual(sentinel);
+    },
+  );
 
-  itUnix("retargets the completed update owner after package-to-Git exposure", async () => {
-    const boundary = await start("update", undefined, undefined, undefined, true);
-    await ready(boundary);
-    const before = boundary.readLease()!;
-    const helper = JSON.parse(String(before.payload_json)).helper;
-    expect(await boundary.control("park")).toBe("parked");
-    expect(await boundary.control("commit")).toBe("committed");
-    boundary.parent.kill();
-    await vi.waitFor(
-      async () => {
-        expect(
-          (await boundary.readEvents()).filter((event) => event.kind === "triage-queued"),
-        ).toHaveLength(1);
-      },
-      { timeout: 15_000 },
-    );
-    await fixing(boundary);
-    const destination = boundary.readLease(boundary.candidateRoot)!;
-    expect(boundary.readLease()).toBeUndefined();
-    expect(destination.owner).toBe(before.owner);
-    expect(JSON.parse(String(destination.payload_json))).toMatchObject({
-      helper,
-      action: { kind: "triage", phase: "running" },
-    });
-    expect(
-      (await boundary.readEvents()).find((event) => event.kind === "fixer")?.failure,
-    ).toMatchObject({
-      installationRoot: boundary.candidateRoot,
-      error: "original failure",
-      gateway: "preserve",
-    });
-    expect(await boundary.log()).toContain("exited code=7 signal=null");
-    const sentinel = boundary.readSentinel()!;
-    expect(JSON.parse(String(sentinel.payload_json))).toMatchObject({
-      stats: { root: boundary.installRoot },
-    });
-    await boundary.native("stop");
-    await closed(boundary);
-    expect(boundary.readSentinel()).toEqual(sentinel);
-  });
-
-  itUnix("yields a switched installation to its live destination family", async () => {
+  itUnix("yields a switched installation to its live destination family", async ({ signal }) => {
     const winner = await start();
     await ready(winner);
     expect(await winner.control("commit")).toBe("committed");
-    await fixing(winner);
+    await fixing(winner, signal);
     const held = winner.readLease();
     const members = (await winner.members()).filter((member) => member.alive);
     const boundary = await start("update", undefined, undefined, undefined, winner.installRoot);
@@ -555,7 +624,7 @@ process.emit=function(kind,message,...args){
     ).toEqual([]);
     expect(events.filter((event) => event.kind === "triage-queued")).toHaveLength(1);
     await winner.native("stop");
-    await closed(winner);
+    await closed(winner, signal);
   });
 
   itUnix("refuses an inactive installed unit replaced after update parking", async () => {
@@ -564,24 +633,16 @@ process.emit=function(kind,message,...args){
     expect(await boundary.control("park")).toBe("parked");
     expect(await boundary.control("commit")).toBe("committed");
     boundary.parent.kill();
-    await vi.waitFor(
-      async () => {
-        const events = await boundary.readEvents();
-        expect(
-          events.some((event) => event.kind === "attached") ||
-            (await boundary.log()).includes("could not verify the installed service"),
-        ).toBe(true);
-      },
-      { timeout: 10_000 },
-    );
+    // The helper records attachment refusal before exiting; exit joins its log writer.
+    expect(await boundary.exit).toEqual({ code: 7, signal: null });
+    expect(await boundary.log()).toContain("could not verify the installed service");
     expect((await boundary.readEvents()).filter((event) => event.kind === "attached")).toEqual([]);
     expect((await boundary.readEvents()).filter((event) => event.kind === "fixer")).toEqual([]);
-    expect(await boundary.exit).toEqual({ code: 7, signal: null });
   });
 
-  itUnix.each(["helper", "runner", "disconnect", "lease", "cancelled", "scope"] as const)(
+  itUnix.for(["helper", "runner", "disconnect", "lease", "cancelled", "scope"] as const)(
     "cleans the cgroup after %s loss without late restoration",
-    async (loss) => {
+    async (loss, { signal }) => {
       const boundary = await start("startup", undefined, undefined, async (root) => {
         if (loss !== "runner" && loss !== "disconnect") {
           return;
@@ -618,7 +679,7 @@ event('branch',{child:branch.pid});`,
       });
       await ready(boundary);
       expect(await boundary.control("commit")).toBe("committed");
-      await fixing(boundary);
+      await fixing(boundary, signal);
       if (loss === "helper") {
         boundary.helper.kill("SIGKILL");
       } else if (loss === "lease") {
@@ -636,7 +697,7 @@ event('branch',{child:branch.pid});`,
           "SIGKILL",
         );
       }
-      await closed(boundary);
+      await closed(boundary, signal);
     },
   );
 
@@ -651,3 +712,89 @@ event('branch',{child:branch.pid});`,
     },
   );
 });
+
+itUnix.for([
+  {
+    format: "multiline v2",
+    membership: "5:cpu:/other\n0::$GROUP\n2:memory:/other\n",
+    stopped: true,
+  },
+  {
+    format: "multiline v1",
+    membership: "2:memory:/other\n7:name=systemd:$GROUP\n3:cpu:/other\n",
+    stopped: true,
+  },
+  {
+    format: "hybrid",
+    membership: "0::/other\n7:name=systemd:$GROUP\n3:cpu:/other\n",
+    stopped: true,
+  },
+  { format: "missing", membership: "", stopped: false },
+  { format: "suffix lookalike", membership: "0::/prefix$GROUP\n", stopped: false },
+  { format: "v1 suffix lookalike", membership: "7:name=systemd:/prefix$GROUP\n", stopped: false },
+  { format: "descendant", membership: "0::$GROUP/child\n", stopped: false },
+  { format: "wrong controller", membership: "2:cpu:$GROUP\n", stopped: false },
+  { format: "controller list", membership: "2:cpu,name=systemd:$GROUP\n", stopped: false },
+  { format: "malformed hierarchy", membership: "x:name=systemd:$GROUP\n", stopped: false },
+  { format: "zero v1 hierarchy", membership: "0:name=systemd:$GROUP\n", stopped: false },
+  { format: "nonzero v2 hierarchy", membership: "1::$GROUP\n", stopped: false },
+  { format: "path whitespace", membership: "7:name=systemd:$GROUP \n", stopped: false },
+])(
+  "checks own-placement $format membership before the scope-stop effect",
+  async ({ membership, stopped }, { signal }) => {
+    const boundary = await start("startup", undefined, undefined, async (root) => {
+      const candidatePath = path.join(root, "candidate.mjs");
+      const candidate = await fs.readFile(candidatePath, "utf8");
+      // Exercise the actual sealed lease owner from its admitted executor. Change
+      // membership only after normal admission; helper placement is untouched.
+      await fs.writeFile(
+        candidatePath,
+        candidate.replace(
+          "event('branch',{child:branch.pid});",
+          `
+event('branch',{child:branch.pid});
+const {createManagedHandoffLeaseStore} = await import('./runtime/managed-handoff-runtime.mjs');
+const params = JSON.parse(fs.readFileSync(${JSON.stringify(path.join(root, "handoff.json"))}, 'utf8'));
+const store = createManagedHandoffLeaseStore({databasePath:params.updateLeaseDatabasePath,serviceManagerEnv:params.serviceManagerEnv});
+const claim = store.read(${JSON.stringify(root)});
+if (claim.kind !== 'current') throw new Error('missing executor claim');
+const cleanupRead = fs.readFileSync;
+fs.readFileSync = function(file, ...args) {
+  const value = cleanupRead.call(this, file, ...args);
+  return file === '/proc/self/cgroup' ? ${JSON.stringify(membership)}.replaceAll('$GROUP', value.trim().slice(3)) : value;
+};
+event('own-placement-probe');
+const stopped = store.stopNative(claim.lease, true);
+event('own-placement-result', {result:stopped});
+`,
+        ),
+      );
+    });
+    await ready(boundary);
+    expect(await boundary.control("commit")).toBe("committed");
+    await boundary.waitForEvent("own-placement-probe", signal);
+    await boundary.waitForEvent(stopped ? "scope-stopped" : "own-placement-result", signal);
+    const events = await boundary.readEvents();
+    expect(
+      events.some((event) => event.kind === "own-placement-probe"),
+      await boundary.log(),
+    ).toBe(true);
+    if (stopped) {
+      expect(
+        events.some((event) => event.kind === "scope-stopped"),
+        await boundary.log(),
+      ).toBe(true);
+    } else {
+      expect(
+        events.find((event) => event.kind === "own-placement-result"),
+        await boundary.log(),
+      ).toMatchObject({ result: false });
+      expect(events.some((event) => event.kind === "scope-stopped")).toBe(false);
+    }
+    if (!stopped) {
+      await boundary.native("stop");
+    }
+    await boundary.exit;
+    expect((await boundary.readEvents()).filter((event) => event.kind === "fixer")).toHaveLength(1);
+  },
+);

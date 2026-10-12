@@ -1,58 +1,30 @@
 // @vitest-environment node
 // Control UI tests cover tool-call classification and view-model resolution.
 import { describe, expect, it } from "vitest";
-import { resolveToolCallKind, resolveToolCallView } from "./tool-call-view.ts";
+import { resolveToolCallView } from "./tool-call-view.ts";
 
-const TEXT_EDITOR_TOOL_NAMES = ["str_replace_editor", "str_replace_based_edit_tool"] as const;
-
-describe("resolveToolCallKind", () => {
+describe("tool detail kinds", () => {
   it.each([
-    ["bash", undefined, "command"],
     ["exec", undefined, "command"],
-    ["Read", undefined, "read"],
-    ["read_file", undefined, "read"],
-    ["edit", undefined, "edit"],
-    ["edit_file", undefined, "edit"],
-    ["apply_patch", undefined, "edit"],
-    ["write", undefined, "write"],
-    ["create_file", undefined, "write"],
-    ["grep", undefined, "search"],
-    ["glob", undefined, "search"],
-    ["web_fetch", undefined, "fetch"],
-    ["mcp__linear__create_issue", undefined, "generic"],
-    // Arg-shape fallback: unknown tool with a small command payload is a command.
+    ["edit_file", { path: "file.ts" }, "edit"],
+    ["apply_patch", { changes: [{ path: "file.ts", kind: "update", diff: "+line" }] }, "edit"],
+    ["grep", { pattern: "line" }, "search"],
+    ["web_fetch", { url: "https://example.test" }, "fetch"],
     ["run_shell", { command: "ls" }, "command"],
     ["run_shell", { command: "ls", a: 1, b: 2, c: 3 }, "generic"],
-  ])("classifies %s with args %o as %s", (name, args, expected) => {
-    expect(resolveToolCallKind(name, args)).toBe(expected);
+  ] as const)("classifies %s with args %o as %s", (name, args, expected) => {
+    expect(resolveToolCallView({ name, args }).kind).toBe(expected);
   });
 
-  it.each(
-    TEXT_EDITOR_TOOL_NAMES.flatMap(
-      (name) =>
-        [
-          [name, { command: "view" }, "read"],
-          [name, { command: "str_replace" }, "edit"],
-          [name, { command: "create" }, "write"],
-          [name, { command: "insert" }, "edit"],
-          [name, { command: "undo_edit" }, "edit"],
-          [name, {}, "generic"],
-          [name, { command: "rename" }, "generic"],
-        ] as const,
-    ),
-  )("classifies command-discriminated editor %s args %o as %s", (name, args, expected) => {
-    expect(resolveToolCallKind(name, args)).toBe(expected);
+  it.each(["str_replace_editor"])("keeps unsupported %s editor commands generic", (name) => {
+    for (const args of [{}, { command: "rename" }]) {
+      expect(resolveToolCallView({ name, args }).kind).toBe("generic");
+    }
   });
 });
 
 describe("shell command views", () => {
-  it.each([
-    ["/bin/zsh -lc 'pnpm test ui'", "pnpm test ui"],
-    ['/bin/bash -c "git status"', "git status"],
-    ["sh -lc 'echo hi'", "echo hi"],
-    ["pnpm test ui", "pnpm test ui"],
-    ["/bin/zsh -lc unquoted", "/bin/zsh -lc unquoted"],
-  ])("unwraps %s", (wrapped, expected) => {
+  it.each([["sh -lc 'echo hi'", "echo hi"]])("unwraps %s", (wrapped, expected) => {
     expect(resolveToolCallView({ name: "bash", args: { command: wrapped } }).command).toBe(
       expected,
     );
@@ -60,71 +32,7 @@ describe("shell command views", () => {
 });
 
 describe("resolveToolCallView", () => {
-  it("returns the command text for command rows", () => {
-    expect(resolveToolCallView({ name: "bash", args: { command: "git status" } })).toEqual({
-      kind: "command",
-      command: "git status",
-    });
-  });
-
-  it("resolves read targets across path spellings", () => {
-    for (const args of [
-      { path: "/repo/src/main.ts" },
-      { file_path: "/repo/src/main.ts" },
-      { filePath: "/repo/src/main.ts" },
-      { file: "/repo/src/main.ts" },
-      { filepath: "/repo/src/main.ts" },
-    ]) {
-      expect(resolveToolCallView({ name: "read", args })).toEqual({
-        kind: "read",
-        target: "main.ts",
-        targetDetail: "/repo/src",
-      });
-    }
-  });
-
-  it("computes an edit diff from openclaw-style oldText/newText args", () => {
-    const view = resolveToolCallView({
-      name: "edit",
-      args: { path: "/repo/a.ts", oldText: "old line", newText: "new line" },
-    });
-
-    expect(view.kind).toBe("edit");
-    expect(view.target).toBe("a.ts");
-    expect(view.targetDetail).toBe("/repo");
-    expect(view.diff).toEqual([
-      { kind: "del", text: "old line" },
-      { kind: "add", text: "new line" },
-    ]);
-    expect(view.stat).toEqual({ added: 1, removed: 1 });
-  });
-
-  it("computes an edit diff from Claude-style old_string/new_string args", () => {
-    const view = resolveToolCallView({
-      name: "edit",
-      args: { file_path: "/repo/a.ts", old_string: "before", new_string: "after" },
-    });
-
-    expect(view.diff).toEqual([
-      { kind: "del", text: "before" },
-      { kind: "add", text: "after" },
-    ]);
-  });
-
-  it("keeps old_str/new_str support for legacy edit aliases", () => {
-    const view = resolveToolCallView({
-      name: "edit_file",
-      args: { file: "/repo/a.ts", old_str: "before", new_str: "after" },
-    });
-
-    expect(view.target).toBe("a.ts");
-    expect(view.diff).toEqual([
-      { kind: "del", text: "before" },
-      { kind: "add", text: "after" },
-    ]);
-  });
-
-  it.each(TEXT_EDITOR_TOOL_NAMES)("resolves %s command-specific views", (name) => {
+  it.each(["str_replace_editor"])("resolves %s command-specific views", (name) => {
     expect(
       resolveToolCallView({
         name,
@@ -195,41 +103,6 @@ describe("resolveToolCallView", () => {
     ).toEqual({ kind: "edit", target: "undo.ts", targetDetail: "/repo" });
   });
 
-  it("joins multi-edit diffs with skip separators", () => {
-    const view = resolveToolCallView({
-      name: "multiedit",
-      args: {
-        path: "/repo/a.ts",
-        edits: [
-          { oldText: "one", newText: "uno" },
-          { oldText: "two", newText: "dos" },
-        ],
-      },
-    });
-
-    expect(view.diff).toEqual([
-      { kind: "del", text: "one" },
-      { kind: "add", text: "uno" },
-      { kind: "skip", text: "" },
-      { kind: "del", text: "two" },
-      { kind: "add", text: "dos" },
-    ]);
-    expect(view.stat).toEqual({ added: 2, removed: 2 });
-  });
-
-  it("prefers the numbered details diff over locally computed arg diffs", () => {
-    const view = resolveToolCallView({
-      name: "edit",
-      args: { path: "/repo/a.ts", oldText: "arg old", newText: "arg new" },
-      details: { diff: "-12 detail old\n+12 detail new" },
-    });
-
-    expect(view.diff).toEqual([
-      { kind: "del", lineNo: 12, text: "detail old" },
-      { kind: "add", lineNo: 12, text: "detail new" },
-    ]);
-  });
-
   it("omits exact stats for truncated persisted details diffs", () => {
     const view = resolveToolCallView({
       name: "edit",
@@ -255,27 +128,6 @@ describe("resolveToolCallView", () => {
       { kind: "del", text: "old" },
       { kind: "add", text: "new" },
     ]);
-  });
-
-  it("renders Codex apply_patch calls as edits with a target path", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Update File: src/lib/util.ts",
-      "@@",
-      " context line",
-      "-removed line",
-      "+added line",
-      "*** End Patch",
-    ].join("\n");
-
-    const view = resolveToolCallView({ name: "apply_patch", args: { patch } });
-
-    expect(view.kind).toBe("edit");
-    expect(view.target).toBe("util.ts");
-    expect(view.targetDetail).toBe("src/lib");
-    expect(view.diff).toContainEqual({ kind: "del", text: "removed line" });
-    expect(view.diff).toContainEqual({ kind: "add", text: "added line" });
-    expect(view.stat).toEqual({ added: 1, removed: 1 });
   });
 
   it("keeps multi-file Codex patches separated and counts every target", () => {
@@ -325,20 +177,6 @@ describe("resolveToolCallView", () => {
     expect(view.targetDetail).toBe("src");
   });
 
-  it("numbers Codex update hunks", () => {
-    const patch = ["*** Update File: src/a.ts", "@@ -4,2 +4,2 @@", " context", "-old", "+new"].join(
-      "\n",
-    );
-
-    const view = resolveToolCallView({ name: "apply_patch", args: { patch } });
-
-    expect(view.diff).toEqual([
-      { kind: "ctx", lineNo: 4, text: "context" },
-      { kind: "del", lineNo: 5, text: "old" },
-      { kind: "add", lineNo: 5, text: "new" },
-    ]);
-  });
-
   it("splits headerless multi-file unified diffs and numbers hunks", () => {
     const patch = [
       "--- a/src/a.ts",
@@ -374,25 +212,6 @@ describe("resolveToolCallView", () => {
     ]);
   });
 
-  it("does not mistake valid Codex body lines for unified-diff headers", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Update File: docs/example.md",
-      "@@",
-      "----",
-      "+++ b/not-a-header",
-      "*** End Patch",
-    ].join("\n");
-
-    const view = resolveToolCallView({ name: "apply_patch", args: { patch } });
-
-    expect(view.diff).toEqual([
-      { kind: "del", text: "---" },
-      { kind: "add", text: "++ b/not-a-header" },
-    ]);
-    expect(view.stat).toEqual({ added: 1, removed: 1 });
-  });
-
   it("renders structured Codex file changes per file", () => {
     const view = resolveToolCallView({
       name: "apply_patch",
@@ -416,27 +235,6 @@ describe("resolveToolCallView", () => {
     expect(view.stat).toEqual({ added: 2, removed: 1 });
     expect(view.diff).toContainEqual({ kind: "file", path: "src/a.ts", text: "Update src/a.ts" });
     expect(view.diff).toContainEqual({ kind: "file", path: "src/b.ts", text: "Add src/b.ts" });
-  });
-
-  it("numbers structured Codex update hunks", () => {
-    const view = resolveToolCallView({
-      name: "apply_patch",
-      args: {
-        changes: [
-          {
-            path: "src/a.ts",
-            kind: { type: "update" },
-            diff: "@@ -7,2 +7,2 @@\n context\n-old\n+new",
-          },
-        ],
-      },
-    });
-
-    expect(view.diff).toEqual([
-      { kind: "ctx", lineNo: 7, text: "context" },
-      { kind: "del", lineNo: 8, text: "old" },
-      { kind: "add", lineNo: 8, text: "new" },
-    ]);
   });
 
   it("caps apply_patch rows while keeping the full diffstat", () => {
@@ -481,36 +279,6 @@ describe("resolveToolCallView", () => {
     expect(view.stat).toBeUndefined();
   });
 
-  it("accepts the Codex input spelling for patch text", () => {
-    const view = resolveToolCallView({
-      name: "apply_patch",
-      args: { input: "*** Add File: notes.md\n+hello" },
-    });
-
-    expect(view.kind).toBe("edit");
-    expect(view.target).toBe("notes.md");
-    expect(view.fileOperations).toEqual([{ operation: "add", path: "notes.md" }]);
-    expect(view.stat).toEqual({ added: 1, removed: 0 });
-  });
-
-  it("builds an all-added preview for write calls with content", () => {
-    const view = resolveToolCallView({
-      name: "write",
-      args: { path: "/repo/new.ts", content: "line 1\nline 2\n" },
-    });
-
-    expect(view).toEqual({
-      kind: "write",
-      target: "new.ts",
-      targetDetail: "/repo",
-      diff: [
-        { kind: "add", lineNo: 1, text: "line 1" },
-        { kind: "add", lineNo: 2, text: "line 2" },
-      ],
-      stat: { added: 2, removed: 0 },
-    });
-  });
-
   it("uses authoritative write details for diff and created-flag stats", () => {
     const args = { path: "/repo/file.ts", content: "line 1\nline 2\n" };
 
@@ -549,50 +317,12 @@ describe("resolveToolCallView", () => {
     });
   });
 
-  it.each(TEXT_EDITOR_TOOL_NAMES)("applies created-flag stats to %s create", (name) => {
-    const view = resolveToolCallView({
-      name,
-      args: { command: "create", path: "/repo/file.ts", file_text: "replacement\n" },
-      details: { created: false },
-    });
-
-    expect(view.diff).toEqual([{ kind: "add", lineNo: 1, text: "replacement" }]);
-    expect(view.stat).toBeUndefined();
-  });
-
-  it("resolves search views from pattern plus path scope", () => {
-    expect(resolveToolCallView({ name: "grep", args: { pattern: "TODO", path: "src" } })).toEqual({
-      kind: "search",
-      target: "TODO",
-      targetDetail: "src",
-    });
-  });
-
-  it("resolves fetch views from the url arg", () => {
-    expect(resolveToolCallView({ name: "web_fetch", args: { url: "https://x.dev/a" } })).toEqual({
-      kind: "fetch",
-      target: "https://x.dev/a",
-    });
-  });
-
   it.each([
-    ["read without a path", { name: "read", args: {} }],
     ["edit without a path", { name: "edit", args: { oldText: "a", newText: "b" } }],
     ["patch without patch text", { name: "apply_patch", args: {} }],
     ["fetch without a url", { name: "fetch", args: {} }],
-    ["unknown tool", { name: "mcp__thing", args: { foo: "bar" } }],
   ])("degrades to generic for %s", (_label, source) => {
     expect(resolveToolCallView(source).kind).toBe("generic");
-  });
-
-  it("renders pure deletions without a phantom blank added line", () => {
-    const view = resolveToolCallView({
-      name: "edit",
-      args: { path: "/repo/a.ts", oldText: "gone-line", newText: "" },
-    });
-
-    expect(view.stat).toEqual({ added: 0, removed: 1 });
-    expect(view.diff).toEqual([{ kind: "del", text: "gone-line" }]);
   });
 
   it("rebuilds the cached view when result details arrive on the same args", () => {

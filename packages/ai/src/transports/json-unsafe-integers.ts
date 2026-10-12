@@ -67,13 +67,10 @@ function parseJsonNumberToken(
 
 function isUnsafeIntegerLiteral(token: string): boolean {
   const digits = token[0] === "-" ? token.slice(1) : token;
-  if (digits.length < MAX_SAFE_INTEGER_ABS_STR.length) {
-    return false;
-  }
-  if (digits.length > MAX_SAFE_INTEGER_ABS_STR.length) {
-    return true;
-  }
-  return digits > MAX_SAFE_INTEGER_ABS_STR;
+  return (
+    digits.length > MAX_SAFE_INTEGER_ABS_STR.length ||
+    (digits.length === MAX_SAFE_INTEGER_ABS_STR.length && digits > MAX_SAFE_INTEGER_ABS_STR)
+  );
 }
 
 /** Quotes integer literals above Number.MAX_SAFE_INTEGER before JSON.parse. */

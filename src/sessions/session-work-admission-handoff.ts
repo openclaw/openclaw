@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeSessionIdentities } from "./session-lifecycle-identity.js";
+import type { SessionWorkAdmissionInterrupt } from "./session-work-admission-interruption.js";
 
 export type SessionWorkAdmissionLease = {
   createHandoff: () => string;
@@ -13,8 +14,10 @@ export type SessionWorkAdmissionLease = {
 export type HandoffSessionWorkAdmission = {
   handoffIds: Set<string>;
   identities: ReadonlySet<string>;
-  interrupt?: (reason?: Error) => void;
+  interrupt?: SessionWorkAdmissionInterrupt;
   interrupted: Error | undefined;
+  isSettling?: () => boolean;
+  getAbortReason?: () => unknown;
 };
 
 type SessionWorkAdmissionHandoff = {
@@ -54,7 +57,9 @@ export function consumeSessionWorkAdmissionHandoff(params: {
   handoffId: string;
   scope: string;
   identities: Iterable<string | undefined>;
-  onInterrupt?: (reason?: Error) => void;
+  onInterrupt?: SessionWorkAdmissionInterrupt;
+  isSettling?: () => boolean;
+  getAbortReason?: () => unknown;
 }): SessionWorkAdmissionLease | undefined {
   const handoffId = params.handoffId.trim();
   if (!handoffId) {
@@ -74,6 +79,8 @@ export function consumeSessionWorkAdmissionHandoff(params: {
   SESSION_WORK_ADMISSION_HANDOFFS.delete(handoffId);
   handoff.admission.handoffIds.delete(handoffId);
   handoff.admission.interrupt = params.onInterrupt;
+  handoff.admission.isSettling = params.isSettling ?? handoff.admission.isSettling;
+  handoff.admission.getAbortReason = params.getAbortReason ?? handoff.admission.getAbortReason;
   if (handoff.admission.interrupted) {
     params.onInterrupt?.(handoff.admission.interrupted);
   }

@@ -3,6 +3,8 @@ import { constants as fsConstants } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { sha256File } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveMacOSDesktopCodexAppPathCandidates,
   type MacOSDesktopCodexAppPathCandidate,
@@ -17,14 +19,21 @@ export async function readMacOSDesktopGenerationFingerprint(
   ),
 ): Promise<string> {
   const entries: string[] = [];
+  const bundles = new Set<string>();
   for (const candidate of candidates) {
     const command = await statFingerprint(candidate.appServerCommandPath);
     entries.push(`candidate:${candidate.appName}:${candidate.appServerCommandPath}:${command}`);
+    // Executable layouts share one bundle's Computer Use assets.
+    if (bundles.has(candidate.appBundlePath)) {
+      continue;
+    }
+    bundles.add(candidate.appBundlePath);
     for (const artifactPath of resolveMacOSDesktopGenerationPaths(candidate)) {
       entries.push(`${artifactPath}\0${await statFingerprint(artifactPath)}`);
     }
-    const pluginRoot = resolveComputerUsePluginRoot(candidate);
-    entries.push(`${pluginRoot}\0${await directoryTreeFingerprint(pluginRoot)}`);
+    for (const pluginRoot of resolveComputerUseArtifactRoots(candidate)) {
+      entries.push(`${pluginRoot}\0${await readCodexDesktopArtifactTreeFingerprint(pluginRoot)}`);
+    }
   }
   return createHash("sha256").update(entries.join("\0")).digest("hex");
 }
@@ -35,6 +44,8 @@ function resolveMacOSDesktopGenerationPaths(
   return [
     candidate.appBundlePath,
     path.join(candidate.bundledMarketplacePath, ".agents", "plugins", "marketplace.json"),
+    path.join(candidate.appBundlePath, "Contents", "Resources", "cua_node", "bin", "node"),
+    path.join(candidate.appBundlePath, "Contents", "Resources", "cua_node", "bin", "node_repl"),
     ...candidate.computerUseServiceAppPaths.flatMap((servicePath) => [
       servicePath,
       path.join(servicePath, "Contents", "Info.plist"),
@@ -51,8 +62,23 @@ function resolveMacOSDesktopGenerationPaths(
   ];
 }
 
-function resolveComputerUsePluginRoot(candidate: MacOSDesktopCodexAppPathCandidate): string {
-  return path.join(candidate.bundledMarketplacePath, "plugins", "computer-use");
+function resolveComputerUseArtifactRoots(candidate: MacOSDesktopCodexAppPathCandidate): string[] {
+  const modules = path.join(
+    candidate.appBundlePath,
+    "Contents",
+    "Resources",
+    "cua_node",
+    "lib",
+    "node_modules",
+    "@oai",
+  );
+  return [
+    path.join(candidate.bundledMarketplacePath, "plugins", "computer-use"),
+    path.join(candidate.bundledMarketplacePath, "plugins", "unified-computer-use"),
+    path.join(modules, "cua-repl"),
+    path.join(modules, "cua"),
+    path.join(modules, "sky", "dist"),
+  ];
 }
 
 /** Stable roots that cover bundle replacement and recursive artifact updates. */
@@ -61,22 +87,15 @@ export function resolveMacOSDesktopGenerationWatchPaths(
     "darwin",
   ),
 ): string[] {
-  const watched = new Set<string>(["/Applications"]);
-  for (const candidate of candidates) {
-    watched.add(candidate.appBundlePath);
-  }
-  return [...watched];
+  return [...new Set(["/Applications", ...candidates.map((candidate) => candidate.appBundlePath)])];
 }
 
-async function directoryTreeFingerprint(root: string): Promise<string> {
+export async function readCodexDesktopArtifactTreeFingerprint(root: string): Promise<string> {
   let rootStat: BigIntStats;
   try {
     rootStat = await fs.lstat(root, { bigint: true });
   } catch (error) {
-    if (isNodeError(error, "ENOENT") || isNodeError(error, "ENOTDIR")) {
-      return "missing";
-    }
-    throw error;
+    return missingFingerprint(error);
   }
   if (!rootStat.isDirectory()) {
     return statFingerprint(root);
@@ -104,10 +123,6 @@ async function directoryTreeFingerprint(root: string): Promise<string> {
         hash.update(`entry\0${relativePath}\0${await statFingerprint(entryPath)}\0`);
       }
     }
-    const after = await fs.lstat(directory, { bigint: true });
-    if (!sameStat(before, after)) {
-      throw new Error(`Codex desktop artifact changed while fingerprinting: ${directory}`);
-    }
   };
   await visit(root, ".", rootStat);
   return hash.digest("hex");
@@ -125,7 +140,7 @@ async function statFingerprint(filePath: string): Promise<string> {
           : "other";
     const own = statTuple(entry);
     if (!entry.isSymbolicLink()) {
-      const content = entry.isFile() ? await readFileFingerprint(filePath, entry, false) : "";
+      const content = entry.isFile() ? await readFileFingerprint(filePath, false) : "";
       return `${type}:${own}:${content}`;
     }
     const [link, realPath, target] = await Promise.all([
@@ -133,52 +148,35 @@ async function statFingerprint(filePath: string): Promise<string> {
       fs.realpath(filePath),
       fs.stat(filePath, { bigint: true }),
     ]);
-    const content = target.isFile() ? await readFileFingerprint(filePath, target, true) : "";
+    const content = target.isFile() ? await readFileFingerprint(filePath, true) : "";
     return `${type}:${own}:${link}:${realPath}:${statTuple(target)}:${content}`;
   } catch (error) {
-    if (isNodeError(error, "ENOENT") || isNodeError(error, "ENOTDIR")) {
-      return "missing";
-    }
-    throw error;
+    return missingFingerprint(error);
   }
 }
 
-async function readFileFingerprint(
-  filePath: string,
-  expected: BigIntStats,
-  followsSymlink: boolean,
-): Promise<string> {
+async function readFileFingerprint(filePath: string, followsSymlink: boolean): Promise<string> {
   const noFollow = followsSymlink ? 0 : (fsConstants.O_NOFOLLOW ?? 0);
   const handle = await fs.open(filePath, fsConstants.O_RDONLY | noFollow);
   try {
     const before = await handle.stat({ bigint: true });
-    if (!sameStat(before, expected)) {
-      throw new Error(`Codex desktop artifact changed while fingerprinting: ${filePath}`);
-    }
-    const hash = createHash("sha256");
     // Metadata can collide on coarse filesystems. Content binds an event-driven generation
     // to the exact executable/config bytes without adding request-hot-path polling.
-    for await (const chunk of handle.createReadStream({ autoClose: false })) {
-      hash.update(chunk);
-    }
-    const after = await handle.stat({ bigint: true });
-    if (!sameStat(before, after)) {
-      throw new Error(`Codex desktop artifact changed while fingerprinting: ${filePath}`);
-    }
-    return hash.digest("hex");
+    const hash = await sha256File(handle, { maxBytes: Number(before.size) });
+    return hash.digest;
   } finally {
     await handle.close();
   }
-}
-
-function sameStat(left: BigIntStats, right: BigIntStats): boolean {
-  return statTuple(left) === statTuple(right);
 }
 
 function statTuple(stat: BigIntStats): string {
   return [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 }
 
-function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
+function missingFingerprint(error: unknown): "missing" {
+  const code = extractErrorCode(error);
+  if (code === "ENOENT" || code === "ENOTDIR") {
+    return "missing";
+  }
+  throw error;
 }

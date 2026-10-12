@@ -6,18 +6,16 @@ import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-ru
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { prepareSlackReply, type PreparedSlackReply } from "../../reply-blocks.js";
-import type { SlackMessageEvent } from "../../types.js";
-import { readSlackReplyBlocks, resolveSlackThreadTs } from "../replies.js";
+import {
+  prepareSlackReply,
+  resolveSlackReplyBlocks,
+  type PreparedSlackReply,
+} from "../../reply-blocks.js";
+import { readLruMapEntry, writeLruMapEntry } from "../lru-map-cache.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 type SlackProgressConfigEntry = Pick<SlackAccountConfig, "streaming"> | null | undefined;
-
-function resolveSlackMessageTimestampMs(message: SlackMessageEvent): number | undefined {
-  const ts = message.event_ts ?? message.ts;
-  return resolveSlackTimestampMs(ts);
-}
 
 export function resolveSlackBotLoopProtection(
   prepared: PreparedSlackMessage,
@@ -45,7 +43,7 @@ export function resolveSlackBotLoopProtection(
     ),
     defaultsConfig: prepared.ctx.cfg.channels?.defaults?.botLoopProtection,
     defaultEnabled: true,
-    nowMs: resolveSlackMessageTimestampMs(prepared.message),
+    nowMs: resolveSlackTimestampMs(prepared.message.event_ts ?? prepared.message.ts),
   };
 }
 
@@ -63,19 +61,6 @@ export function isSlackStreamingEnabled(params: {
   return false;
 }
 
-export function resolveSlackDisableBlockStreaming(params: {
-  useStreaming: boolean;
-  shouldUseDraftStream: boolean;
-  blockStreamingEnabled: boolean | undefined;
-}): boolean | undefined {
-  if (params.useStreaming || params.shouldUseDraftStream) {
-    return true;
-  }
-  return typeof params.blockStreamingEnabled === "boolean"
-    ? !params.blockStreamingEnabled
-    : undefined;
-}
-
 export function resolveExplicitSlackProgressTitle(
   entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
 ): string | undefined {
@@ -87,44 +72,36 @@ export function resolveExplicitSlackProgressTitle(
   return trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : undefined;
 }
 
-export function resolveSlackProgressStyle(entry: SlackProgressConfigEntry): "card" | "compact" {
-  // DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
+export function resolveSlackProgressStyle(
+  entry: SlackProgressConfigEntry,
+  hasReplyThread: boolean,
+): "card" | "compact" | "none" {
   const progress = entry?.streaming?.progress;
+  // Native task cards only affect threads; every other own setting opts into a preview.
+  if (
+    !hasReplyThread &&
+    !Object.entries(progress ?? {}).some(
+      ([key, value]) => key !== "nativeTaskCards" || value !== true,
+    )
+  ) {
+    return "none";
+  }
+  // DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
   return progress?.style ?? (progress?.toolProgress === false ? "compact" : "card");
 }
 
 // Slack's native agent card is the default progress surface; operators opt out
 // with an explicit `false`, which falls back to the Block Kit progress card.
-export function resolveSlackNativeProgressTaskCards(entry: SlackProgressConfigEntry): boolean {
+export function resolveSlackNativeProgressTaskCards(
+  entry: SlackProgressConfigEntry,
+  style: ReturnType<typeof resolveSlackProgressStyle>,
+): boolean {
   // THIS BEHAVIOR IS INTENTIONAL AND MUST NOT BE CASUALLY ADJUSTED.
   // DO NOT CHANGE THIS WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
-  if (resolveSlackProgressStyle(entry) === "compact") {
+  if (style !== "card") {
     return false;
   }
-  const streaming = entry?.streaming;
-  if (!streaming || typeof streaming !== "object" || Array.isArray(streaming)) {
-    return true;
-  }
-  const progressConfig = (streaming as Record<string, unknown>).progress;
-  if (!progressConfig || typeof progressConfig !== "object" || Array.isArray(progressConfig)) {
-    return true;
-  }
-  return (progressConfig as { nativeTaskCards?: unknown }).nativeTaskCards !== false;
-}
-
-export function resolveSlackStreamingThreadHint(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
-  incomingThreadTs: string | undefined;
-  messageTs: string | undefined;
-  isThreadReply?: boolean;
-}): string | undefined {
-  return resolveSlackThreadTs({
-    replyToMode: params.replyToMode,
-    incomingThreadTs: params.incomingThreadTs,
-    messageTs: params.messageTs,
-    hasReplied: false,
-    isThreadReply: params.isThreadReply,
-  });
+  return entry?.streaming?.progress?.nativeTaskCards !== false;
 }
 
 export type SlackEventDeliveryAttempt = {
@@ -157,7 +134,7 @@ export function buildSlackEventDeliveryKey(
   const renderPlan = preparedReply.resolvePreview(params.textOverride);
   const plannedBlocks =
     renderPlan.mode === "single" ? renderPlan.blocks : renderPlan.blockPart?.blocks;
-  const slackBlocks = readSlackReplyBlocks(params.payload) ?? plannedBlocks;
+  const slackBlocks = resolveSlackReplyBlocks(params.payload) ?? plannedBlocks;
   const renderedText = renderPlan.mode === "single" ? renderPlan.text : renderPlan.fallbackText;
   if (!reply.hasContent && !slackBlocks?.length && !renderedText.trim()) {
     return null;
@@ -172,83 +149,18 @@ export function buildSlackEventDeliveryKey(
   });
 }
 
-function readSlackStreamRecipientTeamCache(params: {
-  client: object;
-  fallbackTeamId?: string;
-  userId?: string;
-}): string | undefined {
-  if (!params.fallbackTeamId || !params.userId) {
-    return undefined;
-  }
-  const cacheKey = `${params.fallbackTeamId}:${params.userId}`;
-  const cache = getSlackStreamRecipientTeamCache(params.client);
-  const cached = cache.get(cacheKey);
-  if (!cached) {
-    return undefined;
-  }
-  cache.delete(cacheKey);
-  cache.set(cacheKey, cached);
-  return cached;
-}
-
-function rememberSlackStreamRecipientTeam(params: {
-  client: object;
-  fallbackTeamId?: string;
-  userId?: string;
-  teamId: string;
-}): void {
-  if (!params.fallbackTeamId || !params.userId) {
-    return;
-  }
-  const cacheKey = `${params.fallbackTeamId}:${params.userId}`;
-  const cache = getSlackStreamRecipientTeamCache(params.client);
-  if (cache.has(cacheKey)) {
-    cache.delete(cacheKey);
-  }
-  cache.set(cacheKey, params.teamId);
-  if (cache.size > SLACK_STREAM_RECIPIENT_TEAM_CACHE_MAX) {
-    const oldest = cache.keys().next().value;
-    if (oldest) {
-      cache.delete(oldest);
-    }
-  }
-}
-
-export function createSlackEventDeliveryTracker() {
-  const deliveredKeys = new Set<string>();
-  return {
-    hasDelivered(key: string | null) {
-      return key ? deliveredKeys.has(key) : false;
-    },
-    markDelivered(key: string | null) {
-      if (key) {
-        deliveredKeys.add(key);
-      }
-    },
-  };
-}
-
-export function shouldUseStreaming(params: {
-  streamingEnabled: boolean;
-  threadTs: string | undefined;
-}): boolean {
-  if (!params.streamingEnabled) {
-    return false;
-  }
-  if (!params.threadTs) {
-    logVerbose("slack-stream: streaming disabled — no reply thread target available");
-    return false;
-  }
-  return true;
-}
-
 export async function resolveSlackStreamRecipientTeamId(params: {
   client: Pick<PreparedSlackMessage["ctx"]["app"]["client"], "users">;
   token: string;
   userId?: PreparedSlackMessage["message"]["user"];
   fallbackTeamId?: string;
 }): Promise<string | undefined> {
-  const cachedTeamId = readSlackStreamRecipientTeamCache(params);
+  const cacheKey =
+    params.fallbackTeamId && params.userId
+      ? `${params.fallbackTeamId}:${params.userId}`
+      : undefined;
+  const cache = cacheKey ? getSlackStreamRecipientTeamCache(params.client) : undefined;
+  const cachedTeamId = cache && cacheKey ? readLruMapEntry(cache, cacheKey) : undefined;
   if (cachedTeamId) {
     return cachedTeamId;
   }
@@ -260,7 +172,9 @@ export async function resolveSlackStreamRecipientTeamId(params: {
       });
       const teamId = info.user?.team_id ?? info.user?.profile?.team;
       if (teamId) {
-        rememberSlackStreamRecipientTeam({ ...params, teamId });
+        if (cache && cacheKey) {
+          writeLruMapEntry(cache, cacheKey, teamId, SLACK_STREAM_RECIPIENT_TEAM_CACHE_MAX);
+        }
         return teamId;
       }
     } catch (err) {

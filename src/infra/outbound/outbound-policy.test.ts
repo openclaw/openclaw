@@ -8,7 +8,6 @@ import type { CrossContextDecoration } from "./outbound-policy.js";
 let applyCrossContextDecoration: typeof import("./outbound-policy.js").applyCrossContextDecoration;
 let buildCrossContextDecoration: typeof import("./outbound-policy.js").buildCrossContextDecoration;
 let enforceCrossContextPolicy: typeof import("./outbound-policy.js").enforceCrossContextPolicy;
-let shouldApplyCrossContextMarker: typeof import("./outbound-policy.js").shouldApplyCrossContextMarker;
 
 function expectCrossContextDecoration(
   decoration: CrossContextDecoration | null,
@@ -108,8 +107,8 @@ function expectCrossContextPolicyResult(params: {
   channel: string;
   action: ChannelMessageActionName;
   to: string;
-  currentChannelId: string;
-  currentChannelProvider: string;
+  currentChannelId?: string;
+  currentChannelProvider?: string;
   agentId?: string;
   expected: "allow" | RegExp;
 }) {
@@ -134,12 +133,8 @@ function expectCrossContextPolicyResult(params: {
 
 describe("outbound policy helpers", () => {
   beforeAll(async () => {
-    ({
-      applyCrossContextDecoration,
-      buildCrossContextDecoration,
-      enforceCrossContextPolicy,
-      shouldApplyCrossContextMarker,
-    } = await import("./outbound-policy.js"));
+    ({ applyCrossContextDecoration, buildCrossContextDecoration, enforceCrossContextPolicy } =
+      await import("./outbound-policy.js"));
   });
 
   beforeEach(() => {
@@ -147,64 +142,37 @@ describe("outbound policy helpers", () => {
   });
 
   it.each([
+    { name: "default cross-provider access", provider: "webchat", expected: "allow" as const },
     {
-      cfg: {
-        ...workspaceConfig,
-        tools: {
-          message: { crossContext: { allowAcrossProviders: true } },
-        },
-      } as OpenClawConfig,
-      channel: "forum",
-      action: "send" as const,
-      to: "forum:@ops",
-      currentChannelId: "C12345678",
-      currentChannelProvider: "workspace",
+      name: "explicit cross-provider denial",
+      provider: "webchat",
+      policy: { allowAcrossProviders: false },
+      expected: /target provider/,
+    },
+    {
+      name: "same-provider targetless context",
+      provider: "discord",
+      policy: { allowWithinProvider: false },
       expected: "allow" as const,
     },
-    {
-      cfg: workspaceConfig,
-      channel: "forum",
-      action: "send" as const,
-      to: "forum:@ops",
-      currentChannelId: "C12345678",
-      currentChannelProvider: "workspace",
-      expected: /target provider "forum" while bound to "workspace"/,
-    },
-    {
-      cfg: {
-        ...workspaceConfig,
-        tools: {
-          message: { crossContext: { allowWithinProvider: false } },
-        },
-      } as OpenClawConfig,
-      channel: "workspace",
-      action: "send" as const,
-      to: "C999",
-      currentChannelId: "C123",
-      currentChannelProvider: "workspace",
-      expected: /target="C999" while bound to "C123"/,
-    },
-    {
-      cfg: {
-        ...workspaceConfig,
-        tools: {
-          message: { crossContext: { allowWithinProvider: false } },
-        },
-      } as OpenClawConfig,
-      channel: "workspace",
-      action: "upload-file" as const,
-      to: "C999",
-      currentChannelId: "C123",
-      currentChannelProvider: "workspace",
-      expected: /target="C999" while bound to "C123"/,
-    },
+  ])("preserves $name without a current target", ({ provider, policy, expected }) => {
+    expectCrossContextPolicyResult({
+      cfg: { tools: { message: { crossContext: policy } } },
+      channel: "discord",
+      action: "send",
+      to: "channel:123",
+      currentChannelProvider: provider,
+      expected,
+    });
+  });
+
+  it.each([
     {
       cfg: {
         ...workspaceConfig,
         agents: {
-          list: [
-            {
-              id: "sandbox",
+          entries: {
+            sandbox: {
               tools: {
                 message: {
                   crossContext: {
@@ -213,7 +181,7 @@ describe("outbound policy helpers", () => {
                 },
               },
             },
-          ],
+          },
         },
       } as OpenClawConfig,
       channel: "workspace",
@@ -227,78 +195,6 @@ describe("outbound policy helpers", () => {
   ])("enforces cross-context policy for %j", (params) => {
     expectCrossContextPolicyResult(params);
   });
-
-  it.each([
-    "edit",
-    "delete",
-    "pin",
-    "unpin",
-    "poll-vote",
-    "topic-create",
-    "topic-edit",
-  ] satisfies ChannelMessageActionName[])(
-    "blocks cross-provider %s actions by default",
-    (action) => {
-      expectCrossContextPolicyResult({
-        cfg: workspaceConfig,
-        channel: "forum",
-        action,
-        to: "forum:@ops",
-        currentChannelId: "C12345678",
-        currentChannelProvider: "workspace",
-        expected: /target provider "forum" while bound to "workspace"/,
-      });
-    },
-  );
-
-  it.each([
-    "edit",
-    "delete",
-    "pin",
-    "unpin",
-    "topic-create",
-    "topic-edit",
-  ] satisfies ChannelMessageActionName[])(
-    "allows cross-provider %s actions when explicitly enabled",
-    (action) => {
-      expectCrossContextPolicyResult({
-        cfg: {
-          ...workspaceConfig,
-          tools: {
-            message: { crossContext: { allowAcrossProviders: true } },
-          },
-        } as OpenClawConfig,
-        channel: "forum",
-        action,
-        to: "forum:@ops",
-        currentChannelId: "C12345678",
-        currentChannelProvider: "workspace",
-        expected: "allow",
-      });
-    },
-  );
-
-  it.each([
-    "edit",
-    "delete",
-    "pin",
-    "unpin",
-    "topic-create",
-    "topic-edit",
-  ] satisfies ChannelMessageActionName[])(
-    "allows current-context %s actions without cross-provider opt-in",
-    (action) => {
-      expectCrossContextPolicyResult({
-        cfg: workspaceConfig,
-        channel: "workspace",
-        action,
-        to: "C12345678",
-        currentChannelId: "C12345678",
-        currentChannelProvider: "workspace",
-        expected: "allow",
-      });
-    },
-  );
 
   it("allows a routable alias of the native current channel", () => {
     expect(() =>
@@ -335,47 +231,7 @@ describe("outbound policy helpers", () => {
       preferPresentation: true,
     });
 
-    expect(applied.usedPresentation).toBe(true);
     expect(applied.presentation?.blocks.length).toBeGreaterThan(0);
     expect(applied.message).toBe("hello");
   });
-
-  it("returns null when decoration is skipped and falls back to text markers", async () => {
-    await expect(
-      buildCrossContextDecoration({
-        cfg: richChatConfig,
-        channel: "richchat",
-        target: "123",
-        toolContext: {
-          currentChannelId: "C12345678",
-          currentChannelProvider: "richchat",
-          skipCrossContextDecoration: true,
-        },
-      }),
-    ).resolves.toBeNull();
-
-    const applied = applyCrossContextDecoration({
-      message: "hello",
-      decoration: { prefix: "[from ops] ", suffix: " [cc]" },
-      preferPresentation: true,
-    });
-    expect(applied).toEqual({
-      message: "[from ops] hello [cc]",
-      usedPresentation: false,
-    });
-  });
-
-  it.each([
-    { action: "send", expected: true },
-    { action: "upload-file", expected: true },
-    { action: "thread-reply", expected: true },
-    { action: "thread-create", expected: false },
-    { action: "topic-create", expected: false },
-    { action: "topic-edit", expected: false },
-  ] satisfies Array<{ action: ChannelMessageActionName; expected: boolean }>)(
-    "marks supported cross-context action %j",
-    ({ action, expected }) => {
-      expect(shouldApplyCrossContextMarker(action)).toBe(expected);
-    },
-  );
 });

@@ -2,7 +2,7 @@
 
 // Verifies that script TypeScript uses Node's transformation-free syntax subset.
 import fs from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
+import nodeModule from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -71,6 +71,9 @@ function diagnosticLine(error, sourceUrl) {
  * Checks each TypeScript implementation file under a scripts tree without resolving imports.
  */
 export function checkScriptErasability(rootDir = SCRIPT_ROOT) {
+  if (process.versions.bun) {
+    throw new Error("Script erasability must be checked with Node's strip-only parser.");
+  }
   const files = listTypeScriptImplementationFiles(rootDir);
   const rootLabel = path.basename(rootDir);
   const errors = [];
@@ -79,7 +82,7 @@ export function checkScriptErasability(rootDir = SCRIPT_ROOT) {
     const relativePath = path.relative(rootDir, filePath).split(path.sep).join("/");
     const sourceUrl = `${rootLabel}/${relativePath}`;
     try {
-      stripTypeScriptTypes(fs.readFileSync(filePath, "utf8"), {
+      nodeModule.stripTypeScriptTypes(fs.readFileSync(filePath, "utf8"), {
         mode: "strip",
         sourceUrl,
       });
@@ -115,5 +118,22 @@ export function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main();
+  if (process.versions.bun) {
+    const require = nodeModule.createRequire(import.meta.url);
+    const { resolveNodeRuntimeExecutable } = require("../src/infra/node-runtime-executable.ts");
+    const { runNodeCliShim } = require("./lib/tsx-cli-shim.mjs");
+    const executable = resolveNodeRuntimeExecutable();
+    if (!executable) {
+      throw new Error(
+        "A Node executable is required for script erasability checks; add node to PATH.",
+      );
+    }
+    void runNodeCliShim(import.meta.url, {
+      implementation: "./check-script-erasability.mjs",
+      executable,
+      execArgv: ["--disable-warning=ExperimentalWarning"],
+    });
+  } else {
+    main();
+  }
 }

@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentId } from "./config-utils.js";
-import { readRegularFile, statRegularFile } from "./fs-utils.js";
+import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
 import {
   captureSensitiveTextRedactionSnapshot,
@@ -11,7 +11,10 @@ import {
   getSecretRedactionRegistryRevision,
   redactSensitiveText,
 } from "./openclaw-runtime-io.js";
+import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
 import {
+  assertBoundIncognitoMemorySyncAccess,
+  captureIncognitoMemoryReader,
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
   extractAgentIdFromSessionPath,
@@ -20,7 +23,6 @@ import {
   HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
   isCompactionCheckpointTranscriptFileName,
-  isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
   isIncognitoOpenClawAgentSqlitePath,
@@ -30,15 +32,24 @@ import {
   isUsageCountedSessionTranscriptFileName,
   materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
-  parseSqliteSessionFileMarker,
   prepareSessionEntryInWorker,
+  readRestoredSessionTranscript,
   readTranscriptStatsSync,
   readTranscriptExportSnapshotReadOnlySync,
   resolveSessionTranscriptsDirForAgent,
+  SessionTranscriptColdError,
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
+import {
+  collectRawSessionText,
+  hashSessionEntrySnapshot,
+  parseSessionTimestampMs,
+  projectSessionEntryRecord,
+  renderSessionExportLines,
+} from "./session-entry-projection.js";
+import { resolveBuildSessionSqliteIdentity } from "./session-entry-source.js";
 import { classifySessionMessageOrigin } from "./session-provenance.js";
 import { resolveSessionResetRecallCutoff } from "./session-reset-recall.js";
 import {
@@ -59,13 +70,7 @@ export {
 } from "./session-transcript-corpus.js";
 export { readTranscriptStatsBatchReadOnlySync } from "./openclaw-runtime-session.js";
 
-// Keep the historical one-line-per-message export shape for normal turns, but
-// wrap pathological long messages so downstream indexers never ingest a single
-// toxic line. Wrapped continuation lines still map back to the same JSONL line.
-// This limit applies to content only; the role label adds up to 11 chars.
-const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 const SESSION_ENTRY_PARSE_YIELD_LINES = 250;
-const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
 const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
 type SessionResetRecallCutoff = ReturnType<typeof resolveSessionResetRecallCutoff>;
@@ -74,6 +79,8 @@ export type SessionFileEntry = {
   path: string;
   absPath: string;
   mtimeMs: number;
+  /** Canonical SQLite mutation watermark, independent of source activity. */
+  revisionMs?: number;
   size: number;
   hash: string;
   content: string;
@@ -90,7 +97,14 @@ export type SessionFileEntry = {
   sessionKind: MemorySessionKind;
 };
 
-export type SessionFileState = Pick<SessionFileEntry, "path" | "absPath" | "mtimeMs" | "size">;
+export type SessionFileState = Pick<
+  SessionFileEntry,
+  "path" | "absPath" | "mtimeMs" | "revisionMs" | "size"
+>;
+
+export type SessionEntrySnapshot = NonNullable<
+  ReturnType<typeof readTranscriptExportSnapshotReadOnlySync>
+>;
 
 export type BuildSessionEntryOptions = {
   /** Optional preclassification from a caller-managed dreaming transcript lookup. */
@@ -116,27 +130,6 @@ type SessionTranscriptClassification = {
   dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
   cronRunTranscriptPaths: ReadonlySet<string>;
 };
-
-function hashSessionEntrySnapshot(params: {
-  content: string;
-  lineMap: readonly number[];
-  messageTimestampsMs: readonly number[];
-  lineProvenance: readonly MemoryEntryProvenance[];
-  resetRecallCutoff: SessionResetRecallCutoff;
-}): string {
-  // Preserve persisted hash bytes without flattening another full export string.
-  return createHash("sha256")
-    .update(params.content)
-    .update("\n")
-    .update(params.lineMap.join(","))
-    .update("\n")
-    .update(params.messageTimestampsMs.join(","))
-    .update("\n")
-    .update(JSON.stringify(params.lineProvenance))
-    .update("\n")
-    .update(JSON.stringify(params.resetRecallCutoff))
-    .digest("hex");
-}
 
 export function readSessionEntryResetRecallCutoff(
   entry: SessionFileEntry,
@@ -264,22 +257,9 @@ function isCronRunGeneratedRecord(record: unknown): boolean {
   );
 }
 
-function normalizeComparablePath(pathname: string): string {
-  const resolved = path.resolve(pathname);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-function resolveSessionStoreTranscriptPath(
-  sessionsDir: string,
-  entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
-): string | null {
-  const resolved = resolveSessionStoreTranscriptResolvedPath(sessionsDir, entry);
-  return resolved ? normalizeComparablePath(resolved) : null;
-}
-
 function resolveSessionStoreTranscriptResolvedPath(
   sessionsDir: string,
-  entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
+  entry: SessionTranscriptStoreEntry | undefined,
 ): string | null {
   if (typeof entry?.sessionFile === "string" && entry.sessionFile.trim().length > 0) {
     const sessionFile = entry.sessionFile.trim();
@@ -304,7 +284,7 @@ function loadSessionTranscriptClassificationForSessionsDir(
   const agentId = extractAgentIdFromSessionsDir(sessionsDir);
   if (agentId && isCanonicalSessionsDirForAgent(sessionsDir, agentId)) {
     return classifySessionTranscriptCorpusEntries(
-      listSessionTranscriptCorpusEntriesForAgentSync(agentId),
+      listSessionTranscriptCorpusEntriesForAgentSync(agentId, { includeContentRevision: false }),
     );
   }
   const storePath = path.join(sessionsDir, "sessions.json");
@@ -312,10 +292,11 @@ function loadSessionTranscriptClassificationForSessionsDir(
   const dreamingTranscriptPaths = new Set<string>();
   const cronRunTranscriptPaths = new Set<string>();
   for (const [sessionKey, entry] of Object.entries(store)) {
-    const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
-    if (!transcriptPath) {
+    const resolved = resolveSessionStoreTranscriptResolvedPath(sessionsDir, entry);
+    if (!resolved) {
       continue;
     }
+    const transcriptPath = normalizeComparablePath(resolved);
     if (isDreamingNarrativeSessionStoreKey(sessionKey)) {
       dreamingTranscriptPaths.add(transcriptPath);
     }
@@ -431,94 +412,8 @@ export function parseCanonicalSessionSyncTargetFromPath(
   return { agentId, sessionId };
 }
 
-async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {
-  createSubsystemLogger("memory").debug(`Failed reading session file ${absPath}: ${String(err)}`);
-}
-
 function normalizeSessionText(value: string): string {
-  return value
-    .replace(/\s*\n+\s*/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function collectRawSessionText(content: unknown): string | null {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as { type?: unknown; text?: unknown };
-    if (record.type === "text" && typeof record.text === "string") {
-      parts.push(record.text);
-    }
-  }
-  return parts.length > 0 ? parts.join("\n") : null;
-}
-
-function isHighSurrogate(code: number): boolean {
-  return code >= 0xd800 && code <= 0xdbff;
-}
-
-function isLowSurrogate(code: number): boolean {
-  return code >= 0xdc00 && code <= 0xdfff;
-}
-
-function splitLongSessionLine(
-  text: string,
-  maxChars: number = SESSION_EXPORT_CONTENT_WRAP_CHARS,
-): string[] {
-  const normalized = text.trim();
-  if (!normalized) {
-    return [];
-  }
-  if (normalized.length <= maxChars) {
-    return [normalized];
-  }
-
-  const segments: string[] = [];
-  let cursor = 0;
-  while (cursor < normalized.length) {
-    const remaining = normalized.length - cursor;
-    if (remaining <= maxChars) {
-      segments.push(normalized.slice(cursor).trim());
-      break;
-    }
-
-    const limit = cursor + maxChars;
-    let splitAt = limit;
-    for (let index = limit; index > cursor; index -= 1) {
-      if (normalized[index] === " ") {
-        splitAt = index;
-        break;
-      }
-    }
-    if (
-      splitAt < normalized.length &&
-      splitAt > cursor &&
-      isHighSurrogate(normalized.charCodeAt(splitAt - 1)) &&
-      isLowSurrogate(normalized.charCodeAt(splitAt))
-    ) {
-      splitAt -= 1;
-    }
-    segments.push(normalized.slice(cursor, splitAt).trim());
-    cursor = splitAt;
-    while (cursor < normalized.length && normalized[cursor] === " ") {
-      cursor += 1;
-    }
-  }
-
-  return segments.filter(Boolean);
-}
-
-function renderSessionExportLines(label: string, text: string): string[] {
-  return splitLongSessionLine(text).map((segment) => `${label}: ${segment}`);
+  return value.replace(/\s+/g, " ").trim();
 }
 
 const GENERATED_SYSTEM_MESSAGE_RE = /^System(?: \(untrusted\))?: \[[^\]]+\]\s*/;
@@ -564,28 +459,6 @@ function isRecalledMemoryMessage(message: { provenance?: unknown }): boolean {
   );
 }
 
-function parseSessionTimestampMs(
-  record: { timestamp?: unknown },
-  message: { timestamp?: unknown },
-): number {
-  const candidates = [message.timestamp, record.timestamp];
-  for (const value of candidates) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      const ms = value > 0 && value < 1e11 ? value * 1000 : value;
-      if (Number.isFinite(ms) && ms > 0 && ms <= MAX_DATE_TIMESTAMP_MS) {
-        return Math.floor(ms);
-      }
-    }
-    if (typeof value === "string") {
-      const parsed = Date.parse(value);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        return parsed;
-      }
-    }
-  }
-  return 0;
-}
-
 function resolveSessionEntryParseYieldLines(opts: BuildSessionEntryOptions): number {
   const configured = opts.parseYieldEveryLines;
   if (typeof configured === "number" && Number.isFinite(configured)) {
@@ -594,48 +467,47 @@ function resolveSessionEntryParseYieldLines(opts: BuildSessionEntryOptions): num
   return SESSION_ENTRY_PARSE_YIELD_LINES;
 }
 
-function resolveBuildSessionSqliteIdentity(absPath: string, opts: BuildSessionEntryOptions) {
-  if (opts.agentId && opts.sessionId && opts.storePath) {
-    return {
-      agentId: opts.agentId,
-      sessionId: opts.sessionId,
-      ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
-      storePath: opts.storePath,
-    };
-  }
-  const marker = parseSqliteSessionFileMarker(absPath);
-  return marker && opts.sessionKey ? { ...marker, sessionKey: opts.sessionKey } : marker;
+function sqliteSessionFileState(
+  absPath: string,
+  identity: { agentId: string; sessionId: string },
+  stats: ReturnType<typeof readTranscriptStatsSync>,
+  updatedAtMs?: number,
+): SessionFileState {
+  return {
+    absPath,
+    path: sessionPathForSessionIdentity(identity.agentId, identity.sessionId),
+    mtimeMs: updatedAtMs ?? stats.maxSeq,
+    revisionMs: stats.lastMutationAtMs ?? stats.maxSeq,
+    size: stats.sizeBytes,
+  };
 }
 
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
+  transcriptStats?: ReturnType<typeof readTranscriptStatsSync>,
 ): SessionFileState | null {
   const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
   if (sqliteIdentity) {
-    const stats = readTranscriptStatsSync({
-      ...sqliteIdentity,
-    });
-    return {
-      absPath,
-      path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
-      mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
-      size: stats.sizeBytes,
-    };
+    if (!transcriptStats) {
+      assertBoundIncognitoMemorySyncAccess(
+        sqliteIdentity,
+        "statSessionEntrySync",
+        "buildSessionEntry",
+      );
+    }
+    const stats = transcriptStats ?? readTranscriptStatsSync(sqliteIdentity);
+    return sqliteSessionFileState(absPath, sqliteIdentity, stats, opts.updatedAtMs);
   }
-  try {
-    const stat = fsSync.statSync(absPath);
-    return stat.isFile()
-      ? {
-          absPath,
-          path: sessionPathForFile(absPath),
-          mtimeMs: stat.mtimeMs,
-          size: stat.size,
-        }
-      : null;
-  } catch {
-    return null;
-  }
+  const stat = safeStatSync(absPath);
+  return stat?.isFile()
+    ? {
+        absPath,
+        path: sessionPathForFile(absPath),
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+      }
+    : null;
 }
 
 async function yieldSessionEntryParseIfNeeded(
@@ -652,35 +524,54 @@ async function yieldSessionEntryParseIfNeeded(
 export async function buildSessionEntry(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
+  source?: {
+    memoryEntry(
+      absPath: string,
+      options: BuildSessionEntryOptions,
+    ): Promise<SessionFileEntry | null>;
+  },
 ): Promise<SessionFileEntry | null> {
-  const identity = resolveBuildSessionSqliteIdentity(absPath, opts);
-  // Archives may materialize files, observers own their callbacks, and incognito
-  // transcripts exist only in this process. Their existing local contracts stay intact.
-  if (
-    identity &&
-    !opts.onTranscriptMessage &&
-    opts.parseYieldEveryLines === undefined &&
-    !isIncognitoSessionKey(opts.sessionKey) &&
-    !isIncognitoOpenClawAgentSqlitePath(identity.storePath, { agentId: identity.agentId })
-  ) {
-    const options = { ...opts, ...identity };
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const redaction = captureSensitiveTextRedactionSnapshot();
-      const prepared = await prepareSessionEntryInWorker(absPath, options, redaction);
-      if (prepared.readError !== undefined) {
-        void logSessionFileReadFailure(absPath, prepared.readError);
-        return null;
-      }
-      if (redaction.registryRevision === getSecretRedactionRegistryRevision()) {
-        return prepared.entry
-          ? attachSessionEntryResetRecallCutoff(prepared.entry, prepared.resetRecallCutoff)
-          : null;
-      }
-    }
-    // Continuous secret registration cannot publish stale redaction. The rare
-    // fallback retains the original per-message registry checks and yields.
+  if (source) {
+    return source.memoryEntry(absPath, opts);
   }
-  return buildSessionEntryInProcess(absPath, opts);
+  const identity = resolveBuildSessionSqliteIdentity(absPath, opts);
+  const incognito = identity && captureIncognitoMemoryReader(identity);
+  if (incognito) {
+    return incognito.memoryEntry(absPath, opts);
+  }
+  const prepare = async () => {
+    // Unbound private stores retain their native owner until the atomic cutover.
+    if (
+      identity &&
+      !opts.onTranscriptMessage &&
+      opts.parseYieldEveryLines === undefined &&
+      !isIncognitoSessionKey(opts.sessionKey) &&
+      !isIncognitoOpenClawAgentSqlitePath(identity.storePath, { agentId: identity.agentId })
+    ) {
+      const options = { ...opts, ...identity };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const redaction = captureSensitiveTextRedactionSnapshot();
+        const prepared = await prepareSessionEntryInWorker(absPath, options, redaction);
+        if (redaction.registryRevision === getSecretRedactionRegistryRevision()) {
+          return prepared.entry
+            ? attachSessionEntryResetRecallCutoff(prepared.entry, prepared.resetRecallCutoff)
+            : null;
+        }
+      }
+      throw new Error(
+        "Session transcript redaction changed during preparation; retry the operation.",
+      );
+    }
+    return buildSessionEntryInProcess(absPath, opts);
+  };
+  try {
+    return await prepare();
+  } catch (error) {
+    if (!(error instanceof SessionTranscriptColdError) || identity?.sessionId !== error.sessionId) {
+      throw error;
+    }
+    return readRestoredSessionTranscript(identity, prepare);
+  }
 }
 
 /** The shared transcript worker runs the same projection with task-local redaction. */
@@ -688,30 +579,67 @@ export async function buildSessionEntryInProcess(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
   redactText: (text: string) => string = (text) => redactSensitiveText(text, { mode: "tools" }),
-  reportReadError: (error: unknown) => void = (error) => {
-    void logSessionFileReadFailure(absPath, error);
-  },
 ): Promise<SessionFileEntry | null> {
-  try {
-    const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
-    const sqliteSource = sqliteIdentity
-      ? (() => {
-          const snapshot = readTranscriptExportSnapshotReadOnlySync(sqliteIdentity);
-          if (!snapshot) {
-            return null;
+  return buildSessionEntryFromSource(absPath, opts, redactText);
+}
+
+/** Project an actor-owned snapshot without reopening its physical store on the caller. */
+export async function buildSessionEntryFromSnapshot(
+  absPath: string,
+  opts: BuildSessionEntryOptions & {
+    agentId: string;
+    sessionId: string;
+    storePath: string;
+  },
+  snapshot: SessionEntrySnapshot,
+  assertCurrent: () => void,
+): Promise<SessionFileEntry | null> {
+  const { onTranscriptMessage, ...options } = opts;
+  const result = await buildSessionEntryFromSource(
+    absPath,
+    {
+      ...structuredClone(options),
+      ...(onTranscriptMessage
+        ? {
+            onTranscriptMessage(message, observedAt) {
+              assertCurrent();
+              onTranscriptMessage(message, observedAt);
+            },
           }
-          const { stats, events: records, sessionKey } = snapshot;
-          const resetRecallCutoff = resolveSessionResetRecallCutoff(records);
-          return {
-            mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
-            path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
-            records,
-            resetRecallCutoff,
-            sessionKey,
-            size: stats.sizeBytes,
-          };
-        })()
-      : null;
+        : {}),
+    },
+    (text) => redactSensitiveText(text, { mode: "tools" }),
+    snapshot,
+  );
+  assertCurrent();
+  return result;
+}
+
+async function buildSessionEntryFromSource(
+  absPath: string,
+  opts: BuildSessionEntryOptions,
+  redactText: (text: string) => string,
+  preparedSnapshot?: SessionEntrySnapshot,
+): Promise<SessionFileEntry | null> {
+  const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
+  try {
+    const snapshot =
+      preparedSnapshot ??
+      (sqliteIdentity
+        ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity, {
+            // Observers require original messages and run only after the snapshot closes.
+            projectEvent: opts.onTranscriptMessage ? undefined : projectSessionEntryRecord,
+          })
+        : null);
+    const sqliteSource =
+      snapshot && sqliteIdentity
+        ? {
+            ...sqliteSessionFileState(absPath, sqliteIdentity, snapshot.stats, opts.updatedAtMs),
+            records: snapshot.events,
+            resetRecallCutoff: resolveSessionResetRecallCutoff(snapshot.events),
+            sessionKey: snapshot.sessionKey,
+          }
+        : null;
     if (sqliteIdentity && !sqliteSource) {
       return null;
     }
@@ -900,6 +828,7 @@ export async function buildSessionEntryInProcess(
       path: memoryPath,
       absPath,
       mtimeMs,
+      ...(sqliteSource ? { revisionMs: sqliteSource.revisionMs } : {}),
       size,
       hash: hashSessionEntrySnapshot({
         content,
@@ -921,7 +850,10 @@ export async function buildSessionEntryInProcess(
       sqliteSource?.resetRecallCutoff ?? { state: "absent" },
     );
   } catch (err) {
-    reportReadError(err);
+    if (sqliteIdentity) {
+      throw err;
+    }
+    createSubsystemLogger("memory").debug(`Failed reading session file ${absPath}: ${String(err)}`);
     return null;
   }
 }

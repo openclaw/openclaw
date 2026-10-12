@@ -1,6 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
@@ -63,7 +65,7 @@ function themeConfigResponse(
   const config = {
     ui: { prefs: { ...(family === "claw" ? {} : { theme: family }), themeMode: mode, accent } },
   };
-  const hash = `theme-contrast-${family}-${mode}`;
+  const hash = `theme-contrast-${family}-${mode}-${accent ?? "default"}`;
   return {
     appliedConfigHash: hash,
     config,
@@ -73,6 +75,22 @@ function themeConfigResponse(
     raw: JSON.stringify(config),
     valid: true,
   };
+}
+
+async function expectCommittedConfig(
+  page: Page,
+  committed: ReturnType<typeof themeConfigResponse>,
+) {
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const app = document.querySelector<
+          HTMLElement & { runtime?: { context: ApplicationContext } }
+        >("openclaw-app");
+        return app?.runtime?.context.runtimeConfig.state.configSnapshot;
+      }),
+    )
+    .toMatchObject({ config: committed.config, hash: committed.hash });
 }
 
 function compositeColor(foreground: RenderedColor, background: RenderedColor): RenderedColor {
@@ -184,14 +202,14 @@ suite.define(() => {
         await selectedCard.waitFor({ state: "visible" });
         await gateway.waitForRequest("config.get");
         const initialConfigGets = (await gateway.getRequests("config.get")).length;
-        const committed = themeConfigResponse(family, mode, accent);
+        const committed = themeConfigResponse(family, mode, "theme");
         await gateway.deferNext("config.patch");
         await selectedCard.click();
         const patch = await gateway.waitForRequest("config.patch");
         const raw = (patch.params as { raw?: unknown } | undefined)?.raw;
         expect(typeof raw).toBe("string");
         expect(JSON.parse(String(raw))).toMatchObject({
-          ui: { prefs: { theme: family === "claw" ? null : family } },
+          ui: { prefs: { theme: family === "claw" ? null : family, accent: "theme" } },
         });
 
         // Theme clicks apply immediately; the eventual Gateway acknowledgement must not revert them.
@@ -202,15 +220,35 @@ suite.define(() => {
 
         await gateway.setMethodResponse("config.get", committed);
         await gateway.resolveDeferred("config.patch", committed);
-        await expect
-          .poll(async () => (await gateway.getRequests("config.get")).length)
-          .toBe(initialConfigGets + 1);
+        await expectCommittedConfig(page, committed);
 
         await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(resolved);
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
         await expect
           .poll(() => selectedCard.getAttribute("class"))
           .toContain("settings-theme-card--active");
+
+        // Reapply each extreme through the real picker after theme defaults,
+        // rather than accidentally dropping custom-accent contrast coverage.
+        if (accent) {
+          const accentCommitted = themeConfigResponse(family, mode, accent);
+          await gateway.setMethodResponse("config.get", accentCommitted);
+          await gateway.deferNext("config.patch");
+          await page.locator("[data-accent-custom]").fill(accent);
+          const accentPatch = await gateway.waitForRequest("config.patch", { after: 1 });
+          // SAFETY: This is the config.patch request emitted by the exercised picker;
+          // the parsed payload below is checked against its complete prefs contract.
+          expect(JSON.parse((accentPatch.params as { raw: string }).raw)).toEqual({
+            ui: { prefs: { accent } },
+          });
+          await gateway.resolveDeferred("config.patch", accentCommitted);
+          await expectCommittedConfig(page, accentCommitted);
+          await expect
+            .poll(() =>
+              page.evaluate(() => document.documentElement.style.getPropertyValue("--accent")),
+            )
+            .toBe(accent);
+        }
 
         const visibleDescription = page.locator(".settings-section__desc").first();
         await visibleDescription.waitFor({ state: "visible" });
@@ -357,6 +395,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         expect(new URL(page.url()).pathname).toBe("/settings/appearance");
         expect(await selected.getAttribute("data-value")).toBe(selectedValue);
+        expect(await gateway.getRequests("config.get")).toHaveLength(initialConfigGets);
 
         if (captureUiProof) {
           await mkdir(path.join(suite.artifactDir, "theme-muted-contrast"), { recursive: true });
@@ -395,103 +434,4 @@ suite.define(() => {
       }
     },
   );
-
-  it("keeps the actual Skill Workshop Suggestions view within a 390px mobile viewport", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 844, width: 390 },
-      },
-      async ({ page }) => {
-        const updatedAt = "2026-07-29T10:00:00.000Z";
-        const proposal = {
-          createdAt: updatedAt,
-          description: "Clean inbox triage",
-          id: "proposal-1",
-          kind: "create",
-          scanState: "clean",
-          skillKey: "inbox-cleaner",
-          skillName: "Inbox Cleaner",
-          status: "pending",
-          title: "Inbox Cleaner",
-          updatedAt,
-        };
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "config.get": themeConfigResponse("claw", "light"),
-            "skills.proposals.inspect": {
-              content: "Review unread mail and archive low-priority threads.",
-              record: {
-                createdAt: updatedAt,
-                description: proposal.description,
-                id: proposal.id,
-                kind: proposal.kind,
-                proposedVersion: "v1",
-                status: proposal.status,
-                target: { skillKey: proposal.skillKey, skillName: proposal.skillName },
-                title: proposal.title,
-                updatedAt,
-              },
-              supportFiles: [],
-            },
-            "skills.proposals.list": {
-              proposals: [proposal],
-              schema: "openclaw.skill-workshop.proposals-manifest.v1",
-              installedSkills: [],
-              updatedAt,
-            },
-          },
-        });
-
-        const response = await page.goto(`${suite.server.baseUrl}skills/workshop`);
-        expect(response?.status()).toBe(200);
-        await gateway.waitForRequest("skills.proposals.list");
-
-        const todayTab = page.locator("#skill-workshop-mode-tab-suggestions");
-        await todayTab.waitFor({ state: "visible" });
-        await todayTab.click();
-
-        const today = page.locator(".sw-triage");
-        await today.waitFor({ state: "visible" });
-        const rendered = await today.evaluate((element) => {
-          const styles = getComputedStyle(element);
-          return {
-            bodyWidth: document.body.scrollWidth,
-            boxSizing: styles.boxSizing,
-            clientWidth: element.clientWidth,
-            parentWidth: element.parentElement?.clientWidth ?? 0,
-            scrollWidth: element.scrollWidth,
-            viewportWidth: window.innerWidth,
-            width: element.getBoundingClientRect().width,
-          };
-        });
-
-        expect(rendered.viewportWidth).toBe(390);
-        expect(rendered.boxSizing).toBe("border-box");
-        expect(rendered.width).toBeLessThanOrEqual(rendered.parentWidth);
-        expect(rendered.scrollWidth).toBeLessThanOrEqual(rendered.clientWidth);
-        expect(rendered.bodyWidth).toBeLessThanOrEqual(rendered.viewportWidth);
-
-        if (captureUiProof) {
-          await mkdir(path.join(suite.artifactDir, "theme-muted-contrast"), { recursive: true });
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
-              path.join(suite.artifactDir, "theme-muted-contrast"),
-              "skill-workshop-suggestions-mobile.png",
-            ),
-          });
-          await writeFile(
-            path.join(
-              path.join(suite.artifactDir, "theme-muted-contrast"),
-              "skill-workshop-suggestions-mobile.json",
-            ),
-            `${JSON.stringify(rendered, null, 2)}\n`,
-          );
-        }
-      },
-    );
-  });
 });

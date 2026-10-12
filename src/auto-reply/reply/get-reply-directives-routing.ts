@@ -1,11 +1,10 @@
-// Resolves directive interpretation and prompt projection at the text-command boundary.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { type InlineDirectives, parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
-import { HISTORY_CONTEXT_MARKER } from "./history.js";
+import { HISTORY_CONTEXT_MARKER, RECENT_HISTORY_CONTEXT_MARKER } from "./history.js";
 import { stripMentions } from "./mentions.js";
 import { extractInlineSimpleCommand, stripInlineStatus } from "./reply-inline.js";
 
@@ -32,11 +31,15 @@ export function resolveReplyDirectiveRouting(params: {
   unauthorizedReasoningDirectiveAttempt: boolean;
 } {
   const allowStatusDirective = params.canInterpretTextDirectives;
-  let parsed = parseInlineSessionDirectives(params.commandText, {
-    modelAliases: params.modelAliases,
-    allowStatusDirective,
-    command: params.command,
-  });
+  const parseDirectives = (text: string) =>
+    parseInlineSessionDirectives(text, {
+      modelAliases: params.modelAliases,
+      allowStatusDirective,
+      command: params.command,
+    });
+  const cleanStatus = (text: string) =>
+    allowStatusDirective ? stripInlineStatus(text).cleaned : text;
+  let parsed = parseDirectives(params.commandText);
   const hasInlineStatus = parsed.hasStatusDirective && parsed.cleaned.trim().length > 0;
   if (hasInlineStatus) {
     parsed = { ...parsed, hasStatusDirective: false };
@@ -115,9 +118,7 @@ export function resolveReplyDirectiveRouting(params: {
     };
   }
 
-  const cleanedCommand = allowStatusDirective
-    ? stripInlineStatus(parsed.cleaned).cleaned
-    : parsed.cleaned;
+  const cleanedCommand = cleanStatus(parsed.cleaned);
   const requestedInlineCommand =
     params.canInterpretTextDirectives &&
     params.isAuthorizedSender &&
@@ -174,14 +175,7 @@ export function resolveReplyDirectiveRouting(params: {
         (leadingSender && params.agentText[commandSource.length] === "\n")
           ? "\n"
           : "");
-      const parsedSender = parseInlineSessionDirectives(source, {
-        modelAliases: params.modelAliases,
-        allowStatusDirective,
-        command: params.command,
-      });
-      let cleanedSender = allowStatusDirective
-        ? stripInlineStatus(parsedSender.cleaned).cleaned
-        : parsedSender.cleaned;
+      let cleanedSender = cleanStatus(parseDirectives(source).cleaned);
       const shortcut = requestedInlineCommand ? extractInlineSimpleCommand(cleanedSender) : null;
       // Normalized aliases may select a command; cleanup still needs the corresponding raw token.
       if (shortcut && shortcut.command === requestedInlineCommand?.command) {
@@ -190,7 +184,11 @@ export function resolveReplyDirectiveRouting(params: {
       }
       // Only the whole body or demonstrated leading sender block can be projected.
       // Non-leading, encoded, and flat-history bodies stay opaque; never search quoted context.
-      if (leadingSender && !params.agentText.trimStart().startsWith(HISTORY_CONTEXT_MARKER)) {
+      if (
+        leadingSender &&
+        !params.agentText.trimStart().startsWith(HISTORY_CONTEXT_MARKER) &&
+        !params.agentText.trimStart().startsWith(RECENT_HISTORY_CONTEXT_MARKER)
+      ) {
         cleanedBody = cleanedSender + params.agentText.slice(source.length);
       }
     }

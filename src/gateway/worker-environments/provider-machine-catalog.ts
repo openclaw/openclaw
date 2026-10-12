@@ -5,19 +5,18 @@ import type {
   WorkerOperatingSystem,
   WorkerProfile,
 } from "../../plugins/types.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import {
   normalizeWorkerMachineOptions,
   normalizeWorkerOperatingSystems,
+  requireWorkerProfile,
 } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
 export function createWorkerMachineCatalog(
-  options: Pick<WorkerProviderLifecycleOptions, "getConfig" | "resolveProvider" | "warn"> & {
-    requireWorkerProfile: (value: unknown) => WorkerProfile;
-  },
+  options: Pick<WorkerProviderLifecycleOptions, "getConfig" | "resolveProvider" | "warn">,
 ) {
-  const { requireWorkerProfile } = options;
   type MachineCatalog = {
     providerId: string;
     settings: WorkerProfile;
@@ -29,17 +28,11 @@ export function createWorkerMachineCatalog(
   const machineShapeListeners = new Set<(profileId: string) => void>();
   let machineShapeVersion = 0;
 
-  const machineCatalogChanged = (profileId: string, catalog: MachineCatalog) => {
-    if (machineCatalogs.get(profileId) === catalog) {
-      machineShapeVersion += 1;
-      for (const listener of machineShapeListeners) {
-        try {
-          listener(profileId);
-        } catch {
-          options.warn("Worker machine metadata change reporting failed");
-        }
-      }
-    }
+  const machineCatalogChanged = (profileId: string) => {
+    machineShapeVersion += 1;
+    notifyListeners(machineShapeListeners, profileId, () => {
+      options.warn("Worker machine metadata change reporting failed");
+    });
   };
 
   const machineCatalogFor = (profileId: string) => {
@@ -56,7 +49,7 @@ export function createWorkerMachineCatalog(
     ) {
       catalog = { providerId: profile.provider, settings: structuredClone(settings) };
       machineCatalogs.set(profileId, catalog);
-      machineCatalogChanged(profileId, catalog);
+      machineCatalogChanged(profileId);
     }
     return catalog;
   };
@@ -66,13 +59,12 @@ export function createWorkerMachineCatalog(
     if (!catalog) {
       return undefined;
     }
-    const provider = options.resolveProvider(catalog.providerId);
     const machines = normalizeWorkerMachineOptions(
-      await provider?.listMachineOptions?.(catalog.settings),
+      await options.resolveProvider(catalog.providerId)?.listMachineOptions?.(catalog.settings),
     );
     if (!isDeepStrictEqual(catalog.machines, machines)) {
       catalog.machines = machines;
-      machineCatalogChanged(profileId, catalog);
+      machineCatalogChanged(profileId);
     }
     return machines;
   };
@@ -82,13 +74,12 @@ export function createWorkerMachineCatalog(
     if (!catalog) {
       return undefined;
     }
-    const provider = options.resolveProvider(catalog.providerId);
     const systems = normalizeWorkerOperatingSystems(
-      await provider?.listOperatingSystems?.(catalog.settings),
+      await options.resolveProvider(catalog.providerId)?.listOperatingSystems?.(catalog.settings),
     );
     if (!isDeepStrictEqual(catalog.systems, systems)) {
       catalog.systems = systems;
-      machineCatalogChanged(profileId, catalog);
+      machineCatalogChanged(profileId);
     }
     return systems;
   };
@@ -116,19 +107,18 @@ export function createWorkerMachineCatalog(
   };
 
   const readMachineShape = (
-    record: WorkerEnvironmentRecord,
+    record:
+      | Pick<WorkerEnvironmentRecord, "profileSnapshot" | "profileId" | "providerId">
+      | undefined,
   ): SessionPlacementMachine | undefined => {
+    if (!record) {
+      return undefined;
+    }
     const snapshot = record.profileSnapshot;
     const machineClass =
       typeof snapshot.machineClass === "string" ? snapshot.machineClass : undefined;
     const requestedOs = typeof snapshot.os === "string" ? snapshot.os : undefined;
-    const cached = machineCatalogs.get(record.profileId);
-    // A renamed/reconfigured profile must not relabel an already allocated worker.
-    const catalog =
-      cached?.providerId === record.providerId &&
-      isDeepStrictEqual(cached.settings, snapshot.settings)
-        ? cached
-        : undefined;
+    const catalog = machineCatalogs.get(record.profileId);
     const os = requestedOs ?? catalog?.systems?.find((system) => system.default)?.id;
     const eligible = catalog?.machines?.filter(
       (option) =>
@@ -154,6 +144,22 @@ export function createWorkerMachineCatalog(
   };
 
   return {
+    readProviderDisplayId: (profileId: string) => {
+      try {
+        const catalog = machineCatalogFor(profileId);
+        const displayId =
+          catalog &&
+          options
+            .resolveProvider(catalog.providerId)
+            ?.resolveDisplayId?.(structuredClone(catalog.settings));
+        return typeof displayId === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(displayId)
+          ? displayId
+          : undefined;
+      } catch {
+        // Cosmetic metadata must not hide profiles or leak settings in diagnostics.
+        return undefined;
+      }
+    },
     listMachineOptions,
     listOperatingSystems,
     readMachineShape,
@@ -162,12 +168,8 @@ export function createWorkerMachineCatalog(
         options.warn(`Worker machine catalog warmup failed for profile ${profileId}`),
       );
     },
-    subscribeMachineShapeChanged: (listener: (profileId: string) => void) => {
-      machineShapeListeners.add(listener);
-      return () => {
-        machineShapeListeners.delete(listener);
-      };
-    },
+    subscribeMachineShapeChanged: (listener: (profileId: string) => void) =>
+      registerListener(machineShapeListeners, listener),
     clearMachineShapeListeners: () => machineShapeListeners.clear(),
     machineShapeVersion: () => machineShapeVersion,
   };

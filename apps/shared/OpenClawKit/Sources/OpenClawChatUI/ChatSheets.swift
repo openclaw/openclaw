@@ -21,9 +21,12 @@ public struct ChatSessionsSheet: View {
     }
 
     @Bindable var viewModel: OpenClawChatViewModel
+    private let agentID: String?
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
     @State private var scope: SessionScope = .active
+    @State private var scopedIDs: [String] = []
+    @State private var scopedOwnerRevision: Int?
     @State private var scopedSessions: [OpenClawChatSessionEntry] = []
     @State private var isLoadingScoped = false
     @State private var renameTarget: OpenClawChatSessionEntry?
@@ -36,15 +39,17 @@ public struct ChatSessionsSheet: View {
     @State private var inspectedSession: OpenClawChatSessionEntry?
     @State private var isPresentingGroups = false
 
-    public init(viewModel: OpenClawChatViewModel) {
+    // periphery:ignore - ChatWindowShell constructs this sheet; Xcode 27 indexing misses the reference.
+    public init(viewModel: OpenClawChatViewModel, agentID: String? = nil) {
         self.viewModel = viewModel
+        self.agentID = agentID
     }
 
     /// Live view-model sessions serve the default active list; search and the
     /// archived scope fetch one-shot lists (server-side search with local
     /// cached fallback inside the view model).
     private var usesScopedFetch: Bool {
-        self.scope == .archived || !self.trimmedSearchText.isEmpty
+        self.agentID != nil || self.scope == .archived || !self.trimmedSearchText.isEmpty
     }
 
     private var trimmedSearchText: String {
@@ -52,7 +57,12 @@ public struct ChatSessionsSheet: View {
     }
 
     private var displayedSessions: [OpenClawChatSessionEntry] {
-        self.usesScopedFetch ? self.scopedSessions : self.viewModel.sessions
+        guard self.usesScopedFetch else { return self.viewModel.sessions }
+        if let owner = self.viewModel.sidebarData {
+            guard owner.scopeRevision == self.scopedOwnerRevision else { return [] }
+            return owner.project(self.scopedIDs).filter { $0.isArchived == (self.scope == .archived) }
+        }
+        return self.scopedSessions
     }
 
     private var displayedSessionKeys: [String] {
@@ -60,9 +70,16 @@ public struct ChatSessionsSheet: View {
     }
 
     private var scopedFetchID: String {
-        "\(self.viewModel.selectedAgentID ?? "")|\(self.scope.rawValue)|\(self.trimmedSearchText.lowercased())"
+        let current = [self.viewModel.selectedAgentID ?? "", self.scope.rawValue, self.trimmedSearchText.lowercased()]
+            .joined(separator: "|")
+        return self.agentID
+            .map { agent in
+                "\(agent)|\(current)|\(self.viewModel.sessionKey)|\(self.viewModel.sidebarData?.scopeRevision ?? 0)"
+            } ??
+            current
     }
 
+    // periphery:ignore - The public View conformance requires this public witness.
     public var body: some View {
         NavigationStack {
             List(selection: self.$selectedSessionKeys) {
@@ -91,7 +108,11 @@ public struct ChatSessionsSheet: View {
                 }
             }
             .searchable(text: self.$searchText, prompt: "Search threads")
-            .navigationTitle("Threads")
+            .navigationTitle(self.agentID.map { id in
+                Text(String(
+                    format: String(localized: "Threads for %@"),
+                    self.viewModel.agentChoices.first { $0.id == id }?.displayName ?? id))
+            } ?? Text("Threads"))
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if self.isSelecting, self.scope == .active {
                     self.batchActionBar
@@ -130,7 +151,9 @@ public struct ChatSessionsSheet: View {
                 await self.refreshScopedSessionsIfNeeded(debounce: !self.trimmedSearchText.isEmpty)
             }
             .onAppear {
-                self.viewModel.refreshSessions(limit: OpenClawChatViewModel.sessionListFetchLimit)
+                if self
+                    .agentID ==
+                    nil { self.viewModel.refreshSessions(limit: OpenClawChatViewModel.sessionListFetchLimit) }
             }
             .onChange(of: self.scope) {
                 self.isSelecting = false
@@ -198,7 +221,8 @@ public struct ChatSessionsSheet: View {
 
     private var refreshButton: some View {
         Button {
-            self.viewModel.refreshSessions(limit: OpenClawChatViewModel.sessionListFetchLimit)
+            if self
+                .agentID == nil { self.viewModel.refreshSessions(limit: OpenClawChatViewModel.sessionListFetchLimit) }
             self.refreshScopedSessionsSoon()
         } label: {
             Image(systemName: "arrow.clockwise")
@@ -217,12 +241,7 @@ public struct ChatSessionsSheet: View {
         Button {
             self.isPresentingGroups = true
         } label: {
-            Label {
-                Text("Groups")
-                    .font(OpenClawChatTypography.body)
-            } icon: {
-                Image(systemName: "folder")
-            }
+            chatActionLabel(Text("Groups"), systemImage: "folder")
         }
         .help("Manage thread groups")
     }
@@ -281,34 +300,17 @@ public struct ChatSessionsSheet: View {
         } label: { self.sessionRowContent(session) }
             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                 if !session.isArchived {
-                    Button {
-                        self.viewModel.setSessionPinned(
-                            key: session.key,
-                            pinned: !session.isPinned,
-                            agentID: session.agentId)
-                        self.refreshScopedSessionsSoon()
-                    } label: {
-                        self.actionLabel(
-                            session.isPinned ? "Unpin" : "Pin",
-                            systemImage: session.isPinned ? "pin.slash" : "pin")
-                    }
-                    .tint(OpenClawChatTheme.accent)
+                    self.pinButton(session)
+                        .tint(OpenClawChatTheme.accent)
                 }
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 if ChatSessionSidebarModel.canArchiveSession(
                     session,
-                    mainSessionKey: self.viewModel.resolvedMainSessionKey)
+                    mainSessionKey: self.viewModel.mainSessionKey(for: session))
                 {
-                    Button {
-                        self.viewModel.setSessionArchived(session, archived: !session.isArchived)
-                        self.refreshScopedSessionsSoon()
-                    } label: {
-                        self.actionLabel(
-                            archiveActionTitle,
-                            systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
-                    }
-                    .tint(session.isArchived ? OpenClawChatTheme.accent : OpenClawChatTheme.danger)
+                    self.archiveButton(session, title: archiveActionTitle)
+                        .tint(session.isArchived ? OpenClawChatTheme.accent : OpenClawChatTheme.danger)
                 }
             }
             .contextMenu {
@@ -321,40 +323,23 @@ public struct ChatSessionsSheet: View {
                 Button {
                     self.inspectedSession = session
                 } label: {
-                    self.actionLabel("Get Info…", systemImage: "info.circle")
+                    chatActionLabel("Get Info…", systemImage: "info.circle")
                 }
                 Divider()
                 Button {
                     self.renameText = session.displayName ?? ""
                     self.renameTarget = session
                 } label: {
-                    self.actionLabel("Rename", systemImage: "pencil")
+                    chatActionLabel("Rename", systemImage: "pencil")
                 }
                 if !session.isArchived {
-                    Button {
-                        self.viewModel.setSessionPinned(
-                            key: session.key,
-                            pinned: !session.isPinned,
-                            agentID: session.agentId)
-                        self.refreshScopedSessionsSoon()
-                    } label: {
-                        self.actionLabel(
-                            session.isPinned ? "Unpin" : "Pin",
-                            systemImage: session.isPinned ? "pin.slash" : "pin")
-                    }
+                    self.pinButton(session)
                 }
                 if ChatSessionSidebarModel.canArchiveSession(
                     session,
-                    mainSessionKey: self.viewModel.resolvedMainSessionKey)
+                    mainSessionKey: self.viewModel.mainSessionKey(for: session))
                 {
-                    Button {
-                        self.viewModel.setSessionArchived(session, archived: !session.isArchived)
-                        self.refreshScopedSessionsSoon()
-                    } label: {
-                        self.actionLabel(
-                            archiveActionTitle,
-                            systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
-                    }
+                    self.archiveButton(session, title: archiveActionTitle)
                 }
                 Button {
                     Task {
@@ -364,7 +349,7 @@ public struct ChatSessionsSheet: View {
                             agentID: session.agentId)
                     }
                 } label: {
-                    self.actionLabel(
+                    chatActionLabel(
                         LocalizedStringKey(
                             session.hasActiveRun == true
                                 ? String(localized: "Fork from last completed message")
@@ -378,13 +363,36 @@ public struct ChatSessionsSheet: View {
                         agentID: session.agentId)
                     self.refreshScopedSessionsSoon()
                 } label: {
-                    self.actionLabel(
+                    chatActionLabel(
                         LocalizedStringKey(session.unread == true
                             ? String(localized: "Mark Read")
                             : String(localized: "Mark Unread")),
                         systemImage: session.unread == true ? "envelope.open" : "envelope.badge")
                 }
             }
+    }
+
+    private func pinButton(_ session: OpenClawChatSessionEntry) -> some View {
+        Button {
+            self.viewModel.setSessionPinned(
+                key: session.key,
+                pinned: !session.isPinned,
+                agentID: session.agentId)
+            self.refreshScopedSessionsSoon()
+        } label: {
+            chatActionLabel(
+                session.isPinned ? "Unpin" : "Pin",
+                systemImage: session.isPinned ? "pin.slash" : "pin")
+        }
+    }
+
+    private func archiveButton(_ session: OpenClawChatSessionEntry, title: LocalizedStringKey) -> some View {
+        Button {
+            self.viewModel.setSessionArchived(session, archived: !session.isArchived)
+            self.refreshScopedSessionsSoon()
+        } label: {
+            chatActionLabel(title, systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
+        }
     }
 
     private func sessionRowContent(_ session: OpenClawChatSessionEntry) -> some View {
@@ -453,18 +461,10 @@ public struct ChatSessionsSheet: View {
         self.refreshScopedSessionsSoon()
     }
 
-    private func actionLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
-        Label {
-            Text(title)
-                .font(OpenClawChatTypography.body)
-        } icon: {
-            Image(systemName: systemImage)
-        }
-    }
-
     private func refreshScopedSessionsIfNeeded(debounce: Bool) async {
         guard self.usesScopedFetch else {
             self.scopedSessions = []
+            self.scopedIDs = []
             return
         }
         if debounce {
@@ -475,12 +475,20 @@ public struct ChatSessionsSheet: View {
         self.isLoadingScoped = true
         defer { self.isLoadingScoped = false }
         let query = self.trimmedSearchText
+        let owner = self.viewModel.sidebarData
+        let read = owner?.beginRead()
         let rows = await self.viewModel.fetchSessionList(
             search: query.isEmpty ? nil : query,
-            archived: self.scope == .archived)
+            archived: self.scope == .archived,
+            agentID: self.agentID)
         // A superseded task must not repaint stale rows over the newer query.
         guard !Task.isCancelled else { return }
-        self.scopedSessions = rows
+        if let owner, let read {
+            self.scopedIDs = owner.receive(rows, read: read)
+            self.scopedOwnerRevision = read.scope
+        } else {
+            self.scopedSessions = rows
+        }
     }
 
     /// Mutations refresh the scoped list after the optimistic patch settles.

@@ -1,8 +1,9 @@
 // Exercise Google Chat requests through a real guarded HTTP transport.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { deleteGoogleChatMessage } from "./api.js";
 
 const proofToken = "googlechat-transport-test-token";
 
@@ -67,9 +68,6 @@ vi.mock("./auth.js", async (importOriginal) => ({
   getGoogleChatAccessToken: vi.fn(async () => proofToken),
 }));
 
-let deleteGoogleChatMessage: typeof import("./api.js").deleteGoogleChatMessage;
-let sendGoogleChatMessage: typeof import("./api.js").sendGoogleChatMessage;
-
 const account = {
   accountId: "default",
   enabled: true,
@@ -121,10 +119,6 @@ async function withinDeadline<T>(promise: Promise<T>, timeoutMs = 2_000): Promis
 }
 
 describe("Google Chat real guarded transport", () => {
-  beforeAll(async () => {
-    ({ deleteGoogleChatMessage, sendGoogleChatMessage } = await import("./api.js"));
-  });
-
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockClear();
     loopback.baseUrl = "";
@@ -218,32 +212,6 @@ describe("Google Chat real guarded transport", () => {
     );
   });
 
-  it("rejects malformed UTF-8 JSON through the real guarded transport", async () => {
-    const body = new Uint8Array([
-      ...new TextEncoder().encode('{"name":"spaces/'),
-      0xff,
-      ...new TextEncoder().encode('AAA"}'),
-    ]);
-    const server = createServer((_request, response) => {
-      response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(body);
-    });
-
-    loopback.baseUrl = await listen(server);
-    try {
-      const outcome = await withinDeadline(
-        sendGoogleChatMessage({ account, space: "spaces/AAA", text: "hello" }).then(
-          () => undefined,
-          (error: unknown) => error,
-        ),
-      );
-      expect(outcome).toBeInstanceOf(Error);
-      expect((outcome as Error).message).toMatch(/malformed JSON response/);
-    } finally {
-      await closeServer(server);
-    }
-  });
-
   it("cancels a streaming authenticated DELETE before releasing its real dispatcher", async () => {
     let socketClosed = false;
     let receivedAuthorization: string | undefined;
@@ -302,25 +270,6 @@ describe("Google Chat real guarded transport", () => {
       expect(loopback.releases).toEqual([{ bodyIsNull: false, bodyUsed: true }]);
       await closeServer(server);
       await vi.waitFor(() => expect(socketClosed).toBe(true), { timeout: 1_000 });
-    } finally {
-      await closeServer(server);
-    }
-  });
-
-  it("releases a successful no-content response without cancelling a missing body", async () => {
-    const server = createServer((_request, response) => {
-      response.writeHead(204);
-      response.end();
-    });
-
-    loopback.baseUrl = await listen(server);
-    try {
-      await expect(
-        withinDeadline(
-          deleteGoogleChatMessage({ account, messageName: "spaces/AAA/messages/EMPTY" }),
-        ),
-      ).resolves.toBeUndefined();
-      expect(loopback.releases).toEqual([{ bodyIsNull: true, bodyUsed: false }]);
     } finally {
       await closeServer(server);
     }

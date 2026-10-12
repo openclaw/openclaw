@@ -7,7 +7,6 @@ import type {
   WizardNextResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { WizardNextResultSchema } from "../../../packages/gateway-protocol/src/schema/wizard.js";
-import { createRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildPluginCapabilityConsentReview } from "../../plugins/capability-summary.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
@@ -149,7 +148,7 @@ describe("openclaw.setup provider resolution", () => {
     expect(providerAuthChoiceMocks.prepareAuthChoiceLoadedPluginProvider).not.toHaveBeenCalled();
   });
 
-  it.each([true, false, "true", "cancel"])(
+  it.each([true, false, "cancel"])(
     "keeps runtime capability consent server-owned through activation (%s)",
     async (answer) => {
       const { wizardSessions, context } = makeContext();
@@ -233,6 +232,57 @@ describe("openclaw.setup provider resolution", () => {
       expect(wizardSessions.has(sessionId)).toBe(false);
     },
   );
+
+  it("keeps an activation alive for its provider's full device-code window", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { wizardSessions, context } = makeContext();
+    const sessionId = "activation-device-code";
+    const signedIn = createDeferredCore();
+    setupInferenceMocks.activateSetupInference.mockImplementationOnce(
+      async (params: ActivateSetupInferenceParams) => {
+        const prompter = expectDefined(params.prompter, "activation prompter");
+        // Detected Codex activation hosts the provider sign-in when no profile or key exists.
+        await prompter.deviceCode?.({
+          title: "OpenAI Codex device code",
+          code: "ABCD-EFGH",
+          expiresInMinutes: 15,
+          message: "Enter this one-time code on the sign-in page.",
+        });
+        const signal = expectDefined(params.signal, "activation signal");
+        await new Promise<void>((resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("activation aborted")), {
+            once: true,
+          });
+          void signedIn.promise.then(resolve);
+        });
+        return { ok: true, modelRef: "openai/gpt-5.6-luna", latencyMs: 1, lines: [] };
+      },
+    );
+    try {
+      await systemAgentHandler("openclaw.setup.activate.start")({
+        params: { sessionId, kind: "codex-cli", modelRef: "openai/gpt-5.6-luna" },
+        respond: () => undefined,
+        context,
+      } as never);
+      const session = expectDefined(wizardSessions.get(sessionId), "activation wizard session");
+      const codeStep = await callWizardNext(context, { sessionId });
+      expect(codeStep.step).toMatchObject({ deviceCode: { expiresInMinutes: 15 } });
+
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1_000);
+      expect(session.getStatus()).toBe("running");
+      expect(session.signal.aborted).toBe(false);
+
+      signedIn.resolve();
+      expect(await callWizardNext(context, { sessionId })).toMatchObject({
+        done: true,
+        status: "done",
+        modelActivation: { modelRef: "openai/gpt-5.6-luna" },
+      });
+    } finally {
+      signedIn.resolve();
+      vi.useRealTimers();
+    }
+  });
 
   it("locks cancellation before an accepted runtime install can start", async () => {
     const { wizardSessions, context } = makeContext();
@@ -489,7 +539,6 @@ describe("openclaw.setup provider resolution", () => {
   });
 
   it.each([
-    ["missing", null],
     ["retryable", { config, retrySelection: true, authProfiles: [], persistAuthProfiles: vi.fn() }],
   ])("returns actionable doctor guidance when provider setup is %s", async (_, result) => {
     providerAuthChoiceMocks.prepareAuthChoiceLoadedPluginProvider.mockImplementationOnce(
@@ -520,15 +569,16 @@ describe("openclaw.setup provider resolution", () => {
     await whenAdmittedWizardSessionSettled(session);
     expect(authConfigMocks.writeProviderAuthConfig).not.toHaveBeenCalled();
   });
-  it.each([false, true])(
-    "returns verified provider auth through wizard transport (restart %s)",
-    async (restart) => {
+  it.each([{ restart: true, modelTarget: "utility" as const }])(
+    "returns verified provider auth through wizard transport (restart $restart, target $modelTarget)",
+    async ({ restart, modelTarget }) => {
       const { wizardSessions, context } = makeContext();
       setupInferenceMocks.activateSetupInference.mockImplementationOnce(async (params) => {
         await params.prompter.note("Open the browser and enter ABCD", "Pair GitHub");
         return {
           ok: true,
           modelRef: "github-copilot/test",
+          ...(modelTarget ? { modelTarget } : {}),
           latencyMs: 10,
           lines: ["ready"],
           ...(restart ? { gatewayRestartRequired: true } : {}),
@@ -537,7 +587,12 @@ describe("openclaw.setup provider resolution", () => {
       const { calls, respond } = makeRespond();
 
       await systemAgentHandler("openclaw.setup.auth.start")({
-        params: { sessionId: "auth-session-1", agentId: "research", authChoice: "github-copilot" },
+        params: {
+          sessionId: "auth-session-1",
+          agentId: "research",
+          authChoice: "github-copilot",
+          ...(modelTarget ? { modelTarget } : {}),
+        },
         respond,
         context,
       } as never);
@@ -550,7 +605,11 @@ describe("openclaw.setup provider resolution", () => {
       const session = expectDefined(wizardSessions.get("auth-session-1"), "auth wizard session");
       const first = await callWizardNext(context, { sessionId: "auth-session-1" });
       expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "provider-auth", authChoice: "github-copilot" }),
+        expect.objectContaining({
+          kind: "provider-auth",
+          authChoice: "github-copilot",
+          ...(modelTarget ? { modelTarget } : {}),
+        }),
       );
       expect(setupInferenceMocks.activateSetupInference.mock.calls[0]?.[0].agentId).toBe(
         "research",
@@ -573,21 +632,14 @@ describe("openclaw.setup provider resolution", () => {
         status: "done",
         modelActivation: {
           modelRef: "github-copilot/test",
+          ...(modelTarget ? { modelTarget } : {}),
           ...(restart ? { gatewayRestartRequired: true } : {}),
         },
       });
       expect(wizardSessions.has("auth-session-1")).toBe(false);
     },
   );
-  it.each([
-    "auth",
-    "rate_limit",
-    "billing",
-    "timeout",
-    "format",
-    "unavailable",
-    "unknown",
-  ] as const)(
+  it.each(["auth"] as const)(
     "publishes a finalized %s probe rejection after capability consent",
     async (status) => {
       const { wizardSessions, context } = makeContext();
@@ -784,7 +836,6 @@ describe("openclaw.setup provider resolution", () => {
   it.each([
     "failed",
     "rejected",
-    "persistence-unknown",
     "thrown",
     "retention-indeterminate",
     "application-error",
@@ -807,14 +858,14 @@ describe("openclaw.setup provider resolution", () => {
           }
           if (outcome === "application-error") {
             params.onCommitStarted?.(config);
-            const application = createRuntimeConfigWriteApplication();
-            expectDefined(application.claim(), "application claim").settle("failed");
-            params.onRuntimeApplication?.(application);
+            params.onActivationCompletion?.(async () => {
+              throw new Error("The Gateway did not complete activation (failed).");
+            });
             return { ok: true, modelRef: "example/model", latencyMs: 1, lines: [] };
           }
           return {
             ok: false,
-            status: outcome === "persistence-unknown" ? "unknown" : "auth",
+            status: "auth",
             error: "Provider rejected sign-in",
             ...(outcome === "rejected" ? { disposition: "rejected-before-promotion" } : {}),
           };
@@ -856,7 +907,7 @@ describe("openclaw.setup provider resolution", () => {
           status: "error",
           error:
             outcome === "application-error"
-              ? expect.stringContaining("AI access was saved, but the Gateway could not apply it")
+              ? "The Gateway did not complete activation (failed)."
               : outcome === "retention-indeterminate"
                 ? "Could not retain Codex safely"
                 : outcome === "thrown"

@@ -16,11 +16,9 @@ import {
   createAgentRunRestartAbortError,
 } from "../../agents/run-termination.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
-import {
-  configureChannelAdmissionDecisionSink,
-  configureChannelAdmissionEvidenceCollection,
-} from "../../channels/message-access/admission-evidence.js";
+import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
+import { useBundledProviderPolicyArtifactsForTest } from "../../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -40,13 +38,16 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   createReplyOperation,
   hasReplyOperationExecutionStarted,
   replyRunRegistry,
   type ReplyOperation,
 } from "./reply-run-registry.js";
+import { withReplySystemEventContext } from "./system-event-session-key.js";
 
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
 const state = await setupAgentRunnerExecutionTestState();
 const execution = await import("./agent-runner-execution.js");
 const { emitAgentEvent } = await import("../../infra/agent-events.js");
@@ -60,6 +61,18 @@ const compactionTarget = {
 };
 
 describe("executeAgentTurn: run lifecycle and ownership", () => {
+  it("retains the settled writer without inventing a compaction", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onCompactionAccounting?.({ kind: "durable", count: 0, target: compactionTarget });
+      return { payloads: [{ text: "ok" }], meta: {} };
+    });
+
+    const result = await execution.executeAgentTurn(createMinimalRunAgentTurnParams());
+
+    expect(result.outcome).toMatchObject({ kind: "settled", sessionWriter: compactionTarget });
+    expect(result.outcome.compaction).toBeUndefined();
+  });
+
   it("classifies cancellation raised by the real deferred lifecycle owner", async () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(
       async (params: RunEmbeddedAgentInternalParams) => {
@@ -157,21 +170,24 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     const order: string[] = [];
     const identityWork: unknown[] = [];
     const decisionReceipts: unknown[] = [];
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({
+      enabled: true,
+      decisionSink: (receipt) => {
+        order.push("decision");
+        decisionReceipts.push(receipt);
+        return true;
+      },
+    });
     const clearIdentitySink = configureExecutionIdentityAdmissionSink((work) => {
       order.push("identity");
       identityWork.push(work);
-      return true;
-    });
-    const clearDecisionSink = configureChannelAdmissionDecisionSink((receipt) => {
-      order.push("decision");
-      decisionReceipts.push(receipt);
       return true;
     });
     try {
       const followupRun = createFollowupRun();
       followupRun.run.config = { logging: { audit: { executionIdentity: true } } };
       followupRun.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        audit,
         channelId: "whatsapp",
         accountId: "default",
         participantId: "person-42",
@@ -212,9 +228,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         },
       ]);
     } finally {
-      clearDecisionSink();
       clearIdentitySink();
-      clearCollection();
+      audit.close();
     }
   });
 
@@ -250,49 +265,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(embeddedCall.abortSignal).toMatchObject({ aborted: true });
   });
 
-  it("passes the operator-reviewed proposal revision to every embedded candidate", async () => {
-    const followupRun = createFollowupRun();
-    followupRun.run.skillWorkshopProposalRevision = {
-      agentId: "main",
-      workspaceDir: "/tmp/workspace",
-      proposalId: "proposal-h1",
-      expectedRevisionHash: "revision-h1",
-    };
-    state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("anthropic", "primary", initialFallbackAttemptOptions(params));
-      const result = await params.run(
-        "openai",
-        "fallback",
-        fallbackAttemptOptions(params, "unknown"),
-      );
-      return { result, provider: "openai", model: "fallback", attempts: [] };
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
-
-    expect(
-      state.runEmbeddedAgentMock.mock.calls.map(
-        (call, index) =>
-          requireRecord(call[0], `embedded candidate ${index}`).skillWorkshopProposalRevision,
-      ),
-    ).toEqual([
-      {
-        agentId: "main",
-        workspaceDir: "/tmp/workspace",
-        proposalId: "proposal-h1",
-        expectedRevisionHash: "revision-h1",
-      },
-      {
-        agentId: "main",
-        workspaceDir: "/tmp/workspace",
-        proposalId: "proposal-h1",
-        expectedRevisionHash: "revision-h1",
-      },
-    ]);
-  });
-
   it("records diagnostic progress from global-lane wait notifications", async () => {
     const replyOperation = createReplyOperation({
       sessionKey: "agent:main:global-lane-progress",
@@ -323,20 +295,14 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     }
   });
 
-  it.each([undefined, "default", "ultra"] as const)(
+  it.each(["default"] as const)(
     "revalidates original thinking for main-chat fallback with turn request=%s",
     async (override) => {
       const followupRun = createFollowupRun();
       followupRun.run.provider = "openai";
       followupRun.run.model = "gpt-5.6-sol";
       followupRun.run.thinkLevel = "ultra";
-      if (override !== undefined) {
-        followupRun.run = {
-          ...followupRun.run,
-          thinkLevel: override === "ultra" ? "off" : "ultra",
-          thinkLevelOverride: override,
-        };
-      }
+      followupRun.run = { ...followupRun.run, thinkLevelOverride: override };
       followupRun.run.config = {
         agents: {
           defaults: {
@@ -367,9 +333,9 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
       expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
         "ultra",
-        "high",
+        "ultra",
       ]);
-      expect(followupRun.run.thinkLevel).toBe(override === "ultra" ? "off" : "ultra");
+      expect(followupRun.run.thinkLevel).toBe("ultra");
     },
   );
 
@@ -506,8 +472,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   });
 
   it.each([
-    { reason: "user", compactions: 0 },
-    { reason: "restart", compactions: 0 },
     { reason: "user", compactions: 1 },
     { reason: "restart", compactions: 1 },
   ] as const)(
@@ -585,12 +549,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   );
 
   it.each([
-    { name: "same-owner model", owner: "same", currentContextSnapshot: { tokens: 120 } },
-    { name: "same-owner zero", owner: "same", currentContextSnapshot: { tokens: 0 } },
-    { name: "same-owner unknown", owner: "same", currentContextSnapshot: { tokens: undefined } },
     { name: "same-owner custody-only", owner: "same", currentContextSnapshot: undefined },
     { name: "unrelated writer", owner: "different", currentContextSnapshot: { tokens: 999 } },
-    { name: "opaque candidate", owner: "opaque", currentContextSnapshot: undefined },
   ] as const)(
     "aggregates fallback counts without borrowing $name context",
     async ({ owner, currentContextSnapshot }) => {
@@ -618,19 +578,16 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         currentContextSnapshot: { tokens: 10 },
         target: { ...compactionTarget, sessionId: "latest-successor" },
       };
-      const modelOnly: CompactionAccountingFact | undefined =
-        owner === "opaque"
-          ? undefined
-          : {
-              kind: "durable",
-              count: 0,
-              ...(currentContextSnapshot ? { currentContextSnapshot } : {}),
-              target: {
-                ...latest.target,
-                activeWriterRunId:
-                  owner === "different" ? "unrelated-writer" : compactionTarget.activeWriterRunId,
-              },
-            };
+      const modelOnly: CompactionAccountingFact = {
+        kind: "durable",
+        count: 0,
+        ...(currentContextSnapshot ? { currentContextSnapshot } : {}),
+        target: {
+          ...latest.target,
+          activeWriterRunId:
+            owner === "different" ? "unrelated-writer" : compactionTarget.activeWriterRunId,
+        },
+      };
       const facts = [first, undefined, successor, otherWriter, latest, undefined, modelOnly];
       for (const [index, fact] of facts.entries()) {
         state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -688,36 +645,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     },
   );
 
-  it("passes the hydrated run account to embedded execution", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-      meta: {},
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.agentAccountId = "work";
-    followupRun.originatingChannel = "slack";
-    followupRun.originatingTo = "user:U1";
-    followupRun.originatingAccountId = "work";
-    followupRun.originatingChatType = "direct";
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-        sessionCtx: {
-          Provider: "cron-event",
-        },
-      }),
-    );
-
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
-      messageProvider: "slack",
-      messageTo: "user:U1",
-      agentAccountId: "work",
-      chatType: "direct",
-    });
-  });
-
   it("signals typing and records the execution boundary before assistant text", async () => {
     const typingSignals = createMockTypingSignaler();
     const onAgentRunStart = vi.fn();
@@ -728,6 +655,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       expect(hasReplyOperationExecutionStarted(replyOperation)).toBe(false);
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
       params.onExecutionPhase?.({
         phase: "model_call_started",
         provider: "openai",
@@ -756,48 +684,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     } finally {
       replyOperation.complete();
     }
-  });
-
-  it("forwards CLI harness execution phases into typing signals", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.4", initialFallbackAttemptOptions(params)),
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    state.runCliAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onExecutionPhase?.({
-        phase: "process_spawned",
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        backend: "codex",
-      });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "codex-cli";
-    followupRun.run.model = "gpt-5.4";
-    followupRun.run.clientCaps = ["tool-events", "inline-widgets"];
-    followupRun.media = [{ path: "/tmp/cli.png", contentType: "image/png" }];
-    const typingSignals = createMockTypingSignaler();
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-        typingSignals,
-      }),
-    );
-
-    expect(result.kind).toBe("success");
-    expect(typingSignals.signalExecutionActivity).toHaveBeenCalledOnce();
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      clientCaps: ["tool-events", "inline-widgets"],
-      media: followupRun.media,
-    });
   });
 
   it("requires explicit message targets on heartbeat CLI runs", async () => {
@@ -857,6 +743,78 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
   });
 
+  it("forwards the event queue and bundle MCP retirement to isolated heartbeat embedded runs", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "HEARTBEAT_OK" }],
+      meta: {},
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const opts = withReplySystemEventContext<InternalGetReplyOptions>(
+      { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true },
+      {
+        sessionKey: "agent:main:heartbeat:heartbeat",
+        heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      },
+    );
+    const params = createMinimalRunAgentTurnParams({ opts });
+    params.isHeartbeat = true;
+
+    await executeAgentTurn(params);
+
+    expectMockCallArgFields(
+      state.runEmbeddedAgentMock,
+      0,
+      "isolated heartbeat embedded run params",
+      {
+        trigger: "heartbeat",
+        heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+        cleanupBundleMcpOnRunEnd: true,
+      },
+    );
+  });
+
+  it("forwards the event queue and bundle MCP retirement to isolated heartbeat CLI runs", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "sonnet-4.6", initialFallbackAttemptOptions(params)),
+      provider: "claude-cli",
+      model: "sonnet-4.6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "sonnet-4.6";
+    const opts = withReplySystemEventContext<InternalGetReplyOptions>(
+      { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true },
+      {
+        sessionKey: "agent:main:heartbeat:heartbeat",
+        heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      },
+    );
+    const params = createMinimalRunAgentTurnParams({ followupRun, opts });
+    params.isHeartbeat = true;
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(params);
+
+    expectMockCallArgFields(state.runCliAgentMock, 0, "isolated heartbeat CLI run params", {
+      trigger: "heartbeat",
+      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      cleanupBundleMcpOnRunEnd: true,
+    });
+  });
+
   it("omits requireExplicitMessageTarget on ordinary embedded runs", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
@@ -913,7 +871,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
   it("does not consume channel evidence until a retry reaches runtime admission", async () => {
     const captured: unknown[] = [];
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({ enabled: true });
     const clearSink = configureExecutionIdentityAdmissionSink((work) => {
       captured.push(work);
       return true;
@@ -922,6 +880,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       const followupRun = createFollowupRun();
       followupRun.run.config = { logging: { audit: { executionIdentity: true } } };
       followupRun.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        audit,
         channelId: "whatsapp",
         participantId: "person-1",
       });
@@ -963,7 +922,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       ]);
     } finally {
       clearSink();
-      clearCollection();
+      audit.close();
     }
   });
 

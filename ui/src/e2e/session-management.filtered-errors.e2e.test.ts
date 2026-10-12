@@ -8,6 +8,7 @@ import {
   requireRecord,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -88,8 +89,8 @@ suite.define(() => {
       await search.pressSequentially("superseded", { delay: 40 });
       await search.fill("");
       await search.pressSequentially("latest", { delay: 40 });
-      await roster.locator('.sessions-view-segment wa-radio[value="archived"]').click();
-      await roster.locator('.sessions-view-segment wa-radio[value="all"]').click();
+      await roster.locator('.sessions-view-segment input[value="archived"]').click();
+      await roster.locator('.sessions-view-segment input[value="all"]').click();
       expect(await search.inputValue()).toBe("latest");
       expect(await gateway.getRequests("sessions.list")).toEqual(beforeTyping);
       await gateway.resolveDeferred(
@@ -133,11 +134,9 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
         const selectFilter = async (label: "Archived" | "All" | "Active") => {
-          await page.getByRole("button", { name: "Filter & sort" }).click();
-          await page
-            .locator(".sidebar-session-sort-menu")
-            .getByRole("menuitemradio", { name: label, exact: true })
-            .click();
+          await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+          await chooseSidebarMenuOption(page, "Status", label);
+          await closeSidebarMenu(page);
         };
         await selectFilter(statusFilter);
         await page.getByText("Archived planning", { exact: true }).first().waitFor();

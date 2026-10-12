@@ -1,19 +1,12 @@
-import { emitModelTransportDebug, formatModelTransportDebugUrl } from "@openclaw/ai/diagnostics";
-/**
- * Guarded provider fetch transport utilities.
- *
- * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
- */
+import {
+  emitModelTransportDebug,
+  emitModelTransportError,
+  formatModelTransportDebugUrl,
+} from "@openclaw/ai/diagnostics";
 import { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "@openclaw/ai/internal/retry-after";
 import {
-  isCloudMetadataIpAddress,
-  isLinkLocalIpAddress,
-  isRfc8215LocalUseNat64Ipv6Address,
-  parseCanonicalIpAddress,
-} from "@openclaw/net-policy/ip";
-import {
   asFiniteNumberInRange,
-  clampTimerTimeoutMs,
+  clampPositiveTimerTimeoutMs,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -22,25 +15,21 @@ import {
 } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
-import {
-  mergeSsrFPolicies,
-  ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
-  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
-  SsrFBlockedError,
-  type SsrFPolicy,
-} from "../infra/net/ssrf.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
+import { isRetryableProviderHttpStatus } from "./failover/retry-evidence.js";
 import {
-  containsSecretSentinel,
-  resolveSecretSentinel,
-  SECRET_SENTINEL_PATTERN,
-  swapSecretSentinelsInText,
-} from "../secrets/sentinel.js";
-import { ProviderHttpError, readResponseTextLimited } from "./provider-http-errors.js";
+  ProviderHttpError,
+  readResponseTextLimited,
+  summarizeProviderTransportError,
+} from "./provider-http-errors.js";
 import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
 import { ensureModelProviderLocalService } from "./provider-local-service.js";
+import {
+  resolveProviderTransportSsrFPolicy,
+  withModelProviderNetworkRemediation,
+} from "./provider-network-policy.js";
 import {
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestRouteFacts,
@@ -49,272 +38,28 @@ import {
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
 import { getProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
+import { requestBodyHasStreamTrue } from "./provider-transport-request-body.js";
+import { swapSecretSentinelsForEgress } from "./provider-transport-secret-egress.js";
+import {
+  cancelReaderBestEffort,
+  findSseEventBoundary,
+  hasReadableSseData,
+  isProviderJsonContentType,
+  prepareOpenAISdkSseResponse,
+} from "./provider-transport-sse.js";
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
+const SLOW_MODEL_FETCH_MS = 1_000;
 const OPENAI_SDK_STREAM_CONTENT_SNIFF_BYTES = 2 * 1024;
 const log = createSubsystemLogger("provider-transport-fetch");
 
-/** Max bytes for an entire JSON body synthesized into SSE frames. Prevents OOM
- *  when a hostile streaming endpoint returns a never-ending JSON response
- *  without Content-Length. */
-const SSE_SYNTHESIZE_JSON_MAX_BYTES = 16 * 1024 * 1024;
-
-/** Max bytes read from a non-OK response body before truncation. */
-const SSE_NONOK_BODY_MAX_BYTES = 64 * 1024;
-
-/** Max decoded characters buffered while waiting for the next SSE event boundary. */
-const SSE_SANITIZE_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
-
-const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
-function hasReadableSseData(block: string): boolean {
-  const dataLines = block
-    .split(/\r\n|\n|\r/)
-    .filter((line) => line === "data" || line.startsWith("data:"))
-    .map((line) => {
-      if (line === "data") {
-        return "";
-      }
-      const value = line.slice("data:".length);
-      return value.startsWith(" ") ? value.slice(1) : value;
-    });
-  return dataLines.length > 0 && dataLines.join("\n").trim().length > 0;
-}
-
-function findSseEventBoundary(buffer: string): { index: number; length: number } | undefined {
-  let best: { index: number; length: number } | undefined;
-  for (const delimiter of ["\r\n\r\n", "\n\n", "\r\r"]) {
-    const index = buffer.indexOf(delimiter);
-    if (index === -1) {
-      continue;
-    }
-    if (!best || index < best.index) {
-      best = { index, length: delimiter.length };
-    }
-  }
-  return best;
-}
-
-async function cancelReaderBestEffort(
-  reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
-  reason?: unknown,
-): Promise<void> {
-  // Reader cancellation is cleanup. An upstream cancel failure must not replace
-  // the wrapper's authoritative stream error or downstream cancellation.
-  await reader?.cancel(reason).catch(() => undefined);
-}
-
-function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Response {
-  const source = response.body;
-  if (!source) {
-    return response;
-  }
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let total = 0;
-  // Own the reader: Node can leak an internal pipeThrough writer rejection when
-  // downstream cancellation races the cap terminating the transform.
-  const capped = new ReadableStream<Uint8Array>({
-    start() {
-      reader = source.getReader();
-    },
-    async pull(controller) {
-      try {
-        const chunk = await reader?.read();
-        if (!chunk || chunk.done) {
-          controller.close();
-          return;
-        }
-        const remaining = maxBytes - total;
-        if (chunk.value.byteLength > remaining) {
-          if (remaining > 0) {
-            controller.enqueue(chunk.value.subarray(0, remaining));
-          }
-          total = maxBytes;
-          controller.close();
-          void cancelReaderBestEffort(reader);
-          return;
-        }
-        total += chunk.value.byteLength;
-        controller.enqueue(chunk.value);
-      } catch (error) {
-        controller.error(error);
-        void cancelReaderBestEffort(reader, error);
-      }
-    },
-    async cancel(reason) {
-      await cancelReaderBestEffort(reader, reason);
-    },
-  });
-  return new Response(capped, response);
-}
-
-function sanitizeOpenAISdkSseResponse(
-  response: Response,
-  options?: { synthesizeJsonAsSse?: boolean },
-): Response {
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!response.body) {
-    return response;
-  }
-  if (!response.ok) {
-    return capNonOkResponseBodyLazily(response, SSE_NONOK_BODY_MAX_BYTES);
-  }
-  if (
-    options?.synthesizeJsonAsSse === true &&
-    (/\bapplication\/json\b/i.test(contentType) || /\+json\b/i.test(contentType))
-  ) {
-    const source = response.body;
-    const decoder = new TextDecoder();
-    const encoder = new TextEncoder();
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-    let buffer = "";
-    let totalBytes = 0;
-    const sseBody = new ReadableStream<Uint8Array>({
-      start() {
-        reader = source.getReader();
-      },
-      async pull(controller) {
-        try {
-          for (;;) {
-            const chunk = await reader?.read();
-            if (!chunk || chunk.done) {
-              buffer += decoder.decode();
-              const data = buffer.trim();
-              if (data) {
-                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
-              }
-              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-              controller.close();
-              return;
-            }
-            const nextTotalBytes = totalBytes + chunk.value.byteLength;
-            if (nextTotalBytes > SSE_SYNTHESIZE_JSON_MAX_BYTES) {
-              throw new Error(
-                `Streaming JSON body exceeded ${SSE_SYNTHESIZE_JSON_MAX_BYTES} bytes while synthesizing SSE frames`,
-              );
-            }
-            totalBytes = nextTotalBytes;
-            buffer += decoder.decode(chunk.value, { stream: true });
-          }
-        } catch (error) {
-          await cancelReaderBestEffort(reader, error);
-          controller.error(error);
-        }
-      },
-      async cancel(reason) {
-        await cancelReaderBestEffort(reader, reason);
-      },
-    });
-    const headers = new Headers(response.headers);
-    headers.set("content-type", "text/event-stream; charset=utf-8");
-    return new Response(sseBody, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    });
-  }
-  if (!/\btext\/event-stream\b/i.test(contentType)) {
-    return response;
-  }
-
-  const source = response.body;
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let buffer = "";
-
-  const enqueueSanitized = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-    text: string,
-  ): number => {
-    let enqueued = 0;
-    buffer += text;
-    for (;;) {
-      const boundary = findSseEventBoundary(buffer);
-      if (!boundary) {
-        if (buffer.length > SSE_SANITIZE_BUFFER_MAX_CHARS) {
-          throw new Error(
-            `SSE response exceeded max buffer size (${SSE_SANITIZE_BUFFER_MAX_CHARS} chars) without event boundary`,
-          );
-        }
-        return enqueued;
-      }
-      const block = buffer.slice(0, boundary.index);
-      const separator = buffer.slice(boundary.index, boundary.index + boundary.length);
-      buffer = buffer.slice(boundary.index + boundary.length);
-      // OpenAI's SDK currently tries to JSON.parse event-only or blank-data SSE
-      // messages. Drop those malformed keepalive-style blocks before it parses.
-      if (hasReadableSseData(block)) {
-        controller.enqueue(encoder.encode(`${block}${separator}`));
-        enqueued += 1;
-        return enqueued;
-      }
-    }
-  };
-
-  const sanitizedBody = new ReadableStream<Uint8Array>({
-    start() {
-      reader = source.getReader();
-    },
-    async pull(controller) {
-      try {
-        for (;;) {
-          const pending = enqueueSanitized(controller, "");
-          if (pending > 0) {
-            return;
-          }
-          const chunk = await reader?.read();
-          if (!chunk || chunk.done) {
-            const tail = decoder.decode();
-            if (tail) {
-              enqueueSanitized(controller, tail);
-            }
-            if (buffer && hasReadableSseData(buffer)) {
-              controller.enqueue(encoder.encode(buffer));
-            }
-            buffer = "";
-            controller.close();
-            return;
-          }
-          const enqueued = enqueueSanitized(
-            controller,
-            decoder.decode(chunk.value, { stream: true }),
-          );
-          if (enqueued > 0) {
-            return;
-          }
-        }
-      } catch (error) {
-        await cancelReaderBestEffort(reader, error);
-        controller.error(error);
-      }
-    },
-    async cancel(reason) {
-      await cancelReaderBestEffort(reader, reason);
-    },
-  });
-
-  return new Response(sanitizedBody, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-}
-
 function shouldSanitizeOpenAISdkSseResponse(model: Model): boolean {
-  if (model.provider !== "openai") {
-    return true;
-  }
-  try {
-    return new URL(model.baseUrl).hostname.toLowerCase() !== "api.openai.com";
-  } catch {
-    return true;
-  }
-}
-
-function isJsonContentType(contentType: string): boolean {
-  return /\bapplication\/json\b/i.test(contentType) || /\+json\b/i.test(contentType);
+  return (
+    model.provider !== "openai" ||
+    URL.parse(model.baseUrl)?.hostname.toLowerCase() !== "api.openai.com"
+  );
 }
 
 type OpenAISdkStreamBodyKind = "html" | "json" | "sse" | "unknown";
@@ -375,13 +120,9 @@ async function classifyOpenAISdkStreamBody(response: Response): Promise<OpenAISd
 }
 
 function withOpenAISdkStreamContentType(response: Response, contentType: string): Response {
-  const headers = new Headers(response.headers);
-  headers.set("content-type", contentType);
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
+  const normalized = new Response(response.body, response);
+  normalized.headers.set("content-type", contentType);
+  return normalized;
 }
 
 async function normalizeOpenAISdkStreamContentType(params: {
@@ -397,22 +138,18 @@ async function normalizeOpenAISdkStreamContentType(params: {
   if (/\btext\/event-stream\b/i.test(contentType)) {
     return params.response;
   }
-  if (isJsonContentType(contentType)) {
+  const isJson = isProviderJsonContentType(contentType);
+  if (isJson || !contentType.trim()) {
     // Some OpenAI-compatible gateways stream real SSE (`data: {...}`) but mislabel
     // the response as JSON. Without relabeling, the JSON-wrap fallback below would
     // re-prefix each frame as `data: data: {...}`, breaking JSON.parse in the SDK.
+    // Missing content types use the same clone sniff while preserving the original body.
     const kind = await classifyOpenAISdkStreamBody(params.response).catch(() => "unknown" as const);
     if (kind === "sse") {
       return withOpenAISdkStreamContentType(params.response, "text/event-stream; charset=utf-8");
     }
-    return params.response;
-  }
-  if (!contentType.trim()) {
-    // ChatGPT Codex can stream valid SSE with no content-type header. Sniff a
-    // clone so the SDK still receives the original body once we normalize it.
-    const kind = await classifyOpenAISdkStreamBody(params.response).catch(() => "unknown" as const);
-    if (kind === "sse") {
-      return withOpenAISdkStreamContentType(params.response, "text/event-stream; charset=utf-8");
+    if (isJson) {
+      return params.response;
     }
     if (kind === "json") {
       return withOpenAISdkStreamContentType(params.response, "application/json; charset=utf-8");
@@ -433,34 +170,6 @@ async function normalizeOpenAISdkStreamContentType(params: {
   });
 }
 
-function requestBodyHasStreamTrue(
-  request: Request | undefined,
-  init: RequestInit | undefined,
-): boolean {
-  const method = request?.method ?? init?.method;
-  if (method && method.toUpperCase() !== "POST") {
-    return false;
-  }
-  const headers = request?.headers ?? new Headers(init?.headers);
-  const contentType = headers.get("content-type") ?? "";
-  if (contentType && !/\bapplication\/json\b/i.test(contentType)) {
-    return false;
-  }
-
-  let text: string | undefined;
-  if (typeof init?.body === "string") {
-    text = init.body;
-  }
-  if (!text) {
-    return false;
-  }
-  try {
-    return (JSON.parse(text) as { stream?: unknown }).stream === true;
-  } catch {
-    return false;
-  }
-}
-
 function resolveMaxSdkRetryWaitSeconds(): number | undefined {
   const raw = process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS?.trim();
   if (!raw) {
@@ -475,16 +184,13 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
     return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
   }
 
-  const seconds = asFiniteNumberInRange(parseStrictFiniteNumber(raw), {
-    min: 0,
-    minExclusive: true,
-    max: Number.MAX_SAFE_INTEGER,
-  });
-  if (seconds !== undefined) {
-    return seconds;
-  }
-
-  return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
+  return (
+    asFiniteNumberInRange(parseStrictFiniteNumber(raw), {
+      min: 0,
+      minExclusive: true,
+      max: Number.MAX_SAFE_INTEGER,
+    }) ?? DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS
+  );
 }
 
 function shouldBypassLongSdkRetry(response: Response): boolean {
@@ -494,8 +200,7 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   }
 
   const status = response.status;
-  const stainlessRetryable = status === 408 || status === 409 || status === 429 || status >= 500;
-  if (!stainlessRetryable) {
+  if (!isRetryableProviderHttpStatus(status)) {
     return false;
   }
 
@@ -532,25 +237,15 @@ function buildManagedResponse(
     },
     refreshTimeout,
   });
-  return new Response(wrappedBody, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  return new Response(wrappedBody, response);
 }
 
 function resolveModelRequestPolicy(model: Model) {
   const debugProxy = resolveDebugProxySettings();
-  let explicitDebugProxyUrl: string | undefined;
-  if (debugProxy.enabled && debugProxy.proxyUrl) {
-    try {
-      if (new URL(model.baseUrl).protocol === "https:") {
-        explicitDebugProxyUrl = debugProxy.proxyUrl;
-      }
-    } catch {
-      // Non-URL provider base URLs cannot use the debug proxy override safely.
-    }
-  }
+  const explicitDebugProxyUrl =
+    debugProxy.enabled && debugProxy.proxyUrl && URL.parse(model.baseUrl)?.protocol === "https:"
+      ? debugProxy.proxyUrl
+      : undefined;
   const request = mergeModelProviderRequestOverrides(getModelProviderRequestTransport(model), {
     proxy: explicitDebugProxyUrl
       ? {
@@ -575,236 +270,21 @@ export function resolveModelRequestTimeoutMs(
   model: Model,
   timeoutMs: number | undefined,
 ): number | undefined {
-  if (timeoutMs !== undefined) {
-    return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? clampTimerTimeoutMs(timeoutMs)
-      : undefined;
-  }
-  const modelTimeoutMs = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
-  return typeof modelTimeoutMs === "number" && Number.isFinite(modelTimeoutMs) && modelTimeoutMs > 0
-    ? clampTimerTimeoutMs(modelTimeoutMs)
-    : undefined;
-}
-
-function buildModelRequestSignal(
-  baseSignal: AbortSignal | undefined,
-  timeoutMs: number | undefined,
-): AbortSignal | undefined {
-  if (timeoutMs === undefined) {
-    return baseSignal;
-  }
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  if (!baseSignal) {
-    return timeoutSignal;
-  }
-  return AbortSignal.any([baseSignal, timeoutSignal]);
-}
-
-function resolveHttpOrigin(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
-    return parsed.origin.toLowerCase();
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeProviderOriginHostname(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    const normalized = parsed.hostname.trim().toLowerCase().replace(/\.+$/, "");
-    return normalized || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is string {
-  const hostname = normalizeProviderOriginHostname(value);
-  if (!hostname) {
-    return false;
-  }
-  const labels = hostname.split(".").filter(Boolean);
-  return (
-    !labels.some(
-      (label) =>
-        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
-    ) &&
-    !isLinkLocalIpAddress(hostname) &&
-    !isCloudMetadataIpAddress(hostname) &&
-    !isRfc8215LocalUseNat64Ipv6Address(hostname)
+  return clampPositiveTimerTimeoutMs(
+    timeoutMs === undefined
+      ? (model as { requestTimeoutMs?: unknown }).requestTimeoutMs
+      : timeoutMs,
   );
-}
-
-function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
-  const hostname = normalizeProviderOriginHostname(value);
-  if (!hostname) {
-    return false;
-  }
-  const labels = hostname.split(".").filter(Boolean);
-  return (
-    !labels.some(
-      (label) =>
-        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
-    ) && !parseCanonicalIpAddress(hostname)
-  );
-}
-
-export function resolveProviderTransportSsrFPolicy(params: {
-  baseUrl?: string;
-  url: string;
-  allowPrivateNetwork?: boolean;
-  trustConfiguredBaseUrlOrigin?: boolean;
-}): SsrFPolicy | undefined {
-  const baseUrl = params.baseUrl;
-  const baseOrigin = resolveHttpOrigin(baseUrl);
-  const requestOrigin = resolveHttpOrigin(params.url);
-  const requestMatchesBaseOrigin =
-    typeof baseUrl === "string" && Boolean(baseOrigin) && requestOrigin === baseOrigin;
-  const baseUrlOriginPolicy =
-    requestMatchesBaseOrigin &&
-    params.trustConfiguredBaseUrlOrigin &&
-    canImplicitlyTrustConfiguredBaseUrlOrigin(baseUrl)
-      ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl)
-      : undefined;
-  // Fake-IP trust is hostname-scoped and orthogonal to exact-origin private-IP trust.
-  // It is for DNS hostnames only and does not allow literal private IPs by itself.
-  const fakeIpPolicy =
-    requestMatchesBaseOrigin && canApplyFakeIpHostnamePolicy(baseUrl)
-      ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
-      : undefined;
-  return mergeSsrFPolicies(
-    baseUrlOriginPolicy,
-    fakeIpPolicy,
-    params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
-  );
-}
-
-function withModelProviderNetworkRemediation(
-  error: unknown,
-  params: {
-    baseUrl?: string;
-    providerId: string;
-    url: string;
-  },
-): unknown {
-  const baseOrigin = resolveHttpOrigin(params.baseUrl);
-  const requestOrigin = resolveHttpOrigin(params.url);
-  const hostname = normalizeProviderOriginHostname(params.baseUrl);
-  if (
-    !(error instanceof SsrFBlockedError) ||
-    !baseOrigin ||
-    requestOrigin !== baseOrigin ||
-    !hostname ||
-    !isRfc8215LocalUseNat64Ipv6Address(hostname)
-  ) {
-    return error;
-  }
-  return new SsrFBlockedError(
-    `Configured model provider ${params.providerId} uses local-use NAT64 origin ` +
-      `${baseOrigin}, which OpenClaw blocks by default. Move the provider to a ` +
-      `loopback, LAN, or tailnet address, or set ` +
-      `models.providers.${params.providerId}.request.allowPrivateNetwork=true only for an ` +
-      `operator-controlled endpoint. Original block: ${error.message}`,
-  );
-}
-
-function headersContainSecretSentinel(headers: HeadersInit | undefined): boolean {
-  if (!headers) {
-    return false;
-  }
-  for (const value of new Headers(headers).values()) {
-    if (containsSecretSentinel(value)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function swapSecretSentinelsInUrl(url: string): { text: string; unknown: string[] } {
-  if (!containsSecretSentinel(url)) {
-    return { text: url, unknown: [] };
-  }
-  const unknown = new Set<string>();
-  const text = url.replace(new RegExp(SECRET_SENTINEL_PATTERN.source, "g"), (sentinel) => {
-    const value = resolveSecretSentinel(sentinel);
-    if (value === undefined) {
-      unknown.add(sentinel);
-      return sentinel;
-    }
-    // Sentinels are URL-safe placeholders. Encode the real bytes so query/path structure is stable.
-    return encodeURIComponent(value);
-  });
-  return { text, unknown: [...unknown] };
-}
-
-function swapSecretSentinelsForEgress(params: { url: string; headers?: HeadersInit }): {
-  url: string;
-  headers?: Headers;
-} {
-  if (!containsSecretSentinel(params.url) && !headersContainSecretSentinel(params.headers)) {
-    return { url: params.url };
-  }
-  const urlSwap = swapSecretSentinelsInUrl(params.url);
-  const headers = params.headers ? new Headers(params.headers) : undefined;
-  const unknown = new Set(urlSwap.unknown);
-  if (headers) {
-    for (const [name, value] of headers.entries()) {
-      const swapped = swapSecretSentinelsInText(value);
-      headers.set(name, swapped.text);
-      for (const sentinel of swapped.unknown) {
-        unknown.add(sentinel);
-      }
-    }
-  }
-  const unresolved = unknown.values().next().value;
-  if (unresolved) {
-    throw new Error(
-      `Secret sentinel ${unresolved} is not registered in this process; refusing to send request`,
-    );
-  }
-  return { url: urlSwap.text, ...(headers ? { headers } : {}) };
 }
 
 export function buildGuardedModelFetch(
   model: Model,
   timeoutMs?: number,
-  options?: { sanitizeSse?: boolean },
+  options?: { sanitizeSse?: boolean; onSseComment?: () => void },
 ): typeof fetch {
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
-  const summarizeError = (error: unknown): string => {
-    if (!error || typeof error !== "object") {
-      return `type=${typeof error}`;
-    }
-    const record = error as Record<string, unknown>;
-    const cause =
-      record.cause && typeof record.cause === "object"
-        ? (record.cause as Record<string, unknown>)
-        : undefined;
-    const read = (value: unknown) => (typeof value === "string" ? value : typeof value);
-    return [
-      `name=${read(record.name)}`,
-      `code=${read(record.code)}`,
-      `causeName=${read(cause?.name)}`,
-      `causeCode=${read(cause?.code)}`,
-      `message=${error instanceof Error ? error.message : read(record.message)}`,
-    ].join(" ");
-  };
   return async (input, init) => {
     let localServiceLease: ProviderLocalServiceLease | undefined;
     const request = input instanceof Request ? new Request(input, init) : undefined;
@@ -845,7 +325,12 @@ export function buildGuardedModelFetch(
       requestInit ??
       (swappedEgress.headers && init ? { ...init, headers: swappedEgress.headers } : init);
     const baseSignal = baseInit?.signal ?? undefined;
-    const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
+    const timeoutSignal =
+      requestTimeoutMs === undefined ? undefined : AbortSignal.timeout(requestTimeoutMs);
+    const localServiceSignal =
+      baseSignal && timeoutSignal
+        ? AbortSignal.any([baseSignal, timeoutSignal])
+        : (baseSignal ?? timeoutSignal);
     const guardedFetchOptions = {
       url,
       init: baseInit,
@@ -893,21 +378,28 @@ export function buildGuardedModelFetch(
         providerId: model.provider,
         url,
       });
-      log.warn(
-        `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
-          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(remediatedError)}`,
+      emitModelTransportError(
+        log,
+        "model-fetch",
+        `provider=${model.provider} api=${model.api} model=${model.id} ` +
+          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeProviderTransportError(remediatedError)}`,
+        baseSignal,
       );
       localServiceLease?.release();
       throw remediatedError;
     }
     let response = result.response;
-    emitModelTransportDebug(
-      log,
+    const elapsedMs = Date.now() - fetchStartedAt;
+    const responseMessage =
       `[model-fetch] response provider=${model.provider} api=${model.api} model=${model.id} ` +
-        `status=${response.status} elapsedMs=${Date.now() - fetchStartedAt} ` +
-        `dispatcher=${result.dispatcherReused ? "reused" : "new"} ` +
-        `contentType=${response.headers.get("content-type") ?? ""}`,
-    );
+      `status=${response.status} elapsedMs=${elapsedMs} ` +
+      `dispatcher=${result.dispatcherReused ? "reused" : "new"} ` +
+      `contentType=${response.headers.get("content-type") ?? ""}`;
+    if (!response.ok || elapsedMs >= SLOW_MODEL_FETCH_MS) {
+      log.info(responseMessage);
+    } else {
+      emitModelTransportDebug(log, responseMessage);
+    }
     if (shouldBypassLongSdkRetry(response)) {
       const headers = new Headers(response.headers);
       headers.set("x-should-retry", "false");
@@ -935,9 +427,10 @@ export function buildGuardedModelFetch(
       result.refreshTimeout,
       localServiceLease,
     );
-    return options?.sanitizeSse === false || !shouldSanitizeOpenAISdkSseResponse(model)
-      ? response
-      : sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
+    return prepareOpenAISdkSseResponse(response, {
+      sanitize: options?.sanitizeSse !== false && shouldSanitizeOpenAISdkSseResponse(model),
+      synthesizeJsonAsSse,
+      onSseComment: options?.onSseComment,
+    });
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

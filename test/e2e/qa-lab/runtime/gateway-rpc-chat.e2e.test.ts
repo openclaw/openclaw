@@ -6,11 +6,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { isInternalRuntimeContextCarrierText } from "../../../../extensions/qa-lab/api.js";
 import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
-import {
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
-} from "../../../../src/agents/internal-runtime-context.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -69,9 +66,6 @@ const historyTextSchema = z.union([
   z.string(),
   z.array(z.object({ type: z.literal("text"), text: z.string() })).length(1),
 ]);
-// Next-turn carriers are the delimited body only; the marker instruction lives in the system prompt.
-const runtimeCarrierPrefix = `${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`;
-
 function expectWhitespaceInterior(
   texts: string[],
   owner: string,
@@ -396,13 +390,7 @@ describe("Gateway chat RPCs", () => {
             expect(part.type).toBe("input_text");
             return expectDefined(part.text, "user text");
           })
-          .filter(
-            (text) =>
-              !(
-                text.startsWith(runtimeCarrierPrefix) &&
-                text.endsWith(`\n${INTERNAL_RUNTIME_CONTEXT_END}`)
-              ),
-          );
+          .filter((text) => !isInternalRuntimeContextCarrierText(text));
         expect(userTexts).toHaveLength(index + 1);
         const history = await waitForChatHistory({
           gateway,
@@ -420,11 +408,36 @@ describe("Gateway chat RPCs", () => {
             typeof content === "string" ? content : expectDefined(content[0], "history text").text;
           expectWhitespaceInterior([recorded], recorded, expected.marker, expected.interior);
         }
-        if (index === 0) {
-          expect(userTexts[0]).not.toContain("/think high");
-        } else {
-          expect(userTexts[0]).toContain("/think high");
-        }
+        console.log(
+          "[gateway-rpc-chat-runtime-proof]",
+          JSON.stringify({
+            turn: index + 1,
+            gatewayRunStatus: terminal.status,
+            serializedRuntimeCarriersSkipped: input
+              .filter((item) => item.role === "user")
+              .map((item) =>
+                (item.content ?? [])
+                  .filter((part) => part.type === "input_text")
+                  .map((part) => part.text ?? "")
+                  .join(""),
+              )
+              .filter(isInternalRuntimeContextCarrierText).length,
+            selectedUserTurns: userTexts.length,
+            latestPromptSelected: userTexts.at(-1)?.includes(`BEGIN_${turn.marker}`) ?? false,
+            persistedHistoryContainsPrompt: userMessages.some((message) => {
+              const content = historyTextSchema.safeParse(message.content);
+              return (
+                content.success &&
+                (typeof content.data === "string"
+                  ? content.data
+                  : (content.data[0]?.text ?? "")
+                ).includes(`BEGIN_${turn.marker}`)
+              );
+            }),
+          }),
+        );
+        // The first-sent model prompt replays as projected, so its directive stays stripped.
+        expect(userTexts[0]).not.toContain("/think high");
       }
     },
   );
@@ -434,10 +447,11 @@ describe("Gateway chat RPCs", () => {
     const provider = expectDefined(mock, "trace mock provider");
     const sessionKey = `agent:qa:gateway-inline-trace-${randomUUID()}`;
     const finals = new Map<string, string[]>();
-    let settledTurns = 0;
+    const settledRunIds = new Set<string>();
     const settledSchema = z.object({
       sessionKey: z.literal(sessionKey),
-      reason: z.literal("chat.run.settled"),
+      phase: z.literal("end"),
+      runId: z.string(),
     });
     const finalSchema = z.object({
       sessionKey: z.literal(sessionKey),
@@ -457,11 +471,11 @@ describe("Gateway chat RPCs", () => {
             replies.push(JSON.stringify(parsed.data.message));
             finals.set(parsed.data.runId, replies);
           }
-        } else if (
-          event.event === "sessions.changed" &&
-          settledSchema.safeParse(event.payload).success
-        ) {
-          settledTurns += 1;
+        } else if (event.event === "sessions.changed") {
+          const parsed = settledSchema.safeParse(event.payload);
+          if (parsed.success) {
+            settledRunIds.add(parsed.data.runId);
+          }
         }
       },
     });
@@ -507,9 +521,9 @@ describe("Gateway chat RPCs", () => {
         await expect
           .poll(() => finals.get(runId)?.some((text) => text.includes(reply)), { timeout: 10_000 })
           .toBe(true);
-        // This notification follows dispatch delivery and admission cleanup; no trailing
+        // The terminal session projection follows persistence and dispatch cleanup; no trailing
         // diagnostic payload can arrive after the negative trace assertions below.
-        await expect.poll(() => settledTurns, { timeout: 10_000 }).toBe(index + 1);
+        await expect.poll(() => settledRunIds.has(runId), { timeout: 10_000 }).toBe(true);
         const text = expectDefined(finals.get(runId), "settled chat finals").join("\n");
         expect(text).toContain(reply);
         expect.soft(text.includes("Model Input (User Role)"), `trace turn ${index}`).toBe(turn.raw);
@@ -530,7 +544,7 @@ describe("Gateway chat RPCs", () => {
           `[inline-trace-proof] ${JSON.stringify({
             turn: index,
             runId,
-            settled: settledTurns === index + 1,
+            settled: settledRunIds.has(runId),
             modelReplyDelivered: text.includes(reply),
             rawExpected: turn.raw,
             rawInput: text.includes("Model Input (User Role)"),

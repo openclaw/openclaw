@@ -31,6 +31,7 @@ openclaw-lobster-pet .lobster-pet {
 }
 
 .lobster-pet__motion--hop .lobster-pet .lobster-pet__body {
+  transform-origin: 50% 100%;
   animation: lobster-pet-landing var(--lob-travel-ms) ease-in-out both;
   animation-delay: var(--lob-act-delay, 0s);
 }
@@ -69,23 +70,22 @@ openclaw-lobster-pet .lobster-pet {
     transform: scale(1);
   }
   14% {
-    transform: scale(1.12, 0.82);
+    transform: scale(1.03, 0.96);
   }
   38% {
-    transform: scale(0.92, 1.1) rotate(-4deg);
+    transform: scale(0.98, 1.03) rotate(-4deg);
   }
   70% {
-    transform: scale(0.96, 1.05) rotate(3deg);
+    transform: scale(0.99, 1.02) rotate(3deg);
   }
   86% {
-    transform: scale(1.16, 0.78);
+    transform: scale(1.04, 0.94);
   }
   94% {
-    transform: scale(0.98, 1.04);
+    transform: scale(0.99, 1.02);
   }
 }
 
-/* Departure/dismissal: duck down behind the ledge and fade. */
 openclaw-lobster-pet .lobster-pet--away {
   opacity: 0;
   visibility: hidden;
@@ -100,8 +100,8 @@ openclaw-lobster-pet .lobster-pet--away {
   position: absolute;
   bottom: 0;
   left: var(--lob-x, 80%);
-  /* Build multipliers stretch the sprite box; the svg renders with
-     preserveAspectRatio="none", so the silhouette follows the box. */
+  /* Lobsters keep the artwork's proportions; other species supply their
+     own fixed sprite dimensions through --lob-w and --lob-h. */
   width: calc(16px * var(--lob-scale, 2) * var(--lob-w, 1));
   height: calc(14px * var(--lob-scale, 2) * var(--lob-h, 1));
   transform: translateX(-50%);
@@ -125,7 +125,6 @@ wa-dropdown.lobster-pet-dismiss-menu {
   pointer-events: auto;
 }
 
-/* The Elder does everything at Elder speed. */
 .lobster-pet--elder {
   transition: left 2.6s ease-in-out;
 }
@@ -151,9 +150,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   pointer-events: none;
 }
 
-/* ---- Rare palette variants (lobster-pet-palettes.ts + lobster-pet-lore.ts) ---- */
-
-/* Ghost/albino: pale translucent shell, icy glints. */
 .lobster-pet--palette-ghost {
   --lob-glint: #a8dcff;
 }
@@ -197,12 +193,37 @@ openclaw-lobster-pet[data-dex-complete]::after {
   --lob-glint: #3fff7d;
 }
 
-.lobster-pet--palette-heisenbug {
+.lobster-pet--palette-heisenbug,
+.lobster-pet--palette-clawiestardust {
   --lob-glint: #8be9fd;
 }
 
 .lobster-pet--palette-blueprint {
   --lob-glint: #cfe3ff;
+}
+
+.lobster-pet--palette-clawnstantine {
+  --lob-glint: #ffe09a;
+}
+
+.lobster-pet--palette-taylorpinch {
+  --lob-glint: #d5c4f2;
+}
+
+.lobster-pet--palette-clawtoodeetoo {
+  --lob-glint: #8cd8ff;
+}
+
+.lobster-pet--palette-leonardodepinchy {
+  --lob-glint: #e5bd68;
+}
+
+.lobster-pet--palette-shellvis {
+  --lob-glint: #f4ce7e;
+}
+
+.lobster-pet--palette-alexandergrahamshell {
+  --lob-glint: #dec58e;
 }
 
 .lobster-pet--palette-clawtron {
@@ -375,7 +396,8 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 .lobster-pet--palette-nebula .lob-twinkle,
-.lobster-pet--palette-geode .lob-twinkle {
+.lobster-pet--palette-geode .lob-twinkle,
+.lobster-pet--palette-glass .lob-glass-glints {
   transform-box: fill-box;
   transform-origin: center;
   animation: lobster-pet-twinkle 2s ease-in-out infinite;
@@ -383,12 +405,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 .lobster-pet--palette-glass .lobster-pet__svg {
   opacity: 0.38;
-}
-
-.lobster-pet--palette-glass .lob-glass-glints {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: lobster-pet-twinkle 2s ease-in-out infinite;
 }
 
 /* Flicker owns opacity only. Breathe remains in the list because setting
@@ -498,7 +514,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 .lob-disco {
-  animation: lobster-pet-disco-sweep 6s linear infinite;
+  animation: lobster-pet-oilslick 6s linear infinite;
 }
 
 .lob-disco rect:nth-child(3n + 1) {
@@ -509,12 +525,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 .lob-disco rect:nth-child(3n + 4) {
   animation-delay: 0.8s;
-}
-
-@keyframes lobster-pet-disco-sweep {
-  to {
-    filter: hue-rotate(360deg);
-  }
 }
 
 :root[data-theme-mode="light"] .lob-lumen {
@@ -565,13 +575,18 @@ openclaw-lobster-pet[data-dex-complete]::after {
   filter: saturate(1.3) brightness(1.07);
 }
 
-.lobster-pet__sparkle {
+.lobster-pet__sparkle,
+.lobster-pet__heart,
+.lobster-pet__z {
   position: absolute;
-  color: #ffe27a;
-  font-size: calc(4px * var(--lob-scale, 2));
   line-height: 1;
   opacity: 0;
   pointer-events: none;
+}
+
+.lobster-pet__sparkle {
+  color: #ffe27a;
+  font-size: calc(4px * var(--lob-scale, 2));
 }
 
 .lobster-pet--shiny .lobster-pet__sparkle {
@@ -592,7 +607,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 /* Retro: homage to the classic OpenClaw logo — white sticker outline around
-   the whole sprite (the halo is two stacked 1px drop-shadows). */
+   the whole sprite. */
 .lobster-pet--palette-retro .lobster-pet__svg,
 .lobster-pet--palette-goldenretro .lobster-pet__svg {
   filter: drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 1.2px #f5f7fa)
@@ -676,7 +691,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   filter: none;
 }
 
-/* Offline also dims the lumen running lights - no power, no glow. */
 .lobster-pet--offline .lob-lumen {
   filter: none;
   animation: none;
@@ -729,40 +743,35 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation-delay: var(--lob-breathe-delay, 0s);
 }
 
-.lob-claw {
+.lob-claw,
+.lob-claw > path {
   transform-box: view-box;
 }
 
-.lob-claw--l {
+.lob-claw--l,
+.lob-claw--l > path {
   transform-origin: 25px 52px;
 }
 
-.lob-claw--r {
+.lob-claw--r,
+.lob-claw--r > path {
   transform-origin: 95px 52px;
 }
 
 /* Claw size scales the paths inside the group: act animations own the group
    transform, so scaling here composes instead of being overridden mid-wave.
    Per-side vars let crusher/pincer asymmetry size each claw on its own. */
-.lob-claw > path {
-  transform-box: view-box;
-}
-
 .lob-claw--l > path {
   transform: scale(var(--lob-claw-l, 1));
-  transform-origin: 25px 52px;
 }
 
 .lob-claw--r > path {
   transform: scale(var(--lob-claw-r, 1));
-  transform-origin: 95px 52px;
 }
 
 .lob-tail {
   fill: color-mix(in srgb, var(--lob-shell, #ff4f40) 78%, #10181f);
 }
-
-/* ---- Idle blinking: crossfade open pupils and closed-lid curves ---- */
 
 .lobster-pet .lob-eye-closed {
   opacity: 0;
@@ -780,8 +789,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation-delay: var(--lob-blink-delay, 0s);
 }
 
-/* ---- Entrances ----
-   Walk pops up from behind the footer ledge; rare arrivals descend under a
+/* Walk pops up from behind the footer ledge; rare arrivals descend under a
    balloon or pop out of a bubble. Durations mirror LOBSTER_PET_ENTRANCE_MS
    in lobster-pet-plans.ts. */
 
@@ -864,17 +872,12 @@ openclaw-lobster-pet[data-dex-complete]::after {
     opacity: 0.75;
     transform: scale(1);
   }
-  70% {
-    opacity: 0;
-    transform: scale(1.25);
-  }
+  70%,
   100% {
     opacity: 0;
     transform: scale(1.25);
   }
 }
-
-/* ---- Acts ---- */
 
 .lobster-pet--act-wave .lob-claw--r {
   animation: lobster-pet-wave 1.4s ease-in-out;
@@ -927,24 +930,21 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation-delay: var(--lob-act-delay, 0s);
 }
 
-/* Petting: content closed eyes and a floating heart. */
-.lobster-pet--act-pet .lob-eye-open {
+.lobster-pet--act-pet .lob-eye-open,
+.lobster-pet--act-nap .lob-eye-open {
   opacity: 0;
 }
 
-.lobster-pet--act-pet .lob-eye-closed {
+.lobster-pet--act-pet .lob-eye-closed,
+.lobster-pet--act-nap .lob-eye-closed {
   opacity: 1;
 }
 
 .lobster-pet__heart {
-  position: absolute;
   left: 46%;
   bottom: 78%;
   color: #ff5c8a;
   font-size: calc(5px * var(--lob-scale, 2));
-  line-height: 1;
-  opacity: 0;
-  pointer-events: none;
 }
 
 .lobster-pet--act-pet .lobster-pet__heart {
@@ -991,13 +991,11 @@ openclaw-lobster-pet[data-dex-complete]::after {
   transform: translateY(6%) scaleY(0.94);
 }
 
-/* Molt: shiver, squash, pop. */
 .lobster-pet--act-molt .lobster-pet__body {
   animation: lobster-pet-molt 2.6s ease-in-out;
   animation-delay: var(--lob-act-delay, 0s);
 }
 
-/* The abandoned shell: frozen, washed out, fading over a minute. */
 .lobster-pet--shell {
   pointer-events: none;
   cursor: default;
@@ -1014,27 +1012,13 @@ openclaw-lobster-pet[data-dex-complete]::after {
   opacity: 1;
 }
 
-/* ---- Nap: eyes shut, z's drift up ---- */
-
-.lobster-pet--act-nap .lob-eye-open {
-  opacity: 0;
-}
-
-.lobster-pet--act-nap .lob-eye-closed {
-  opacity: 1;
-}
-
 .lobster-pet__z {
-  position: absolute;
   left: 58%;
   bottom: 72%;
   color: var(--lob-claw, #ff775f);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: calc(4.5px * var(--lob-scale, 2));
   font-weight: 700;
-  line-height: 1;
-  opacity: 0;
-  pointer-events: none;
 }
 
 .lobster-pet--act-nap .lobster-pet__z {
@@ -1042,7 +1026,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation-delay: calc(var(--i, 0) * 0.7s);
 }
 
-/* Party days: confetti-colored z's. */
 .lobster-pet--party .lobster-pet__z:nth-of-type(1) {
   color: #ffd166;
 }
@@ -1054,8 +1037,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
 .lobster-pet--party .lobster-pet__z:nth-of-type(3) {
   color: #ff5c8a;
 }
-
-/* ---- Bubbles ---- */
 
 .lobster-pet__bubble {
   position: absolute;
@@ -1074,8 +1055,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation-delay: calc(var(--i, 0) * 0.42s);
 }
 
-/* ---- Keyframes ---- */
-
 @keyframes lobster-pet-breathe {
   0%,
   100% {
@@ -1088,31 +1067,27 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 @keyframes lobster-pet-blink-open {
   0%,
-  93% {
+  93%,
+  98%,
+  100% {
     opacity: 1;
   }
   94%,
   97% {
     opacity: 0;
-  }
-  98%,
-  100% {
-    opacity: 1;
   }
 }
 
 @keyframes lobster-pet-blink-closed {
   0%,
-  93% {
+  93%,
+  98%,
+  100% {
     opacity: 0;
   }
   94%,
   97% {
     opacity: 1;
-  }
-  98%,
-  100% {
-    opacity: 0;
   }
 }
 
@@ -1152,14 +1127,12 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 @keyframes lobster-pet-hop {
   0%,
+  60%,
   100% {
     transform: translateY(0);
   }
   30% {
     transform: translateY(-38%);
-  }
-  60% {
-    transform: translateY(0);
   }
   75% {
     transform: translateY(3%) scaleY(0.94);
@@ -1200,21 +1173,17 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 @keyframes lobster-pet-startle {
-  0% {
+  0%,
+  55%,
+  85%,
+  100% {
     transform: translateY(0);
   }
   25% {
     transform: translateY(-45%) rotate(-4deg);
   }
-  55% {
-    transform: translateY(0);
-  }
   70% {
     transform: translateY(-12%);
-  }
-  85%,
-  100% {
-    transform: translateY(0);
   }
 }
 
@@ -1340,14 +1309,12 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 @keyframes lobster-pet-cheer {
   0%,
+  40%,
   100% {
     transform: translateY(0) rotateY(0deg);
   }
   20% {
     transform: translateY(-42%) rotateY(0deg);
-  }
-  40% {
-    transform: translateY(0) rotateY(0deg);
   }
   60% {
     transform: translateY(-34%) rotateY(180deg);
@@ -1428,8 +1395,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-/* ---- Pass-through visitors ---- */
-
 /* All species cross the measured free lane, not the whole composer width. */
 .lobster-pet--passer {
   pointer-events: none;
@@ -1445,23 +1410,32 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation-name: lobster-pet-cross, lobster-pet-cross-hop;
 }
 
-/* The crab walks sideways by definition: it crosses while facing you and
-   feels no need to explain itself. */
 .lobster-pet--crab .lobster-pet__body {
   animation: lobster-pet-crab-scuttle 0.24s ease-in-out infinite;
 }
 
-/* The snail neither waddles nor hurries. */
 .lobster-pet--snail .lobster-pet__body {
   animation: none;
 }
 
-/* The duck bobs like the bath toy it is. */
 .lobster-pet--duck .lobster-pet__body {
   animation: lobster-pet-duck-bob 1.6s ease-in-out infinite;
 }
 
-/* The jellyfish drifts above the ledge, pulsing softly. */
+.lobster-pet--fedora .lobster-pet__body {
+  animation: lobster-pet-fedora-tumble 1.4s ease-in-out infinite;
+}
+
+@keyframes lobster-pet-fedora-tumble {
+  0%,
+  100% {
+    transform: rotate(-6deg);
+  }
+  50% {
+    transform: rotate(6deg);
+  }
+}
+
 .lobster-pet--jellyfish {
   margin-top: -8px;
 }
@@ -1492,15 +1466,13 @@ openclaw-lobster-pet[data-dex-complete]::after {
   100% {
     top: 0;
   }
-  15% {
+  15%,
+  82% {
     top: -12px;
   }
   26%,
   70% {
     top: var(--lob-y);
-  }
-  82% {
-    top: -12px;
   }
 }
 
@@ -1534,8 +1506,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-/* ---- Message in a bottle ----
-   Washes up on its own schedule, bobs until opened, and ebbs away. The
+/* Washes up on its own schedule, bobs until opened, and ebbs away. The
    fortune travels in the title tooltip. */
 
 .lobster-bottle {
@@ -1574,8 +1545,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-/* ---- Lobsterdex (appearance settings gallery) ---- */
-
 .lobsterdex {
   display: flex;
   flex-wrap: wrap;
@@ -1594,7 +1563,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation: none;
 }
 
-/* Unseen palettes are dim silhouettes until one visits. */
 .lobsterdex__mini--unseen {
   filter: grayscale(1) brightness(0.45) opacity(0.55);
 }

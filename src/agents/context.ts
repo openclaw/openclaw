@@ -1,6 +1,3 @@
-// Load session runtime model metadata so we can infer context windows when the
-// agent reports a model id. This includes custom models.json entries.
-
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
@@ -11,16 +8,12 @@ import {
 } from "./context-cache-projection.js";
 import {
   getContextWindowCaches,
-  lookupCachedContextTokens,
-  lookupCachedContextWindow,
-  minPositiveContextTokens,
   replaceContextWindowCaches,
   replaceDiscoveredContextTokenCache,
 } from "./context-cache.js";
 import {
   type ContextTokenResolutionParams,
   type ModelContextTokenProjection,
-  type ModelsConfig,
   resolveModelContextTokenProjectionFromCache,
 } from "./context-resolution.js";
 import {
@@ -28,19 +21,6 @@ import {
   CONTEXT_WINDOW_RUNTIME_STATE,
 } from "./context-runtime-state.js";
 
-export {
-  ANTHROPIC_CONTEXT_1M_TOKENS,
-  ANTHROPIC_FABLE_CONTEXT_TOKENS,
-  ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS,
-  ANTHROPIC_OPUS_5_CONTEXT_TOKENS,
-  ANTHROPIC_SONNET_5_CONTEXT_TOKENS,
-  ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
-} from "./context-resolution.js";
-export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
-export {
-  applyConfiguredContextWindows,
-  applyDiscoveredContextWindows,
-} from "./context-cache-projection.js";
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
@@ -54,7 +34,7 @@ function primeConfiguredContextWindowsFromConfig(cfg: OpenClawConfig): OpenClawC
   applyConfiguredContextWindows({
     cache: caches.configuredTokenCache,
     windowCache: caches.contextWindowCache,
-    modelsConfig: cfg.models as ModelsConfig | undefined,
+    modelsConfig: cfg.models,
   });
   CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = cfg;
   CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
@@ -100,34 +80,16 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
   }
   CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = Promise.resolve()
     .then(async () => {
-      if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-        return;
-      }
       let stagedTokenCache = new Map<string, number>();
       try {
-        const catalogResult = await (async () => {
-          const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
-          return await loadPreparedModelCatalogOwnerSnapshot({
-            config: cfg,
-            readOnly: true,
-          }).then(
-            (value) => ({ status: "fulfilled" as const, value }),
-            (reason: unknown) => ({ status: "rejected" as const, reason }),
-          );
-        })();
-        if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-          return;
-        }
-        if (catalogResult.status === "fulfilled") {
-          stagedTokenCache = await prepareDiscoveredContextTokenCache({
-            modelCatalog: catalogResult.value.modelCatalog,
-            assertCurrent: () => {
-              if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-                throw new Error("context window cache generation was superseded");
-              }
-            },
-          });
-        }
+        const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
+        const owner = await loadPreparedModelCatalogOwnerSnapshot({
+          config: cfg,
+          readOnly: true,
+        });
+        stagedTokenCache = await prepareDiscoveredContextTokenCache({
+          modelCatalog: owner.modelCatalog,
+        });
       } catch {
         // Static and discovered rows belong to one atomic generation. If its owner fails, keep
         // config overrides only instead of mixing in independently rediscovered static metadata.
@@ -164,9 +126,6 @@ export async function prewarmContextWindowCacheAfterReady(params: {
   const loadPromise = (async () => {
     const { getPublishedPreparedModelCatalogOwnerSnapshot } =
       await loadPreparedModelCatalogRuntime();
-    if (shouldStop()) {
-      return;
-    }
     const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
       config: params.config,
       allowGatewaySubagentBinding: true,
@@ -174,20 +133,13 @@ export async function prewarmContextWindowCacheAfterReady(params: {
     if (!owner) {
       throw new Error("published Gateway model catalog owner is unavailable");
     }
-    if (shouldStop()) {
-      return;
-    }
     // Gateway publication intentionally exposes configured/static turn facts. Full catalog
     // inventory is a separate control-plane load and must not run in post-ready warmup.
     const caches = await prepareContextWindowCaches({
       config: owner.config,
       modelCatalog: owner.modelCatalog,
-      assertCurrent: () => {
-        if (shouldStop()) {
-          throw new Error("context window cache prewarm cancelled");
-        }
-      },
     });
+    // Superseded projections may finish; only publication needs the current generation.
     if (shouldStop()) {
       return;
     }
@@ -216,45 +168,18 @@ export async function prewarmContextWindowCacheAfterReady(params: {
   }
 }
 
-export async function waitForContextWindowCacheLoad(options?: {
-  timeoutMs?: number;
-}): Promise<"idle" | "loaded" | "timeout"> {
-  const promise = CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
-  if (
-    !promise ||
-    CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration !== CONTEXT_WINDOW_RUNTIME_STATE.generation
-  ) {
-    return "idle";
-  }
-
-  const timeoutMs = Math.max(0, Math.trunc(options?.timeoutMs ?? 250));
-  if (timeoutMs === 0) {
-    return "timeout";
-  }
-
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise.then(() => "loaded" as const),
-      new Promise<"timeout">((resolve) => {
-        timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
-        (timeoutHandle as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
-}
-
-/** Replace cached model context metadata for the active runtime configuration. */
-export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<void> {
+/** Restore configured context limits without acquiring a model catalog. */
+export function resetContextWindowCache(cfg: OpenClawConfig): void {
   beginContextWindowCacheRefresh();
   const caches = getContextWindowCaches();
   caches.configuredTokenCache.clear();
   caches.contextWindowCache.clear();
   primeConfiguredContextWindowsFromConfig(cfg);
+}
+
+/** Replace cached model context metadata for the active runtime configuration. */
+export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<void> {
+  resetContextWindowCache(cfg);
   await ensureContextWindowCacheLoaded();
 }
 
@@ -275,20 +200,6 @@ function prepareContextWindowCache(options?: {
   }
 }
 
-export function lookupContextTokens(
-  modelId?: string,
-  options?: { allowAsyncLoad?: boolean; skipRuntimeConfigLoad?: boolean },
-): number | undefined {
-  if (!modelId) {
-    return undefined;
-  }
-  prepareContextWindowCache(options);
-  return minPositiveContextTokens(
-    lookupCachedContextTokens(modelId),
-    lookupCachedContextWindow(modelId),
-  );
-}
-
 export function resolveContextTokensForModel(
   params: ContextTokenResolutionParams,
 ): number | undefined {
@@ -298,10 +209,9 @@ export function resolveContextTokensForModel(
 export function resolveModelContextTokenProjection(
   params: ContextTokenResolutionParams,
 ): ModelContextTokenProjection {
-  const lookupOptions = {
+  prepareContextWindowCache({
     allowAsyncLoad: params.allowAsyncLoad,
-    skipRuntimeConfigLoad: Boolean(params.cfg),
-  };
-  prepareContextWindowCache(lookupOptions);
+    skipRuntimeConfigLoad: Boolean(params.cfg) || params.allowCacheLookup === false,
+  });
   return resolveModelContextTokenProjectionFromCache(params);
 }

@@ -20,3 +20,15 @@ export function writeLruMapEntry<T>(
   cache.set(cacheKey, entry);
   pruneMapToMaxSize(cache, maxEntries);
 }
+
+export function pruneExpiredMapEntries<T extends { expiresAt: number }>(
+  cache: Map<string, T>,
+  now: number,
+): void {
+  // Cache clocks are process-owned Date.now() values, not external timestamps.
+  for (const [key, entry] of cache) {
+    if (entry.expiresAt <= now) {
+      cache.delete(key);
+    }
+  }
+}

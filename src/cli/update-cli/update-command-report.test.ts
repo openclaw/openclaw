@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
 
 const mocks = vi.hoisted(() => ({
-  select: vi.fn<() => Promise<string | symbol>>(),
+  select:
+    vi.fn<
+      (params: { options: Array<{ value: string; label: string }> }) => Promise<string | symbol>
+    >(),
   confirm: vi.fn<() => Promise<boolean | symbol>>(),
   prepare:
     vi.fn<typeof import("../../infra/update-failure-report.js").prepareUpdateFailureReport>(),
@@ -77,14 +79,6 @@ function setup(
 }
 
 describe("interactive update failure action", () => {
-  it("keeps diagnosis as a distinct action without preparing a report", async () => {
-    const fixture = setup("triage", false);
-
-    await expect(fixture.run()).resolves.toBe("triage");
-    expect(fixture.prepare).not.toHaveBeenCalled();
-    expect(fixture.submit).not.toHaveBeenCalled();
-  });
-
   it("shows the sanitized preview and honors cancellation without submission", async () => {
     const fixture = setup("report", false);
 
@@ -96,69 +90,13 @@ describe("interactive update failure action", () => {
     expect(fixture.submit).not.toHaveBeenCalled();
   });
 
-  it("submits the exact reviewed digest only after confirmation", async () => {
-    const fixture = setup("report", true);
-
-    await expect(fixture.run()).resolves.toBe("handled");
-    expect(fixture.submit).toHaveBeenCalledWith(
-      fixture.prepared,
-      fixture.prepared.previewDigest,
-      expect.any(Object),
-    );
-    expect(fixture.runtime.log).toHaveBeenCalledWith(
-      "Created GitHub issue: https://github.com/openclaw/openclaw/issues/123",
-    );
-  });
-
-  it("passes durable failed phases when the handoff result omits them", async () => {
-    const fixture = setup("report", false);
-    const recordedRun = {
-      runId: "00000000-0000-4000-8000-000000000001",
-      createdAtMs: 1,
-      updatedAtMs: 2,
-      trigger: "cli",
-      phase: "finished",
-      status: "failed",
-      reason: "global-install-failed",
-      origin: {},
-      target: { kind: "package" },
-      before: { version: "2026.8.1" },
-      after: {},
-      steps: [{ step: "activating", status: "failed", startedAtMs: 1, endedAtMs: 2 }],
-      verification: {},
-      repair: [],
-      confirmedAtMs: null,
-      finishedAtMs: 2,
-      downtimeMs: null,
-    } satisfies UpdateRunRecord;
-    mocks.getUpdateRun.mockReturnValue(recordedRun);
-
-    await expect(fixture.run()).resolves.toBe("handled");
-
-    expect(mocks.getUpdateRun).toHaveBeenCalledWith("attempt-cli", {
-      env: { OPENCLAW_STATE_DIR: expect.any(String) },
-    });
-    expect(fixture.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({ recordedRun }),
-      expect.objectContaining({
-        env: expect.objectContaining({ OPENCLAW_STATE_DIR: expect.any(String) }),
-      }),
-    );
-  });
-
   it.each([
     [
       "duplicate issue",
       { status: "duplicate", url: "https://github.com/openclaw/openclaw/issues/123" },
       "Existing issue: https://github.com/openclaw/openclaw/issues/123",
     ],
-    [
-      "duplicate fallback with a retired locator",
-      { status: "duplicate", fallbackUrl: "https://github.com/openclaw/openclaw/issues/new" },
-      "Existing prefilled issue: https://github.com/openclaw/openclaw/issues/new",
-    ],
     ["pending", { status: "pending" }, undefined],
-    ["unsaved stale", { status: "stale" }, undefined],
   ] as const)(
     "keeps %s guidance without claiming a saved artifact",
     async (_name, result, link) => {
@@ -182,7 +120,7 @@ describe("interactive update failure action", () => {
     },
   );
 
-  it("keeps the saved report path beside an ordinary browser fallback", async () => {
+  it("returns a fallback to the action menu without opening or printing a browser link", async () => {
     const fixture = setup("report", true);
     fixture.submit.mockResolvedValue({
       status: "fallback",
@@ -193,66 +131,43 @@ describe("interactive update failure action", () => {
 
     await expect(fixture.run()).resolves.toBe("handled");
 
-    expect(fixture.runtime.log).toHaveBeenCalledWith(`Prefilled issue: ${fixture.prepared.url}`);
+    expect(fixture.chooseAction).toHaveBeenCalledTimes(2);
+    expect(fixture.runtime.log).not.toHaveBeenCalledWith(
+      `Prefilled issue: ${fixture.prepared.url}`,
+    );
     expect(fixture.runtime.log).toHaveBeenCalledWith(
       `Saved sanitized report: ${fixture.prepared.savedReportPath}`,
     );
   });
 
-  it("returns a retryable no-start result to explicit action and confirmation", async () => {
-    const fixture = setup(["report", "report"], true);
+  it("retires a browser retry choice after submission errors while retaining the report", async () => {
+    const fixture = setup(["report", "report", "report", "report"], true);
     fixture.submit
-      .mockReset()
       .mockResolvedValueOnce({
-        message: "spawn gh EAGAIN",
-        savedReportPath: fixture.prepared.savedReportPath,
         status: "retryable",
-      })
-      .mockResolvedValueOnce({
+        message: "GitHub authentication is unavailable.",
         savedReportPath: fixture.prepared.savedReportPath,
-        status: "created",
-        url: "https://github.com/openclaw/openclaw/issues/123",
-      });
+      })
+      .mockRejectedValueOnce(new Error("transport failed"))
+      .mockRejectedValueOnce(new Error("still unavailable"));
 
     await expect(fixture.run()).resolves.toBe("handled");
-    expect(fixture.prepare).toHaveBeenCalledTimes(2);
-    expect(fixture.submit).toHaveBeenCalledTimes(2);
-    expect(fixture.chooseAction).toHaveBeenCalledTimes(2);
-    expect(mocks.confirm).toHaveBeenCalledTimes(2);
-    expect(fixture.runtime.log).toHaveBeenCalledWith("spawn gh EAGAIN");
-    expect(fixture.runtime.log).toHaveBeenCalledWith(
-      "Created GitHub issue: https://github.com/openclaw/openclaw/issues/123",
-    );
+
+    expect(fixture.chooseAction).toHaveBeenCalledTimes(4);
+    expect(
+      fixture.chooseAction.mock.calls.map(([params]) =>
+        params.options.some((option) => option.value === "browser"),
+      ),
+    ).toEqual([false, true, false, false]);
+    expect(fixture.prepare).toHaveBeenCalledOnce();
+    expect(fixture.submit).toHaveBeenCalledTimes(4);
+    expect(mocks.confirm).toHaveBeenCalledTimes(4);
+    expect(fixture.runtime.error).toHaveBeenCalledTimes(2);
+    for (const [report, digest] of fixture.submit.mock.calls) {
+      expect(report).toBe(fixture.prepared);
+      expect(digest).toBe(fixture.prepared.previewDigest);
+    }
   });
-
-  it("does nothing when the action menu is dismissed", async () => {
-    const fixture = setup("dismiss", true);
-
-    await expect(fixture.run()).resolves.toBe("handled");
-    expect(fixture.prepare).not.toHaveBeenCalled();
-    expect(fixture.submit).not.toHaveBeenCalled();
-  });
-
-  it.each(["prepare", "submit"] as const)(
-    "returns a failed %s attempt to the explicit action surface",
-    async (phase) => {
-      const fixture = setup(["report", "dismiss"], true);
-      if (phase === "prepare") {
-        fixture.prepare.mockRejectedValueOnce(new Error("report storage unavailable"));
-      } else {
-        fixture.submit.mockRejectedValueOnce(new Error("report transport unavailable"));
-      }
-
-      await expect(fixture.run()).resolves.toBe("handled");
-
-      expect(fixture.chooseAction).toHaveBeenCalledTimes(2);
-      expect(fixture.runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `report ${phase === "prepare" ? "storage" : "transport"} unavailable`,
-        ),
-      );
-    },
-  );
 
   it("requires a fresh explicit choice before diagnosing after a report failure", async () => {
     const fixture = setup(["report", "triage"], true);

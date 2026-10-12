@@ -1,7 +1,12 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
-import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
+import { describe, expect, it, vi } from "vitest";
+import type {
+  SessionCatalog,
+  SessionCatalogHost,
+} from "../../../packages/gateway-protocol/src/index.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
+import { refetchExpandedSessionCatalogPages } from "./app-sidebar-session-catalog-state.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
 function catalog(id: string, hostCount: number): SessionCatalog {
@@ -29,6 +34,63 @@ function catalog(id: string, hostCount: number): SessionCatalog {
 }
 
 describe("SessionCatalogLiveState", () => {
+  it.each(["final", "incremental"] as const)(
+    "retains rows and cursors for a pending host in %s publications",
+    async (publication) => {
+      const live = new SessionCatalogLiveState();
+      const { progressId } = live.beginRequest(1);
+      const current = catalog("codex", 2);
+      current.hosts[0]!.nextCursor = "next-page";
+      const pending = { ...current.hosts[0]!, pending: true, sessions: [], nextCursor: undefined };
+      const incoming = { ...current, hosts: [pending] };
+      const catalogs =
+        publication === "final"
+          ? live.mergeFinal([incoming], [current])
+          : live.applyHost({
+              payload: { progressId, agentId: "main", catalog: incoming },
+              agentId: "main",
+              catalogs: [current],
+              pageDepths: new Map(),
+            })!.catalogs;
+      expect(catalogs[0]?.hosts[0]).toMatchObject({
+        pending: true,
+        sessions: current.hosts[0]!.sessions,
+        nextCursor: "next-page",
+      });
+      // A final response still removes genuinely absent hosts.
+      expect(catalogs[0]?.hosts).toHaveLength(publication === "final" ? 1 : 2);
+      const request = vi.fn();
+      expect(
+        await refetchExpandedSessionCatalogPages({
+          catalogs,
+          previousCatalogs: [current],
+          client: { request } as unknown as GatewayBrowserClient,
+          agentId: "main",
+          pageDepths: new Map([[sessionCatalogHostKey("codex", pending.hostId), 1]]),
+          isCurrent: () => true,
+          canRequestPage: () => true,
+        }),
+      ).toEqual(catalogs);
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not replace a settled progressive host with its pending final response", () => {
+    const live = new SessionCatalogLiveState();
+    const { progressId } = live.beginRequest(1);
+    const current = catalog("codex", 1);
+    const pending: SessionCatalogHost = { ...current.hosts[0]!, pending: true, sessions: [] };
+    const published = live.applyHost({
+      payload: { progressId, agentId: "main", catalog: current },
+      agentId: "main",
+      catalogs: [{ ...current, hosts: [pending] }],
+      pageDepths: new Map(),
+    })!;
+    expect(live.mergeFinal([{ ...current, hosts: [pending] }], published.catalogs)).toEqual([
+      current,
+    ]);
+  });
+
   it("clears unavailable native readiness without losing another host or expanded rows", () => {
     const live = new SessionCatalogLiveState();
     const { progressId } = live.beginRequest(1);
@@ -78,60 +140,5 @@ describe("SessionCatalogLiveState", () => {
       });
     }).not.toThrow();
     expect(result!).toBeNull();
-  });
-
-  it.each([
-    {
-      metadata: "capabilities",
-      update: (current: SessionCatalog): SessionCatalog => ({
-        ...current,
-        capabilities: {
-          ...current.capabilities,
-          createSession: { model: "openai/gpt-5.6-luna" },
-        },
-      }),
-    },
-    {
-      metadata: "catalog error",
-      update: (current: SessionCatalog): SessionCatalog => ({
-        ...current,
-        error: { code: "unavailable", message: "Catalog temporarily unavailable" },
-      }),
-    },
-  ])("applies $metadata without marking a material change", ({ update }) => {
-    const live = new SessionCatalogLiveState();
-    const { progressId } = live.beginRequest(1);
-    const current = catalog("changed", 1);
-
-    const result = live.applyHost({
-      payload: {
-        progressId,
-        agentId: "main",
-        catalog: { ...update(current), hosts: [current.hosts[0]!] },
-      },
-      agentId: "main",
-      catalogs: [current],
-      pageDepths: new Map(),
-    });
-
-    expect(result?.catalogs[0]).toEqual(update(current));
-    expect(result?.materialChange).toBe(false);
-    expect(live.sawChange).toBe(false);
-  });
-
-  it.each([
-    ["mode-less client", { deviceId: "legacy-client" }, false],
-    ["browser with a node role", { deviceId: "browser", mode: "webchat", roles: ["node"] }, false],
-    [
-      "operator with a node role",
-      { deviceId: "operator", mode: "operator", roles: ["node"] },
-      false,
-    ],
-    ["node with an operator role", { deviceId: "node", mode: "node", roles: ["operator"] }, true],
-    ["legacy node role", { deviceId: "legacy-node", roles: ["node"] }, true],
-  ] as const)("classifies %s presence for catalog refreshes", (_name, entry, expected) => {
-    const live = new SessionCatalogLiveState();
-
-    expect(live.observePresence({ presence: [entry] })).toBe(expected);
   });
 });

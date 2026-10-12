@@ -1,0 +1,45 @@
+// Exact v2 method names, suppressed per connection during initialize. Keep this
+// list separate from payload no-ops: turn-scoped events can still renew progress
+// deadlines, and terminal interaction also records native execution for cleanup.
+export const CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS = [
+  // No incoming consumer, and no turn id for progress or transcript projection.
+  "account/login/completed",
+  "app/list/updated",
+  "command/exec/outputDelta",
+  "deprecationNotice",
+  "externalAgentConfig/import/completed",
+  "externalAgentConfig/import/progress",
+  "fs/changed",
+  "fuzzyFileSearch/sessionCompleted",
+  "fuzzyFileSearch/sessionUpdated",
+  "mcpServer/event/stream/notification",
+  "mcpServer/oauthLogin/completed",
+  "mcpServer/startupStatus/updated",
+  "process/exited",
+  "process/outputDelta",
+  "project/changed",
+  "remoteControl/status/changed",
+  "thread/environment/connected",
+  "thread/environment/disconnected",
+  "thread/goal/cleared",
+  "thread/project/updated",
+  "thread/queue/changed",
+  "thread/realtime/closed",
+  "thread/realtime/error",
+  "thread/realtime/item/completed",
+  "thread/realtime/item/started",
+  "thread/realtime/item/transcript/delta",
+  "thread/realtime/itemAdded",
+  "thread/realtime/outputAudio/delta",
+  "thread/realtime/sdp",
+  "thread/realtime/started",
+  "thread/realtime/transcript/delta",
+  "thread/realtime/transcript/done",
+  "windows/worldWritableWarning",
+  "windowsSandbox/setupCompleted",
+  // Cumulative diffs follow retained file-item/response completion events.
+  "turn/diff/updated",
+  // Retired before the minimum supported server (0.149.0); canonical items remain.
+  "item/fileChange/outputDelta",
+  "thread/compacted",
+] as const;

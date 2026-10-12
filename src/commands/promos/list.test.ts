@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OutputRuntimeEnv } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 const mocks = vi.hoisted(() => ({
   fetchClawHubPromotions: vi.fn(),
+  markPromotionSlugsNotified: vi.fn(),
+}));
+
+vi.mock("../../infra/promotions-feed.js", () => ({
+  markPromotionSlugsNotified: mocks.markPromotionSlugsNotified,
 }));
 
 vi.mock("../../infra/clawhub-promotions.js", async () => {
@@ -58,16 +64,24 @@ beforeEach(() => {
 });
 
 describe("promosListCommand", () => {
-  it("prints promotions with models and the claim command", async () => {
+  it("waits for notice recording before publishing the list", async () => {
     mocks.fetchClawHubPromotions.mockResolvedValue([promotion]);
-    const { runtime, lines } = makeRuntime();
-
-    await promosListCommand({}, runtime);
-
-    const output = lines.join("\n");
-    expect(output).toContain("Free Example models — Example");
-    expect(output).toContain("openrouter/example/model-alpha (Model Alpha) — suggested default");
-    expect(output).toContain("openclaw promos claim spring-models");
+    const recording = createDeferredCore();
+    const started = createDeferredCore();
+    mocks.markPromotionSlugsNotified.mockImplementationOnce(() => {
+      started.resolve();
+      return recording.promise;
+    });
+    const { runtime } = makeRuntime();
+    const pending = promosListCommand({ json: true }, runtime);
+    await started.promise;
+    try {
+      expect(runtime.writeStdout).not.toHaveBeenCalled();
+    } finally {
+      recording.resolve();
+      await pending;
+    }
+    expect(runtime.writeStdout).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -136,18 +150,5 @@ describe("promosListCommand", () => {
     const output = lines.join("\n");
     expect(output).not.toContain("\u001b");
     expect(output).toContain("Free");
-  });
-
-  it("writes JSON to stdout with --json", async () => {
-    mocks.fetchClawHubPromotions.mockResolvedValue([promotion]);
-    const { runtime, lines, stdout } = makeRuntime();
-
-    await promosListCommand({ json: true }, runtime);
-
-    expect(lines).toEqual([]);
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.writeStdout).toHaveBeenCalledOnce();
-    const parsed = JSON.parse(stdout.join("")) as { promotions: Array<{ slug: string }> };
-    expect(parsed.promotions[0]?.slug).toBe("spring-models");
   });
 });

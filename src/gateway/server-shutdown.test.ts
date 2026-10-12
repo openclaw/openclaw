@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { finishGatewayRestartTrace, startGatewayRestartTrace } from "./restart-trace.js";
@@ -10,6 +11,7 @@ vi.mock("../logging/subsystem.js", () => ({
 
 afterEach(() => {
   finishGatewayRestartTrace("test.finish");
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   logInfo.mockClear();
 });
@@ -43,6 +45,7 @@ describe("gateway close steps", () => {
   it.each([false, true])(
     "reports a held step before it settles without changing order (trace=%s)",
     async (trace) => {
+      const clock = vi.spyOn(performance, "now").mockReturnValue(0);
       vi.stubEnv("OPENCLAW_GATEWAY_RESTART_TRACE", trace ? "1" : "0");
       startGatewayRestartTrace("stop.signal.received");
       const entered = createDeferredCore();
@@ -58,6 +61,7 @@ describe("gateway close steps", () => {
       const messages = () => logInfo.mock.calls.map(([message]) => String(message));
       try {
         await entered.promise;
+        clock.mockReturnValue(1_250);
         expect(second).not.toHaveBeenCalled();
         expect(
           messages().some((line) => line.includes("shutdown.gateway-lifetime-sidecars.begin ")),
@@ -75,7 +79,7 @@ describe("gateway close steps", () => {
       expect(second).toHaveBeenCalledOnce();
       expect(onError).not.toHaveBeenCalled();
       expect(messages().some((line) => line.includes("shutdown.gateway-lifetime-sidecars "))).toBe(
-        trace,
+        true,
       );
       expect(messages().some((line) => line.includes("shutdown.post-ready-sidecars "))).toBe(trace);
     },

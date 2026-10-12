@@ -115,44 +115,75 @@ suite.define(() => {
     await expect.poll(() => page.locator(".lobster-pet--act-pet").count()).toBe(0);
   });
 
+  it("keeps resting visitors proportionate and aligned with their perch", async () => {
+    for (const seed of [0, 42, 77, 1234]) {
+      await configureComposerPet({ mode: "offline", outcome: "ok", seed });
+      await page.clock.runFor(1600);
+      const shape = await page.locator("openclaw-lobster-pet").evaluate((pet) => {
+        for (const animation of pet.getAnimations({ subtree: true })) {
+          animation.pause();
+          animation.currentTime = Number(animation.effect?.getTiming().delay) || 0;
+        }
+        const sprite = pet.querySelector(
+          ".lobster-pet__motion > .lobster-pet:not(.lobster-pet--twin)",
+        )!;
+        const svg = sprite.querySelector<SVGSVGElement>(".lobster-pet__svg")!;
+        const matrix = svg.getScreenCTM()!;
+        const foot = new DOMPoint(60, 105).matrixTransform(matrix);
+        return {
+          aspect: Math.hypot(matrix.a, matrix.b) / Math.hypot(matrix.c, matrix.d),
+          footOffset: foot.y - sprite.getBoundingClientRect().bottom,
+        };
+      });
+      expect(shape.aspect).toBeCloseTo(1, 2);
+      expect(Math.abs(shape.footOffset)).toBeLessThan(0.2);
+    }
+  });
+
   it("uses the composer ledge and floor, then clears the floor as soon as typing starts", async () => {
-    await configureComposerPet({ mode: "offline", outcome: "ok", seed: 42 });
+    await configureComposerPet({ mode: "offline", outcome: "ok", seed: 108 });
     expect(await page.locator("openclaw-app-sidebar openclaw-lobster-pet").count()).toBe(0);
     const pet = page.locator(".new-session-page__composer openclaw-lobster-pet");
     await expect.poll(() => pet.getAttribute("data-scene-ready")).not.toBeNull();
     await page.clock.runFor(1500);
     await page.screenshot({ path: suite.artifactDir + "/top-perch.png", animations: "disabled" });
-    const hop = await pet.evaluate(async (element) => {
-      const actor = element as HTMLElement & {
-        geometry: {
-          scene: {
-            top: { start: number; end: number };
-            floor: unknown;
-            passage: [number, number] | null;
-          };
+    // Seed 108 starts with two eligible hops: walk to the clear column if
+    // needed, then land on the floor. Advance its clock through the real owner.
+    for (let frame = 0; frame < 30 && (await pet.getAttribute("data-spot")) !== "floor"; frame++) {
+      await page.clock.fastForward(500);
+      await settlePet();
+    }
+    expect({
+      spot: await pet.getAttribute("data-spot"),
+      hops: await pet.locator(".lobster-pet__motion--hop").count(),
+    }).toEqual({ spot: "floor", hops: 1 });
+    const landings = await pet.evaluate((element) => {
+      const sprite = element.querySelector<HTMLElement>(
+        ".lobster-pet__motion > .lobster-pet:not(.lobster-pet--twin)",
+      )!;
+      const body = sprite.querySelector<HTMLElement>(".lobster-pet__body")!;
+      const animation = body
+        .getAnimations()
+        .find((entry) => (entry as CSSAnimation).animationName === "lobster-pet-landing")!;
+      animation.pause();
+      const frames = [0.14, 0.86].map((fraction) => {
+        animation.currentTime = Number(animation.effect!.getTiming().duration) * fraction;
+        const box = body.getBoundingClientRect();
+        const parent = sprite.getBoundingClientRect();
+        return {
+          width: box.width / parent.width,
+          height: box.height / parent.height,
+          footOffset: box.bottom - parent.bottom,
         };
-        spotPct: number;
-        performAct: (act: string) => void;
-        updateComplete: Promise<unknown>;
-      };
-      const scene = actor.geometry.scene;
-      if (!scene.floor || !scene.passage) {
-        throw new Error("Default composer has no safe floor or passage");
-      }
-      actor.spotPct =
-        (((scene.passage[0] + scene.passage[1]) / 2 - scene.top.start) /
-          (scene.top.end - scene.top.start)) *
-        100;
-      for (let i = 0; i < 10 && actor.getAttribute("data-spot") !== "floor"; i++) {
-        actor.performAct("hop");
-        await actor.updateComplete;
-      }
-      return {
-        spot: actor.getAttribute("data-spot"),
-        hops: actor.querySelectorAll(".lobster-pet__motion--hop").length,
-      };
+      });
+      animation.play();
+      return frames;
     });
-    expect(hop).toEqual({ spot: "floor", hops: 1 });
+    for (const landing of landings) {
+      expect(landing.width).toBeLessThanOrEqual(1.06);
+      expect(landing.height).toBeGreaterThanOrEqual(0.939);
+      expect(Math.abs(landing.footOffset)).toBeLessThan(0.2);
+    }
     await page.clock.runFor(1300);
     await page.screenshot({ path: suite.artifactDir + "/floor-visit.png", animations: "disabled" });
     const textarea = page.locator(".new-session-page__message");

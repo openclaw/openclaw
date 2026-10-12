@@ -1,12 +1,19 @@
-/* Settings > System > About — page-specific leftovers on top of settings.css. */
-
-/* Hero: big Clawd, product identity, and community links (iOS About-style). */
 .about-hero {
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 10px 16px 26px;
   text-align: center;
+}
+
+.about-hero__mark--neutral {
+  width: 168px;
+  height: 168px;
+}
+
+.about-hero__mark--neutral svg {
+  width: 100%;
+  height: 100%;
 }
 
 .about-hero__clawd {
@@ -42,7 +49,8 @@
   transform: translateY(0) scale(0.97);
 }
 
-.about-hero__clawd:focus-visible {
+.about-hero__clawd:focus-visible,
+.about-hero__link:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -87,7 +95,7 @@
 }
 
 /* One-shot poke wave: the same gesture without the loop's long idle lead-in.
-   Duration must stay in sync with CLAWD_WAVE_MS in about-page.ts. */
+   Duration must stay in sync with CLAWD_WAVE_MS in about-page.tsx. */
 .about-hero__clawd--wave .lob-claw--r {
   animation: about-clawd-poke-wave 1.4s ease-in-out;
 }
@@ -166,11 +174,6 @@
   background: var(--bg-hover);
 }
 
-.about-hero__link:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .about-hero__link-icon {
   display: inline-flex;
 }
@@ -225,7 +228,6 @@
   grid-template-columns: max-content minmax(0, 1fr);
 }
 
-/* Commit hash, age, and copy button cluster inside the build facts grid. */
 .about-commit {
   display: inline-flex;
   align-items: center;

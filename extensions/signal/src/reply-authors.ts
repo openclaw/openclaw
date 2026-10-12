@@ -1,7 +1,10 @@
 // Signal plugin module tracks native-reply quote authors for durable sends.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
+  asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,20 +21,17 @@ type SignalPersistedReplyContext =
   | { ambiguous: true; author?: never; body?: never };
 
 const { memoryReplyContexts } = signalReplyAuthorState;
+const replyContextWrites = new KeyedAsyncQueue();
 
 function openSignalReplyAuthorStore() {
-  if (signalReplyAuthorState.persistentStoreDisabled) {
-    return undefined;
-  }
   const runtime = getOptionalSignalRuntime();
   try {
-    return runtime?.state.openKeyedStore<SignalReplyContextRecord>({
+    return runtime?.state.openKeyedStoreV2<SignalReplyContextRecord>({
       namespace: PERSISTENT_NAMESPACE,
       maxEntries: PERSISTENT_MAX_ENTRIES,
       defaultTtlMs: DEFAULT_REPLY_AUTHOR_TTL_MS,
     });
   } catch (error) {
-    signalReplyAuthorState.persistentStoreDisabled = true;
     runtime?.logging
       .getChildLogger({ plugin: "signal", feature: "reply-author-state" })
       .warn("Signal persistent reply author state unavailable", { error: String(error) });
@@ -39,11 +39,11 @@ function openSignalReplyAuthorStore() {
   }
 }
 
-function buildSignalReplyAuthorStoreKey(params: {
+function resolveSignalReplyIdentity(params: {
   accountId?: string | null;
   to: string;
   replyToId?: string | null;
-}): string | undefined {
+}) {
   const conversationKey = normalizeSignalMessagingTarget(params.to);
   const replyToId = normalizeOptionalString(params.replyToId);
   if (!conversationKey || !replyToId) {
@@ -52,7 +52,12 @@ function buildSignalReplyAuthorStoreKey(params: {
   const accountKey = normalizeLowercaseStringOrEmpty(
     normalizeOptionalString(params.accountId) ?? DEFAULT_ACCOUNT_ID,
   );
-  return `account=${accountKey}|to=${conversationKey}|id=${replyToId}`;
+  return {
+    key: `account=${accountKey}|to=${conversationKey}|id=${replyToId}`,
+    accountId: accountKey,
+    conversationKey,
+    replyToId,
+  };
 }
 
 function pruneMemoryReplyContexts(now = Date.now()): void {
@@ -61,13 +66,7 @@ function pruneMemoryReplyContexts(now = Date.now()): void {
       memoryReplyContexts.delete(key);
     }
   }
-  while (memoryReplyContexts.size > PERSISTENT_MAX_ENTRIES) {
-    const oldestKey = memoryReplyContexts.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    memoryReplyContexts.delete(oldestKey);
-  }
+  pruneMapToMaxSize(memoryReplyContexts, PERSISTENT_MAX_ENTRIES);
 }
 
 function resolveReplyContext(
@@ -92,19 +91,18 @@ function resolveReplyContext(
   };
 }
 
-function resolveSourceTimestamp(value: number | null | undefined): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : Date.now();
-}
-
 function mergeReplyContext(
   current: SignalReplyContextRecord | undefined,
-  next: SignalReplyContextRecord & { kind: "resolved" },
+  next: SignalReplyContextRecord,
 ): SignalReplyContextRecord {
   if (!current) {
     return next;
   }
   if (current.kind === "ambiguous") {
     return current;
+  }
+  if (next.kind === "ambiguous") {
+    return next;
   }
   if (current.author !== next.author) {
     const { author: _author, body: _body, media: _media, ...identity } = next;
@@ -123,84 +121,49 @@ export async function registerSignalReplyContext(params: {
   sourceTimestamp?: number | null;
 }): Promise<void> {
   const store = openSignalReplyAuthorStore();
-  const key = buildSignalReplyAuthorStoreKey(params);
+  const identity = resolveSignalReplyIdentity(params);
   const author = normalizeOptionalString(params.author);
   const body = normalizeOptionalString(params.body);
   const media = params.media?.map((entry) => ({
     contentType: normalizeOptionalString(entry.contentType),
     kind: entry.kind ?? undefined,
   }));
-  const conversationKey = normalizeSignalMessagingTarget(params.to);
-  const replyToId = normalizeOptionalString(params.replyToId);
-  const accountKey = normalizeLowercaseStringOrEmpty(
-    normalizeOptionalString(params.accountId) ?? DEFAULT_ACCOUNT_ID,
-  );
-  const sourceTimestamp = resolveSourceTimestamp(params.sourceTimestamp);
-  if (!key || !author || !conversationKey || !replyToId) {
+  const sourceTimestamp = asPositiveSafeInteger(params.sourceTimestamp) ?? Date.now();
+  if (!identity || !author) {
     return;
   }
+  const { key, ...replyIdentity } = identity;
   const registeredAt = Date.now();
   const record = {
     kind: "resolved" as const,
     author,
     ...(body ? { body } : {}),
     ...(media?.length ? { media } : {}),
-    accountId: accountKey,
-    conversationKey,
-    replyToId,
+    ...replyIdentity,
     sourceTimestamp,
     registeredAt,
   };
   const expiresAt = registeredAt + DEFAULT_REPLY_AUTHOR_TTL_MS;
-  if (!store) {
-    const next = mergeReplyContext(memoryReplyContexts.get(key), record);
-    memoryReplyContexts.set(key, { ...next, expiresAt });
-    pruneMemoryReplyContexts(registeredAt);
-    return;
-  }
-  if (!store.update) {
-    const next = mergeReplyContext(memoryReplyContexts.get(key), record);
-    memoryReplyContexts.set(key, { ...next, expiresAt });
-    pruneMemoryReplyContexts(registeredAt);
-    signalReplyAuthorState.persistentStoreDisabled = true;
-    getOptionalSignalRuntime()
-      ?.logging.getChildLogger({ plugin: "signal", feature: "reply-author-state" })
-      .warn("Signal persistent reply author state lacks atomic updates");
-    return;
-  }
-  let updateEvaluated = false;
-  let nextRecord: SignalReplyContextRecord | undefined;
-  try {
-    const updated = await store.update(key, (current) => {
-      updateEvaluated = true;
-      nextRecord = mergeReplyContext(current, record);
-      return nextRecord;
-    });
-    if (updated && nextRecord) {
-      memoryReplyContexts.set(key, { ...nextRecord, expiresAt });
-    } else {
-      memoryReplyContexts.delete(key);
-    }
-    pruneMemoryReplyContexts(registeredAt);
-  } catch (error) {
-    if (!updateEvaluated) {
-      try {
-        nextRecord = mergeReplyContext(await store.lookup(key), record);
-      } catch {
-        nextRecord = undefined;
+  await replyContextWrites.enqueue(key, async () => {
+    const cached = memoryReplyContexts.get(key);
+    let next = mergeReplyContext(
+      cached && cached.expiresAt > registeredAt ? cached : undefined,
+      record,
+    );
+    try {
+      if (store) {
+        next = mergeReplyContext(await store.lookup(key), next);
+        await store.register(key, next);
       }
+    } catch (error) {
+      getOptionalSignalRuntime()
+        ?.logging.getChildLogger({ plugin: "signal", feature: "reply-author-state" })
+        .warn("Signal persistent reply author state failed", { error: String(error) });
     }
-    const next = nextRecord;
-    if (next) {
-      memoryReplyContexts.set(key, { ...next, expiresAt });
-    } else if (updateEvaluated) {
-      memoryReplyContexts.delete(key);
-    }
+    // The plugin serializes its own writes; foreign writes during this read/write are best effort.
+    memoryReplyContexts.set(key, { ...next, expiresAt });
     pruneMemoryReplyContexts(registeredAt);
-    getOptionalSignalRuntime()
-      ?.logging.getChildLogger({ plugin: "signal", feature: "reply-author-state" })
-      .warn("Signal persistent reply author state failed", { error: String(error) });
-  }
+  });
 }
 
 export async function resolveSignalReplyContextWithPersistence(params: {
@@ -209,17 +172,13 @@ export async function resolveSignalReplyContextWithPersistence(params: {
   replyToId?: string | null;
 }): Promise<SignalPersistedReplyContext | undefined> {
   const store = openSignalReplyAuthorStore();
-  const key = buildSignalReplyAuthorStoreKey(params);
+  const key = resolveSignalReplyIdentity(params)?.key;
   if (!key) {
     return undefined;
   }
-  if (!store) {
-    pruneMemoryReplyContexts();
-    return resolveReplyContext(memoryReplyContexts.get(key));
-  }
   pruneMemoryReplyContexts();
   const memoryContext = resolveReplyContext(memoryReplyContexts.get(key));
-  if (memoryContext) {
+  if (!store || memoryContext) {
     return memoryContext;
   }
   try {

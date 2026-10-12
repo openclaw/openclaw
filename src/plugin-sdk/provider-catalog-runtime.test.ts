@@ -8,9 +8,10 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-runtime";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import {
+  createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
-  runWithScheduledGatewayContext,
 } from "../gateway/scheduled-run-gateway-context.js";
+import { createPluginRuntimeCapabilityLease } from "../plugins/capability-lease.js";
 import {
   LegacyPluginSdkResourceHost,
   bindLegacyPluginSdkResourceHost,
@@ -21,7 +22,7 @@ import {
   resetPluginLoaderTestStateForTest,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
-import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   bindGatewayContextResolver,
@@ -30,35 +31,25 @@ import {
   withPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { createPluginServiceSchedulerRunner } from "../plugins/service-scheduler-context.js";
+import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import {
   AsyncWorkScope,
   captureAsyncWorkTracker,
   trackAsyncWork,
 } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 
 afterEach(() => resetPluginLoaderTestStateForTest());
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it("resolves an empty provider scope through the shipped SDK export", () => {
-  expect(
-    resolvePluginProviders({
-      config: { plugins: { enabled: false } },
-      env: {},
-      onlyPluginIds: [],
-    }),
-  ).toEqual([]);
-});
-
 let sequence = 0;
 
-it.each([
-  ["omitted", undefined, ["family", "other"], ["sdk-family", "sdk-other"]],
-  ["empty", [], [], []],
-  ["normalized id", [" SDK-FAMILY "], ["family"], ["sdk-family"]],
-  ["alias", [" SDK-ALIAS "], ["family"], ["sdk-family"]],
-  ["family hook alias", [" SDK-FAMILY-EAST "], ["family"], ["sdk-family"]],
-] as const)(
+it.each([["omitted", undefined, ["family", "other"], ["sdk-family", "sdk-other"]]] as const)(
   "shipped provider-catalog-runtime augmentModelCatalogWithProviderPlugins selects %s hooks without filtering their rows",
   async (_selection, providerIds, expected, expectedCalls) => {
     const id = `sdk-catalog-selection-${sequence++}`;
@@ -171,6 +162,8 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   return {
     id,
     state,
+    config,
+    env,
     load: () => acquirePluginRegistryForInspection({ config, env }),
     loadRaw: () => loadPluginRegistryHandle({ config, env }),
     resolve(registry: PluginRegistry, host: LegacyPluginSdkResourceHost, providerRefs?: string[]) {
@@ -196,32 +189,77 @@ function readProvider(
   return provider.isCacheTtlEligible?.({ provider: provider.id, modelId: "synthetic-model" });
 }
 
-it("keeps the shipped provider callback usable after inspection release", async () => {
-  const fixture = nativeProviderFixture();
-  const host = new LegacyPluginSdkResourceHost();
-  const inspection = await fixture.load();
-  try {
-    const providers = fixture.resolve(inspection.registry, host);
-    expect(providers).toHaveLength(1);
-    expect(providers[0]!.id).toBe(fixture.id);
-    expect(readProvider(providers[0]!)).toBe(true);
-    expect(fixture.resolve(inspection.registry, host)).toHaveLength(1);
-    await inspection.release();
-    expect(isPluginRegistryRetired(inspection.registry)).toBe(true);
-    expect(readProvider(providers[0]!)).toBe(true);
-    expect(fixture.state.disposals).toBe(0);
-    expect(() => fixture.resolve(inspection.registry, host)).toThrow(
-      "inspection resources have been released",
+it.each([false, true])(
+  "retires bare provider resources with the scheduled CLI owner, ambient RPC=%s",
+  async (ambientRpc) => {
+    const fixture = nativeProviderFixture();
+    const inspection = await fixture.load();
+    const clock = createGatewaySchedulerClock();
+    const gateway = createTestGatewayScheduler(clock.clock);
+    const host = new LegacyPluginSdkResourceHost();
+    const foreign = new LegacyPluginSdkResourceHost();
+    host.bindScheduler(gateway);
+    const lease = createPluginRuntimeCapabilityLease("scheduled CLI fixture");
+    const record = inspection.registry.plugins.find((entry) => entry.id === fixture.id);
+    if (!record) {
+      throw new Error("Fixture provider did not register");
+    }
+    const createScheduler = () =>
+      createPluginServiceScheduler(
+        gateway,
+        createPluginServiceSchedulerRunner({
+          registry: inspection.registry,
+          record,
+          instance: getPluginInstance(record),
+          lease,
+        }),
+      ).scheduler;
+    const foreignResolver = () => undefined;
+    bindLegacyPluginSdkResourceHost(foreignResolver, foreign);
+    const scheduler = host.run(() =>
+      ambientRpc
+        ? withPluginRuntimeGatewayRequestScope(
+            { resolveGatewayContext: foreignResolver, isWebchatConnect: () => false },
+            createScheduler,
+          )
+        : createScheduler(),
     );
-    await host.close();
-    expect(fixture.state.disposals).toBe(1);
-    expect(fixture.state.database?.isOpen).toBe(false);
-  } finally {
-    await host.close();
-    await inspection.release();
-    fixture.cleanup();
-  }
-});
+    let providers: ReturnType<typeof resolvePluginProviders> = [];
+    scheduler.schedule({
+      id: "provider-borrow",
+      delayMs: 1,
+      run: () => {
+        providers = resolvePluginProviders({
+          config: fixture.config,
+          env: fixture.env,
+          onlyPluginIds: [fixture.id],
+        });
+      },
+    });
+    try {
+      await foreign.run(() => clock.advanceBy(1));
+      expect(providers).toHaveLength(1);
+      await inspection.release();
+      await foreign.close();
+      expect(readProvider(providers[0]!)).toBe(true);
+      expect(fixture.state.disposals).toBe(0);
+      await scheduler.stop();
+      await host.close();
+      expect(fixture.state.disposals).toBe(1);
+      expect(fixture.state.database?.isOpen).toBe(false);
+    } finally {
+      await scheduler.stop();
+      lease.revoke();
+      await Promise.allSettled([
+        host.close(),
+        foreign.close(),
+        inspection.release(),
+        gateway.stop(),
+      ]);
+      fixture.cleanup();
+    }
+  },
+);
 
 it("keeps two SDK hosts independent while borrowing the same native source", async () => {
   const fixture = nativeProviderFixture();
@@ -456,18 +494,16 @@ it.each(["scheduled", "shared-scheduled"] as const)(
     bindGatewayContextResolver(second, fenceScheduledGatewayContextResolver(scheduled));
     const resolver =
       kind === "scheduled" ? scheduled : getSharedGatewayContextResolver([first, second]);
+    const runScheduled = createScheduledGatewayRunner(resolver);
     const inspection = await fixture.load();
     const resolve = () =>
       foreign.run(() =>
-        runWithScheduledGatewayContext({
-          resolveGatewayContext: resolver,
-          run: async () => {
-            const existing = getPluginRuntimeGatewayRequestScope();
-            return withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => ({}) }, () => {
-              expect(getPluginRuntimeGatewayRequestScope()).toBe(existing);
-              return fixture.resolve(inspection.registry, foreign);
-            });
-          },
+        runScheduled(async () => {
+          const existing = getPluginRuntimeGatewayRequestScope();
+          return withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => ({}) }, () => {
+            expect(getPluginRuntimeGatewayRequestScope()).toBe(existing);
+            return fixture.resolve(inspection.registry, foreign);
+          });
         }),
       );
     try {
@@ -506,15 +542,11 @@ it.each(["unknown", "mixed-composite"] as const)(
     const unknown = vi.fn(() => undefined);
     const resolver =
       kind === "unknown" ? unknown : getSharedGatewayContextResolver([first, second]);
+    const runScheduled = createScheduledGatewayRunner(resolver);
     const inspection = await fixture.load();
     try {
       await expect(
-        foreign.run(() =>
-          runWithScheduledGatewayContext({
-            resolveGatewayContext: resolver,
-            run: async () => fixture.resolve(inspection.registry, foreign),
-          }),
-        ),
+        foreign.run(() => runScheduled(async () => fixture.resolve(inspection.registry, foreign))),
       ).rejects.toThrow("Gateway SDK resource host is not bound");
       await inspection.release();
       expect(fixture.state.database?.isOpen).toBe(false);

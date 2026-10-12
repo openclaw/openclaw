@@ -60,17 +60,20 @@ export async function reconcileUnknownQueuedDelivery(params: {
   payloads: readonly ReplyPayload[];
   cfg: OpenClawConfig;
   warn: (message: string) => void;
+  assertCurrent?: () => void;
 }): Promise<ChannelMessageUnknownSendReconciliationResult | null> {
-  const adapter = resolveOutboundChannelMessageAdapter({
+  const adapter = await resolveOutboundChannelMessageAdapter({
     channel: params.entry.channel,
     cfg: params.cfg,
     agentId: params.entry.session?.agentId,
     allowBootstrap: true,
+    assertCurrent: params.assertCurrent,
   });
-  if (adapter?.durableFinal?.capabilities?.reconcileUnknownSend !== true) {
-    return null;
-  }
-  const reconcileUnknownSend = adapter.durableFinal.reconcileUnknownSend;
+  params.assertCurrent?.();
+  const reconcileUnknownSend =
+    adapter?.durableFinal?.capabilities?.reconcileUnknownSend === true
+      ? adapter.durableFinal.reconcileUnknownSend
+      : undefined;
   if (!reconcileUnknownSend) {
     return null;
   }

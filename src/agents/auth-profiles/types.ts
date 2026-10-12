@@ -3,10 +3,28 @@
  * These types describe credential payloads, runtime selection state, and repair
  * results consumed by providers, sessions, doctor, and plugin-facing seams.
  */
+import type { z } from "zod";
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretRef } from "../../config/types.secrets.js";
-import type { OAuthCredentialMetadata } from "./credential-schema.js";
+import type {
+  inlineAuthProfileCredentialSchema,
+  OAuthCredentialMetadata,
+} from "./credential-schema.js";
 import type { LegacyOAuthRef } from "./legacy-oauth-ref.js";
+
+type InlineAuthProfileCredential = z.infer<typeof inlineAuthProfileCredentialSchema>;
+
+export type SharedAuthStoreOwnership = { location: "legacy-main" } | { location: "state-db" };
+
+/** Internal prepared ownership, carried through commit publication and compensation. */
+export type AuthProfileStoreOwner = {
+  databasePath: string;
+  sharedDatabasePath: string;
+  location: SharedAuthStoreOwnership["location"];
+};
+
+export type PreparedAuthProfileStoreOwner = AuthProfileStoreOwner & { env: NodeJS.ProcessEnv };
 
 /** Provider identifier recorded on auth profile credentials. */
 export type OAuthProvider = string;
@@ -20,51 +38,32 @@ export type OAuthCredentials = OAuthCredentialMetadata & {
   email?: string;
 };
 
-/** API-key credential with optional secret reference indirection. */
-export type ApiKeyCredential = {
-  type: "api_key";
-  provider: string;
+export type ApiKeyCredential = SchemaContract<
+  Omit<Extract<InlineAuthProfileCredential, { type: "api_key" }>, "key">
+> & {
   key?: string;
   keyRef?: SecretRef;
-  /** Explicit opt-out for copying this profile when creating another agent. */
-  copyToAgents?: boolean;
-  email?: string;
-  displayName?: string;
-  /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */
-  metadata?: Record<string, string>;
 };
 
 /** Static token credential that OpenClaw does not refresh. */
-type TokenCredential = {
-  /**
-   * Static bearer-style token (often OAuth access token / PAT).
-   * Not refreshable by OpenClaw (unlike `type: "oauth"`).
-   */
-  type: "token";
-  provider: string;
+type TokenCredential = SchemaContract<
+  Omit<Extract<InlineAuthProfileCredential, { type: "token" }>, "token">
+> & {
   token?: string;
   tokenRef?: SecretRef;
-  /** Explicit opt-out for copying this profile when creating another agent. */
-  copyToAgents?: boolean;
-  /** Optional expiry timestamp (ms since epoch). */
-  expires?: number;
-  email?: string;
-  displayName?: string;
 };
 
-/** Refreshable OAuth credential plus provider metadata and legacy references. */
-export type OAuthCredential = OAuthCredentials & {
-  type: "oauth";
-  provider: string;
-  oauthRef?: LegacyOAuthRef;
-  /**
-   * OAuth refresh tokens are not portable by default. Provider-owned flows may
-   * set this only when copying refresh material across agents is known safe.
-   */
-  copyToAgents?: boolean;
-  email?: string;
-  displayName?: string;
-};
+/**
+ * Refreshable OAuth credential plus provider metadata and legacy references.
+ * OAuth refresh tokens are not portable by default. Provider-owned flows may
+ * set copyToAgents only when copying refresh material across agents is known safe.
+ */
+export type OAuthCredential = OAuthCredentialMetadata &
+  SchemaContract<
+    Omit<Extract<InlineAuthProfileCredential, { type: "oauth" }>, keyof OAuthCredentialMetadata>
+  > & {
+    oauthRef?: LegacyOAuthRef;
+  };
 
 export type SavedSetupCredential = {
   apiKeyHeader?: true;
@@ -77,7 +76,6 @@ export type SavedSetupCredential = {
   pluginId?: string;
 };
 
-/** Credential variants supported by auth profiles. */
 export type AuthProfileCredential = (ApiKeyCredential | TokenCredential | OAuthCredential) & {
   /** Replacement credentials stay unavailable until their verified connection is activated. */
   setup?: SavedSetupCredential;
@@ -104,7 +102,6 @@ export type AuthProfileCooldownClassification = "wham_token_expired" | "wham_acc
 
 /** Profile-wide blocked reason reported by provider usage probes. */
 export type AuthProfileBlockedReason = "subscription_limit";
-/** Source that marked a profile as blocked. */
 export type AuthProfileBlockedSource = "codex_rate_limits" | "wham";
 
 /** Per-profile usage statistics for round-robin and cooldown tracking */
@@ -128,6 +125,11 @@ export type ProfileUsageStats = {
   lastProbeAt?: number;
 };
 
+export type UserModelAuthProfile = {
+  credential: AuthProfileCredential;
+  usageStats?: ProfileUsageStats;
+};
+
 /** Durable, non-secret auth profile selection state. */
 export type AuthProfileState = {
   /**
@@ -141,13 +143,23 @@ export type AuthProfileState = {
   usageStats?: Record<string, ProfileUsageStats>;
 };
 
+export type PersistedAuthProfileStoreInspection =
+  | { status: "missing"; reason: "database" | "table" | "row" }
+  | { status: "readable"; raw: unknown }
+  | { status: "unreadable" };
+
+export type AuthProfileRowRead = {
+  store: PersistedAuthProfileStoreInspection;
+  state: PersistedAuthProfileStoreInspection;
+  cacheable: boolean;
+};
+
 /** Persisted credential payload without runtime-only selection state. */
 export type AuthProfileSecretsStore = {
   version: number;
   profiles: Record<string, AuthProfileCredential>;
 };
 
-/** Persisted runtime-state payload with a schema version. */
 export type AuthProfileStateStore = {
   version: number;
 } & AuthProfileState;
@@ -176,12 +188,13 @@ export type RuntimeAuthProfileStore = AuthProfileStore & {
   /** Runtime-only built-in CLI winners; internal provenance, never exposed or persisted. */
   runtimeExternalCliProfileIds?: string[];
   runtimeLocalProfileIds?: string[];
+  /** Canonical local OAuth rows may be hidden by shared-store reconciliation. */
+  runtimeHasLocalOAuthProfiles?: boolean;
   /** Provider orders stored by this owner; [] means no local override, even with inherited priority. */
   runtimeLocalOrderProviderIds?: string[];
   runtimeInheritsMainState?: boolean;
 };
 
-/** Result returned by config/store auth profile id repair. */
 export type AuthProfileIdRepairResult = {
   config: OpenClawConfig;
   changes: string[];

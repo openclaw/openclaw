@@ -6,7 +6,6 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { writeCronJobScratch } from "./scratch-store.js";
 import {
-  loadCronJobsStoreSync,
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreWithConfigJobsReadOnly,
   saveCronJobsStore,
@@ -40,14 +39,23 @@ function legacyReviewJob() {
   };
 }
 
+/** The weekly curator as the Gateway last converged it: a system-owned isolated agent turn. */
+function curatorJob() {
+  return {
+    ...job("retired"),
+    name: "skill-collection-review-main",
+    declarationKey: "skill-collection-review:main",
+    systemOwned: true,
+    sessionTarget: "isolated",
+    payload: { kind: "agentTurn", message: "Weekly Skill Workshop curator pass." },
+    delivery: { mode: "none" },
+  };
+}
+
 describe("retired Workshop cron jobs", () => {
-  it.each(
-    ["async", "sync"].flatMap((mode) =>
-      ["both", "json-only", "column-only"].map((shape) => ({ mode, shape })),
-    ),
-  )(
-    "retires $shape legacy rows on an already-current database through $mode load",
-    async ({ mode, shape }) => {
+  it.each(["both", "json-only", "column-only", "curator"])(
+    "retires %s legacy rows on an already-current database through mutable load",
+    async (shape) => {
       await withOpenClawTestState({ label: "retired-workshop-cron" }, async (state) => {
         const storePath = state.statePath("cron", "jobs.json");
         const otherStorePath = state.statePath("other-cron", "jobs.json");
@@ -55,7 +63,7 @@ describe("retired Workshop cron jobs", () => {
         await saveCronJobsStore(storePath, { version: 1, jobs: [job("retired"), job("keep")] });
         await saveCronJobsStore(otherStorePath, { version: 1, jobs: [job("retired")] });
         for (const target of [storePath, otherStorePath]) {
-          writeCronJobScratch({
+          await writeCronJobScratch({
             storePath: target,
             jobId: "retired",
             content: "old scratch",
@@ -64,9 +72,18 @@ describe("retired Workshop cron jobs", () => {
         }
         const db = openOpenClawStateDatabase().db;
         const version = db.prepare("PRAGMA user_version").get();
-        db.prepare("UPDATE cron_jobs SET payload_kind = ?, job_json = ? WHERE job_id = ?").run(
-          shape === "json-only" ? "systemEvent" : "skillCollectionReview",
-          JSON.stringify(shape === "column-only" ? job("retired") : retired),
+        db.prepare(
+          "UPDATE cron_jobs SET payload_kind = ?, job_json = ?, declaration_key = ? WHERE job_id = ?",
+        ).run(
+          shape === "curator"
+            ? "agentTurn"
+            : shape === "json-only"
+              ? "systemEvent"
+              : "skillCollectionReview",
+          JSON.stringify(
+            shape === "curator" ? curatorJob() : shape === "column-only" ? job("retired") : retired,
+          ),
+          shape === "curator" ? "skill-collection-review:main" : null,
           "retired",
         );
         const count = (table: "cron_jobs" | "cron_job_scratch", target: string) =>
@@ -84,10 +101,7 @@ describe("retired Workshop cron jobs", () => {
         await guard.recheck();
         expect(count("cron_jobs", storePath)).toEqual({ count: 1 });
         expect(count("cron_job_scratch", storePath)).toEqual({ count: 1 });
-        const loaded =
-          mode === "sync"
-            ? loadCronJobsStoreSync(storePath)
-            : (await loadCronJobsStoreWithConfigJobs(storePath)).store;
+        const loaded = (await loadCronJobsStoreWithConfigJobs(storePath)).store;
         expect(loaded.jobs.map((entry) => entry.id)).toEqual(["keep"]);
         expect(count("cron_jobs", storePath)).toEqual({ count: 0 });
         expect(count("cron_job_scratch", storePath)).toEqual({ count: 0 });

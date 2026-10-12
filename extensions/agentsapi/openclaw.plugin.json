@@ -1,0 +1,93 @@
+{
+  "id": "agentsapi",
+  "name": "OpenAI Agents API",
+  "description": "OpenAI Agents API harness with hosted or self-hosted sessions.",
+  "categories": ["agent-runtimes"],
+  "activation": {
+    "onStartup": false,
+    "onAgentHarnesses": ["agentsapi"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "nativeTools": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["type"],
+          "properties": { "type": { "type": "string", "minLength": 1 } },
+          "additionalProperties": true
+        },
+        "default": [
+          { "type": "web_search", "mode": "live" },
+          { "type": "programmatic_tool_calling", "enabled": true }
+        ],
+        "description": "Native Agents API tool declarations passed unchanged to new sessions. Omit for live web search and programmatic tool calling. A supplied list replaces the defaults; the API validates tool types and options. An empty list sends no native declarations, but programmatic tool calling requires an explicit enabled: false declaration to disable it. OpenClaw functions, MCP servers, plugins, and environment-provided tools are configured separately. Restart the Gateway and reset existing sessions to adopt a changed list."
+      },
+      "plugins": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Agents API-specific installed Codex plugin selection.",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "allow_all_plugins": { "type": "boolean" },
+          "plugins": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "marketplaceName": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+                "pluginName": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      },
+      "environment": {
+        "type": "string",
+        "enum": ["openai_hosted", "self_hosted"],
+        "default": "openai_hosted",
+        "description": "Execution environment for new sessions. Self-hosted uses the prepared OpenClaw workspace and requires an externally connected executor. Reset existing sessions after changing this setting."
+      },
+      "executorController": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Plugin ID that owns this self-hosted executor controller. Omit for an externally connected executor. Enable the selected plugin and reset existing sessions before changing controllers."
+      },
+      "openai_host": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "OpenAI-hosted environment settings. Unused for self-hosted sessions.",
+        "properties": {
+          "network": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["access"],
+            "description": "Native Agents API network policy. Reset existing sessions after adding, changing, or removing this policy. The API validates domain rules.",
+            "properties": {
+              "access": {
+                "type": "string",
+                "enum": ["enabled", "disabled", "restricted"]
+              },
+              "allowed_domains": {
+                "type": ["array", "null"],
+                "items": { "type": "string" },
+                "description": "Exact hostnames allowed in restricted mode. Subdomains and redirect destinations require separate entries."
+              }
+            }
+          }
+        }
+      },
+      "hostExecutorSkillDirectories": {
+        "type": "array",
+        "maxItems": 32,
+        "uniqueItems": true,
+        "items": { "type": "string", "pattern": "^(?:(?![\\s\\S]*/\\.{1,2}(?:/|(?![\\s\\S])))/|(?![\\s\\S]*[\\\\/]\\.{1,2}(?:[\\\\/]|(?![\\s\\S])))(?:[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\/]+[\\\\/][^\\\\/]+))" },
+        "description": "Unique absolute paths without . or .. path segments on the executor host machine that already contain the skill files and are available to the Agents API harness. OpenClaw does not copy or install these files. Gateway skill eligibility filters do not apply to these directories. Reset existing sessions after changing this list."
+      }
+    }
+  }
+}

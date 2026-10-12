@@ -8,8 +8,12 @@ import type { ApplicationContext, ApplicationGateway } from "../../app/context.t
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import type { ModelSetupRouteData } from "./model-setup-page.ts";
-import "./model-setup-page.ts";
+import type { ModelSetupRouteData } from "./first-run-setup.ts";
+import {
+  createPage,
+  mountModelSetupPage,
+  unmountModelSetupPage,
+} from "./test-helpers/solid-page.test-support.tsx";
 
 type TestModelSetupPage = HTMLElement & {
   routeData?: ModelSetupRouteData;
@@ -63,6 +67,7 @@ function createFixture() {
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: vi.fn(),
     setSessionKey: vi.fn(),
     start: vi.fn(),
@@ -78,7 +83,7 @@ function createFixture() {
   const selection = { selectedId: "main", scopeId: "main" };
   const context = {
     gateway,
-    agentSelection: {
+    settingsAgentSelection: {
       state: selection,
       subscribe: (listener: () => void) => {
         selectionListeners.add(listener);
@@ -117,10 +122,11 @@ function createFixture() {
 
 async function mountPage(context: ApplicationContext): Promise<TestModelSetupPage> {
   const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
+  const page = createPage(context);
   page.routeData = { firstRun: false };
   provider.append(page);
   document.body.append(provider);
+  mountModelSetupPage(page);
   await page.updateComplete;
   return page;
 }
@@ -143,9 +149,10 @@ describe("ModelSetupPage detection ownership", () => {
     const { context, request, runtimeConfig } = createFixture();
     request.mockResolvedValue(detection);
     const provider = createApplicationContextProvider(context);
-    const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
+    const page = createPage(context);
     provider.append(page);
     document.body.append(provider);
+    mountModelSetupPage(page);
     await page.updateComplete;
 
     expect(request).not.toHaveBeenCalled();
@@ -223,13 +230,16 @@ describe("ModelSetupPage detection ownership", () => {
       } else if (change === "agent") {
         setAgent("research");
       } else if (change === "remount") {
+        unmountModelSetupPage(page);
         page.remove();
         page = await mountPage(context);
       } else {
         const provider = page.parentElement!;
+        unmountModelSetupPage(page);
         page.remove();
         page.routeData = { firstRun: false };
         provider.append(page);
+        mountModelSetupPage(page);
       }
       await vi.waitFor(() => expect(selectedModelDetail(page)).toBe("current-model"));
       expect(signal?.aborted).toBe(true);

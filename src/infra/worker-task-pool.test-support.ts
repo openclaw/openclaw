@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { threadId, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { serveWorkerTasks } from "./worker-task-pool.js";
+import { serveWorkerTasks } from "./worker-task-server.js";
 
 export type PoolFixtureInput = {
   label: string;
   readStartupOptions?: boolean;
   exchanges?: number;
+  opaqueRequest?: boolean;
+  consumeInput?: boolean;
+  notifications?: number;
   counters?: SharedArrayBuffer;
   wait?: boolean;
   exitCode?: number;
@@ -31,6 +34,9 @@ serveWorkerTasks<PoolFixtureResult>(
       assert.ok(typeof input.exitCode === "number");
       process.exit(input.exitCode);
     }
+    for (let index = 0; index < Number(input.notifications ?? 0); index++) {
+      channel?.notify({ label: input.label, index });
+    }
     if (input.counters) {
       assert.ok(input.counters instanceof SharedArrayBuffer);
       const counters = new Int32Array(input.counters);
@@ -40,13 +46,21 @@ serveWorkerTasks<PoolFixtureResult>(
       }
     }
     let relayedBufferBytes: number | undefined;
+    if (input.consumeInput) {
+      assert.ok(channel);
+      channel.consumeInput();
+    }
     if (input.exchanges && channel) {
       channel.consumeInput();
       for (let index = 0; index < Number(input.exchanges); index++) {
         const buffer =
           input.relayBuffer && input.buffer instanceof ArrayBuffer ? input.buffer : undefined;
         const response = await channel.request(
-          { label: input.label, buffer },
+          {
+            kind: input.opaqueRequest ? undefined : "fixture-exchange",
+            label: input.label,
+            buffer,
+          },
           buffer ? [buffer] : undefined,
         );
         if (buffer) {

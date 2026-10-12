@@ -1,18 +1,33 @@
 // Gateway Protocol schema module defines OpenClaw chat payloads.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import {
+  SYSTEM_AGENT_PLUGIN_CAPABILITY_MAX_CHARS,
+  SYSTEM_AGENT_PLUGIN_CAPABILITY_MAX_ITEMS,
+  SYSTEM_AGENT_PLUGIN_ID_MAX_CHARS,
+  SYSTEM_AGENT_PLUGIN_NAME_MAX_CHARS,
+  SYSTEM_AGENT_SETTING_PATH_MAX_SEGMENTS,
+  SYSTEM_AGENT_SETTING_SEGMENT_MAX_CHARS,
+} from "../system-agent-context.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import {
   SetupInferenceActivationRejectionSchema,
   SetupInferenceFailureStatusSchema,
 } from "./setup-inference.js";
+import { withSince } from "./since.js";
 import { WizardAnswerSchema, WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
 
 export const SystemAgentWizardCancelSchema = closedObject({
   /** The visible step this action belongs to; stale controls must not affect a newer step. */
   stepId: NonEmptyString,
 });
+
+const PluginCapabilityNamesSchema = Type.Optional(
+  Type.Array(Type.String({ minLength: 1, maxLength: SYSTEM_AGENT_PLUGIN_CAPABILITY_MAX_CHARS }), {
+    maxItems: SYSTEM_AGENT_PLUGIN_CAPABILITY_MAX_ITEMS,
+  }),
+);
 
 /**
  * OpenClaw chat lets clients (macOS app onboarding, future UIs) hold the
@@ -42,6 +57,37 @@ export const SystemAgentChatParamsSchema = closedObject({
         maxLength: 64,
         pattern: "^[A-Za-z0-9/_-]{1,64}$",
       }),
+      plugin: Type.Optional(
+        closedObject({
+          id: Type.String({
+            minLength: 1,
+            maxLength: SYSTEM_AGENT_PLUGIN_ID_MAX_CHARS,
+            pattern: "^[A-Za-z0-9@][A-Za-z0-9@._/-]{0,127}$",
+          }),
+          name: Type.String({ minLength: 1, maxLength: SYSTEM_AGENT_PLUGIN_NAME_MAX_CHARS }),
+          installed: Type.Optional(Type.Boolean()),
+          declared: Type.Optional(
+            closedObject({
+              tools: PluginCapabilityNamesSchema,
+              providers: PluginCapabilityNamesSchema,
+              channels: PluginCapabilityNamesSchema,
+              contracts: PluginCapabilityNamesSchema,
+              skills: PluginCapabilityNamesSchema,
+              mcpServers: PluginCapabilityNamesSchema,
+              incomplete: Type.Optional(Type.Boolean()),
+            }),
+          ),
+          setting: Type.Optional(
+            closedObject({
+              path: Type.Array(
+                Type.String({ minLength: 1, maxLength: SYSTEM_AGENT_SETTING_SEGMENT_MAX_CHARS }),
+                { minItems: 1, maxItems: SYSTEM_AGENT_SETTING_PATH_MAX_SEGMENTS },
+              ),
+              label: Type.String({ minLength: 1, maxLength: SYSTEM_AGENT_PLUGIN_NAME_MAX_CHARS }),
+            }),
+          ),
+        }),
+      ),
     }),
   ),
   /** Host-only regular-agent delegation context. Never model-authored. */
@@ -86,6 +132,8 @@ export const SystemAgentChatQuestionSchema = closedObject({
 export const SystemAgentChatResultSchema = closedObject({
   sessionId: NonEmptyString,
   reply: NonEmptyString,
+  /** Passive caretaker welcome that a purpose-specific view may replace. Notices stay visible. */
+  optionalWelcome: Type.Optional(Type.Boolean()),
   /** The next reply is a hosted-wizard secret and clients must mask its input/echo. */
   sensitive: Type.Optional(Type.Boolean()),
   /** The hosted wizard will consume the next message as its current step answer. */
@@ -214,6 +262,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       label: NonEmptyString,
       detail: Type.String(),
       modelRef: NonEmptyString,
+      modelTarget: Type.Optional(Type.Literal("utility")),
       recommended: Type.Boolean(),
       /** true: verified; false: definitively logged out; absent: unknown. */
       credentials: Type.Optional(Type.Boolean()),
@@ -242,6 +291,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     closedObject({
       /** Opaque provider-auth choice sent back during activation. */
       id: NonEmptyString,
+      modelTarget: Type.Optional(Type.Literal("utility")),
       /** Canonical provider identity for clients with bundled brand artwork. */
       brandId: Type.Optional(NonEmptyString),
       /** Provider family shown above the specific credential method. */
@@ -257,6 +307,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     Type.Array(
       closedObject({
         id: NonEmptyString,
+        modelTarget: Type.Optional(Type.Literal("utility")),
         /** Canonical provider identity for clients with bundled brand artwork. */
         brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
@@ -279,6 +330,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     Type.Array(
       closedObject({
         id: NonEmptyString,
+        modelTarget: Type.Optional(Type.Literal("utility")),
         /** Canonical provider identity for clients with bundled brand artwork. */
         brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
@@ -317,11 +369,14 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
   workspace: NonEmptyString,
   codexAppServerDetected: Type.Optional(Type.Boolean()),
   configuredModel: Type.Optional(Type.String()),
+  setupModel: Type.Optional(Type.String()),
+  utilityModel: Type.Optional(Type.String()),
   setupComplete: Type.Boolean(),
 });
 
 /** Live verification of the Gateway's current default-agent inference route. */
 export const SystemAgentSetupVerifyParamsSchema = closedObject({
+  modelTarget: Type.Optional(Type.Literal("utility")),
   /** Agent whose configured inference route is being verified. */
   agentId: Type.Optional(NonEmptyString),
 });
@@ -330,6 +385,7 @@ export const SystemAgentSetupVerifyResultSchema = Type.Union([
   closedObject({
     ok: Type.Literal(true),
     modelRef: NonEmptyString,
+    modelTarget: Type.Optional(Type.Literal("utility")),
     latencyMs: Type.Number(),
   }),
   closedObject({
@@ -340,19 +396,10 @@ export const SystemAgentSetupVerifyResultSchema = Type.Union([
 ]);
 
 export const SystemAgentSetupActivateParamsSchema = closedObject({
+  modelTarget: Type.Optional(Type.Literal("utility")),
   /** Agent that owns the verified and persisted inference route. */
   agentId: Type.Optional(NonEmptyString),
-  kind: Type.Union([
-    Type.Literal("existing-model"),
-    Type.Literal("openai-api-key"),
-    Type.Literal("anthropic-api-key"),
-    Type.Literal("claude-cli"),
-    Type.Literal("codex-cli"),
-    Type.Literal("gemini-cli"),
-    ProviderAutoSetupInferenceKind,
-    SavedAuthSetupInferenceKind,
-    Type.Literal("api-key"),
-  ]),
+  kind: Type.Union([...SetupInferenceKind.anyOf, Type.Literal("api-key")]),
   /** Exact detected model for this route; prevents detect/activate drift. */
   modelRef: Type.Optional(NonEmptyString),
   /** Manual step only: opaque provider-auth choice returned by detection. */
@@ -376,6 +423,7 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
   ok: Type.Boolean(),
   /** Present on success: the model ref that answered the live test. */
   modelRef: Type.Optional(Type.String()),
+  modelTarget: Type.Optional(Type.Literal("utility")),
   latencyMs: Type.Optional(Type.Number()),
   /** Human-readable setup summary lines (workspace, model, gateway). */
   lines: Type.Optional(Type.Array(Type.String())),
@@ -390,6 +438,8 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
 
 /** Starts one provider-owned interactive login as a gateway wizard session. */
 export const SystemAgentSetupAuthStartParamsSchema = closedObject({
+  expectedOwnerId: Type.Optional(withSince("2026.9.9", Type.String({ minLength: 1 }))),
+  modelTarget: Type.Optional(Type.Literal("utility")),
   /** Client-generated so cancellation remains possible if the start reply is lost. */
   sessionId: NonEmptyString,
   /** Agent that owns credentials and model selection created by this setup flow. */

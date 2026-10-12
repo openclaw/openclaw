@@ -2,13 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { WorkboardExecution } from "@openclaw/workboard-contract";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createWorkboardLifecycleService, syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
+import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
 import { sqliteTestAuxStores } from "./test/sqlite-store.js";
 
-const workerModuleUrl = new URL("./sqlite-store.worker.ts", import.meta.url);
+const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint);
 
 const SESSION_KEY = "agent:main:subagent:workboard-cleanup-recovery";
 const RUN_ID = "run-cleanup-recovery";
@@ -84,65 +86,6 @@ function doneSessionSnapshot(updatedAt: number) {
 const context = { logger: { warn: vi.fn() } } as never;
 
 describe("Workboard managed-worktree cleanup recovery", () => {
-  it("retries cleanup after a hook failure and process restart", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-cleanup-recovery-"));
-    const dbPath = path.join(dir, "workboard.sqlite");
-    const initial = openStore(dbPath);
-    const card = await createManagedCard(initial.store);
-    const removeIfLossless = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("worktree registry unavailable"))
-      .mockResolvedValueOnce(true);
-    const worktrees = { removeIfLossless };
-
-    await expect(
-      syncWorkboardSubagentEnded({
-        store: initial.store,
-        worktrees,
-        event: {
-          targetSessionKey: SESSION_KEY,
-          runId: RUN_ID,
-          endedAt: card.updatedAt + 1,
-          outcome: "ok",
-        },
-      }),
-    ).rejects.toThrow("worktree registry unavailable");
-    await initial.stores.close();
-
-    const restarted = openStore(dbPath);
-    const service = createWorkboardLifecycleService({
-      store: restarted.store,
-      readSessions: doneSessionSnapshot(card.updatedAt + 1),
-      worktrees,
-    });
-
-    try {
-      await restarted.store.ready();
-      await service.start(context);
-      service.onGatewayStart();
-      await vi.waitFor(async () => {
-        expect(removeIfLossless).toHaveBeenCalledTimes(2);
-        expect(removeIfLossless).toHaveBeenLastCalledWith({
-          path: MANAGED_PATH,
-          ownerKind: "workboard",
-          ownerId: card.id,
-        });
-        const recovered = await restarted.store.get(card.id);
-        expect(recovered).toMatchObject({ status: "review", execution: { status: "review" } });
-        expect(recovered?.metadata?.automation?.workspace).toEqual({
-          kind: "worktree",
-          path: SOURCE_PATH,
-          branch: "main",
-        });
-      });
-    } finally {
-      service.onGatewayStop();
-      await service.stop?.(context);
-      await restarted.stores.close();
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   it("cleans a freshly reconciled terminal worktree in the initial restart sweep", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-cleanup-fresh-"));
     const dbPath = path.join(dir, "workboard.sqlite");

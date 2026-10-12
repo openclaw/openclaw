@@ -124,20 +124,14 @@ describe("retired copilot custody", () => {
       blocked: false,
     });
 
-    expect(storage.localSet).toHaveBeenCalledWith({ [CUSTODY_BLOCKED_KEY]: true });
-    expect(storage.localRemove).toHaveBeenCalledTimes(2);
-    expect(storage.localRemove).toHaveBeenNthCalledWith(1, COPILOT_LOCAL_KEYS);
-    expect(storage.localRemove).toHaveBeenNthCalledWith(2, [CUSTODY_BLOCKED_KEY]);
+    expect(storage.localSet).not.toHaveBeenCalled();
+    expect(storage.localRemove).toHaveBeenCalledOnce();
+    expect(storage.localRemove).toHaveBeenCalledWith(COPILOT_LOCAL_KEYS);
     expect(storage.sessionRemove).toHaveBeenCalledOnce();
     expect(storage.sessionRemove).toHaveBeenCalledWith(COPILOT_SESSION_KEYS);
     expect(storage.localValues).toEqual(RETAINED_LOCAL);
     expect(storage.sessionValues).toEqual({});
-    expect(storage.operations).toEqual([
-      "marker_set",
-      "session_remove",
-      "retired_local_remove",
-      "marker_remove",
-    ]);
+    expect(storage.operations).toEqual(["session_remove", "retired_local_remove"]);
   });
 
   it.each([
@@ -151,35 +145,6 @@ describe("retired copilot custody", () => {
             gatewayScope: "ws://127.0.0.1:18789/",
             sessionKey: "browser:tab:7",
             creationPending: true,
-          },
-        },
-        pendingArchives: [],
-      },
-    },
-    {
-      label: "a confirmed session remains",
-      registry: {
-        sessions: {
-          7: {
-            tabId: 7,
-            browserInstanceId: "browser-instance",
-            gatewayScope: "ws://127.0.0.1:18789/",
-            sessionKey: "browser:tab:7",
-            sessionId: "session-7",
-          },
-        },
-        pendingArchives: [],
-      },
-    },
-    {
-      label: "an active session remains",
-      registry: {
-        sessions: {
-          7: {
-            tabId: 7,
-            browserInstanceId: "browser-instance",
-            sessionKey: "browser:tab:7",
-            active: true,
           },
         },
         pendingArchives: [],
@@ -293,17 +258,34 @@ describe("retired copilot custody", () => {
     expect(storage.sessionValues).toEqual({});
   });
 
-  it("keeps authority blocked when automatic empty-state cleanup fails", async () => {
-    const storage = cleanupStorage({
-      registry: { sessions: {}, pendingArchives: [] },
-      failureStage: "retired_local_remove",
-    });
+  it.each([
+    { stage: "session_remove", registryPresent: true },
+    { stage: "retired_local_remove", registryPresent: true },
+    { stage: "session_remove", registryPresent: false },
+    { stage: "retired_local_remove", registryPresent: false },
+  ] as const)(
+    "retries harmless cleanup after $stage fails (registry present: $registryPresent)",
+    async ({ stage, registryPresent }) => {
+      const storage = cleanupStorage({
+        registry: { sessions: {}, pendingArchives: [] },
+        registryPresent,
+        failureStage: stage,
+      });
 
-    await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({ blocked: true });
+      await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({
+        blocked: true,
+      });
+      expect(storage.localValues).not.toHaveProperty(CUSTODY_BLOCKED_KEY);
+      expect(Object.hasOwn(storage.localValues, "copilotSessionRegistryV1")).toBe(registryPresent);
 
-    expect(storage.localValues[CUSTODY_BLOCKED_KEY]).toBe(true);
-    expect(storage.localValues).toHaveProperty("copilotSessionRegistryV1");
-  });
+      storage.setFailureStage(undefined);
+      await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({
+        blocked: false,
+      });
+      expect(storage.localValues).toEqual(RETAINED_LOCAL);
+      expect(storage.sessionValues).toEqual({});
+    },
+  );
 });
 
 describe("native bootstrap timeout", () => {
@@ -312,78 +294,91 @@ describe("native bootstrap timeout", () => {
     vi.unstubAllGlobals();
   });
 
-  it("bounds a stuck native call and leaves status retryable", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("crypto", {
-      getRandomValues: vi.fn((bytes: Uint8Array) => {
-        bytes.set(Uint8Array.from({ length: 16 }, (_, index) => index * 17));
-        return bytes;
-      }),
-    });
-    const stored: Record<string, unknown> = {};
-    let onDisconnect = () => {};
-    const disconnect = vi.fn(() => onDisconnect());
-    const chromeApi = {
-      runtime: {
-        connectNative: vi.fn(() => ({
-          disconnect,
-          onDisconnect: {
-            addListener: (listener: () => void) => {
-              onDisconnect = listener;
+  it.each(["current", "disabled", "re-enabled"])(
+    "settles a stuck native call after %s ownership",
+    async (ownership) => {
+      vi.useFakeTimers();
+      vi.stubGlobal("crypto", {
+        getRandomValues: vi.fn((bytes: Uint8Array) => {
+          bytes.set(Uint8Array.from({ length: 16 }, (_, index) => index * 17));
+          return bytes;
+        }),
+      });
+      const stored: Record<string, unknown> = {};
+      let onDisconnect = () => {};
+      const disconnect = vi.fn(() => onDisconnect());
+      const chromeApi = {
+        runtime: {
+          connectNative: vi.fn(() => ({
+            disconnect,
+            onDisconnect: {
+              addListener: (listener: () => void) => {
+                onDisconnect = listener;
+              },
             },
-          },
-          onMessage: { addListener: vi.fn() },
-          postMessage: vi.fn(),
-        })),
-      },
-      storage: {
-        local: {
-          get: vi.fn(async (keys: string[]) =>
-            Object.fromEntries(
-              keys.filter((key) => Object.hasOwn(stored, key)).map((key) => [key, stored[key]]),
-            ),
-          ),
-          set: vi.fn(async (values: Record<string, unknown>) => {
-            Object.assign(stored, values);
-          }),
-          remove: vi.fn(async (keys: string[]) => {
-            for (const key of keys) {
-              delete stored[key];
-            }
-          }),
+            onMessage: { addListener: vi.fn() },
+            postMessage: vi.fn(),
+          })),
         },
-      },
-    };
-    const controller = createNativeBootstrapController({
-      chromeApi,
-      getPairing: async () => null,
-      applyPairing: vi.fn(),
-    });
+        storage: {
+          local: {
+            get: vi.fn(async (keys: string[]) =>
+              Object.fromEntries(
+                keys.filter((key) => Object.hasOwn(stored, key)).map((key) => [key, stored[key]]),
+              ),
+            ),
+            set: vi.fn(async (values: Record<string, unknown>) => {
+              Object.assign(stored, values);
+            }),
+            remove: vi.fn(async (keys: string[]) => {
+              for (const key of keys) {
+                delete stored[key];
+              }
+            }),
+          },
+        },
+      };
+      const controller = createNativeBootstrapController({
+        chromeApi,
+        getPairing: async () => null,
+        applyPairing: vi.fn(),
+      });
 
-    const attempt = controller.attempt();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(chromeApi.runtime.connectNative.mock.results[0]?.value.postMessage).toHaveBeenCalledWith(
-      {
+      const attempt = controller.attempt();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        chromeApi.runtime.connectNative.mock.results[0]?.value.postMessage,
+      ).toHaveBeenCalledWith({
         v: 1,
         op: "bootstrap",
         nonce: "ABEiM0RVZneImaq7zN3u_w",
-      },
-    );
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(stored).toEqual({});
-    await vi.advanceTimersByTimeAsync(1);
+      });
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(stored).toEqual({});
+      if (ownership !== "current") {
+        await controller.disableSynchronously();
+        if (ownership === "re-enabled") {
+          await controller.enable({ attemptNow: false });
+        }
+      }
+      await vi.advanceTimersByTimeAsync(1);
 
-    await expect(attempt).resolves.toEqual({
-      status: "retrying",
-      code: "native_host_timeout",
-    });
-    await expect(controller.status()).resolves.toEqual({
-      disabled: false,
-      state: "retrying",
-      failureCode: "native_host_timeout",
-    });
-    expect(disconnect).toHaveBeenCalledOnce();
-  });
+      await expect(attempt).resolves.toEqual(
+        ownership === "current"
+          ? { status: "retrying", code: "native_host_timeout" }
+          : { status: "superseded" },
+      );
+      await expect(controller.status()).resolves.toEqual(
+        ownership === "current"
+          ? { disabled: false, state: "retrying", failureCode: "native_host_timeout" }
+          : {
+              disabled: ownership === "disabled",
+              state: ownership === "disabled" ? "disabled" : "waiting",
+            },
+      );
+      expect(disconnect).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 type EnsurePortScript = (request: { nonce: string }) => unknown;

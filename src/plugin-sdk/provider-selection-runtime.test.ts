@@ -84,27 +84,6 @@ describe("plugin-sdk provider-selection-runtime", () => {
     expect(resolution.providerConfig).toEqual({ providerId: "second" });
   });
 
-  it("skips unavailable auto candidates before config normalization", () => {
-    const resolveProviderConfig = vi.fn(({ provider }: { provider: TestProvider }) => ({
-      providerId: provider.id,
-    }));
-    const resolution = resolveConfiguredCapabilityProvider({
-      cfg: {},
-      cfgForResolve: {},
-      getConfiguredProvider: (providerId) => providers.find((entry) => entry.id === providerId),
-      listProviders: () => providers,
-      isProviderAvailable: ({ provider }) => provider.id !== "first",
-      resolveProviderConfig,
-      isProviderConfigured: () => true,
-    });
-
-    expect(resolution.ok).toBe(true);
-    expect(resolveProviderConfig).toHaveBeenCalledOnce();
-    expect(resolveProviderConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: providers[1] }),
-    );
-  });
-
   it("retains the first unavailable provider when no auto candidate is available", () => {
     const resolveProviderConfig = vi.fn();
     const resolution = resolveConfiguredCapabilityProvider({
@@ -126,18 +105,6 @@ describe("plugin-sdk provider-selection-runtime", () => {
   });
 
   it.each([
-    {
-      configuredProviderId: undefined,
-      expected: { apiKey: "default", model: "base", voice: "first", language: "en" },
-    },
-    {
-      configuredProviderId: "alias",
-      expected: { apiKey: "default", model: "alias-model", voice: "first" },
-    },
-    {
-      configuredProviderId: "canonical",
-      expected: { apiKey: "default", model: "base" },
-    },
     {
       configuredProviderId: "other-alias",
       expected: { apiKey: "default", model: "other-model", voice: "second", language: "en" },

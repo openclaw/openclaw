@@ -2,34 +2,36 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
+import { isToolCallContentType } from "../chat/tool-content.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sleep } from "../utils/sleep.js";
+import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import {
-  isUsageCostRollupFresh,
-  readUsageCostRollups,
-  refreshCostUsageCacheForAgent,
-  resolveUsageCostAgentDir,
-  resolveUsageCostCacheDatabasePath,
-  resolveUsageCostPricingFingerprint,
-} from "./session-cost-usage-aggregation.js";
-import {
-  listUsageCountedTranscriptStats,
   readTranscriptRecords,
   readTranscriptRecordsBestEffort,
-  resolveExistingUsageSessionFile,
-  resolveUsageCostTranscriptFile,
+  resolveUsageSessionSource,
 } from "./session-cost-usage-collection.js";
 import {
-  computeUsageTokenTotals,
+  withUsageCostIncognitoScope,
+  captureUsageCostIncognitoBinding,
+  type UsageCostIncognitoBinding,
+} from "./session-cost-usage-incognito.js";
+import {
   createUsageCostResolver,
-  parseUsageCostTranscriptEntry,
-} from "./session-cost-usage-pricing.js";
-import { createUsageDayKeyFormatter } from "./session-cost-usage-projection.js";
-import { buildSessionCostSummaryFromRollup } from "./session-cost-usage-rollup.js";
+  parseUsageCostTranscriptEntryAsync,
+  resolveUsageCostPricingFingerprint,
+} from "./session-cost-usage-pricing-context.js";
+import { computeUsageTokenTotals } from "./session-cost-usage-pricing.js";
+import {
+  prepareUsageCostWorker,
+  resolveUsageCostWorkerDayBucket,
+  runUsageCostWorker,
+} from "./session-cost-usage-worker-runtime.js";
 import type {
   DiscoveredSession,
   SessionCostSummary,
@@ -41,22 +43,58 @@ import type {
 
 const USAGE_COST_DIRECT_REFRESH_RETRY_MS = 25;
 
-/**
- * Scan all transcript files to discover sessions not in the session store.
- * Returns basic metadata for each discovered session.
- */
+type SessionUsageDiagnosticParams = {
+  sessionId?: string;
+  sessionFile?: string;
+  config?: OpenClawConfig;
+  agentId: string;
+  incognito?: UsageCostIncognitoBinding;
+};
+
+function withSessionUsageDiagnosticSource<Params extends SessionUsageDiagnosticParams, Result>(
+  params: Params,
+  read: (scoped: Params, sessionFile: string) => Promise<Result>,
+): Promise<Result | null> {
+  return withUsageCostIncognitoScope(
+    captureUsageCostIncognitoBinding(params),
+    async (incognito) => {
+      const scoped = { ...params, incognito };
+      const source = await resolveUsageSessionSource(scoped);
+      if (
+        !source ||
+        (!parseSqliteSessionFileMarker(source.sessionFile) && !fs.existsSync(source.sessionFile))
+      ) {
+        return null;
+      }
+      return read(scoped, source.sessionFile);
+    },
+  );
+}
+
 export async function discoverAllSessions(params: {
   agentId: string;
+  incognito?: UsageCostIncognitoBinding;
   startMs?: number;
   endMs?: number;
 }): Promise<DiscoveredSession[]> {
-  const files = await listUsageCountedTranscriptStats(params.agentId, {
-    minMtimeMs: params.startMs,
-  });
+  const result = await runUsageCostWorker(
+    prepareUsageCostWorker({
+      ...params,
+      storePath: params.incognito?.actor.path,
+    }),
+    {
+      kind: "inventory",
+      minMtimeMs: params.startMs,
+    },
+    params.incognito,
+  );
+  if (result.kind !== "inventory") {
+    throw new Error("Usage worker returned an invalid session inventory");
+  }
 
   const discovered = new Map<string, DiscoveredSession>();
 
-  for (const file of files) {
+  for (const file of result.files) {
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
     const { sourcePath: sessionFile, sessionId } = file;
     if (!sessionId) {
@@ -83,18 +121,15 @@ export async function discoverAllSessions(params: {
     }
   }
 
-  // Sort by mtime descending (most recent first)
-  const sessions = Array.from(discovered.values());
-  sessions.sort((a, b) => b.mtime - a.mtime);
-  return sessions;
+  return Array.from(discovered.values()).toSorted((a, b) => b.mtime - a.mtime);
 }
 
 export async function loadSessionCostSummary(params: {
   sessionId?: string;
-  sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
   agentId: string;
+  incognito?: UsageCostIncognitoBinding;
   sessionTarget?: {
     agentId: string;
     sessionId: string;
@@ -106,235 +141,223 @@ export async function loadSessionCostSummary(params: {
   includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
 }): Promise<SessionCostSummary | null> {
-  const sessionFile = resolveExistingUsageSessionFile(params);
-  if (!sessionFile) {
-    return null;
-  }
-  const file = await resolveUsageCostTranscriptFile(sessionFile);
-  if (!file) {
-    return null;
-  }
-  const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
-  const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
-  while (
-    (await refreshCostUsageCacheForAgent({
-      config: params.config,
-      agentId: params.agentId,
-      agentDir,
-      databasePath,
-      sessionFiles: [sessionFile],
-    })) === "busy"
-  ) {
-    // Direct detail callers require the requested session, unlike background
-    // summary refreshes. Wait for the agent-wide writer to release, then retry.
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, USAGE_COST_DIRECT_REFRESH_RETRY_MS);
-    });
-  }
-  const currentFile = await resolveUsageCostTranscriptFile(sessionFile);
-  if (!currentFile) {
-    return null;
-  }
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
-  const stored = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, {
-    filePaths: [currentFile.filePath],
-  }).get(currentFile.filePath);
-  if (!stored || !isUsageCostRollupFresh({ stored, file: currentFile })) {
-    return null;
-  }
-  const hasExplicitRange = params.startMs !== undefined || params.endMs !== undefined;
-  return buildSessionCostSummaryFromRollup({
-    rollup: stored.entry.rollup,
-    sessionId: params.sessionId,
-    sessionFile,
-    startMs: params.startMs ?? Number.NEGATIVE_INFINITY,
-    endMs: params.endMs ?? Number.POSITIVE_INFINITY,
-    includeUntimestamped: params.includeUntimestamped === true || !hasExplicitRange,
-    formatDay: createUsageDayKeyFormatter(params.dayBucket),
+  const binding = captureUsageCostIncognitoBinding(params);
+  const captured = binding ? prepareUsageCostWorker({ ...params, incognito: binding }) : undefined;
+  return withUsageCostIncognitoScope(binding, async (incognito) => {
+    const scoped = { ...params, incognito };
+    const source = await resolveUsageSessionSource(scoped);
+    if (!source) {
+      return null;
+    }
+    const { sessionFile } = source;
+    const prepared = captured ?? prepareUsageCostWorker({ ...scoped, sessionFiles: [sessionFile] });
+    const inventory = await runUsageCostWorker(
+      prepared,
+      {
+        kind: "inventory",
+        sessionFiles: [sessionFile],
+      },
+      scoped.incognito,
+    );
+    if (inventory.kind !== "inventory") {
+      throw new Error("Usage worker returned an invalid session inventory");
+    }
+    if (inventory.files.length === 0) {
+      return null;
+    }
+    while (
+      (await refreshCostUsageCacheForAgent({
+        config: scoped.config,
+        agentId: scoped.agentId,
+        agentDir: prepared.agentDir,
+        databasePath: prepared.location.databasePath,
+        storePath: prepared.location.storePath,
+        env: prepared.location.env,
+        sessionFiles: [sessionFile],
+        incognito: scoped.incognito,
+      })) === "busy"
+    ) {
+      // Direct detail callers require the requested session, unlike background
+      // summary refreshes. Wait for the agent-wide writer to release, then retry.
+      await sleep(USAGE_COST_DIRECT_REFRESH_RETRY_MS);
+    }
+    const pricingFingerprint = await resolveUsageCostPricingFingerprint(
+      prepared.config,
+      prepared.agentDir,
+    );
+    const result = await runUsageCostWorker(
+      prepared,
+      {
+        kind: "sessions",
+        pricingFingerprint,
+        sessions: [{ sessionId: scoped.sessionId, sessionFile }],
+        startMs: scoped.startMs,
+        endMs: scoped.endMs,
+        includeUntimestamped: scoped.includeUntimestamped,
+        dayBucket: resolveUsageCostWorkerDayBucket(scoped.dayBucket),
+      },
+      scoped.incognito,
+    );
+    if (result.kind !== "sessions") {
+      throw new Error("Usage worker returned an invalid session summary");
+    }
+    return result.summaries[0] ?? null;
   });
 }
 
-export async function loadSessionUsageTimeSeries(params: {
-  sessionId?: string;
-  sessionEntry?: SessionEntry;
-  sessionFile?: string;
-  config?: OpenClawConfig;
-  agentId: string;
-  maxPoints?: number;
-}): Promise<SessionUsageTimeSeries | null> {
-  const sessionFile = resolveExistingUsageSessionFile(params);
-  if (!sessionFile) {
-    return null;
-  }
-  if (!parseSqliteSessionFileMarker(sessionFile) && !fs.existsSync(sessionFile)) {
-    return null;
-  }
-
-  if (params.maxPoints !== undefined && params.maxPoints !== null) {
-    if (!Number.isFinite(params.maxPoints) || params.maxPoints <= 0) {
-      return { sessionId: params.sessionId, points: [] };
-    }
-  }
-
-  let points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
-  const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
-  const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
-
-  for await (const record of readTranscriptRecords(sessionFile)) {
-    const entry = parseUsageCostTranscriptEntry(record, resolveCost);
-    const timestamp = entry?.timestamp?.getTime();
-    if (!entry?.usage || !timestamp) {
-      continue;
-    }
-    const { input, output, cacheRead, cacheWrite, totalTokens } = computeUsageTokenTotals(
-      entry.usage,
-    );
-    points.push({
-      timestamp,
-      input,
-      output,
-      cacheRead,
-      cacheWrite,
-      totalTokens,
-      cost: entry.costTotal ?? 0,
-    });
-  }
-
-  points.sort((a, b) => a.timestamp - b.timestamp);
-
-  const maxPoints = params.maxPoints ?? 100;
-  if (points.length > maxPoints) {
-    const step = Math.ceil(points.length / maxPoints);
-    const downsampled: typeof points = [];
-    let bucket: (typeof points)[number] | undefined;
-    let bucketSize = 0;
-    for (const point of points) {
-      if (!bucket || bucketSize === step) {
-        bucket = {
-          timestamp: point.timestamp,
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: 0,
-        };
-        downsampled.push(bucket);
-        bucketSize = 0;
+export async function loadSessionUsageTimeSeries(
+  params: SessionUsageDiagnosticParams & { maxPoints?: number },
+): Promise<SessionUsageTimeSeries | null> {
+  return withSessionUsageDiagnosticSource(params, async (scoped, sessionFile) => {
+    if (scoped.maxPoints !== undefined && scoped.maxPoints !== null) {
+      if (!Number.isFinite(scoped.maxPoints) || scoped.maxPoints <= 0) {
+        return { sessionId: scoped.sessionId, points: [] };
       }
-      bucket.timestamp = point.timestamp;
-      bucket.input += point.input;
-      bucket.output += point.output;
-      bucket.cacheRead += point.cacheRead;
-      bucket.cacheWrite += point.cacheWrite;
-      bucket.totalTokens += point.totalTokens;
-      bucket.cost += point.cost;
-      bucketSize += 1;
     }
-    points = downsampled;
-  }
 
-  // Accumulate after sampling to preserve the bucket-based floating-point sums.
-  let cumulativeTokens = 0;
-  let cumulativeCost = 0;
-  return {
-    sessionId: params.sessionId,
-    points: points.map((point) => {
-      cumulativeTokens += point.totalTokens;
-      cumulativeCost += point.cost;
-      return Object.assign(point, { cumulativeTokens, cumulativeCost });
-    }),
-  };
+    let points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
+    const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
+    const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
+
+    for await (const record of readTranscriptRecords(sessionFile, scoped.incognito)) {
+      const entry = await parseUsageCostTranscriptEntryAsync(record, resolveCost, scoped.config);
+      const timestamp = entry?.timestamp?.getTime();
+      if (!entry?.usage || !timestamp) {
+        continue;
+      }
+      points.push({
+        timestamp,
+        ...computeUsageTokenTotals(entry.usage),
+        cost: entry.costTotal ?? 0,
+      });
+    }
+
+    points.sort((a, b) => a.timestamp - b.timestamp);
+
+    const maxPoints = scoped.maxPoints ?? 100;
+    if (points.length > maxPoints) {
+      const step = Math.ceil(points.length / maxPoints);
+      const downsampled: typeof points = [];
+      let bucket: (typeof points)[number] | undefined;
+      for (const [index, point] of points.entries()) {
+        if (!bucket || index % step === 0) {
+          bucket = {
+            timestamp: point.timestamp,
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: 0,
+          };
+          downsampled.push(bucket);
+        }
+        bucket.timestamp = point.timestamp;
+        bucket.input += point.input;
+        bucket.output += point.output;
+        bucket.cacheRead += point.cacheRead;
+        bucket.cacheWrite += point.cacheWrite;
+        bucket.totalTokens += point.totalTokens;
+        bucket.cost += point.cost;
+      }
+      points = downsampled;
+    }
+
+    // Accumulate after sampling to preserve the bucket-based floating-point sums.
+    let cumulativeTokens = 0;
+    let cumulativeCost = 0;
+    return {
+      sessionId: scoped.sessionId,
+      points: points.map((point) => {
+        cumulativeTokens += point.totalTokens;
+        cumulativeCost += point.cost;
+        return Object.assign(point, { cumulativeTokens, cumulativeCost });
+      }),
+    };
+  });
 }
 
-export async function loadSessionLogs(params: {
-  sessionId?: string;
-  sessionEntry?: SessionEntry;
-  sessionFile?: string;
-  config?: OpenClawConfig;
-  agentId: string;
-  limit?: number;
-}): Promise<SessionLogEntry[] | null> {
-  const sessionFile = resolveExistingUsageSessionFile(params);
-  if (!sessionFile) {
-    return null;
-  }
-  if (!parseSqliteSessionFileMarker(sessionFile) && !fs.existsSync(sessionFile)) {
-    return null;
-  }
-
-  const logs: SessionLogEntry[] = [];
-  if (params.limit !== undefined && params.limit !== null) {
-    if (!Number.isFinite(params.limit) || params.limit <= 0) {
-      return [];
+export async function loadSessionLogs(
+  params: SessionUsageDiagnosticParams & { limit?: number },
+): Promise<SessionLogEntry[] | null> {
+  return withSessionUsageDiagnosticSource(params, async (scoped, sessionFile) => {
+    const logs: SessionLogEntry[] = [];
+    if (scoped.limit !== undefined && scoped.limit !== null) {
+      if (!Number.isFinite(scoped.limit) || scoped.limit <= 0) {
+        return [];
+      }
     }
-  }
-  const limit = params.limit ?? 50;
-  const boundedLimit = Number.isInteger(limit);
-  const retentionLimit = limit * 2;
-  const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
-  const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
+    const limit = scoped.limit ?? 50;
+    const boundedLimit = Number.isInteger(limit);
+    const retentionLimit = limit * 2;
+    const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
+    const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
 
-  for await (const parsed of readTranscriptRecordsBestEffort(sessionFile)) {
-    try {
-      const message = parsed.message as Record<string, unknown> | undefined;
-      if (!message) {
-        continue;
-      }
-
-      const role = message.role as string | undefined;
-      if (role !== "user" && role !== "assistant" && role !== "tool" && role !== "toolResult") {
-        continue;
-      }
-
-      const contentParts: string[] = [];
-      const rawToolName = message.toolName ?? message.tool_name ?? message.name ?? message.tool;
-      const toolName = normalizeOptionalString(rawToolName);
-      if (role === "tool" || role === "toolResult") {
-        contentParts.push(`[Tool: ${toolName ?? "tool"}]`);
-        contentParts.push("[Tool Result]");
-      }
-
-      // Extract content
-      const rawContent = message.content;
-      if (typeof rawContent === "string") {
-        contentParts.push(rawContent);
-      } else if (Array.isArray(rawContent)) {
-        // Handle content blocks (text, tool_use, etc.)
-        const contentText = rawContent
-          .map((block: unknown) => {
-            if (typeof block === "string") {
-              return block;
-            }
-            const b = block as Record<string, unknown>;
-            if (b.type === "text" && typeof b.text === "string") {
-              return b.text;
-            }
-            if (b.type === "tool_use") {
-              const name = typeof b.name === "string" ? b.name : "unknown";
-              return `[Tool: ${name}]`;
-            }
-            if (b.type === "tool_result") {
-              return "[Tool Result]";
-            }
-            return "";
-          })
-          .filter(Boolean)
-          .join("\n");
-        if (contentText) {
-          contentParts.push(contentText);
+    for await (const parsed of readTranscriptRecordsBestEffort(sessionFile, scoped.incognito)) {
+      let role: SessionLogEntry["role"];
+      let content: string;
+      try {
+        const message = parsed.message as Record<string, unknown> | undefined;
+        if (!message) {
+          continue;
         }
-      }
 
-      // OpenAI-style tool calls stored outside the content array.
-      const rawToolCalls =
-        message.tool_calls ?? message.toolCalls ?? message.function_call ?? message.functionCall;
-      const toolCalls = Array.isArray(rawToolCalls)
-        ? rawToolCalls
-        : rawToolCalls
-          ? [rawToolCalls]
-          : [];
-      if (toolCalls.length > 0) {
+        const recordRole = message.role as string | undefined;
+        if (
+          recordRole !== "user" &&
+          recordRole !== "assistant" &&
+          recordRole !== "tool" &&
+          recordRole !== "toolResult"
+        ) {
+          continue;
+        }
+        role = recordRole;
+
+        const contentParts: string[] = [];
+        const rawToolName = message.toolName ?? message.tool_name ?? message.name ?? message.tool;
+        const toolName = normalizeOptionalString(rawToolName);
+        if (role === "tool" || role === "toolResult") {
+          contentParts.push(`[Tool: ${toolName ?? "tool"}]`);
+          contentParts.push("[Tool Result]");
+        }
+
+        const rawContent = message.content;
+        if (typeof rawContent === "string") {
+          contentParts.push(rawContent);
+        } else if (Array.isArray(rawContent)) {
+          const contentText = rawContent
+            .map((block: unknown) => {
+              if (typeof block === "string") {
+                return block;
+              }
+              const b = block as Record<string, unknown>;
+              if (b.type === "text" && typeof b.text === "string") {
+                return b.text;
+              }
+              if (isToolCallContentType(normalizeOptionalString(b.type))) {
+                const name = typeof b.name === "string" ? b.name : "unknown";
+                return `[Tool: ${name}]`;
+              }
+              if (b.type === "tool_result") {
+                return "[Tool Result]";
+              }
+              return "";
+            })
+            .filter(Boolean)
+            .join("\n");
+          if (contentText) {
+            contentParts.push(contentText);
+          }
+        }
+
+        // OpenAI-style tool calls stored outside the content array.
+        const rawToolCalls =
+          message.tool_calls ?? message.toolCalls ?? message.function_call ?? message.functionCall;
+        const toolCalls = Array.isArray(rawToolCalls)
+          ? rawToolCalls
+          : rawToolCalls
+            ? [rawToolCalls]
+            : [];
         for (const call of toolCalls) {
           const callObj = call as Record<string, unknown>;
           const directName = typeof callObj.name === "string" ? callObj.name : undefined;
@@ -343,26 +366,28 @@ export async function loadSessionLogs(params: {
           const name = directName ?? fnName ?? "unknown";
           contentParts.push(`[Tool: ${name}]`);
         }
-      }
 
-      const rawText = contentParts.join("\n");
-      let content =
-        role === "user"
-          ? stripUserEnvelopeForDisplay(rawText).trim()
-          : stripInboundMetadata(rawText.trim());
-      if (!content) {
+        const rawText = contentParts.join("\n");
+        content =
+          role === "user"
+            ? stripUserEnvelopeForDisplay(rawText).trim()
+            : stripInboundMetadata(rawText.trim());
+        if (!content) {
+          continue;
+        }
+
+        const maxLen = 2000;
+        if (content.length > maxLen) {
+          content = truncateUtf16Safe(content, maxLen) + "…";
+        }
+      } catch {
+        // Ignore malformed records.
         continue;
-      }
-
-      // Truncate very long content.
-      const maxLen = 2000;
-      if (content.length > maxLen) {
-        content = truncateUtf16Safe(content, maxLen) + "…";
       }
 
       // Logs share pricing and timestamp interpretation with summaries and charts.
       // Recomputing here can turn unknown prices into zero or ignore tiered rates.
-      const entry = parseUsageCostTranscriptEntry(parsed, resolveCost);
+      const entry = await parseUsageCostTranscriptEntryAsync(parsed, resolveCost, scoped.config);
       const usage = role === "assistant" ? entry?.usage : undefined;
 
       logs.push({
@@ -378,22 +403,9 @@ export async function loadSessionLogs(params: {
         logs.sort((a, b) => a.timestamp - b.timestamp);
         logs.splice(0, logs.length - limit);
       }
-    } catch {
-      // Ignore malformed lines
     }
-  }
 
-  // Sort by timestamp and limit
-  if (boundedLimit) {
     logs.sort((a, b) => a.timestamp - b.timestamp);
     return logs.length > limit ? logs.slice(-limit) : logs;
-  }
-
-  // Return most recent logs
-  const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
-  if (sortedLogs.length > limit) {
-    return sortedLogs.slice(-limit);
-  }
-
-  return sortedLogs;
+  });
 }

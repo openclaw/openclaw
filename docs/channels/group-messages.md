@@ -18,7 +18,7 @@ Goal: let OpenClaw sit in WhatsApp groups, wake up only when pinged, and keep th
 
 ## Behavior
 
-- Activation modes: `mention` (default) or `always`. `mention` requires a ping: a real WhatsApp @-mention (`mentionedJids`), a configured regex pattern, the bot's E.164 digits anywhere in the text, or a quoted reply to one of the bot's messages (except shared-number self-chat setups). `always` wakes the agent on every message, but the injected group prompt tells it to reply only when it adds value and to return the exact silent token `NO_REPLY` (case-insensitive) otherwise. Defaults come from config (`channels.whatsapp.groups` `requireMention`) and can be overridden per group via `/activation`.
+- Activation modes: `mention` (default) or `always`. `mention` requires a ping: a real WhatsApp @-mention (`mentionedJids`), a configured regex pattern, the bot's E.164 digits anywhere in the text, or a quoted reply to one of the bot's messages (except shared-number self-chat setups). `always` wakes the agent on every admitted message and requires a reply by default. To permit selective silence for unaddressed messages, explicitly set `surfaces.whatsapp.silentReply.group: "allow"`; the automatic-reply prompt then permits the exact silent token `NO_REPLY` (case-insensitive). See [Silent replies](/concepts/messages#silent-replies) for the global setting and precedence. Activation defaults come from config (`channels.whatsapp.groups` `requireMention`) and can be overridden per group via `/activation`.
 - Group allowlist: when `channels.whatsapp.groups` is set, only listed group JIDs are admitted (include `"*"` to allow all); messages from unlisted groups are dropped with a log hint.
 - Group policy: `channels.whatsapp.groupPolicy` controls whether group messages are accepted (`open|disabled|allowlist`). `allowlist` uses `channels.whatsapp.groupAllowFrom` (fallback: explicit `channels.whatsapp.allowFrom`). Default is `allowlist` (blocked until you add senders).
 - Per-group sessions: session keys look like `agent:<agentId>:whatsapp:group:<jid>` (non-default accounts append `:thread:whatsapp-account-<accountId>`), so directives such as `/verbose on`, `/trace on`, or `/think high` (sent as standalone messages) are scoped to that group; personal DM state is untouched.
@@ -44,7 +44,6 @@ Make display-name pings work even when WhatsApp strips the visual `@` from the t
   agents: {
     entries: {
       main: {
-        default: true,
         groupChat: {
           mentionPatterns: ["@?openclaw", "\\+?15555550123"],
         },
@@ -57,7 +56,7 @@ Make display-name pings work even when WhatsApp strips the visual `@` from the t
 Notes:
 
 - The regexes are case-insensitive and use the same safe-regex guardrails as other config regex surfaces; invalid patterns and unsafe nested repetition are ignored.
-- WhatsApp still sends canonical mentions via `mentionedJids` when someone taps the contact, so the number fallback is rarely needed but is a useful safety net.
+- WhatsApp still sends explicit mentions via `mentionedJids` when someone taps the contact, so the number fallback is rarely needed but is a useful safety net.
 - The pending-context window resolves as `channels.whatsapp.accounts.<id>.historyLimit` → `channels.whatsapp.historyLimit` → `messages.groupChat.historyLimit` → 50.
 
 ### Activation command (owner-only)

@@ -1,5 +1,5 @@
-// Control UI chat module implements user message content behavior.
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
@@ -13,63 +13,19 @@ type UserChatMessageContentBlock = {
   type: string;
   text?: string;
   url?: string;
+  fileName?: string;
   source?: unknown;
   attachment?: {
     url: string;
     kind: Extract<MediaKind, "audio" | "video" | "document">;
     label: string;
     mimeType?: string;
+    origin?: "paste" | "file";
   };
 };
 
-function buildUserChatMessageContentBlocks(
-  message: string,
-  attachments?: readonly ChatAttachment[],
-  retention?: "available" | "complete",
-): UserChatMessageContentBlock[] | null {
-  const blocks: UserChatMessageContentBlock[] = [];
-  const text = message.trim();
-  if (text) {
-    blocks.push({ type: "text", text });
-  }
-  for (const attachment of attachments ?? []) {
-    // Retained content owns inline bytes before outbox cleanup releases Blob URLs.
-    // Initial prompts allow available previews; delivered turns require every byte.
-    const dataUrl = retention ? getChatAttachmentDataUrl(attachment) : undefined;
-    if (retention === "complete" && !dataUrl) {
-      return null;
-    }
-    const previewUrl = dataUrl || getChatAttachmentPreviewUrl(attachment);
-    if (!previewUrl) {
-      continue;
-    }
-    if (attachment.mimeType.startsWith("image/")) {
-      blocks.push({
-        type: "image",
-        url: previewUrl,
-        source: { type: "url", url: previewUrl },
-      });
-      continue;
-    }
-    const normalizedMimeType = attachment.mimeType.trim().toLowerCase();
-    const isVideo =
-      normalizedMimeType.startsWith("video/") ||
-      ((normalizedMimeType === "" || normalizedMimeType === "application/octet-stream") &&
-        hasVideoMediaFileExtension(attachment.fileName ?? ""));
-    blocks.push({
-      type: "attachment",
-      attachment: {
-        url: previewUrl,
-        kind: attachment.mimeType.startsWith("audio/") ? "audio" : isVideo ? "video" : "document",
-        label: attachment.fileName?.trim() || "Attached file",
-        mimeType: attachment.mimeType,
-      },
-    });
-  }
-  return blocks;
-}
-
 type LocalUserMessageInput = {
+  workContext?: ChatWorkContext;
   attachments?: readonly ChatAttachment[];
   mentions?: readonly HumanMention[];
   createdAt: number;
@@ -80,6 +36,7 @@ type LocalUserMessageInput = {
   };
   replyToId?: string;
   runId?: string;
+  steerTargetRunId?: string;
   sender?: SenderIdentity;
   text: string;
 };
@@ -114,8 +71,49 @@ export function buildLocalUserMessage(
   input: LocalUserMessageInput,
   retention?: "available" | "complete",
 ): LocalUserMessage | null {
-  const content = buildUserChatMessageContentBlocks(input.text, input.attachments, retention);
-  if (!content?.length) {
+  const { text: message, attachments } = input;
+  const content: UserChatMessageContentBlock[] = [];
+  const text = message.trim();
+  if (text) {
+    content.push({ type: "text", text });
+  }
+  for (const attachment of attachments ?? []) {
+    // Retained content owns inline bytes before outbox cleanup releases Blob URLs.
+    // Initial prompts allow available previews; delivered turns require every byte.
+    const dataUrl = retention ? getChatAttachmentDataUrl(attachment) : undefined;
+    if (retention === "complete" && !dataUrl) {
+      return null;
+    }
+    const previewUrl = dataUrl || getChatAttachmentPreviewUrl(attachment);
+    if (!previewUrl) {
+      continue;
+    }
+    if (attachment.mimeType.startsWith("image/")) {
+      content.push({
+        type: "image",
+        url: previewUrl,
+        ...(attachment.fileName ? { fileName: attachment.fileName } : {}),
+        source: { type: "url", url: previewUrl },
+      });
+      continue;
+    }
+    const normalizedMimeType = attachment.mimeType.trim().toLowerCase();
+    const isVideo =
+      normalizedMimeType.startsWith("video/") ||
+      ((normalizedMimeType === "" || normalizedMimeType === "application/octet-stream") &&
+        hasVideoMediaFileExtension(attachment.fileName ?? ""));
+    content.push({
+      type: "attachment",
+      attachment: {
+        url: previewUrl,
+        kind: attachment.mimeType.startsWith("audio/") ? "audio" : isVideo ? "video" : "document",
+        label: attachment.fileName?.trim() || "Attached file",
+        mimeType: attachment.mimeType,
+        ...(attachment.origin ? { origin: attachment.origin } : {}),
+      },
+    });
+  }
+  if (!content.length) {
     return null;
   }
   const { mentions } = trimHumanMentions(input.text, input.mentions);
@@ -124,7 +122,11 @@ export function buildLocalUserMessage(
     content,
     timestamp: input.createdAt,
     __openclaw: {
+      ...(input.workContext
+        ? { workContext: { snapshot: input.workContext, text: input.text } }
+        : {}),
       ...(input.runId ? { idempotencyKey: `${input.runId}:user` } : {}),
+      ...(input.steerTargetRunId ? { steerTargetRunId: input.steerTargetRunId } : {}),
       ...(input.pending
         ? {
             kind: "pending-send",

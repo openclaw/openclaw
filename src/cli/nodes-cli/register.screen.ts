@@ -1,4 +1,4 @@
-// Node screen recording command: invokes screen.record and writes returned media locally.
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
@@ -14,13 +14,11 @@ import {
   callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodeFiniteNumber,
-  parseOptionalNodeNonNegativeInteger,
-  parseOptionalNodePositiveInteger,
+  parseOptionalNodeInteger,
   resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
-/** Register node screen recording commands. */
 export function registerNodesScreenCommands(nodes: Command) {
   const screen = nodes
     .command("screen")
@@ -40,23 +38,24 @@ export function registerNodesScreenCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts & { out?: string }) => {
         await runNodesCommand("screen record", async () => {
           const durationMs = parseDurationMs(opts.duration ?? "");
-          const screenIndex = parseOptionalNodeNonNegativeInteger(opts.screen ?? "0", "--screen");
+          const screenIndex = parseOptionalNodeInteger(
+            opts.screen ?? "0",
+            "--screen",
+            "non-negative",
+          );
           const fps = parseOptionalNodeFiniteNumber(opts.fps ?? "10", "--fps", {
             minExclusive: 0,
           });
-          const timeoutMs = parseOptionalNodePositiveInteger(
-            opts.invokeTimeout,
-            "--invoke-timeout",
-          );
+          const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
           const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
 
           const invokeParams = buildNodeInvokeParams({
             nodeId,
             command: "screen.record",
             params: {
-              durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
-              screenIndex: Number.isFinite(screenIndex) ? screenIndex : undefined,
-              fps: Number.isFinite(fps) ? fps : undefined,
+              durationMs,
+              screenIndex,
+              fps,
               format: "mp4",
               includeAudio: opts.audio !== false,
             },
@@ -64,9 +63,8 @@ export function registerNodesScreenCommands(nodes: Command) {
           });
 
           const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
-          const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-          const parsed = parseScreenRecordPayload(res.payload);
-          const filePath = opts.out ?? screenRecordTempPath({ ext: parsed.format || "mp4" });
+          const parsed = parseScreenRecordPayload(asRecord(raw).payload);
+          const filePath = opts.out ?? screenRecordTempPath({ ext: parsed.format });
           const written = await writeScreenRecordToFile(filePath, parsed.base64);
 
           if (opts.json) {

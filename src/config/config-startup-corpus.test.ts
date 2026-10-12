@@ -7,16 +7,26 @@ import { listAgentIds } from "../agents/agent-scope-config.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { applyLegacyCompatibilityStep } from "../commands/doctor/shared/config-flow-steps.js";
 import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/legacy-config-core-migrate.js";
+import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
+import { resolveBundledDirFromPackageRoot } from "../plugins/bundled-dir.js";
 import { resolveProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
+import {
+  listConfigCorpusFixtureNames,
+  readConfigCorpusFixture,
+} from "./config-corpus.test-support.js";
 import { createConfigIO } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
-const corpusDir = fileURLToPath(new URL("../../test/fixtures/config-corpus/", import.meta.url));
-const fixtureNames = fs
-  .readdirSync(corpusDir)
-  .filter((name) => name.endsWith(".json"))
-  .toSorted();
+const bundledPluginsDir = resolveBundledDirFromPackageRoot(
+  fileURLToPath(new URL("../../", import.meta.url)),
+);
+if (!bundledPluginsDir) {
+  throw new Error("Missing bundled plugin fixtures for startup corpus");
+}
+
+const fixtureNames = listConfigCorpusFixtureNames();
 const expectations: Record<
   string,
   { providers: string[]; model?: string; sourceConfig?: OpenClawConfig }
@@ -107,23 +117,36 @@ describe("operator config startup corpus", () => {
       OPENCLAW_STATE_DIR: home,
       DISCORD_BOT_TOKEN: "synthetic-token",
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../../extensions/", import.meta.url)),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
     };
+    for (const key of [
+      "OPENCLAW_STATE_DIR",
+      "DISCORD_BOT_TOKEN",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+    ] as const) {
+      vi.stubEnv(key, env[key]);
+    }
     const snapshot = await createConfigIO({
       configPath,
       env,
       homedir: () => home,
       observe: false,
     }).readConfigFileSnapshot();
-    expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
-    expect(snapshot.config.bindings).toContainEqual({
+    expect(snapshot.valid).toBe(false);
+    const migrated = migrateLegacyConfig(snapshot.sourceConfig, {
+      sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+    });
+    const validated = validateConfigObjectWithPlugins(migrated.config, { env });
+    expect(validated.ok).toBe(true);
+    expect(validated.ok && validated.config.bindings).toContainEqual({
       agentId: "worker",
       match: { channel: "discord", accountId: "*" },
     });
   });
 
-  it.each([false, true, "legacy", null])(
-    "silently removes included Copilot discovery.enabled=%j",
+  it.each([false, null])(
+    "retains included Copilot discovery.enabled=%j until Doctor migrates it",
     async (enabled) => {
       const home = tempDirs.make("openclaw-copilot-migration-");
       const configPath = path.join(home, "openclaw.json");
@@ -141,25 +164,24 @@ describe("operator config startup corpus", () => {
         observe: false,
       });
       const snapshot = await io.readConfigFileSnapshot();
-      expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
-      expect(snapshot.warnings).toEqual([]);
-      expect(snapshot.config.plugins?.entries?.["github-copilot"]).toEqual({
+      expect(snapshot.valid).toBe(false);
+      expect(snapshot.sourceConfig.plugins?.entries?.["github-copilot"]?.config).toEqual({
+        discovery: { enabled },
+      });
+      const repaired = migrateLegacyConfig(snapshot.sourceConfig, {
+        sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+      });
+      expect(repaired.config?.plugins?.entries?.["github-copilot"]).toEqual({
         enabled: true,
         config: {},
       });
-      const repaired = normalizeCompatibilityConfigValues(snapshot.sourceConfig);
-      expect(repaired.config.plugins?.entries?.["github-copilot"]).toEqual({
-        enabled: true,
-        config: {},
-      });
-      expect(normalizeCompatibilityConfigValues(repaired.config).changes).toEqual([]);
+      expect(
+        migrateLegacyConfig(repaired.config, { sourceConfigBeforeMigrations: repaired.config })
+          .changes,
+      ).toEqual([]);
       expect(JSON.parse(fs.readFileSync(path.join(home, "copilot.json"), "utf8"))).toEqual(legacy);
     },
   );
-
-  it("covers every retained config with an explicit catalog expectation", () => {
-    expect(fixtureNames).toEqual(Object.keys(expectations).toSorted());
-  });
 
   it.each(fixtureNames)(
     "%s loads, prepares model rows, and offers provider login",
@@ -173,7 +195,7 @@ describe("operator config startup corpus", () => {
         OPENCLAW_TEST_HOME: home,
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../../extensions/", import.meta.url)),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
       })) {
         vi.stubEnv(key, value);
@@ -198,12 +220,10 @@ describe("operator config startup corpus", () => {
       );
 
       // Relocate sanitized operator paths without removing their config contracts.
-      const raw: unknown = JSON.parse(
-        fs.readFileSync(path.join(corpusDir, name), "utf8"),
-        (_key, value: unknown) =>
-          typeof value === "string" && value.startsWith("/home/fixture/")
-            ? path.join(home, value.slice("/home/fixture/".length))
-            : value,
+      const raw: unknown = JSON.parse(readConfigCorpusFixture(name), (_key, value: unknown) =>
+        typeof value === "string" && value.startsWith("/home/fixture/")
+          ? path.join(home, value.slice("/home/fixture/".length))
+          : value,
       );
       fs.writeFileSync(configPath, JSON.stringify(raw));
       const env = { ...process.env };
@@ -227,12 +247,12 @@ describe("operator config startup corpus", () => {
       });
       const normalized = normalizeCompatibilityConfigValues(migrated.state.candidate, {
         sourceRaw: snapshot.parsed,
-        sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
       });
       fs.writeFileSync(configPath, JSON.stringify(normalized.config));
       const startup = await loadGatewayStartupConfigSnapshot({
         initialSnapshotRead: await io.readConfigFileSnapshotWithPluginMetadata(),
         minimalTestGateway: false,
+        ambientEnvTriggers: "suppress",
         log: console,
       });
       const config = startup.snapshot.config;

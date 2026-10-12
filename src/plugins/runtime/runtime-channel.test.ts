@@ -1,6 +1,7 @@
 // Runtime channel tests cover channel plugin runtime send, reply, and capability behavior.
 import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 
 const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn(async () => ({ status: "handled" })));
@@ -19,18 +20,70 @@ function requireWatcherEvent(mock: ReturnType<typeof vi.fn>, index: number) {
 }
 
 describe("inbound dispatch", () => {
-  it("carries the owning runtime reply dispatcher into routed channel turns", async () => {
-    const boundReplyDispatch = vi.fn();
-    const channel = createRuntimeChannel({ dispatchReplyFromConfig: boundReplyDispatch });
-    const turn = { channel: "qa-channel" } as Parameters<typeof channel.inbound.dispatch>[0];
-
-    await channel.inbound.dispatch(turn);
-
-    expect(dispatchRoutedChannelTurn).toHaveBeenCalledWith({
-      ...turn,
-      dispatchReplyFromConfig: boundReplyDispatch,
-    });
+  it("keeps the complete deprecated turn object identical to inbound", () => {
+    const channel = createRuntimeChannel();
+    expect(channel.turn).toBe(channel.inbound);
+    expect(channel.turn.dispatch).toBe(channel.inbound.dispatch);
   });
+  it("removes event custody before invoking the host-bound reply dispatcher", async () => {
+    const callback = vi.fn();
+    const dispatch = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    }));
+    const channel = createRuntimeChannel({ dispatchReplyFromConfig: dispatch });
+    const replyOptions = {
+      isHeartbeat: true,
+      internalEventExecution: { assertCurrent: callback, onStarted: callback },
+      onReplyOperationOwned: callback,
+    };
+    await channel.reply.dispatchReplyFromConfig({
+      ctx: { Body: "test", CommandAuthorized: false },
+      cfg: {},
+      dispatcher: createReplyDispatcher({ deliver: async () => {} }),
+      replyOptions,
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ replyOptions: { isHeartbeat: true } }),
+    );
+    expect(replyOptions.onReplyOperationOwned).toBe(callback);
+  });
+
+  it.each([
+    { surface: "inbound", bound: true },
+    { surface: "turn", bound: true },
+    { surface: "inbound", bound: false },
+    { surface: "turn", bound: false },
+  ] as const)(
+    "$surface preserves dispatch precedence (bound=$bound)",
+    async ({ surface, bound }) => {
+      const boundReplyDispatch = bound ? vi.fn() : undefined;
+      const callerDispatch = vi.fn();
+      const channel = createRuntimeChannel({ dispatchReplyFromConfig: boundReplyDispatch });
+      const replyOptions = {
+        isHeartbeat: true,
+        internalEventExecution: { onStarted: vi.fn() },
+        onReplyOperationOwned: vi.fn(),
+      };
+      const turn = {
+        cfg: {},
+        channel: "qa-channel",
+        route: { agentId: "main", sessionKey: "agent:main:qa-channel:direct:test" },
+        ctxPayload: { Body: "test", CommandAuthorized: false },
+        delivery: { deliver: async () => undefined },
+        dispatchReplyFromConfig: callerDispatch,
+        replyOptions,
+      } satisfies Parameters<typeof channel.inbound.dispatch>[0];
+
+      await channel[surface].dispatch(turn);
+
+      expect(dispatchRoutedChannelTurn).toHaveBeenCalledWith({
+        ...turn,
+        dispatchReplyFromConfig: boundReplyDispatch ?? callerDispatch,
+        replyOptions: { isHeartbeat: true },
+      });
+    },
+  );
 });
 
 describe("runtimeContexts", () => {

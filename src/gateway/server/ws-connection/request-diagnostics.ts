@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { isMainThread } from "node:worker_threads";
 import { WORKER_PROTOCOL_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { hasInternalDiagnosticEventInterest } from "../../../infra/diagnostic-event-listener-presence.js";
@@ -11,7 +12,8 @@ import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import { isCoreGatewayMethodClassified } from "../../methods/core-descriptors.js";
+import { runWithMainThreadTask } from "../../../infra/main-thread-stall.js";
+import { isCoreGatewayMethodClassified } from "../../methods/core-method-policy.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 
@@ -19,10 +21,12 @@ type RpcEvent = Extract<DiagnosticEventInput, { type: "gateway.rpc" }>;
 type ResponseOutcome = Extract<RpcEvent, { phase: "response" }>["outcome"];
 type DispatchOutcome = Extract<RpcEvent, { phase: "dispatch" }>["outcome"];
 const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
+let activeHandlers = 0;
+let exclusiveHandler: GatewayRpcDiagnostics | undefined;
 
 export type GatewayRpcQueueTiming = { receivedAt: number; dequeuedAt: number };
 
-class GatewayRpcDiagnostics {
+export class GatewayRpcDiagnostics {
   private trace = getActiveDiagnosticTraceContext();
   private queueStartedAt?: number;
   private queueWaitMs?: number;
@@ -59,9 +63,10 @@ class GatewayRpcDiagnostics {
     }
   }
 
-  response(outcome: ResponseOutcome): void {
+  response(outcome: ResponseOutcome, responseBytes?: number): void {
     const sent = outcome === "ok" || outcome === "error";
-    if (sent ? this.responseState === "sent" : this.deliveryFailureRecorded) {
+    const firstResponse = this.responseState !== "sent";
+    if (sent ? !firstResponse && responseBytes === undefined : this.deliveryFailureRecorded) {
       return;
     }
     if (sent) {
@@ -73,33 +78,57 @@ class GatewayRpcDiagnostics {
       }
     }
     // Acceptance and final frames can share one request and outlive its handler.
-    // Retain only the first successful send and first delivery failure separately.
+    // Keep first-response timing separate from each encoded frame's byte count.
     this.emit({
       type: "gateway.rpc",
       method: this.method,
       phase: "response",
       outcome,
+      firstResponse: sent ? firstResponse : undefined,
+      responseBytes,
       durationMs: performance.now() - this.startedAt,
     });
   }
 
-  async runHandler(invoke: () => Promise<void> | void): Promise<void> {
-    const startedAt = performance.now();
-    this.handlerStarted = true;
+  static async runHandler(
+    invoke: () => Promise<void> | void,
+    diagnostics?: GatewayRpcDiagnostics,
+  ): Promise<void> {
+    // All handler entries participate, including in-process calls without diagnostics.
+    // Another start permanently invalidates the sole candidate until all handlers settle.
+    exclusiveHandler = ++activeHandlers === 1 ? diagnostics : undefined;
+    const heapUsedAtStart =
+      diagnostics && exclusiveHandler === diagnostics && isMainThread
+        ? process.memoryUsage().heapUsed
+        : undefined;
+    const startedAt = diagnostics ? performance.now() : 0;
+    if (diagnostics) {
+      diagnostics.handlerStarted = true;
+    }
     let outcome: "returned" | "threw" = "returned";
     try {
-      await invoke();
+      await runWithMainThreadTask(
+        diagnostics ? `gateway:rpc:${diagnostics.method}` : "gateway:rpc",
+        invoke,
+      );
     } catch (error) {
       outcome = "threw";
       throw error;
     } finally {
-      this.emit({
+      const heapDeltaBytes =
+        heapUsedAtStart !== undefined && exclusiveHandler === diagnostics
+          ? process.memoryUsage().heapUsed - heapUsedAtStart
+          : undefined;
+      activeHandlers--;
+      exclusiveHandler = undefined;
+      diagnostics?.emit({
         type: "gateway.rpc",
-        method: this.method,
+        method: diagnostics.method,
         phase: "handler",
         outcome,
         durationMs: performance.now() - startedAt,
-        admissionMs: startedAt - this.startedAt,
+        admissionMs: startedAt - diagnostics.startedAt,
+        heapDeltaBytes,
       });
     }
   }
@@ -120,8 +149,6 @@ class GatewayRpcDiagnostics {
     });
   }
 }
-
-export type { GatewayRpcDiagnostics };
 
 /** Capture receipt before a socket FIFO, without work when diagnostics are unused. */
 export function captureGatewayRpcReceivedAt(): number | undefined {
@@ -154,12 +181,12 @@ export function createGatewayRpcDiagnostics(
   if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("gateway.rpc")) {
     return undefined;
   }
-  // Only process-stable core names become dimensions. Plugin/unknown names may
-  // contain arbitrary caller data and must not create new metric series.
-  const label = isCoreGatewayMethodClassified(method)
-    ? method
-    : getMethodRegistry?.().getHandler(method) || Object.hasOwn(extraHandlers, method)
-      ? "other"
-      : "unknown";
+  // Only catalog-owned names become dimensions, never arbitrary request values.
+  const label =
+    isCoreGatewayMethodClassified(method) ||
+    getMethodRegistry?.().getHandler(method) ||
+    Object.hasOwn(extraHandlers, method)
+      ? method
+      : "other";
   return new GatewayRpcDiagnostics(label);
 }

@@ -1,14 +1,14 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { resolveGlobalSet } from "../shared/global-singleton.js";
 import {
-  isArtifactPreservingStateRead,
+  executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
@@ -33,19 +33,16 @@ const observations = resolveGlobalSet<HealthObservation>(
   "close-and-restart",
 );
 const supersededObservation = new Error("Config health observation was superseded");
+// Supersession uses identity; a process-lived import stack would retain its first caller.
+supersededObservation.stack = undefined;
 
 function matchingObservations(next: HealthObservation): HealthObservation[] {
-  const matches: HealthObservation[] = [];
-  for (const current of observations) {
-    if (
+  return [...observations].filter(
+    (current) =>
       current.configPath === next.configPath &&
       (current.databasePath === next.databasePath ||
-        (next.identity() !== undefined && current.identity() === next.identity()))
-    ) {
-      matches.push(current);
-    }
-  }
-  return matches;
+        (next.identity() !== undefined && current.identity() === next.identity())),
+  );
 }
 
 function supersedeMatchingObservations(next: HealthObservation): void {
@@ -190,6 +187,7 @@ type ConfigHealthStateStore = Disposable & {
 export function captureConfigHealthStateStore(
   deps: ConfigHealthStateDeps,
   configPath: string,
+  assertAdmissionCurrent?: () => void,
 ): ConfigHealthStateStore {
   const env = resolveConfigHealthStateEnv(deps);
   const databasePath = resolveOpenClawStateSqlitePath(env);
@@ -203,6 +201,7 @@ export function captureConfigHealthStateStore(
     captured = { error };
   }
   const captureScope = (continuation = false): ConfigHealthStateStore => {
+    assertAdmissionCurrent?.();
     const observation: HealthObservation = {
       databasePath,
       configPath,
@@ -215,6 +214,7 @@ export function captureConfigHealthStateStore(
       observations.add(observation);
     }
     const isCurrent = () => {
+      assertAdmissionCurrent?.();
       if ("context" in captured) {
         captured.context.admission.assertCurrent();
       }
@@ -255,18 +255,22 @@ export function captureConfigHealthStateStore(
         observations.delete(observation);
       },
       async read(): Promise<ConfigHealthSnapshot | null> {
-        const artifactPreserving = isArtifactPreservingStateRead();
         const guard = createOperationGuard();
         try {
           if ("error" in captured) {
             throw captured.error;
           }
-          const snapshot = (await runOpenClawStateWorkerOperation(
-            captured.context,
-            (scope) => scope.execute({ type: "config.health.read", input: { artifactPreserving } }),
-            { existingOnly: true, assertCurrent: guard.assertCurrent },
-          )) ?? { state: {}, basis: {} };
-          return isCurrent() ? snapshot : null;
+          guard.assertCurrent();
+          const reply = await executeExistingOpenClawStateRead(
+            { path: databasePath, env: captured.context.environment },
+            { type: "config.health.read", input: undefined },
+            { context: captured.context },
+          );
+          guard.assertCurrent();
+          if (reply && (!reply.ok || reply.type !== "config.health.read")) {
+            throw new Error("Unexpected config health read reply");
+          }
+          return reply?.snapshot ?? { state: {}, basis: {} };
         } catch (error) {
           guard.rethrowIfInvalid(error);
           if (error === supersededObservation) {

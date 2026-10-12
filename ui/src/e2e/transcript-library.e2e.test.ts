@@ -181,7 +181,6 @@ suite.define(() => {
         expect(await reader.getAttribute("aria-busy")).toBe("false");
         await reader.getByRole("tab", { name: "Transcript", exact: true }).click();
         await reader.getByText("Keep the reader quiet and readable.", { exact: true }).waitFor();
-        await reader.getByRole("button", { name: "Load more" }).click();
         await reader.getByText("The next page is readable too.", { exact: true }).waitFor();
         await page.screenshot({
           path: path.join(suite.artifactDir, "meetings-transcript-desktop.png"),
@@ -249,6 +248,7 @@ suite.define(() => {
         expect(JSON.parse(write.raw).transcripts.autoStart).toEqual([
           { ...source, title: "Weekly design review" },
         ]);
+        await gateway.deferNext("transcripts.list");
         await capture.getByRole("button", { name: /Transcript library/ }).click();
         await library.getByRole("status").getByText("Loading meetings…").waitFor();
         await gateway.resolveDeferred("transcripts.list");

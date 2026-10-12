@@ -1,13 +1,13 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { describe, expect, it, vi } from "vitest";
+import { CODEX_CLI_SESSION_SOURCE_CAPABILITY } from "./node-cli-sessions.js";
 import {
   transcriptMirrorMocks,
   nodeHostMocks,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
-  CODEX_CLI_SESSION_RESUME_COMMAND,
   CODEX_NODE_CONTINUE_COMMANDS,
   tempDirs,
   readCodexSessionTranscript,
@@ -36,6 +36,31 @@ import {
   type OpenClawConfig,
   type PluginRuntime,
 } from "./session-catalog.test-helpers.js";
+
+const nodeSourceHomeId = "a".repeat(64);
+
+function nodeCatalog(options: Parameters<typeof createRuntime>[0] = {}) {
+  const context = createRuntime({
+    nodes: [
+      {
+        nodeId: "devbox",
+        connected: true,
+        caps: [CODEX_CLI_SESSION_SOURCE_CAPABILITY],
+        commands: [...CODEX_NODE_CONTINUE_COMMANDS],
+        invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
+      },
+    ],
+    ...options,
+  });
+  const { api, getProvider } = createGatewayApi(context.runtime);
+  registerCodexSessionCatalog({
+    api,
+    bindingStore: createCodexTestBindingStore(),
+    control: createControl(),
+    getRuntimeConfig: () => config,
+  });
+  return { ...context, provider: getProvider()! };
+}
 
 describe("Codex supervision actions", () => {
   it.each(["openai/gpt-6-astra", "openai/gpt-5.6-sol"])(
@@ -66,77 +91,6 @@ describe("Codex supervision actions", () => {
     },
   );
 
-  it("marks paired-node rows continuable only with complete permitted capabilities", async () => {
-    const sourceByNode = new Map([
-      ["ready-cli", { status: "idle", source: "cli" }],
-      ["ready-vscode", { status: "notLoaded", source: "vscode" }],
-      ["ready-atlas", { status: "notLoaded", source: "atlas" }],
-      ["missing-run", { status: "idle", source: "cli" }],
-      ["active", { status: "active", source: "cli" }],
-      ["noninteractive", { status: "idle", source: "exec" }],
-    ]);
-    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ nodeId }) => {
-      const source = sourceByNode.get(nodeId);
-      if (!source) {
-        throw new Error("unexpected node");
-      }
-      return {
-        payloadJSON: JSON.stringify({
-          sessions: [
-            {
-              threadId: `thread-${nodeId}`,
-              status: source.status,
-              source: source.source,
-              archived: false,
-            },
-          ],
-        }),
-      };
-    });
-    const { runtime } = createRuntime({
-      nodes: [...sourceByNode.keys()].map((nodeId) => ({
-        nodeId,
-        displayName: nodeId,
-        connected: true,
-        commands: [...CODEX_NODE_CONTINUE_COMMANDS],
-        invocableCommands:
-          nodeId === "missing-run"
-            ? CODEX_NODE_CONTINUE_COMMANDS.filter(
-                (command) => command !== CODEX_CLI_SESSION_RESUME_COMMAND,
-              )
-            : [...CODEX_NODE_CONTINUE_COMMANDS],
-      })),
-      invoke,
-    });
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control: createControl(),
-      getRuntimeConfig: () => config,
-    });
-
-    const hosts = await getProvider()?.list({
-      hostIds: [...sourceByNode.keys()].map((id) => `node:${id}`),
-    });
-    const sessionByHost = new Map(hosts?.map((host) => [host.hostId, host.sessions[0]]) ?? []);
-    expect(sessionByHost.get("node:ready-cli")).toMatchObject({
-      canContinue: true,
-      canArchive: false,
-    });
-    expect(sessionByHost.get("node:ready-vscode")).toMatchObject({
-      canContinue: true,
-      canArchive: false,
-    });
-    expect(sessionByHost.get("node:ready-atlas")).toMatchObject({
-      canContinue: true,
-      canArchive: false,
-    });
-    expect(sessionByHost.get("node:missing-run")).toMatchObject({ canContinue: false });
-    expect(sessionByHost.get("node:active")).toMatchObject({ canContinue: false });
-    expect(sessionByHost.get("node:noninteractive")).toMatchObject({ canContinue: false });
-  });
-
   it("adopts a paired-node session with bounded history and an executable binding", async () => {
     const remoteThreadId = "123e4567-e89b-12d3-a456-426614174001";
     const sessionFamilyId = "123e4567-e89b-12d3-a456-426614174002";
@@ -145,6 +99,8 @@ describe("Codex supervision actions", () => {
       if (command === CODEX_APP_SERVER_THREADS_LIST_COMMAND) {
         return {
           payloadJSON: JSON.stringify({
+            sourceHomeId: nodeSourceHomeId,
+            canContinueCodex: true,
             sessions: [
               {
                 threadId: remoteThreadId,
@@ -182,6 +138,7 @@ describe("Codex supervision actions", () => {
           nodeId: "devbox",
           displayName: "Devbox",
           connected: true,
+          caps: [CODEX_CLI_SESSION_SOURCE_CAPABILITY],
           commands: [...CODEX_NODE_CONTINUE_COMMANDS],
           invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
         },
@@ -213,9 +170,7 @@ describe("Codex supervision actions", () => {
     adopted.archivedAt = 123;
     adopted.archivedBy = { type: "human", id: "operator-1" };
     adopted.archiveReason = "manual";
-    runtimeConfig = {
-      agents: { list: [{ id: "alpha" }, { id: "beta", default: true }] },
-    } as OpenClawConfig;
+    runtimeConfig = compatibilityOwnerConfig("beta");
     const second = await provider?.continueSession?.({
       agentId: "alpha",
       hostId: "node:devbox",
@@ -281,7 +236,7 @@ describe("Codex supervision actions", () => {
     expect(restored?.archivedBy).toBeUndefined();
     expect(restored?.archiveReason).toBeUndefined();
 
-    const listed = await provider?.list({ hostIds: ["node:devbox"] });
+    const listed = await provider?.list({ agentId: "alpha", hostIds: ["node:devbox"] });
     expect(listed?.[0]?.sessions[0]).toMatchObject({
       threadId: remoteThreadId,
       sessionKey: first?.sessionKey,
@@ -291,7 +246,7 @@ describe("Codex supervision actions", () => {
   it("keeps Gateway-first upgrades compatible with the released node selector and separates concurrent owners", async () => {
     const threadId = "123e4567-e89b-12d3-a456-426614174001";
     const runtimeConfig = {
-      agents: { ownership: "explicit", list: [{ id: "alpha" }, { id: "beta" }] },
+      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
     } as OpenClawConfig;
     // v2026.9.4 resolves every catalog packet through the node's configured agent roster.
     const selectReleasedNodeAgent = (params: unknown) =>
@@ -304,6 +259,8 @@ describe("Codex supervision actions", () => {
       if (command === CODEX_APP_SERVER_THREADS_LIST_COMMAND) {
         return {
           payloadJSON: JSON.stringify({
+            sourceHomeId: nodeSourceHomeId,
+            canContinueCodex: true,
             sessions: [
               {
                 threadId,
@@ -326,6 +283,7 @@ describe("Codex supervision actions", () => {
         {
           nodeId: "devbox",
           connected: true,
+          caps: [CODEX_CLI_SESSION_SOURCE_CAPABILITY],
           commands: [...CODEX_NODE_CONTINUE_COMMANDS, CODEX_TERMINAL_RESUME_COMMAND],
           invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS, CODEX_TERMINAL_RESUME_COMMAND],
         },
@@ -393,11 +351,12 @@ describe("Codex supervision actions", () => {
   });
 
   it("rejects paired-node continue without the permitted run command", async () => {
-    const { runtime, createSessionEntry } = createRuntime({
+    const { provider, createSessionEntry } = nodeCatalog({
       nodes: [
         {
           nodeId: "devbox",
           connected: true,
+          caps: [CODEX_CLI_SESSION_SOURCE_CAPABILITY],
           commands: [
             CODEX_APP_SERVER_THREADS_LIST_COMMAND,
             CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
@@ -409,16 +368,9 @@ describe("Codex supervision actions", () => {
         },
       ],
     });
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control: createControl(),
-      getRuntimeConfig: () => config,
-    });
 
     await expect(
-      getProvider()?.continueSession?.({
+      provider.continueSession!({
         hostId: "node:devbox",
         threadId: "thread-remote",
         clientScopes: ["operator.admin"],
@@ -428,26 +380,10 @@ describe("Codex supervision actions", () => {
   });
 
   it("rejects non-canonical paired-node host ids before adoption keying", async () => {
-    const { runtime, createSessionEntry } = createRuntime({
-      nodes: [
-        {
-          nodeId: "devbox",
-          connected: true,
-          commands: [...CODEX_NODE_CONTINUE_COMMANDS],
-          invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
-        },
-      ],
-    });
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control: createControl(),
-      getRuntimeConfig: () => config,
-    });
+    const { provider, createSessionEntry } = nodeCatalog();
 
     await expect(
-      getProvider()?.continueSession?.({
+      provider.continueSession!({
         hostId: "node:devbox ",
         threadId: "thread-remote",
         clientScopes: ["operator.admin"],
@@ -457,26 +393,10 @@ describe("Codex supervision actions", () => {
   });
 
   it("requires operator.admin before continuing a paired-node session", async () => {
-    const { runtime, createSessionEntry } = createRuntime({
-      nodes: [
-        {
-          nodeId: "devbox",
-          connected: true,
-          commands: [...CODEX_NODE_CONTINUE_COMMANDS],
-          invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
-        },
-      ],
-    });
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control: createControl(),
-      getRuntimeConfig: () => config,
-    });
+    const { provider, createSessionEntry } = nodeCatalog();
 
     await expect(
-      getProvider()?.continueSession?.({
+      provider.continueSession!({
         hostId: "node:devbox",
         threadId: "thread-remote",
         clientScopes: ["operator.write"],
@@ -488,6 +408,8 @@ describe("Codex supervision actions", () => {
   it("rejects a non-continuable paired-node session status", async () => {
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
       payloadJSON: JSON.stringify({
+        sourceHomeId: nodeSourceHomeId,
+        canContinueCodex: true,
         sessions: [
           {
             threadId: "thread-remote",
@@ -498,27 +420,10 @@ describe("Codex supervision actions", () => {
         ],
       }),
     }));
-    const { runtime, createSessionEntry } = createRuntime({
-      nodes: [
-        {
-          nodeId: "devbox",
-          connected: true,
-          commands: [...CODEX_NODE_CONTINUE_COMMANDS],
-          invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
-        },
-      ],
-      invoke,
-    });
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control: createControl(),
-      getRuntimeConfig: () => config,
-    });
+    const { provider, createSessionEntry } = nodeCatalog({ invoke });
 
     await expect(
-      getProvider()?.continueSession?.({
+      provider.continueSession!({
         hostId: "node:devbox",
         threadId: "thread-remote",
         clientScopes: ["operator.admin"],
@@ -553,6 +458,7 @@ describe("Codex supervision actions", () => {
     });
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => ({
       payloadJSON: JSON.stringify({
+        sourceHomeId: nodeSourceHomeId,
         sessions:
           // The node thread lookup must page without a title searchTerm; if a
           // regression ever sends one, this returns [] and the test fails.

@@ -66,11 +66,14 @@ openclaw tui --local
   - If you type `/session agent:other:main`, you switch to that agent session explicitly.
 - Session scope:
   - `per-sender` (default): each agent has many sessions.
-  - `global`: the TUI always uses the `global` session (the picker may be empty).
+  - `global`: the default and `main` selections use the `global` session (the picker may be empty).
 - The current agent + session are always visible in the footer.
 - If the session has a [goal](/tools/goal), the footer shows its compact state:
   `Pursuing goal`, `Goal paused (/goal resume)`, `Goal blocked (/goal resume)`, or `Goal achieved`.
 - When started without `--session`, gateway-mode TUI resumes the last selected session. The gateway, agent, and session scope must match, and that session must still exist. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.
+- Session details and remembered-session restoration keep the selected agent and exact conversation, even when another agent has the same session name. After reconnecting, metadata from the previous connection is discarded.
+- Bare `global` selects the agent's Home: `agent:<id>:main` in per-sender scope, or `global` in global scope. An explicit `agent:<id>:global` selects that stored conversation when it exists. If an exact history read confirms it is absent, the legacy alias selects the same agent's Home. History errors never select a fallback conversation.
+- Messages submitted while a new session selection is loading stay in the editor. Press Enter again after it is ready. If history fails to load, retry `/session <key>` or select another session; session-dependent commands also remain unavailable until the selection is ready.
 
 ## Sending + delivery
 
@@ -86,6 +89,14 @@ openclaw tui --local
 - Settings (`/settings`): toggle tool output expansion and thinking visibility. This panel does not control delivery.
 
 Esc or Ctrl+C closes a picker. In the session picker, the first press clears a nonempty filter. Press again to close it.
+
+The model picker opens immediately, showing a checking state if no models are known yet.
+In Gateway mode, it reuses the selected agent's last known list while refreshing in the
+background. Catalog changes update an open picker without clearing its search or
+moving its highlighted choice when that model is still present.
+It lists the current model and each provider's
+[recommended models](/concepts/recommended-models) first. Choose **All models (N)**
+to show the rest; typing a search always matches every model.
 
 ## Questions
 
@@ -138,7 +149,7 @@ Core:
 
 - `/help`
 - `/status` (Gateway-forwarded, shows session/model summary)
-- `/gateway-status` (alias `/gwstatus`) shows Gateway version, channel configuration summaries, and sessions directly.
+- `/gateway-status` (alias `/gwstatus`) shows Gateway version, channel configuration summaries, and stored session inventory, including archived sessions.
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
 - `/model <provider/model|default>` (or `/models`). `default` clears the session override.
@@ -191,6 +202,22 @@ OpenClaw:
 - `/openclaw [request]` returns from the normal agent TUI to the [OpenClaw](#openclaw-setup-and-repair-helper) setup/repair chat, optionally forwarding one request.
 
 Other Gateway slash commands (for example, `/context`) are forwarded to the Gateway and shown as system output. See [Slash commands](/tools/slash-commands).
+
+## Local Chrome setup
+
+Use `/browser-setup` (or `/browser-setup inspect`) to inspect Chrome extension
+setup on the **TUI process host**, not the connected Gateway.
+`/browser-setup install` explicitly prepares automatic local setup;
+`/browser-setup verify` checks the local authenticated extension relay.
+No pairing code is requested for supported local native bootstrap. Chrome still
+requires its own extension installation and permission approval, and existing
+pairings and automatic-setup opt-outs are preserved.
+
+These commands are deterministic local CLI operations, not messages to the agent.
+Do not paste credentials into them. `/stop`, `/abort`, Escape, or exiting the TUI
+cancels a pending setup command. After interruption, inspect again to reconcile
+any preparation that already completed. When the TUI runs through SSH, setup runs
+on the SSH host; the physical terminal viewer is not assumed to host Chrome.
 
 ## Local shell commands
 
@@ -311,7 +338,7 @@ disabled by default inside tmux and GNU Screen. Sixel is not supported.
 - `--session <key>`: Session key (default: `main`, or `global` when scope is global)
 - `--deliver`: Deliver assistant replies to the provider (default off)
 - `--thinking <level>`: Override thinking level for sends
-- `--message <text>`: Send an initial message after connecting
+- `--message <text>`: Send an initial message after connecting. If the selected history is unavailable, the TUI reports that the initial message was not sent; it does not replay it automatically after session recovery.
 - `--timeout-ms <ms>`: Agent timeout in ms (defaults to `agents.defaults.timeoutSeconds`)
 - `--history-limit <n>`: History entries to load (default `200`)
 

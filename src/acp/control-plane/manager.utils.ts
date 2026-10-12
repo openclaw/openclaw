@@ -3,27 +3,40 @@ import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-/** Shared ACP manager normalization, resolution, and error helpers. */
+import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
 import { buildAcpDatabaseSessionKey } from "../runtime/session-meta-keys.js";
-import { resolveSessionStorePathForAcp } from "../runtime/session-meta-store.js";
+import {
+  resolveSessionStorePathForAcp,
+  type AcpSessionStoreEntry,
+} from "../runtime/session-meta-store.js";
 import type { AcpSessionResolution, AcpSessionTarget } from "./manager.types.js";
 
-/** Resolves the agent id encoded in an ACP session key. */
 export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "main"): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? fallback);
 }
 
-/** Builds the stale-session error shown when ACP metadata is missing. */
-export function resolveMissingMetaError(sessionKey: string): AcpRuntimeError {
+function resolveMissingMetaError(sessionKey: string): AcpRuntimeError {
   return new AcpRuntimeError(
     "ACP_SESSION_INIT_FAILED",
     `ACP metadata is missing for ${sessionKey}. Recreate this ACP session with /acp spawn and rebind the thread.`,
   );
 }
 
-/** Converts a session resolution union into the runtime error callers should throw. */
+/** Project the selected store result without reopening storage. */
+export function resolveStoredAcpSession(
+  target: AcpSessionTarget,
+  stored: AcpSessionStoreEntry | null,
+): AcpSessionResolution {
+  if (stored?.acp) {
+    return { kind: "ready", ...target, meta: stored.acp, entry: stored.entry };
+  }
+  return isAcpSessionKey(target.sessionKey)
+    ? { kind: "stale", ...target, error: resolveMissingMetaError(target.sessionKey) }
+    : { kind: "none", ...target };
+}
+
 export function resolveAcpSessionResolutionError(
   resolution: AcpSessionResolution,
 ): AcpRuntimeError | null {
@@ -39,7 +52,6 @@ export function resolveAcpSessionResolutionError(
   );
 }
 
-/** Returns ready ACP metadata or throws the matching resolution error. */
 export function requireReadySessionMeta(resolution: AcpSessionResolution): SessionAcpMeta {
   if (resolution.kind === "ready") {
     return resolution.meta;
@@ -72,18 +84,12 @@ export function acpSessionActorKey(target: AcpSessionTarget): string {
   );
 }
 
-/** Restricts runtime-provided error codes to the ACP error-code enum. */
 export function normalizeAcpErrorCode(code: string | undefined): AcpRuntimeError["code"] {
   if (!code) {
     return "ACP_TURN_FAILED";
   }
   const normalized = code.trim().toUpperCase();
-  for (const allowed of ACP_ERROR_CODES) {
-    if (allowed === normalized) {
-      return allowed;
-    }
-  }
-  return "ACP_TURN_FAILED";
+  return ACP_ERROR_CODES.find((allowed) => allowed === normalized) ?? "ACP_TURN_FAILED";
 }
 
 export function createUnsupportedControlError(params: {
@@ -103,4 +109,26 @@ export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {
     Object.hasOwn(raw, "agentSessionId") ||
     Object.hasOwn(raw, "sessionIdsProvisional")
   );
+}
+
+const SESSION_ACTOR_SUPERSEDED_DETAIL_CODE = "SESSION_ACTOR_SUPERSEDED";
+
+export function createSupersededActorError(sessionKey: string): AcpRuntimeError {
+  return new AcpRuntimeError(
+    "ACP_SESSION_INIT_FAILED",
+    `ACP session actor was superseded during runtime initialization for ${sessionKey}.`,
+    { detailCode: SESSION_ACTOR_SUPERSEDED_DETAIL_CODE },
+  );
+}
+
+export function isSupersededActorError(error: unknown): boolean {
+  return (
+    error instanceof AcpRuntimeError && error.detailCode === SESSION_ACTOR_SUPERSEDED_DETAIL_CODE
+  );
+}
+
+export function assertCurrentAcpActor(current: boolean, sessionKey: string): void {
+  if (!current) {
+    throw createSupersededActorError(sessionKey);
+  }
 }

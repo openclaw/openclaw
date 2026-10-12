@@ -56,6 +56,65 @@ describe("OpenAI Responses provider", () => {
     configureAiTransportHost({});
   });
 
+  it.each([
+    {
+      label: "raw schema",
+      responseFormat: { type: "object", properties: { answer: { type: "string" } } },
+      expected: {
+        type: "json_schema",
+        name: "openclaw_response",
+        schema: { type: "object", properties: { answer: { type: "string" } } },
+      },
+    },
+    {
+      label: "nested schema",
+      responseFormat: {
+        type: "json_schema",
+        json_schema: { name: "answer", schema: { type: "object" }, strict: false },
+      },
+      expected: {
+        type: "json_schema",
+        name: "answer",
+        schema: { type: "object" },
+        strict: false,
+      },
+    },
+    {
+      label: "native schema",
+      responseFormat: {
+        type: "json_schema",
+        name: "answer",
+        schema: { type: "object" },
+        strict: null,
+      },
+      expected: {
+        type: "json_schema",
+        name: "answer",
+        schema: { type: "object" },
+        strict: null,
+      },
+    },
+    {
+      label: "JSON object",
+      responseFormat: { type: "json_object" },
+      expected: { type: "json_object" },
+    },
+    {
+      label: "text",
+      responseFormat: { type: "text" },
+      expected: { type: "text" },
+    },
+  ])(
+    "projects $label output constraints in provider and transport requests",
+    async ({ responseFormat, expected }) => {
+      const options = { apiKey: "test", responseFormat };
+      const transportParams = buildOpenAIResponsesParams(model(), context, options);
+      await streamSimpleOpenAIResponses(model(), context, options).result();
+      expect(transportParams.text?.format).toEqual(expected);
+      expect(openAiMockState.params[0]).toMatchObject({ text: { format: expected } });
+    },
+  );
+
   it.each(["none", "short", "long"] as const)(
     "identifies OpenCode conversations with %s cache retention",
     async (cacheRetention) => {
@@ -166,7 +225,7 @@ describe("OpenAI Responses provider", () => {
 
     expect(result.stopReason).toBe("error");
     for (const params of [transportParams, openAiMockState.params[0]]) {
-      expect(params).toMatchObject({ max_output_tokens: 16, store: false });
+      expect(params).toMatchObject({ store: false, max_output_tokens: 16 });
     }
     expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
   });
@@ -217,14 +276,22 @@ describe("OpenAI Responses provider", () => {
   });
 
   it.each([
-    { reasoningEffort: undefined, expectedEffort: undefined },
-    { reasoningEffort: "minimal", expectedEffort: "low" },
-    { reasoningEffort: "xhigh", expectedEffort: "xhigh" },
-    { reasoningEffort: "max", expectedEffort: "max" },
+    { id: "gpt-6.1-sol", reasoningEffort: undefined, expectedEffort: undefined },
+    { id: "gpt-6.1-sol", reasoningEffort: "none", expectedEffort: undefined },
+    { id: "gpt-6.1-sol", reasoningEffort: "minimal", expectedEffort: "low" },
+    { id: "gpt-6.1-sol", reasoningEffort: "max", expectedEffort: "max" },
+    { id: "gpt-6-astra", reasoningEffort: undefined, expectedEffort: undefined },
+    { id: "gpt-6-astra", reasoningEffort: "minimal", expectedEffort: "low" },
+    { id: "gpt-6-astra", reasoningEffort: "xhigh", expectedEffort: "xhigh" },
+    { id: "gpt-6-astra", reasoningEffort: "max", expectedEffort: "max" },
+    { id: "gpt-6-sol", reasoningEffort: "none", expectedEffort: "none" },
+    { id: "gpt-6-sol", reasoningEffort: "max", expectedEffort: "max" },
+    { id: "gpt-6-luna", reasoningEffort: "none", expectedEffort: "none" },
+    { id: "gpt-6-luna", reasoningEffort: "max", expectedEffort: "max" },
   ] as const)(
-    "honors Astra reasoning and sampling without catalog metadata for $reasoningEffort",
-    async ({ reasoningEffort, expectedEffort }) => {
-      const requestModel = model({ id: "gpt-6-astra" });
+    "honors $id reasoning and sampling without catalog metadata for $reasoningEffort",
+    async ({ id, reasoningEffort, expectedEffort }) => {
+      const requestModel = model({ id });
       const options = { apiKey: "sentinel-key", reasoningEffort, temperature: 0.5, topP: 0.8 };
       const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
       await streamOpenAIResponses(requestModel, context, options).result();

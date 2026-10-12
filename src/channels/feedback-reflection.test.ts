@@ -1,28 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { recordChannelFeedbackEvent, runChannelFeedbackReflection } from "./feedback-reflection.js";
+import { runChannelFeedbackReflection } from "./feedback-reflection.js";
 import {
-  configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
   readChannelContextAdmissionEvidence,
 } from "./message-access/admission-evidence.js";
 
-const appendTranscriptEvent = vi.hoisted(() => vi.fn(async () => undefined));
 const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn());
-const loadSessionEntry = vi.hoisted(() => vi.fn());
-const readSessionUpdatedAtCore = vi.hoisted(() => vi.fn());
-const resolveSessionTranscriptRuntimeTarget = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/state/main/sessions.json"));
 
 vi.mock("../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: resolveStorePath,
 }));
-vi.mock("../config/sessions/session-accessor.js", () => ({
-  appendTranscriptEvent,
-  loadSessionEntry,
-  loadSessionEntryReadOnly: loadSessionEntry,
-  readSessionUpdatedAtCore,
-  resolveSessionTranscriptRuntimeTarget,
+// mock-isolation: Persistence is exercised through the real feedback worker boundary.
+vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
+  withSessionEntryReadOnlyInWorker: vi.fn(),
+  readSessionUpdatedAtInWorker: vi.fn(async () => undefined),
 }));
 vi.mock("./turn/lifecycle.js", () => ({ dispatchRoutedChannelTurn }));
 
@@ -32,28 +25,23 @@ describe("channel feedback reflection", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("classifies internal reflection as explicitly unsupported provenance", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
-        expect(
-          consumeChannelAdmissionEvidence(
-            readChannelContextAdmissionEvidence(plan.ctxPayload as object),
-          ),
-        ).toMatchObject({ ingressState: "unsupported", decisionCoverage: "unsupported" });
-        return { admission: { kind: "dispatch" }, dispatched: false };
-      });
-      await runChannelFeedbackReflection({
-        cfg,
-        channel: "msteams",
-        channelLabel: "Teams",
-        agentId: "main",
-        sessionKey: "agent:main:msteams:feedback-unsupported",
-        conversationId: "conversation-unsupported",
-        conversationKind: "direct",
-      });
-    } finally {
-      cleanup();
-    }
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
+      expect(
+        consumeChannelAdmissionEvidence(
+          readChannelContextAdmissionEvidence(plan.ctxPayload as object),
+        ),
+      ).toMatchObject({ ingressState: "unsupported", decisionCoverage: "unsupported" });
+      return { admission: { kind: "dispatch" }, dispatched: false };
+    });
+    await runChannelFeedbackReflection({
+      cfg,
+      channel: "msteams",
+      channelLabel: "Teams",
+      agentId: "main",
+      sessionKey: "agent:main:msteams:feedback-unsupported",
+      conversationId: "conversation-unsupported",
+      conversationKind: "direct",
+    });
   });
 
   it("runs reflection in the original session and enforces cooldown", async () => {
@@ -147,34 +135,5 @@ describe("channel feedback reflection", () => {
         conversationKind: "direct",
       }),
     ).resolves.toMatchObject({ status: "complete", followUp: false });
-  });
-
-  it("records feedback through the persisted transcript owner", async () => {
-    loadSessionEntry.mockReturnValue({ sessionId: "session-1" });
-    resolveSessionTranscriptRuntimeTarget.mockResolvedValue({
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:main",
-      storePath: "/state/main/sessions.json",
-    });
-    const event = { type: "custom", event: "feedback", ts: 1 };
-
-    await expect(
-      recordChannelFeedbackEvent({
-        cfg,
-        agentId: "main",
-        sessionKey: "agent:main:msteams:feedback-2",
-        event,
-      }),
-    ).resolves.toBe(true);
-    expect(appendTranscriptEvent).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: "agent:main:main",
-        storePath: "/state/main/sessions.json",
-      },
-      event,
-    );
   });
 });

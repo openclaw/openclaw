@@ -18,6 +18,21 @@ function message(id: string, role: string, content: unknown, seq: number, runId?
   };
 }
 
+function withPositionIndex(
+  props: Parameters<typeof projectChatTranscript>[0],
+  check: (read: () => ReturnType<typeof projectChatTranscript>["positionIndex"]) => void,
+) {
+  const transcript = createTestTranscript();
+  try {
+    transcript.renderSession(props.sessionKey, (session) => {
+      check(() => projectChatTranscript(props, session).positionIndex);
+      return html``;
+    });
+  } finally {
+    transcript.hostDisconnected();
+  }
+}
+
 describe("chat position projection", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
@@ -39,16 +54,13 @@ describe("chat position projection", () => {
       ),
     ];
     const props = threadProps("rail-projection", "agent:main:projection", messages);
-    const transcript = createTestTranscript();
-    let landmarks: readonly unknown[] = [];
-    transcript.renderSession(props.paneId, props.sessionKey, (session) => {
-      landmarks = projectChatTranscript(props, session).positionIndex.markers.map(
-        (marker) => marker.message,
-      );
-      return html``;
+    withPositionIndex(props, (read) => {
+      expect(read().markers.map((marker) => marker.message)).toEqual([
+        messages[0],
+        messages[3],
+        messages[4],
+      ]);
     });
-    expect(landmarks).toEqual([messages[0], messages[3], messages[4]]);
-    transcript.hostDisconnected();
   });
 
   it("targets the visible final answer before later dashboard commentary and tools", () => {
@@ -76,16 +88,9 @@ describe("chat position projection", () => {
       persistCommentary: true,
       runWorking: false,
     };
-    const transcript = createTestTranscript();
-    let landmarks: readonly unknown[] = [];
-    transcript.renderSession(props.paneId, props.sessionKey, (session) => {
-      landmarks = projectChatTranscript(props, session).positionIndex.markers.map(
-        (marker) => marker.message,
-      );
-      return html``;
+    withPositionIndex(props, (read) => {
+      expect(read().markers.map((marker) => marker.message)).toEqual([messages[0], messages[1]]);
     });
-    expect(landmarks).toEqual([messages[0], messages[1]]);
-    transcript.hostDisconnected();
   });
   it.each([
     {
@@ -150,47 +155,33 @@ describe("chat position projection", () => {
       },
     ]);
     props.showToolCalls = true;
-    const transcript = createTestTranscript();
-    try {
-      transcript.renderSession(props.paneId, props.sessionKey, (session) => {
-        const index = projectChatTranscript(props, session).positionIndex;
-        expect(index.markers.filter((marker) => marker.role === "assistant")).toHaveLength(
-          assistantMarkers,
-        );
-        expect(index.markers.filter((marker) => marker.role === "user")).toHaveLength(1);
-        expect(index.markerIdsByMessageId.has("tool")).toBe(false);
-        return html``;
-      });
-    } finally {
-      transcript.hostDisconnected();
-    }
+    withPositionIndex(props, (read) => {
+      const index = read();
+      expect(index.markers.filter((marker) => marker.role === "assistant")).toHaveLength(
+        assistantMarkers,
+      );
+      expect(index.markers.filter((marker) => marker.role === "user")).toHaveLength(1);
+      expect(index.markerIdsByMessageId.has("tool")).toBe(false);
+    });
   });
 
   it("refreshes navigation visibility when retained message content changes", () => {
-    const response = message("response", "assistant", "Visible answer", 2, "edited-run");
+    const question = message("question", "user", "Inspect the answer", 1);
+    const response = (content: string) =>
+      message("response", "assistant", content, 2, "edited-run");
     const props = threadProps("rail-edited", "agent:main:main", [
-      message("question", "user", "Inspect the answer", 1),
-      response,
+      question,
+      response("Visible answer"),
     ]);
-    const transcript = createTestTranscript();
-    try {
-      transcript.renderSession(props.paneId, props.sessionKey, (session) => {
-        const anchors = () =>
-          projectChatTranscript(props, session).positionIndex.markers.map(
-            (marker) => marker.anchorId,
-          );
-        expect(anchors()).toEqual(["question", "response"]);
-        response.content = "<thinking>Private planning</thinking>";
-        props.messages = [...props.messages];
-        expect(anchors()).toEqual(["question"]);
-        response.content = "The visible answer is ready";
-        props.messages = [...props.messages];
-        expect(anchors()).toEqual(["question", "response"]);
-        return html``;
-      });
-    } finally {
-      transcript.hostDisconnected();
-    }
+    withPositionIndex(props, (read) => {
+      const anchors = () => read().markers.map((marker) => marker.anchorId);
+      expect(anchors()).toEqual(["question", "response"]);
+      // History owners publish edited messages as replacements, keeping the retained question.
+      props.messages = [question, response("<thinking>Private planning</thinking>")];
+      expect(anchors()).toEqual(["question"]);
+      props.messages = [question, response("The visible answer is ready")];
+      expect(anchors()).toEqual(["question", "response"]);
+    });
   });
 
   it("keeps consecutive user messages and another participant while aggregating a run across a steer", () => {
@@ -205,28 +196,22 @@ describe("chat position projection", () => {
       message("last", "assistant", "Both sections are ready", 5, "shared-run"),
     ];
     const props = threadProps("rail-steer", "agent:main:main", messages);
-    const transcript = createTestTranscript();
-    try {
-      transcript.renderSession(props.paneId, props.sessionKey, (session) => {
-        const index = projectChatTranscript(props, session).positionIndex;
-        expect(index.markers.map((marker) => marker.message)).toEqual([
-          messages[0],
-          messages[1],
-          messages[4],
-          messages[3],
-        ]);
-        expect(index.markers[2]?.anchorId).toBe("first");
-        expect([...index.markerIdsByMessageId.keys()]).toEqual([
-          "user-1",
-          "user-2",
-          "first",
-          "mira",
-          "last",
-        ]);
-        return html``;
-      });
-    } finally {
-      transcript.hostDisconnected();
-    }
+    withPositionIndex(props, (read) => {
+      const index = read();
+      expect(index.markers.map((marker) => marker.message)).toEqual([
+        messages[0],
+        messages[1],
+        messages[4],
+        messages[3],
+      ]);
+      expect(index.markers[2]?.anchorId).toBe("first");
+      expect([...index.markerIdsByMessageId.keys()]).toEqual([
+        "user-1",
+        "user-2",
+        "first",
+        "mira",
+        "last",
+      ]);
+    });
   });
 });

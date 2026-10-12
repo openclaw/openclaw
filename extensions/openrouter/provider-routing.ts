@@ -1,21 +1,4 @@
-// Openrouter provider module implements model/runtime integration.
-type OpenRouterExtraParamsContext = {
-  config?: {
-    models?: {
-      providers?: Record<
-        string,
-        {
-          params?: Record<string, unknown>;
-        }
-      >;
-    };
-  };
-  extraParams: Record<string, unknown>;
-  provider: string;
-  model?: {
-    params?: Record<string, unknown>;
-  };
-};
+import type { ProviderPlugin } from "openclaw/plugin-sdk/plugin-entry";
 
 const BLOCKED_RECORD_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
@@ -48,33 +31,18 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
-function mergeOpenRouterProviderRouting(params: {
-  providerParams?: Record<string, unknown>;
-  modelParams?: Record<string, unknown>;
-  extraParams: Record<string, unknown>;
-}): Record<string, unknown> | undefined {
-  const providerRouting = readRecord(params.providerParams?.provider);
-  const modelRouting = readRecord(params.modelParams?.provider);
-  const extraRouting = readRecord(params.extraParams.provider);
-  const merged = {
-    ...providerRouting,
-    ...modelRouting,
-    ...extraRouting,
-  };
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
 export function resolveOpenRouterExtraParamsForTransport(
-  ctx: OpenRouterExtraParamsContext,
+  ctx: Parameters<NonNullable<ProviderPlugin["extraParamsForTransport"]>>[0],
 ): { patch?: Record<string, unknown> } | undefined {
   const providerConfigParams = readRecord(ctx.config?.models?.providers?.[ctx.provider]?.params);
   const modelParams = readRecord(ctx.model?.params);
-  const providerRouting = mergeOpenRouterProviderRouting({
-    providerParams: providerConfigParams,
-    modelParams,
-    extraParams: ctx.extraParams,
-  });
-  if (!providerConfigParams && !modelParams && !providerRouting) {
+  const providerRouting = {
+    ...readRecord(providerConfigParams?.provider),
+    ...readRecord(modelParams?.provider),
+    ...readRecord(ctx.extraParams.provider),
+  };
+  const hasProviderRouting = Object.keys(providerRouting).length > 0;
+  if (!providerConfigParams && !modelParams && !hasProviderRouting) {
     return undefined;
   }
   return {
@@ -82,7 +50,7 @@ export function resolveOpenRouterExtraParamsForTransport(
       ...providerConfigParams,
       ...modelParams,
       ...ctx.extraParams,
-      ...(providerRouting ? { provider: providerRouting } : {}),
+      ...(hasProviderRouting ? { provider: providerRouting } : {}),
     },
   };
 }

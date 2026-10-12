@@ -1,14 +1,10 @@
 import type { SystemAgentChatQuestion } from "@openclaw/gateway-protocol";
 import { normalizeNullableString as nonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import type { SchemaContract } from "../../../../packages/gateway-protocol/src/schema-contract.js";
 
-export type CustodianStructuredQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  options: Array<{ label: string; description?: string; recommended?: boolean; reply?: string }>;
-  isOther: boolean;
-  skipAction?: "exit";
-};
+export type CustodianStructuredQuestion = SchemaContract<
+  Omit<SystemAgentChatQuestion, "isOther"> & { isOther: boolean }
+>;
 
 /**
  * Sanitize the typed `question` field from `openclaw.chat`. The gateway owns
@@ -22,9 +18,7 @@ export function parseCustodianQuestion(
   if (!value || typeof value !== "object") {
     return null;
   }
-  const id = nonEmptyString(value.id);
-  const header = nonEmptyString(value.header);
-  const question = nonEmptyString(value.question);
+  const [id, header, question] = [value.id, value.header, value.question].map(nonEmptyString);
   if (!id || !header || !question || !Array.isArray(value.options)) {
     return null;
   }
@@ -37,8 +31,7 @@ export function parseCustodianQuestion(
     if (!label) {
       return null;
     }
-    const description = nonEmptyString(option.description ?? null);
-    const reply = nonEmptyString(option.reply ?? null);
+    const [description, reply] = [option.description, option.reply].map(nonEmptyString);
     options.push({
       label,
       ...(description ? { description } : {}),

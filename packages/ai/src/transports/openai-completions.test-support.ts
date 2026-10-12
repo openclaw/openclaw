@@ -8,6 +8,7 @@ import {
 } from "../host.js";
 import type { Model } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
+import { encodedModelRequestBodyStream } from "./model-request-body.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import type { processCompletionsStream } from "./openai-completions-stream.js";
 
@@ -20,17 +21,6 @@ export type CapturedStreamEvent = {
   content?: string;
   partial?: unknown;
 };
-
-type RequestTransportConfig = {
-  proxy?: unknown;
-  tls?: unknown;
-  headers?: Record<string, string>;
-  allowPrivateNetwork?: boolean;
-};
-
-const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
-  "openclaw.modelProviderRequestTransport",
-);
 
 function resolveTestEndpointClass(baseUrl: string | undefined): string {
   if (!baseUrl) {
@@ -113,7 +103,12 @@ configureAiTransportHost({
   buildModelFetch: () => async (input, init) => {
     const response = await globalThis.fetch(input, init);
     const contentType = response.headers.get("content-type") ?? "";
-    if (!response.ok || !response.body || !contentType.includes("application/json")) {
+    if (
+      !response.ok ||
+      !response.body ||
+      !contentType.includes("application/json") ||
+      encodedModelRequestBodyStream(init?.body) === false
+    ) {
       return response;
     }
     const headers = new Headers(response.headers);
@@ -134,20 +129,6 @@ configureAiTransportHost({
       : undefined;
   },
 });
-
-export function attachModelProviderRequestTransport<TModel extends object>(
-  model: TModel,
-  request: RequestTransportConfig | undefined,
-): TModel {
-  if (!request) {
-    return model;
-  }
-  const next = { ...model } as TModel & {
-    [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]?: RequestTransportConfig;
-  };
-  next[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL] = request;
-  return next;
-}
 
 export function makeCompletionsModel(
   overrides: Partial<Model<"openai-completions">> = {},
@@ -219,17 +200,6 @@ export async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<
   for (const chunk of chunks) {
     yield chunk as never;
   }
-}
-
-export function neverYieldsStream(): AsyncIterable<unknown> {
-  return {
-    [Symbol.asyncIterator]() {
-      return {
-        next: async () => await new Promise<IteratorResult<unknown>>(() => {}),
-        return: async () => ({ done: true, value: undefined }),
-      };
-    },
-  };
 }
 
 export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -325,23 +295,6 @@ export const customQwenReasoningModel = makeCompletionsModel({
   baseUrl: "https://proxy.example.com/v1",
   contextWindow: 262_144,
   maxTokens: 32_000,
-});
-
-export const gemma4Model = makeCompletionsModel({
-  id: "google/gemma-4-12b",
-  name: "Gemma 4 12B",
-  provider: "vllm",
-  baseUrl: "https://proxy.example.com/v1",
-  contextWindow: 262_144,
-  maxTokens: 32_000,
-});
-
-export const kimiCodingProxyModel = makeCompletionsModel({
-  ...customKimiProxyModel,
-  id: "kimi-for-coding",
-  name: "Kimi for Coding",
-  provider: "kimi",
-  baseUrl: "https://api.kimi.com/coding/v1",
 });
 
 export function getAssistantMessage(params: { messages: unknown }) {

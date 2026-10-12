@@ -1,54 +1,11 @@
 import type { ChildProcess } from "node:child_process";
 import { createWriteStream, write, writev } from "node:fs";
-import { createRequire } from "node:module";
 import type { Writable } from "node:stream";
-import { toErrorObject } from "../infra/errors.js";
+import { createPipe } from "@openclaw/fs-safe/pipe";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { SpawnSecretInput } from "./supervisor/types.js";
 
 export type SpawnStdioEntry = "ignore" | "inherit" | "ipc" | "overlapped" | "pipe" | number;
-
-const require = createRequire(import.meta.url);
-type SecretPipe = { fds: number[]; close: (fd: number) => void };
-let createPipe: (() => SecretPipe) | undefined;
-
-function createSecretPipe(): SecretPipe {
-  createPipe ??= (() => {
-    // SAFETY: Koffi's require export has the same API as its typed default export.
-    const koffi = require("koffi") as typeof import("koffi").default;
-    const libc = koffi.load(null);
-    const closeFd = libc.func("int close(int fd)");
-    const close = (fd: number) => {
-      if (closeFd(fd) !== 0) {
-        throw new Error(`secret input close failed (errno ${koffi.errno()})`);
-      }
-    };
-    const pipe = libc.func(
-      process.platform === "linux"
-        ? "int pipe2(_Out_ int *fds, int flags)"
-        : "int pipe(_Out_ int *fds)",
-    );
-    const fcntl =
-      process.platform === "linux" ? undefined : libc.func("int fcntl(int fd, int cmd, ...)");
-    return () => {
-      const fds = [-1, -1];
-      // Linux allocates with O_CLOEXEC atomically. POSIX F_SETFD=2/FD_CLOEXEC=1
-      // protects other execs on platforms without pipe2; no async work intervenes.
-      if (pipe(fds, ...(fcntl ? [] : [0x80000])) !== 0) {
-        throw new Error(`secret input pipe creation failed (errno ${koffi.errno()})`);
-      }
-      try {
-        if (fcntl && fds.some((fd) => fcntl(fd, 2, "int", 1) !== 0)) {
-          throw new Error(`secret input close-on-exec failed (errno ${koffi.errno()})`);
-        }
-        return { fds, close };
-      } catch (error) {
-        fds.forEach(close);
-        throw error;
-      }
-    };
-  })();
-  return createPipe();
-}
 
 type SecretDeliveryOptions = {
   abortSignal?: AbortSignal;
@@ -75,37 +32,31 @@ export function prepareSecretInputStdio(
   // Node's POSIX stdio "pipe" is a socketpair, which cannot be reopened through
   // /proc/self/fd. A real anonymous pipe supports external CLI descriptor readers
   // while preserving one-shot consumption without credential files or shell relays.
-  const pipe = process.platform === "win32" ? undefined : createSecretPipe();
-  let [readFd, writeFd] = pipe?.fds ?? [];
-  stdio[secretInput.fd] = readFd ?? "overlapped";
-  const closeRead = () => {
-    if (readFd !== undefined) {
-      pipe!.close(readFd);
-      readFd = undefined;
-    }
-  };
+  const pipe = process.platform === "win32" ? undefined : createPipe();
+  let writer = pipe?.writer;
+  stdio[secretInput.fd] = pipe?.reader.fd ?? "overlapped";
+  // Numeric secret descriptors keep this launch in-process; IPC cannot transfer them.
   return {
     [Symbol.dispose]() {
-      closeRead();
-      if (writeFd !== undefined) {
-        pipe!.close(writeFd);
-        writeFd = undefined;
-      }
+      pipe?.reader.close();
+      writer?.close();
+      writer = undefined;
     },
     async deliverTo(child, options) {
-      closeRead();
+      pipe?.reader.close();
+      const streamWriter = writer;
       const stream =
-        writeFd === undefined
+        streamWriter === undefined
           ? (child.stdio[secretInput.fd] as Writable | null | undefined)
           : createWriteStream("", {
-              fd: writeFd,
+              fd: streamWriter.fd,
               fs: {
                 write,
                 writev,
                 // Native allocations are outside Node's per-worker fd registry.
-                close(fd, callback) {
+                close(_fd, callback) {
                   try {
-                    pipe!.close(fd);
+                    streamWriter.close();
                     callback(null);
                   } catch (error) {
                     callback(toErrorObject(error, "secret input close failed"));
@@ -113,7 +64,7 @@ export function prepareSecretInputStdio(
                 },
               },
             });
-      writeFd = undefined;
+      writer = undefined;
       if (!stream || typeof stream.end !== "function") {
         throw new Error(`secret input file descriptor ${secretInput.fd} is unavailable`);
       }

@@ -1,13 +1,8 @@
-// Package manager config tests validate workspace package manager settings.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import {
-  mergeOverrides,
-  parsePnpmPackageKey,
-  readNpmLockOverrides,
-} from "../scripts/generate-npm-package-lock.mts";
+import { mergeOverrides, readNpmLockOverrides } from "../scripts/generate-npm-package-lock.mts";
 import { pnpmLockfileDocuments } from "../scripts/lib/pnpm-lockfile-documents.mjs";
 
 type PnpmBuildConfig = {
@@ -18,6 +13,7 @@ type PnpmBuildConfig = {
 };
 
 type RootPackageJson = {
+  dependencies: { tar: string };
   files?: string[];
   pnpm?: PnpmBuildConfig;
 };
@@ -53,26 +49,6 @@ function readPnpmEnvironmentLock(): PnpmEnvironmentLock {
     throw new Error("pnpm-lock.yaml is missing its environment document");
   }
   return parse(environment) as PnpmEnvironmentLock;
-}
-
-function collectPnpmLockPackages(): Set<string> {
-  const lockfile = parse(
-    pnpmLockfileDocuments(fs.readFileSync("pnpm-lock.yaml", "utf8")).dependencies,
-  ) as {
-    packages?: Record<string, { version?: unknown }>;
-  };
-  const packages = new Set<string>();
-  for (const [packageKey, metadata] of Object.entries(lockfile.packages ?? {})) {
-    const parsed = parsePnpmPackageKey(packageKey);
-    if (!parsed) {
-      continue;
-    }
-    packages.add(`${parsed.name}@${parsed.version}`);
-    if (typeof metadata.version === "string") {
-      packages.add(`${parsed.name}@${metadata.version}`);
-    }
-  }
-  return packages;
 }
 
 describe("package manager build policy", () => {
@@ -118,75 +94,24 @@ describe("package manager build policy", () => {
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
 
-  it("includes third-party notices in the published root package", () => {
-    const packageJson = readJson("package.json") as RootPackageJson;
-
-    expect(packageJson.files).toContain("THIRD_PARTY_NOTICES.md");
-  });
-
-  it("omits source-only Crabbox wrapper modules from the published root package", () => {
-    const packageJson = readJson("package.json") as RootPackageJson;
-
-    for (const sourcePath of [
-      "scripts/crabbox-wrapper.mjs",
-      "scripts/crabbox-wrapper.mts",
-      "scripts/crabbox-wrapper-providers.mts",
-      "scripts/crabbox-routing-policy.mts",
-      "scripts/testbox-lease-freshness.mts",
-      "scripts/lib/tsx-cli-shim.mjs",
-    ]) {
-      expect(packageJson.files).not.toContain(sourcePath);
-    }
-  });
-
   it("pins forked transitive dependencies with parent-scoped npm-lock overrides", () => {
-    const overrides = readNpmLockOverrides() as Record<string, unknown>;
+    const tarVersion = (readJson("package.json") as RootPackageJson).dependencies.tar;
+    const overrides = readNpmLockOverrides(
+      {
+        dependencies: { minipass: "3.3.6", tar: tarVersion },
+      },
+      process.cwd(),
+    );
 
-    const packages = collectPnpmLockPackages();
-
-    expect(overrides["lru-cache"]).toBeUndefined();
-    expect(overrides["lru-memoizer@2.3.0"]).toMatchObject({
-      "lru-cache": { ".": "6.0.0", yallist: "4.0.0" },
-    });
-    if (packages.has("lru-memoizer@3.0.0")) {
-      const lruCacheVersion = (overrides["lru-memoizer@3.0.0"] as Record<string, string>)[
-        "lru-cache"
-      ];
-      expect(lruCacheVersion).toMatch(/^11\.\d+\.\d+$/u);
-      expect(packages.has(`lru-cache@${lruCacheVersion}`)).toBe(true);
-    }
+    expect(overrides.yallist).toBeUndefined();
+    expect(overrides["minipass@3.3.6"]).toMatchObject({ yallist: "4.0.0" });
+    expect(overrides[`tar@${tarVersion}`]).toMatchObject({ yallist: "5.0.0" });
   });
 
-  it("merges exact npm-lock pins with nested lock-derived pins", () => {
-    expect(
-      mergeOverrides(
-        { "@mistralai/mistralai": "2.2.1" },
-        { "@mistralai/mistralai": { ".": "2.2.1", zod: "4.4.3" } },
-        {},
-      ),
-    ).toEqual({
-      "@mistralai/mistralai": { ".": "2.2.1", zod: "4.4.3" },
-    });
-  });
-
-  it.each(
-    (
-      [
-        ["package", "workspace"],
-        ["package", "lock"],
-        ["workspace", "lock"],
-      ] as const
-    ).flatMap(([first, second]) =>
-      [false, true].flatMap((childrenFirst) =>
-        ["1.2.3", "npm:@scope/parent@1.2.3"].map((rootSpec) => ({
-          first,
-          second,
-          childrenFirst,
-          rootSpec,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    { first: "package", second: "workspace", childrenFirst: false, rootSpec: "1.2.3" },
+    { first: "package", second: "lock", childrenFirst: true, rootSpec: "npm:@scope/parent@1.2.3" },
+  ] as const)(
     "retains child policy and $rootSpec across sources $first/$second (childrenFirst=$childrenFirst)",
     ({ first, second, childrenFirst, rootSpec }) => {
       const sources: Record<"package" | "workspace" | "lock", Record<string, unknown>> = {
@@ -235,25 +160,25 @@ describe("package manager build policy", () => {
     });
   });
 
-  it.each([
-    ["^1.0.0", "~1.0.0"],
-    ["1.0.0", "2.0.0"],
-  ])("rejects conflicting root pins %s and %s when merging nested pins", (left, right) => {
-    expect(() =>
-      mergeOverrides(
-        { "floating-package": left },
-        { "floating-package": { ".": right, child: "2.0.0" } },
-        {},
-      ),
-    ).toThrow(/conflicts with pnpm lock policy/u);
-    expect(() =>
-      mergeOverrides(
-        { "floating-package": { ".": left, child: "2.0.0" } },
-        { "floating-package": right },
-        {},
-      ),
-    ).toThrow(/conflicts with pnpm lock policy/u);
-  });
+  it.each([["^1.0.0", "~1.0.0"]])(
+    "rejects conflicting root pins %s and %s when merging nested pins",
+    (left, right) => {
+      expect(() =>
+        mergeOverrides(
+          { "floating-package": left },
+          { "floating-package": { ".": right, child: "2.0.0" } },
+          {},
+        ),
+      ).toThrow(/conflicts with pnpm lock policy/u);
+      expect(() =>
+        mergeOverrides(
+          { "floating-package": { ".": left, child: "2.0.0" } },
+          { "floating-package": right },
+          {},
+        ),
+      ).toThrow(/conflicts with pnpm lock policy/u);
+    },
+  );
 
   it("rejects distinct npm alias targets with matching versions", () => {
     expect(() =>

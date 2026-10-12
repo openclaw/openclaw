@@ -1,23 +1,28 @@
 import { render, type TemplateResult } from "lit";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
+import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
+import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import { NewSessionComposerTextareaController } from "./composer.ts";
+import { NewSessionComposerTextareaController } from "./composer-controller.ts";
+import { renderNewSessionComposer } from "./composer.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
-import { renderNewSessionDraftComposer } from "./draft-composer.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];
 const textareaControllers: NewSessionComposerTextareaController[] = [];
 
-export function composerContext(snapshot: { client: GatewayBrowserClient | null }) {
+export function composerContext(
+  snapshot: Partial<ApplicationGatewaySnapshot> & { client: GatewayBrowserClient | null },
+) {
   return {
-    gateway: { snapshot },
+    gateway: { snapshot, connection: { gatewayUrl: "ws://gateway.test" }, connectionRevision: 0 },
     config: { current: {} },
     sessions: { state: { result: null } },
     theme: {
+      branding: resolveThemeBranding(undefined),
       settings: { lobsterPetVisits: true, lobsterPetSounds: false },
       refresh: vi.fn(),
     },
@@ -51,6 +56,7 @@ export function renderComposer(
     textareaController?: NewSessionComposerTextareaController;
   } = {},
 ) {
+  onTestFinished(installChatComposerPickerDismissal(document));
   const container = document.createElement("div");
   const attachmentDraft = new NewSessionAttachmentDraft(
     () => undefined,
@@ -67,7 +73,7 @@ export function renderComposer(
   let draftOwnerKey = overrides.draftOwnerKey ?? "draft:one";
   const renderCurrent = () =>
     render(
-      renderNewSessionDraftComposer({
+      renderNewSessionComposer({
         agentId,
         attachmentDraft,
         canSubmit: overrides.canSubmit ?? true,
@@ -127,7 +133,7 @@ export function renderComposer(
 
 export function resetComposerTestFixtures() {
   for (const attachmentDraft of attachmentDrafts) {
-    attachmentDraft.reset({ release: true });
+    attachmentDraft.reset();
   }
   attachmentDrafts.length = 0;
   for (const textareaController of textareaControllers) {

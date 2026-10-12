@@ -1,14 +1,17 @@
-// Control UI tests cover usage detail behavior through the rendered panel.
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
-import type { SessionLogEntry, TimeSeriesPoint, UsageSessionEntry } from "./types.ts";
-import { renderSessionDetailPanel } from "./view-details.ts";
+// Control UI tests cover usage detail behavior through the rendered panel.
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import type { SessionLogEntry, TimeSeriesPoint, UsageProps, UsageSessionEntry } from "./types.ts";
+import { SessionDetailPanel } from "./view-details.tsx";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  document.body.replaceChildren();
 });
 
 function point(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
@@ -71,64 +74,180 @@ function mount(
   errors: {
     timeSeries?: string;
     sessionLogs?: string;
-    sessionLogsData?: SessionLogEntry[];
+    sessionLogsData?: SessionLogEntry[] | null;
+    sessionLogsLoading?: boolean;
+    sessionLogsHasLoaded?: boolean;
+    logFilters?: UsageProps["detail"]["logFilters"];
     session?: UsageSessionEntry;
     stale?: boolean;
     contextWeight?: UsageSessionEntry["contextWeight"];
     contextExpanded?: boolean;
     onToggleContextExpanded?: () => void;
+    onCursorRangeChange?: (start: number | null, end: number | null) => void;
   } = {},
 ) {
-  const status = (error?: string): PanelRefreshStatus => ({
+  const status = (error?: string, hasLoaded = errors.stale ?? false): PanelRefreshStatus => ({
     error: error ?? null,
-    hasLoaded: errors.stale ?? false,
+    hasLoaded,
     stale: errors.stale ?? false,
     awaitingGateway: false,
   });
   const container = document.createElement("div");
-  render(
-    renderSessionDetailPanel(
-      { ...(errors.session ?? session()), contextWeight: errors.contextWeight },
-      { points },
-      false,
-      status(errors.timeSeries),
-      "per-turn",
-      vi.fn(),
-      breakdownMode,
-      vi.fn(),
-      start,
-      end,
-      vi.fn(),
-      filters.startDate ?? "",
-      filters.endDate ?? "",
-      filters.selectedDays ?? [],
-      filters.timeZone ?? "local",
-      errors.sessionLogsData ?? [],
-      false,
-      status(errors.sessionLogs),
-      false,
-      vi.fn(),
-      { roles: [], tools: [], hasTools: false, query: "" },
-      vi.fn(),
-      vi.fn(),
-      vi.fn(),
-      vi.fn(),
-      vi.fn(),
-      {
-        weight: errors.contextWeight,
-        loading: false,
-        status: status(),
-      },
-      errors.contextExpanded ?? false,
-      errors.onToggleContextExpanded ?? vi.fn(),
-      vi.fn(),
-    ),
-    container,
+  const [cursor, setCursor] = createSignal({ start, end });
+  const [contextExpanded, setContextExpanded] = createSignal(errors.contextExpanded ?? false);
+  mountSolid(
+    () =>
+      SessionDetailPanel({
+        session: { ...(errors.session ?? session()), contextWeight: errors.contextWeight },
+        detail: {
+          timeSeries: { points },
+          timeSeriesLoading: false,
+          timeSeriesStatus: status(errors.timeSeries),
+          timeSeriesMode: "per-turn",
+          timeSeriesBreakdownMode: breakdownMode,
+          get timeSeriesCursorStart() {
+            return cursor().start;
+          },
+          get timeSeriesCursorEnd() {
+            return cursor().end;
+          },
+          sessionLogs: errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
+          sessionLogsLoading: errors.sessionLogsLoading ?? false,
+          sessionLogsStatus: status(errors.sessionLogs, errors.sessionLogsHasLoaded),
+          sessionLogsExpanded: false,
+          logFilters: errors.logFilters ?? { roles: [], tools: [], hasTools: false, query: "" },
+          context: {
+            weight: errors.contextWeight,
+            loading: false,
+            status: status(),
+          },
+        },
+        callbacks: {
+          onTimeSeriesModeChange: vi.fn(),
+          onTimeSeriesBreakdownChange: vi.fn(),
+          onTimeSeriesCursorRangeChange: (nextStart, nextEnd) => {
+            setCursor({ start: nextStart, end: nextEnd });
+            errors.onCursorRangeChange?.(nextStart, nextEnd);
+          },
+          onToggleSessionLogsExpanded: vi.fn(),
+          onLogFiltersChange: vi.fn(),
+          onToggleContextExpanded: () => {
+            setContextExpanded((current) => !current);
+            errors.onToggleContextExpanded?.();
+          },
+          onSelectSession: vi.fn(),
+        },
+        range: {
+          startDate: filters.startDate ?? "",
+          endDate: filters.endDate ?? "",
+          selectedDays: filters.selectedDays ?? [],
+          timeZone: filters.timeZone ?? "local",
+        },
+        get contextExpanded() {
+          return contextExpanded();
+        },
+        onClose: vi.fn(),
+      }),
+    { container },
   );
+  flush();
   return container;
 }
 
 describe("renderSessionDetailPanel filtered usage", () => {
+  it.each<{
+    side: "left" | "right";
+    key: string;
+    start: number | null;
+    end: number | null;
+    expected: [number, number];
+  }>([
+    { side: "left", key: "ArrowRight", start: null, end: null, expected: [2000, 4000] },
+    { side: "right", key: "ArrowLeft", start: null, end: null, expected: [1000, 3000] },
+    { side: "left", key: "ArrowUp", start: 2000, end: 3000, expected: [3000, 3000] },
+    { side: "right", key: "ArrowDown", start: 2000, end: 3000, expected: [2000, 2000] },
+    { side: "left", key: "Home", start: 2000, end: 3000, expected: [1000, 3000] },
+    { side: "left", key: "End", start: 2000, end: 3000, expected: [3000, 3000] },
+    { side: "right", key: "Home", start: 2000, end: 3000, expected: [2000, 2000] },
+    { side: "right", key: "End", start: 2000, end: 3000, expected: [2000, 4000] },
+    { side: "left", key: "ArrowRight", start: 3000, end: 3000, expected: [3000, 3000] },
+    { side: "right", key: "ArrowLeft", start: 2000, end: 2000, expected: [2000, 2000] },
+    { side: "left", key: "ArrowRight", start: 3000, end: 2000, expected: [3000, 3000] },
+  ])(
+    "adjusts the $side range handle with $key from $start–$end",
+    ({ side, key, start, end, expected }) => {
+      const onCursorRangeChange = vi.fn();
+      const container = mount(
+        [1000, 2000, 3000, 4000].map((timestamp) => point({ timestamp })),
+        start,
+        end,
+        "total",
+        {},
+        { onCursorRangeChange },
+      );
+      const handle = container.querySelector<HTMLElement>(`.chart-handle-${side}`)!;
+      expect(handle.getAttribute("role")).toBe("slider");
+      expect(handle.tabIndex).toBe(0);
+      expect(handle.getAttribute("aria-label")).toBe(side === "left" ? "Range start" : "Range end");
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      handle.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(onCursorRangeChange).toHaveBeenCalledExactlyOnceWith(...expected);
+    },
+  );
+
+  it("retains the focused handle through consecutive cursor adjustments", () => {
+    const onCursorRangeChange = vi.fn();
+    const container = mount(
+      [1000, 2000, 3000, 4000].map((timestamp) => point({ timestamp })),
+      null,
+      null,
+      "total",
+      {},
+      { onCursorRangeChange },
+    );
+    document.body.append(container);
+    try {
+      const handle = container.querySelector<HTMLElement>(".chart-handle-left")!;
+      handle.focus();
+      for (const timestamp of [2000, 3000]) {
+        handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+        flush();
+        expect(container.querySelector(".chart-handle-left")).toBe(handle);
+        expect(document.activeElement).toBe(handle);
+        expect(handle.getAttribute("aria-valuenow")).toBe(String(timestamp));
+        expect(onCursorRangeChange).toHaveBeenLastCalledWith(timestamp, 4000);
+        expect(container.querySelector(".session-detail-stats")?.textContent).toContain(
+          `${timestamp === 2000 ? 300 : 200} tokens`,
+        );
+      }
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("retains manually expanded log tools across a cursor update", () => {
+    const container = mount(
+      [1000, 2000, 3000, 4000].map((timestamp) => point({ timestamp })),
+      null,
+      null,
+      "total",
+      {},
+      {
+        sessionLogsData: [{ timestamp: 3, role: "assistant", content: "[Tool: read]" }],
+        sessionLogsHasLoaded: true,
+      },
+    );
+    const tools = container.querySelector<HTMLDetailsElement>(".session-log-tools")!;
+    tools.open = true;
+    container
+      .querySelector(".chart-handle-left")
+      ?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    flush();
+    expect(container.querySelector(".session-log-tools")).toBe(tools);
+    expect(tools.open).toBe(true);
+  });
+
   it("formats timeline labels in the selected UTC time zone", () => {
     const timestamps = [
       Date.parse("2026-05-13T18:00:00.000Z"),
@@ -172,16 +291,16 @@ describe("renderSessionDetailPanel filtered usage", () => {
 
   it("filters detail points by the selected UTC day and keeps the final millisecond", () => {
     const localOffsetMs = 8 * 60 * 60 * 1000;
-    const localYear = vi
-      .spyOn(Date.prototype, "getFullYear")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
-      });
-    const localMonth = vi
-      .spyOn(Date.prototype, "getMonth")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCMonth();
-      });
+    const localYear = vi.spyOn(Date.prototype, "getFullYear").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
+    });
+    const localMonth = vi.spyOn(Date.prototype, "getMonth").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCMonth();
+    });
     const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
       return new Date(this.getTime() + localOffsetMs).getUTCDate();
     });
@@ -209,42 +328,70 @@ describe("renderSessionDetailPanel filtered usage", () => {
     }
   });
 
-  it("aggregates token, cost, type, message, and duration data inside the selected range", () => {
-    const container = mount(
-      [
-        point({
-          timestamp: 1000,
-          totalTokens: 100,
-          cost: 0.1,
-          input: 10,
-          output: 0,
-          cacheRead: 5,
-          cacheWrite: 2,
-        }),
-        point({
-          timestamp: 2000,
-          totalTokens: 200,
-          cost: 0.2,
-          input: 0,
-          output: 20,
-          cacheRead: 7,
-          cacheWrite: 3,
-        }),
-        point({ timestamp: 3000, totalTokens: 300, cost: 0.3 }),
+  it("aggregates selected tokens while counting actual loaded message roles", () => {
+    const start = Date.parse("2026-08-20T12:00:00Z");
+    const end = start + 1000;
+    const points = [
+      point({
+        timestamp: start,
+        totalTokens: 100,
+        cost: 0.1,
+        input: 10,
+        output: 0,
+        cacheRead: 5,
+        cacheWrite: 2,
+      }),
+      point({
+        timestamp: end,
+        totalTokens: 200,
+        cost: 0.2,
+        input: 0,
+        output: 20,
+        cacheRead: 7,
+        cacheWrite: 3,
+      }),
+      point({ timestamp: end + 1000, totalTokens: 300, cost: 0.3 }),
+    ];
+    const entry = session();
+    entry.usage.messageCounts = {
+      total: 10,
+      user: 5,
+      assistant: 5,
+      toolCalls: 0,
+      toolResults: 4,
+      errors: 2,
+    };
+    entry.usage.toolUsage = {
+      totalCalls: 7,
+      uniqueTools: 2,
+      tools: [
+        { name: "read", count: 4 },
+        { name: "exec", count: 3 },
       ],
-      1000,
-      2000,
-      "by-type",
-    );
+    };
+    const logs: SessionLogEntry[] = [
+      { timestamp: start - 1000, role: "user", content: "Earlier request" },
+      { timestamp: 0, role: "user", content: "Undated request" },
+      { timestamp: start, role: "assistant", content: "[Tool: read]" },
+      { timestamp: start + 250, role: "toolResult", content: "First result" },
+      { timestamp: start + 500, role: "assistant", content: "Unmetered update" },
+      { timestamp: start + 750, role: "tool", content: "Second result" },
+      { timestamp: end, role: "assistant", content: "Finished" },
+    ];
+    const data = { session: entry, sessionLogsData: logs, sessionLogsHasLoaded: true };
+    const container = mount(points, start, end, "by-type", {}, data);
 
     expect(container.querySelector(".session-detail-stats")?.textContent).toContain("300");
     expect(container.querySelector(".session-detail-stats")?.textContent).toContain("$0.30");
     expect(container.querySelector(".session-detail-indicator")).not.toBeNull();
     const summary = [...container.querySelectorAll(".session-summary-card")];
-    expect(summary[0]?.textContent).toContain("2");
+    expect(summary[0]?.querySelector(".session-summary-value")?.textContent).toBe("3");
     const messageSummary = summary[0]?.textContent?.replaceAll(/\s+/g, " ");
-    expect(messageSummary).toContain("1 user");
-    expect(messageSummary).toContain("1 assistant");
+    expect(messageSummary).toContain("0 user");
+    expect(messageSummary).toContain("3 assistant");
+    expect(messageSummary).toContain("Loaded conversation · selected interval");
+    expect(summary[2]?.querySelector(".session-summary-value")?.textContent).toBe("—");
+    expect(summary[2]?.textContent?.replaceAll(/\s+/g, " ")).toContain("— tool results");
     expect(summary[3]?.textContent).toContain("1s");
     expect(
       [...container.querySelectorAll(".timeseries-breakdown .legend-item")].map((item) =>
@@ -254,7 +401,133 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(
       container.querySelector(".timeseries-breakdown .cost-breakdown-total")?.textContent,
     ).toContain("47");
+
+    const full = mount(points, null, null, "total", {}, data);
+    const fullSummary = [...full.querySelectorAll(".session-summary-card")];
+    expect(fullSummary[0]?.querySelector(".session-summary-value")?.textContent).toBe("10");
+    expect(fullSummary[0]?.textContent?.replaceAll(/\s+/g, " ")).toContain("5 user · 5 assistant");
+    expect(fullSummary[0]?.textContent).not.toContain("Loaded conversation");
+    expect(fullSummary[1]?.querySelector(".session-summary-value")?.textContent).toBe("7");
+    expect(fullSummary[1]?.textContent?.replaceAll(/\s+/g, " ")).toContain("2 tools used");
+    expect(
+      [...full.querySelectorAll(".usage-list-item")].map((item) => [
+        item.firstElementChild?.textContent,
+        item.querySelector(".usage-list-value > span")?.textContent,
+      ]),
+    ).toEqual([
+      ["read", "4"],
+      ["exec", "3"],
+    ]);
+    expect(fullSummary[2]?.querySelector(".session-summary-value")?.textContent).toBe("2");
+    expect(fullSummary[2]?.textContent?.replaceAll(/\s+/g, " ")).toContain("4 tool results");
   });
+
+  it.each<{
+    name: string;
+    logs: SessionLogEntry[] | null;
+    hasLoaded: boolean;
+    loading?: boolean;
+    error?: string;
+  }>([
+    { name: "initial loading", logs: null, hasLoaded: false, loading: true },
+    { name: "initial failure", logs: null, hasLoaded: false, error: "logs unavailable" },
+    { name: "empty loaded conversation", logs: [], hasLoaded: true },
+    {
+      name: "undated loaded messages",
+      logs: [
+        { timestamp: 0, role: "user", content: "Unknown time" },
+        { timestamp: 0, role: "assistant", content: "[Tool: read]" },
+      ],
+      hasLoaded: true,
+    },
+    {
+      name: "interval outside loaded history",
+      logs: [
+        { timestamp: Date.parse("2026-08-21T12:00:00Z"), role: "assistant", content: "Later" },
+      ],
+      hasLoaded: true,
+    },
+  ])(
+    "keeps interval message and tool counts unavailable for $name",
+    ({ logs, hasLoaded, loading, error }) => {
+      const start = Date.parse("2026-08-20T12:00:00Z");
+      const entry = session();
+      entry.usage.toolUsage = {
+        totalCalls: 7,
+        uniqueTools: 2,
+        tools: [
+          { name: "read", count: 4 },
+          { name: "exec", count: 3 },
+        ],
+      };
+      const container = mount(
+        [point({ timestamp: start }), point({ timestamp: start + 1000 })],
+        start,
+        start + 1000,
+        "total",
+        {},
+        {
+          session: entry,
+          sessionLogsData: logs,
+          sessionLogsHasLoaded: hasLoaded,
+          sessionLogsLoading: loading,
+          sessionLogs: error,
+        },
+      );
+      const messages = container.querySelector(".session-summary-card");
+      expect(messages?.querySelector(".session-summary-value")?.textContent).toBe("—");
+      expect(messages?.textContent).toContain("Loaded conversation · selected interval");
+      expect(messages?.textContent).not.toContain("0 user");
+      const tools = container.querySelectorAll(".session-summary-card")[1];
+      expect(tools?.querySelector(".session-summary-value")?.textContent).toBe("—");
+      expect(tools?.textContent?.replaceAll(/\s+/g, " ")).toContain("— tools used");
+      expect(
+        [...container.querySelectorAll(".usage-list-item")].map((item) => [
+          item.firstElementChild?.textContent,
+          item.querySelector(".usage-list-value > span")?.textContent,
+        ]),
+      ).toEqual([
+        ["read", "—"],
+        ["exec", "—"],
+      ]);
+    },
+  );
+
+  it.each(["refreshing", "stale"] as const)(
+    "keeps %s loaded counts independent of conversation search and role filters",
+    (state) => {
+      const start = Date.parse("2026-08-20T12:00:00Z");
+      const container = mount(
+        [point({ timestamp: start }), point({ timestamp: start + 1000 })],
+        start,
+        start + 1000,
+        "total",
+        {},
+        {
+          sessionLogsData: [
+            { timestamp: start, role: "user", content: "Question" },
+            { timestamp: start + 1000, role: "assistant", content: "Answer" },
+          ],
+          sessionLogsHasLoaded: true,
+          sessionLogsLoading: state === "refreshing",
+          sessionLogs: state === "stale" ? "refresh failed" : undefined,
+          stale: state === "stale",
+          logFilters: { roles: ["tool"], tools: [], hasTools: false, query: "not present" },
+        },
+      );
+      const messages = container.querySelector(".session-summary-card");
+      expect(messages?.querySelector(".session-summary-value")?.textContent).toBe("2");
+      expect(messages?.textContent?.replaceAll(/\s+/g, " ")).toContain("1 user · 1 assistant");
+      expect(messages?.textContent).toContain("Loaded conversation · selected interval");
+      expect(container.querySelectorAll(".session-log-entry")).toHaveLength(0);
+      expect(container.querySelectorAll(".session-summary-value")[1]?.textContent).toBe("0");
+      if (state === "stale") {
+        expect(container.querySelector(".usage-detail-error--conversation")?.textContent).toContain(
+          "Showing stale data",
+        );
+      }
+    },
+  );
 
   it.each(["tool", "toolResult"] as const)(
     "counts repeated assistant calls without counting %s results in the selected range",
@@ -287,9 +560,10 @@ describe("renderSessionDetailPanel filtered usage", () => {
         },
         { timestamp: end, role: "assistant", content: "Both files reviewed." },
         { timestamp: end + 1000, role: "assistant", content: "[Tool: exec]" },
+        { timestamp: 0, role: "assistant", content: "[Tool: exec]" },
       ];
       const points = [start, end, end + 1000].map((timestamp) => point({ timestamp }));
-      const data = { session: entry, sessionLogsData: logs };
+      const data = { session: entry, sessionLogsData: logs, sessionLogsHasLoaded: true };
       const selected = mount(points, start, end, "total", {}, data);
       expect(selected.querySelectorAll(".session-summary-value")[1]?.textContent).toBe("2");
       expect(selected.querySelectorAll(".session-summary-meta")[1]?.textContent?.trim()).toBe(
@@ -307,6 +581,11 @@ describe("renderSessionDetailPanel filtered usage", () => {
       expect(selected.querySelector(".session-log-tools-pill")?.textContent?.trim()).toBe(
         "read × 2",
       );
+      expect(
+        [...selected.querySelectorAll(".session-log-tools-pill")].map((pill) =>
+          pill.textContent?.trim(),
+        ),
+      ).toContain("exec × 1");
     },
   );
 
@@ -494,15 +773,19 @@ describe("renderSessionDetailPanel filtered usage", () => {
     ]);
     expect(fileEntries[2]?.querySelector(".muted")?.textContent).toBe("unknown");
     expect(cards[0]?.querySelector(".context-breakdown-more")?.textContent).toContain("1 more");
-    container.querySelector<HTMLButtonElement>(".context-breakdown-header button")?.click();
+    document.body.append(container);
+    const toggle = container.querySelector<HTMLButtonElement>(".context-breakdown-header button")!;
+    toggle.focus();
+    toggle.click();
+    flush();
     expect(onToggleContextExpanded).toHaveBeenCalledOnce();
-
-    const expanded = mount([], null, null, "total", {}, { contextWeight, contextExpanded: true });
+    expect(container.querySelector(".context-breakdown-header button")).toBe(toggle);
+    expect(document.activeElement).toBe(toggle);
     expect(
-      expanded
+      container
         .querySelectorAll(".context-breakdown-card")[0]
         ?.querySelectorAll(".context-breakdown-item"),
     ).toHaveLength(5);
-    expect(expanded.querySelector(".context-breakdown-more")).toBeNull();
+    expect(container.querySelector(".context-breakdown-more")).toBeNull();
   });
 });

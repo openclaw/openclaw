@@ -8,13 +8,19 @@ import {
   DEFAULT_VIDEO_GENERATION_TIMEOUT_MS,
   runDashscopeVideoGenerationTask,
 } from "../video-generation/dashscope-compatible.js";
-import type { VideoGenerationProvider, VideoGenerationResult } from "../video-generation/types.js";
+import type {
+  VideoGenerationProvider,
+  VideoGenerationProviderConfiguredContext,
+  VideoGenerationResult,
+} from "../video-generation/types.js";
 import { resolveApiKeyForProvider } from "./provider-auth-runtime.js";
-import { isProviderApiKeyConfigured } from "./provider-auth.js";
+import { isProviderApiKeyConfigured, isProviderApiKeyConfiguredAsync } from "./provider-auth.js";
 import {
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "./provider-http.js";
+
+export { selectSupportedVideoDuration } from "../video-generation/duration-support.js";
 
 export type {
   GeneratedVideoAsset,
@@ -25,10 +31,7 @@ export type {
   VideoGenerationModelCapabilitiesContext,
   VideoGenerationRequest,
   VideoGenerationResult,
-  VideoGenerationMode,
-  VideoGenerationProviderOptionType,
   VideoGenerationModeCapabilities,
-  VideoGenerationTransformCapabilities,
   VideoGenerationProviderCapabilities,
   VideoGenerationCatalogModelEntry,
   VideoGenerationProvider,
@@ -58,6 +61,20 @@ export function buildDashscopeVideoGenerationProvider(
     ((configuredBaseUrl) => configuredBaseUrl?.trim() || options.defaultBaseUrl);
   const resolveAigcBaseUrl =
     options.resolveAigcBaseUrl ?? ((baseUrl) => baseUrl.replace(/\/+$/u, ""));
+  const resolveAuthConfig = (
+    ctx: VideoGenerationProviderConfiguredContext,
+  ): Parameters<typeof isProviderApiKeyConfigured>[0] | undefined => {
+    const baseUrl = ctx.cfg?.models?.providers?.[options.providerId]?.baseUrl;
+    if (options.credentialPolicy?.acceptsBaseUrl?.(baseUrl) === false) {
+      return undefined;
+    }
+    return {
+      provider: options.providerId,
+      ...ctx,
+      profileTypes: options.credentialPolicy ? ["api_key"] : undefined,
+      acceptsApiKey: options.credentialPolicy?.acceptsApiKey,
+    };
+  };
 
   return {
     id: options.providerId,
@@ -68,16 +85,12 @@ export function buildDashscopeVideoGenerationProvider(
     resolveModelCapabilities: ({ model }) =>
       DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[model]?.capabilities,
     isConfigured: (ctx) => {
-      const baseUrl = ctx.cfg?.models?.providers?.[options.providerId]?.baseUrl;
-      if (options.credentialPolicy?.acceptsBaseUrl?.(baseUrl) === false) {
-        return false;
-      }
-      return isProviderApiKeyConfigured({
-        provider: options.providerId,
-        ...ctx,
-        profileTypes: options.credentialPolicy ? ["api_key"] : undefined,
-        acceptsApiKey: options.credentialPolicy?.acceptsApiKey,
-      });
+      const authConfig = resolveAuthConfig(ctx);
+      return authConfig ? isProviderApiKeyConfigured(authConfig) : false;
+    },
+    isConfiguredAsync: async (ctx) => {
+      const authConfig = resolveAuthConfig(ctx);
+      return authConfig ? isProviderApiKeyConfiguredAsync(authConfig) : false;
     },
     capabilities: DASHSCOPE_WAN_VIDEO_CAPABILITIES,
     async generateVideo(req): Promise<VideoGenerationResult> {
@@ -147,5 +160,3 @@ export {
   resolveVideoGenerationReferenceUrls,
   runDashscopeVideoGenerationTask,
 } from "../video-generation/dashscope-compatible.js";
-
-export type { DashscopeVideoGenerationResponse } from "../video-generation/dashscope-compatible.js";

@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  enableOpenClawCompileCache,
+  resolveOpenClawCompileCacheDirectory,
+  resolveOpenClawCompileCacheRespawnEnv,
+} from "./node-compile-cache.mjs";
+import { isNodeHostLauncherChild, runNodeHostLauncher } from "./node-host-launcher.mjs";
 import {
   consumeLauncherRootOptionToken,
   isForegroundGmailRunInvocation,
@@ -47,9 +53,10 @@ const ensureSupportedRuntimeVersion = async () => {
       "openclaw: this Bun runtime is unsupported because it does not provide node:sqlite.\n" +
         `Use Node.js ${SUPPORTED_NODE_RANGE}; Bun remains supported for installs and package scripts.\n`,
     );
-    return process.exit(1);
+    process.exitCode = 1;
+    return true;
   }
-  const probe = detectCurrentSqliteCapabilities();
+  const probe = await detectCurrentSqliteCapabilities();
   const failure = nodeRuntimeFailure(process.versions.node, probe);
   if (!failure) {
     const note = nodeRuntimeNote(process.versions.node, probe);
@@ -61,9 +68,9 @@ const ensureSupportedRuntimeVersion = async () => {
   const unsupportedCommand = classifyUnsupportedNodeCommand(process.argv);
   const canRunDiagnostics = canRunOpenClawNodeDiagnostics(process.versions.node, probe.available);
   const diagnosticExemption = unsupportedCommand === "diagnostic" && canRunDiagnostics;
-  await recoverNodeRuntime({
-    allowInstall: !diagnosticExemption,
-  });
+  if (await recoverNodeRuntime({ allowInstall: !diagnosticExemption })) {
+    return true;
+  }
   if (!diagnosticExemption) {
     process.stderr.write(`openclaw: ${failure}\n`);
   }
@@ -81,46 +88,28 @@ const ensureSupportedRuntimeVersion = async () => {
     process.env.OPENCLAW_NODE_UPDATE_RESPAWNED = "1";
     return false;
   }
-  return process.exit(1);
+  process.exitCode = 1;
+  return true;
 };
 
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
 const isNodeCompileCacheRequested = () =>
   Boolean(process.env.NODE_COMPILE_CACHE) && !isNodeCompileCacheDisabled();
-const sanitizeCompileCachePathSegment = (value) => {
-  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
-  return normalized.length > 0 ? normalized : "unknown";
-};
-const readPackageVersion = () => {
-  try {
-    const parsed = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
-    if (typeof parsed?.version === "string" && parsed.version.trim().length > 0) {
-      return parsed.version;
+const resolveCompileCacheRespawnLauncher = () => {
+  const moduleLauncher = fileURLToPath(import.meta.url);
+  const invokedLauncher = process.argv[1];
+  if (invokedLauncher) {
+    try {
+      // npm/pnpm's lexical install path matters only when it identifies this module.
+      if (realpathSync(invokedLauncher) === realpathSync(moduleLauncher)) {
+        return invokedLauncher;
+      }
+    } catch {
+      // An unavailable entry path cannot identify this launcher.
     }
-  } catch {
-    // Fall through to an install-metadata-only cache key.
   }
-  return "unknown";
-};
-const resolvePackagedCompileCacheDirectory = () => {
-  const packageJsonUrl = new URL("./package.json", import.meta.url);
-  const version = sanitizeCompileCachePathSegment(readPackageVersion());
-  let installMarker = "no-package-json";
-  try {
-    const stat = statSync(packageJsonUrl);
-    installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
-  } catch {
-    // Package archives should always have package.json, but keep startup best-effort.
-  }
-  const baseDirectory = isNodeCompileCacheRequested()
-    ? process.env.NODE_COMPILE_CACHE
-    : path.join(os.tmpdir(), "node-compile-cache");
-  return path.join(
-    baseDirectory,
-    "openclaw",
-    version,
-    sanitizeCompileCachePathSegment(installMarker),
-  );
+  // Public cli-entry imports can belong to another application or have no argv[1].
+  return moduleLauncher;
 };
 
 const respawnWithoutCompileCacheIfNeeded = () => {
@@ -141,35 +130,19 @@ const respawnWithoutCompileCacheIfNeeded = () => {
   delete env.NODE_COMPILE_CACHE;
   return runRespawnedChild(
     process.execPath,
-    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
     env,
   );
 };
 
-const respawnWithPackagedCompileCacheIfNeeded = () => {
-  if (isSourceCheckoutLauncher() || isNodeCompileCacheDisabled()) {
+const respawnWithPackagedCompileCacheIfNeeded = (directory) => {
+  const env = resolveOpenClawCompileCacheRespawnEnv({ directory });
+  if (!env) {
     return false;
   }
-  if (process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1") {
-    return false;
-  }
-  const currentDirectory = module.getCompileCacheDir?.();
-  if (!currentDirectory) {
-    return false;
-  }
-  const desiredDirectory = resolvePackagedCompileCacheDirectory();
-  if (path.resolve(currentDirectory) === path.resolve(desiredDirectory)) {
-    return false;
-  }
-  const env = {
-    ...process.env,
-    NODE_COMPILE_CACHE: desiredDirectory,
-    OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
-  };
   return runRespawnedChild(
     process.execPath,
-    // pnpm's lexical hash link owns the install; its realpath is only shared package content.
-    [...process.execArgv, process.argv[1], ...process.argv.slice(2)],
+    [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
     env,
   );
 };
@@ -282,7 +255,6 @@ const LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP = new Set([
   "models",
   "plugins",
   "sessions",
-  "tasks",
 ]);
 
 const hasLauncherContainerTarget = (argv) => {
@@ -622,77 +594,125 @@ const tryOutputPrecomputedCommandHelp = () => {
   return true;
 };
 
-// Resolve Node before loading pending package lifecycle code or any built runtime modules.
-const waitingForNodeUpdateRespawn = await ensureSupportedRuntimeVersion();
-const currentNodeRuntimeFailure = process.versions.bun
-  ? null
-  : nodeRuntimeFailure(process.versions.node, detectCurrentSqliteCapabilities());
+// Native launchers pin state/config through their environment and invoke this exact
+// command. Enter the installed protocol owner before plugin discovery, dotenv,
+// package repair, or CLI diagnostics can inspect/migrate Gateway configuration.
+// No general CLI command receives a config exemption; the native owner still
+// admits the frame, manifest, exact origin and Windows binding/ACLs before keys.
+const isBrowserNativeHostInvocation =
+  process.argv[2] === "browser" &&
+  process.argv[3] === "extension" &&
+  process.argv[4] === "native-host";
 
-if (!waitingForNodeUpdateRespawn) {
-  // Diagnostics must not replay package lifecycle scripts under an unsupported Node.
-  if (
-    !currentNodeRuntimeFailure &&
-    !isSourceCheckoutLauncher() &&
-    (existsSync(new URL("./.openclaw-lifecycle-pending", import.meta.url)) ||
-      existsSync(new URL("./dist/openclaw-install-guard", import.meta.url)))
-  ) {
-    try {
-      const { completePendingPackageLifecycle } = await import("./dist/infra/package-lifecycle.js");
-      await completePendingPackageLifecycle({
-        packageRoot: fileURLToPath(new URL("./", import.meta.url)),
-      });
-    } catch (error) {
-      process.stderr.write(
-        `openclaw: package lifecycle is incomplete. Reinstall with package scripts enabled, then retry. ${error instanceof Error ? error.message : String(error)}\n`,
-      );
-      process.exit(1);
-    }
-  }
-  if (tryOutputLauncherVersion(process.argv)) {
-    if (currentNodeRuntimeFailure) {
-      process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
-    }
-    process.exit(0);
-  }
-}
-
-// Codex owns the relay timeout by PID. Keep the launcher as that exact process
-// so a timeout cannot strand a compile-cache respawn child.
-const waitingForCompileCacheRespawn =
-  waitingForNodeUpdateRespawn ||
-  (!isForegroundGmailRunInvocation(process.argv) &&
-    !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
-    (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded()));
-
-// https://nodejs.org/api/module.html#module-compile-cache
-if (
-  !waitingForCompileCacheRespawn &&
-  module.enableCompileCache &&
-  !isNodeCompileCacheDisabled() &&
-  !isSourceCheckoutLauncher()
-) {
+if (isBrowserNativeHostInvocation) {
   try {
-    module.enableCompileCache(resolvePackagedCompileCacheDirectory());
+    // A browser-owned pipe must never launch an interactive runtime installer.
+    const supported = process.versions.bun
+      ? Boolean(process.getBuiltinModule?.("node:sqlite"))
+      : !nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities());
+    if (!supported) {
+      process.exitCode = 1;
+    } else {
+      await installProcessWarningFilter();
+      // Fixed package artifact, not a path selected by argv, config or plugin discovery.
+      // Its async entry owns stdin and drains the single response before process exit.
+      await import("./dist/extensions/browser/native-host-entry.js");
+    }
   } catch {
-    // Ignore errors
+    // Fail closed without falling through to config loading or text on protocol stdout.
+    process.exitCode = 1;
   }
+} else {
+  await runLauncher();
 }
 
-if (!waitingForCompileCacheRespawn) {
-  if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
-    if (currentNodeRuntimeFailure) {
-      process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
+async function runLauncher() {
+  // Resolve Node before loading pending package lifecycle code or any built runtime modules.
+  const waitingForNodeUpdateRespawn = await ensureSupportedRuntimeVersion();
+  if (waitingForNodeUpdateRespawn) {
+    return;
+  }
+  if (
+    !waitingForNodeUpdateRespawn &&
+    (await runNodeHostLauncher({
+      entryPath: fileURLToPath(import.meta.url),
+      packageRoot: fileURLToPath(new URL("./", import.meta.url)),
+    }))
+  ) {
+    return;
+  }
+  const currentNodeRuntimeFailure = process.versions.bun
+    ? null
+    : nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities());
+
+  if (!waitingForNodeUpdateRespawn) {
+    // Diagnostics must not replay package lifecycle scripts under an unsupported Node.
+    if (
+      !currentNodeRuntimeFailure &&
+      !isSourceCheckoutLauncher() &&
+      (existsSync(new URL("./.openclaw-lifecycle-pending", import.meta.url)) ||
+        existsSync(new URL("./dist/openclaw-install-guard", import.meta.url)))
+    ) {
+      try {
+        const { completePendingPackageLifecycle } =
+          await import("./dist/infra/package-lifecycle.js");
+        await completePendingPackageLifecycle({
+          packageRoot: fileURLToPath(new URL("./", import.meta.url)),
+        });
+      } catch (error) {
+        process.stderr.write(
+          `openclaw: package lifecycle is incomplete. Reinstall with package scripts enabled, then retry. ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
     }
-  } else if (!isHelpFastPathDisabled() && tryOutputPrecomputedCommandHelp()) {
-    // OK
-  } else {
-    await installProcessWarningFilter();
-    if (await tryImport("./dist/entry.js")) {
-      // OK
-    } else if (await tryImport("./dist/entry.mjs")) {
+    if (tryOutputLauncherVersion(process.argv)) {
+      if (currentNodeRuntimeFailure) {
+        process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
+      }
+      return;
+    }
+  }
+
+  const compileCacheDirectory =
+    !waitingForNodeUpdateRespawn && !isSourceCheckoutLauncher()
+      ? resolveOpenClawCompileCacheDirectory({
+          installRoot: fileURLToPath(new URL(".", import.meta.url)),
+        })
+      : undefined;
+
+  // Codex owns the relay timeout by PID. Keep the launcher as that exact process
+  // so a timeout cannot strand a compile-cache respawn child.
+  const waitingForCompileCacheRespawn =
+    waitingForNodeUpdateRespawn ||
+    (!isNodeHostLauncherChild() &&
+      !isForegroundGmailRunInvocation(process.argv) &&
+      !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
+      ((await respawnWithoutCompileCacheIfNeeded()) ||
+        (await respawnWithPackagedCompileCacheIfNeeded(compileCacheDirectory))));
+
+  // https://nodejs.org/api/module.html#module-compile-cache
+  if (!waitingForCompileCacheRespawn && module.enableCompileCache) {
+    enableOpenClawCompileCache({ directory: compileCacheDirectory });
+  }
+
+  if (!waitingForCompileCacheRespawn) {
+    if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
+      if (currentNodeRuntimeFailure) {
+        process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
+      }
+    } else if (!isHelpFastPathDisabled() && tryOutputPrecomputedCommandHelp()) {
       // OK
     } else {
-      throw new Error(await buildMissingEntryErrorMessage());
+      await installProcessWarningFilter();
+      if (await tryImport("./dist/entry.js")) {
+        // OK
+      } else if (await tryImport("./dist/entry.mjs")) {
+        // OK
+      } else {
+        throw new Error(await buildMissingEntryErrorMessage());
+      }
     }
   }
 }

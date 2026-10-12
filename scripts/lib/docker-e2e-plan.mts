@@ -8,9 +8,7 @@ import { resolve } from "node:path";
 import { resolveUpgradeSurvivorConfigStepsForBaseline } from "../e2e/lib/upgrade-survivor/config-recipe.mts";
 import {
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
-  DEFAULT_LIVE_RETRIES,
   allReleasePathLanes,
-  fleetCacheLane,
   mainLanes,
   normalizeReleaseProfile,
   publicInstallerLanes,
@@ -22,17 +20,27 @@ import {
   type DockerE2eReleaseProfileInput,
 } from "./docker-e2e-scenarios.mts";
 import officialExternalChannelCatalog from "./official-external-channel-catalog.json" with { type: "json" };
+import officialExternalProviderCatalog from "./official-external-provider-catalog.json" with { type: "json" };
+import { isRecord } from "./record-shared.mjs";
 import {
+  UPDATE_FIRST_HOP_COMPAT_LANE,
+  UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
+  isUpdateFirstHopCompatLane,
+  listUpdateFirstHopCompatLaneNames,
+  updateFirstHopCompatLaneName,
+} from "./update-first-hop-lanes.mjs";
+import {
+  assertSupportedUpgradeSurvivorBaselineSpec,
+  isPackageRecoveryScenario,
+  packageRecoveryBaselines,
   isTrustedHarnessOwnedUpgradeSurvivorScenario,
-  normalizeUpgradeSurvivorBaselineSpec,
   parseUpgradeSurvivorBaselineSpecs,
   parseUpgradeSurvivorScenarios,
+  readUpgradeSurvivorScenarioCatalog,
   supportsUpgradeSurvivorScenarioAtBaseline,
 } from "./upgrade-survivor-policy.mjs";
 
-export { DEFAULT_LIVE_RETRIES };
 export { normalizeReleaseProfile };
-export { normalizeUpgradeSurvivorBaselineSpec };
 
 export const DEFAULT_E2E_BARE_IMAGE = "openclaw-docker-e2e-bare:local";
 export const DEFAULT_E2E_FUNCTIONAL_IMAGE = "openclaw-docker-e2e-functional:local";
@@ -56,7 +64,6 @@ export const RELEASE_PATH_PROFILE = "release-path";
 
 type LiveMode = "all" | "only" | "skip";
 type DockerProfile = typeof DEFAULT_PROFILE | typeof RELEASE_PATH_PROFILE;
-type UpgradeSurvivorExpansion = { lanes: DockerE2eLane[]; omittedLaneNames: string[] };
 type InertTargetContract = {
   mode: "inert";
   source: { readText: (relativePath: string) => string | null };
@@ -69,6 +76,8 @@ const UPDATE_FIRST_HOP_COMPAT_CATALOGS = new Set([
   // Node-runner aliases for newer releases moved to the recorded package inventory.
   "0a12e16a5b6a2d723472cff04a05b356751da92a54c7b9a19cbb539c94190bb6",
   "2cb55271610aae5578175cf1587574231e9a72f9420a544d73370a8d3b8531ec",
+  // Current outputs retire pre-June memory teardown stubs.
+  "dfa812490cac8f09a274d698eb54c7c4a4b8474f3e264fbd38008af70b013cb3",
 ]);
 const IOS_WATCH_RELAY_COMMANDS = ['"watch.status"', '"watch.notify"'];
 type DockerE2ePlanOptions = {
@@ -76,7 +85,6 @@ type DockerE2ePlanOptions = {
   frozenTarget?: InertTargetContract;
   includeOpenWebUI: boolean;
   liveMode: LiveMode;
-  liveRetries: number;
   orderLanes: (lanes: DockerE2eLane[], timingStore?: unknown) => DockerE2eLane[];
   planReleaseAll: boolean;
   profile: string;
@@ -94,6 +102,7 @@ export function parseLaneSelection(raw: string | undefined): string[] {
   }
   const laneAliases = new Map([
     ["install-e2e", ["install-e2e-openai", "install-e2e-anthropic"]],
+    [UPDATE_FIRST_HOP_COMPAT_LANE, listUpdateFirstHopCompatLaneNames()],
     [
       "bundled-plugin-install-uninstall",
       Array.from(
@@ -131,8 +140,24 @@ function sanitizeLaneNameSuffix(value: string): string {
 const UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES = ["@openclaw/codex"];
 
 // Pre-protocol catalogs are content-addressed. Unknown legacy blocks fail
-// closed instead of requiring a dependency or reimplementing a JavaScript parser.
+// closed; current catalogs declare capabilities in JSON without executing target code.
 const LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS = new Map([
+  [
+    "f2549a057028829ff5286db89d357e5b3d4ec1f5cdb3ca07672b7e34a739b60a",
+    "base msteams-polls abandoned-update legacy-operator-state workshop-doctor-recovery mobile-pairing-reconnect acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs missing-configured-plugin-migration custom-plugin-siblings projects-doctor taskflow-restoration stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume recovery-cleanup auth-profile-v2026-7-2-beta-5 watchos-direct-node",
+  ],
+  [
+    "b0166f96bf3839d53ce94721b563fcf2b6604ddef04028cd8d9c7769275566c7",
+    "base msteams-polls abandoned-update legacy-operator-state mobile-pairing-reconnect acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs missing-configured-plugin-migration custom-plugin-siblings projects-doctor taskflow-restoration stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume recovery-cleanup auth-profile-v2026-7-2-beta-5 watchos-direct-node",
+  ],
+  [
+    "7d9d7520c2c34d51fff78e542a7f539b77080bfd04648438e95aec4af3fe362e",
+    "base msteams-polls abandoned-update legacy-operator-state workshop-doctor-recovery mobile-pairing-reconnect acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs missing-configured-plugin-migration custom-plugin-siblings stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume recovery-cleanup auth-profile-v2026-7-2-beta-5 watchos-direct-node",
+  ],
+  [
+    "5e8821538f3722fdf0dc3b3917ae639853f305e4c7a9b84febb8905601a9b5c7",
+    "base msteams-polls abandoned-update legacy-operator-state mobile-pairing-reconnect acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs missing-configured-plugin-migration custom-plugin-siblings stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume recovery-cleanup auth-profile-v2026-7-2-beta-5 watchos-direct-node",
+  ],
   [
     "a4246e4fc65d037c173b38976f115faea015e476211f845bf328937805d81193",
     "base msteams-polls abandoned-update legacy-operator-state mobile-pairing-reconnect acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs custom-plugin-siblings stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume recovery-cleanup auth-profile-v2026-7-2-beta-5 watchos-direct-node",
@@ -226,13 +251,32 @@ function readLegacyFrozenScenarioContract(source: string): string[] | undefined 
   return LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS.get(digest)?.split(" ");
 }
 
+function readInertFrozenScenarioContract(
+  source: string,
+  targetRoot: string | undefined,
+  frozenTarget?: InertTargetContract,
+): string[] | undefined {
+  const text = readTargetMetadata(
+    targetRoot,
+    "scripts/lib/upgrade-survivor-scenarios.json",
+    frozenTarget,
+  );
+  if (text === null) {
+    return readLegacyFrozenScenarioContract(source);
+  }
+  return readUpgradeSurvivorScenarioCatalog(text);
+}
+
 function readFrozenScenarioContract(
   assertionsFile: string,
   targetRoot: string,
   allowExecutableContract: boolean,
 ): string[] {
   if (!allowExecutableContract) {
-    const inertScenarios = readLegacyFrozenScenarioContract(readFileSync(assertionsFile, "utf8"));
+    const inertScenarios = readInertFrozenScenarioContract(
+      readFileSync(assertionsFile, "utf8"),
+      targetRoot,
+    );
     if (inertScenarios) {
       return inertScenarios;
     }
@@ -250,8 +294,9 @@ function readFrozenScenarioContract(
   if (result.status !== 0) {
     const errorLines = result.stderr.trim().split("\n");
     if (result.stderr.includes("unknown upgrade-survivor assertion command: list-scenarios")) {
-      const legacyScenarios = readLegacyFrozenScenarioContract(
+      const legacyScenarios = readInertFrozenScenarioContract(
         readFileSync(assertionsFile, "utf8"),
+        targetRoot,
       );
       if (legacyScenarios) {
         return legacyScenarios;
@@ -306,7 +351,10 @@ function filterUpgradeSurvivorScenariosForTarget(
   const relativePath = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
   if (frozenTarget) {
     const source = frozenTarget.source.readText(relativePath);
-    const catalog = source === null ? undefined : readLegacyFrozenScenarioContract(source);
+    const catalog =
+      source === null
+        ? undefined
+        : readInertFrozenScenarioContract(source, targetRoot, frozenTarget);
     if (!catalog) {
       throw new Error(`unrecognized required inert scenario catalog: ${relativePath}`);
     }
@@ -344,11 +392,38 @@ function readTargetMetadata(
 }
 
 function supportsUpdateFirstHopCompatForTarget(
+  laneName: string,
   targetRoot: string | undefined,
   frozenTarget?: InertTargetContract,
 ): boolean {
   if (!targetRoot && !frozenTarget) {
+    // Untargeted planning runs this checkout's matching lane and package; this lane
+    // entered the catalog with candidate admission protocol 1.
     return true;
+  }
+  if (laneName === UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE) {
+    // Release targets are full pinned checkouts. A missing manifest is an incomplete
+    // target contract, so never infer candidate admission from sibling metadata.
+    const manifest = readTargetMetadata(targetRoot, "package.json", frozenTarget);
+    return (
+      manifest !== null &&
+      (JSON.parse(manifest) as { openclaw?: { updateAdmissionProtocol?: number } }).openclaw
+        ?.updateAdmissionProtocol === 1
+    );
+  }
+  // A target that records its own inventory only proves the hops it lists.
+  const inventory = readTargetMetadata(
+    targetRoot,
+    "scripts/lib/update-compat-inventory.json",
+    frozenTarget,
+  );
+  if (inventory !== null) {
+    const releases = (JSON.parse(inventory).releases as { version: string }[]).map((release) =>
+      updateFirstHopCompatLaneName(release.version),
+    );
+    if (!releases.includes(laneName)) {
+      return false;
+    }
   }
   const source = readTargetMetadata(targetRoot, "scripts/runtime-postbuild.mts", frozenTarget);
   if (source === null) {
@@ -420,15 +495,16 @@ function expandUpgradeSurvivorBaselineLanes(
   rawScenarios = "",
   allowExecutableContract = false,
   frozenTarget?: InertTargetContract,
-): UpgradeSurvivorExpansion {
-  const hasUpgradeSurvivorLane = poolLanes.some(
+) {
+  const survivorLanes = poolLanes.filter(
     (poolLane) =>
       poolLane.name === "published-upgrade-survivor" || poolLane.name === "update-migration",
   );
-  if (!hasUpgradeSurvivorLane) {
+  if (survivorLanes.length === 0) {
     return { lanes: poolLanes, omittedLaneNames: [] };
   }
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
+  baselineSpecs.forEach(assertSupportedUpgradeSurvivorBaselineSpec);
   // Trusted-current planners may know scenarios that a frozen target's Docker
   // harness cannot seed or assert. Filter by the selected tree's concrete
   // harness contract so validation never schedules an impossible target lane.
@@ -446,16 +522,27 @@ function expandUpgradeSurvivorBaselineLanes(
       ? requestedScenarios.filter((scenario) => !supportedScenarioSet.has(scenario))
       : [];
   const scenarios = configuredScenarios.length > 0 ? supportedScenarios : [];
-  const matrixBaselines = baselineSpecs.length > 0 ? baselineSpecs : [undefined];
-  const survivorLanes = poolLanes.filter(
-    (poolLane) =>
-      poolLane.name === "published-upgrade-survivor" || poolLane.name === "update-migration",
-  );
+  const matrixBaselines: Array<string | undefined> =
+    baselineSpecs.length > 0 ? baselineSpecs : [undefined];
+  const scenarioCells = (selectedScenarios: Array<string | undefined>) => [
+    ...matrixBaselines.flatMap((baselineSpec) =>
+      selectedScenarios
+        .filter(
+          (scenario) =>
+            !isPackageRecoveryScenario(scenario) &&
+            supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec),
+        )
+        .map((scenario) => ({ baselineSpec, scenario })),
+    ),
+    ...selectedScenarios
+      .filter(isPackageRecoveryScenario)
+      .flatMap((scenario) =>
+        packageRecoveryBaselines(scenario).map((baselineSpec) => ({ baselineSpec, scenario })),
+      ),
+  ];
   const omittedLaneNames = survivorLanes.flatMap((poolLane) =>
-    matrixBaselines.flatMap((baselineSpec) =>
-      unsupportedScenarios
-        .filter((scenario) => supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec))
-        .map((scenario) => expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario)),
+    scenarioCells(unsupportedScenarios).map(({ baselineSpec, scenario }) =>
+      expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario),
     ),
   );
   if (supportedScenarios.length === 0 && unsupportedScenarios.length > 0) {
@@ -476,32 +563,27 @@ function expandUpgradeSurvivorBaselineLanes(
         return [poolLane];
       }
       const matrixScenarios = scenarios.length > 0 ? scenarios : [undefined];
-      return matrixBaselines.flatMap((baselineSpec) =>
-        matrixScenarios
-          .filter((scenario) => supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec))
-          .map((scenario) => {
-            const name = expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario);
-            const suffix = name.slice(poolLane.name.length + 1);
-            const commandPrefix = [
-              `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}"`,
-              baselineSpec
-                ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}`
-                : "",
-              scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
-            ]
-              .filter(Boolean)
-              .join(" ");
-            return Object.assign({}, poolLane, {
-              cacheKey: poolLane.cacheKey
-                ? suffix
-                  ? `${poolLane.cacheKey}-${suffix}`
-                  : poolLane.cacheKey
-                : name,
-              command: commandPrefix ? `${commandPrefix} ${poolLane.command}` : poolLane.command,
-              name,
-            });
-          }),
-      );
+      const cells = scenarioCells(matrixScenarios);
+      return cells.map(({ baselineSpec, scenario }) => {
+        const name = expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario);
+        const suffix = name.slice(poolLane.name.length + 1);
+        const commandPrefix = [
+          `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}"`,
+          baselineSpec ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}` : "",
+          scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return Object.assign({}, poolLane, {
+          cacheKey: poolLane.cacheKey
+            ? suffix
+              ? `${poolLane.cacheKey}-${suffix}`
+              : poolLane.cacheKey
+            : name,
+          command: `${commandPrefix} ${poolLane.command}`,
+          name,
+        });
+      });
     }),
     omittedLaneNames,
   };
@@ -515,23 +597,6 @@ function dedupeLanes(poolLanes: DockerE2eLane[]): DockerE2eLane[] {
     }
   }
   return [...byName.values()];
-}
-
-function selectNamedLanes(
-  poolLanes: DockerE2eLane[],
-  selectedNames: string[],
-  label: string,
-): DockerE2eLane[] {
-  const byName = new Map(poolLanes.map((poolLane) => [poolLane.name, poolLane]));
-  const missing = selectedNames.filter((name) => !byName.has(name));
-  if (missing.length > 0) {
-    throw new Error(
-      `${label} unknown lane(s): ${missing.join(", ")}. Available lanes: ${[...byName.keys()]
-        .toSorted((a, b) => a.localeCompare(b))
-        .join(", ")}`,
-    );
-  }
-  return selectedNames.map((name) => byName.get(name)!);
 }
 
 export function parseLiveMode(raw: unknown): LiveMode {
@@ -561,16 +626,12 @@ function applyLiveMode(poolLanes: DockerE2eLane[], mode: LiveMode): DockerE2eLan
   return poolLanes.filter((poolLane) => (mode === "only" ? poolLane.live : !poolLane.live));
 }
 
-function applyLiveRetries(poolLanes: DockerE2eLane[], retries: number): DockerE2eLane[] {
-  return poolLanes.map((poolLane) => (poolLane.live ? { ...poolLane, retries } : poolLane));
-}
-
 export function laneWeight(poolLane: DockerE2eLane): number {
-  return Math.max(1, poolLane.weight ?? 1);
+  return Math.max(1, poolLane.weight);
 }
 
 export function laneResources(poolLane: DockerE2eLane): string[] {
-  return [...new Set(["docker", ...(poolLane.resources ?? [])])];
+  return [...new Set(["docker", ...poolLane.resources])];
 }
 
 export function laneSummary(poolLane: DockerE2eLane): string {
@@ -579,11 +640,10 @@ export function laneSummary(poolLane: DockerE2eLane): string {
   const noOutputTimeout = poolLane.noOutputTimeoutMs
     ? ` no-output=${Math.round(poolLane.noOutputTimeoutMs / 1000)}s`
     : "";
-  const retries = poolLane.retries > 0 ? ` retries=${poolLane.retries}` : "";
   const cache = poolLane.cacheKey ? ` cache=${poolLane.cacheKey}` : "";
   const image = poolLane.e2eImageKind ? ` image=${poolLane.e2eImageKind}` : "";
   const state = poolLane.stateScenario ? ` state=${poolLane.stateScenario}` : "";
-  return `${poolLane.name}(w=${laneWeight(poolLane)} r=${resources}${timeout}${noOutputTimeout}${retries}${cache}${image}${state})`;
+  return `${poolLane.name}(w=${laneWeight(poolLane)} r=${resources}${timeout}${noOutputTimeout}${cache}${image}${state})`;
 }
 
 export function lanesNeedE2eImageKind(
@@ -598,20 +658,17 @@ export function lanesNeedOpenClawPackage(poolLanes: DockerE2eLane[]): boolean {
 }
 
 export function findLaneByName(name: string): DockerE2eLane | undefined {
-  return dedupeLanes(
-    expandUpgradeSurvivorBaselineLanes(
-      [
-        ...allReleasePathLanes({ includeOpenWebUI: true }),
-        ...publicInstallerLanes,
-        fleetCacheLane,
-        ...mainLanes,
-        ...tailLanes,
-      ],
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
-      undefined,
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
-    ).lanes,
-  ).find((poolLane) => poolLane.name === name);
+  return expandUpgradeSurvivorBaselineLanes(
+    [
+      ...allReleasePathLanes({ includeOpenWebUI: true }),
+      ...publicInstallerLanes,
+      ...mainLanes,
+      ...tailLanes,
+    ],
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
+    undefined,
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
+  ).lanes.find((poolLane) => poolLane.name === name);
 }
 
 function laneCredentialRequirements(poolLane: DockerE2eLane): string[] {
@@ -623,26 +680,18 @@ function laneCredentialRequirements(poolLane: DockerE2eLane): string[] {
   if (poolLane.name === "install-e2e-anthropic") {
     credentials.push("anthropic");
   }
-  if (resources.includes("live:openai")) {
-    credentials.push("openai");
-  }
-  if (resources.includes("live:codex")) {
-    credentials.push("codex");
-  }
-  if (resources.includes("live:claude")) {
-    credentials.push(poolLane.name === "live-anthropic-cache" ? "anthropic-api-key" : "anthropic");
-  }
-  if (resources.includes("live:droid")) {
-    credentials.push("factory");
-  }
-  if (resources.includes("live:gemini")) {
-    credentials.push("gemini");
-  }
-  if (resources.includes("live:opencode")) {
-    credentials.push("opencode");
-  }
-  if (resources.includes("live:telegram")) {
-    credentials.push("telegram");
+  for (const [resource, credential] of [
+    ["live:openai", "openai"],
+    ["live:codex", "codex"],
+    ["live:claude", poolLane.name === "live-anthropic-cache" ? "anthropic-api-key" : "anthropic"],
+    ["live:droid", "factory"],
+    ["live:gemini", "gemini"],
+    ["live:opencode", "opencode"],
+    ["live:telegram", "telegram"],
+  ] as const) {
+    if (resources.includes(resource)) {
+      credentials.push(credential);
+    }
   }
   return credentials;
 }
@@ -670,20 +719,74 @@ function upgradeSurvivorBaselineVersionForLane(poolLane: DockerE2eLane): string 
   return /(?:^|\/|@)(\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/u.exec(spec ?? "")?.[1] ?? null;
 }
 
-export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLane[]): string[] {
+function legacyOperatorProviderPackages(
+  targetRoot?: string,
+  frozenTarget?: InertTargetContract,
+): string[] {
+  const catalogPath = "scripts/lib/official-external-provider-catalog.json";
+  const text =
+    targetRoot || frozenTarget ? readTargetMetadata(targetRoot, catalogPath, frozenTarget) : null;
+  // Older candidates without the external catalog still carry their bundled providers.
+  const catalog: unknown =
+    targetRoot || frozenTarget
+      ? text === null
+        ? { entries: [] }
+        : JSON.parse(text)
+      : officialExternalProviderCatalog;
+  if (!isRecord(catalog) || !Array.isArray(catalog.entries)) {
+    throw new Error(`invalid candidate provider catalog: ${catalogPath}`);
+  }
+  return catalog.entries.flatMap((entry: unknown) =>
+    isRecord(entry) &&
+    entry.source === "official" &&
+    typeof entry.name === "string" &&
+    isRecord(entry.openclaw) &&
+    isRecord(entry.openclaw.install) &&
+    entry.openclaw.install.npmSpec === entry.name
+      ? [entry.name]
+      : [],
+  );
+}
+
+export function requiredPrepublishPluginPackagesForLanes(
+  poolLanes: DockerE2eLane[],
+  targetRoot?: string,
+  frozenTarget?: InertTargetContract,
+): string[] {
   const configuredChannelIds = new Set<string>();
   const requiredPackages = new Set<string>();
+  let legacyOperatorProviders: string[] | undefined;
   for (const poolLane of poolLanes) {
     for (const packageName of poolLane.prepublishPluginPackages ?? []) {
       requiredPackages.add(packageName);
     }
     const scenario = upgradeSurvivorScenarioForLane(poolLane);
-    if (!scenario || scenario === "abandoned-update" || scenario === "custom-plugin-siblings") {
+    if (
+      !scenario ||
+      isPackageRecoveryScenario(scenario) ||
+      scenario === "abandoned-update" ||
+      scenario === "backup-schedule" ||
+      scenario === "custom-plugin-siblings" ||
+      scenario === "projects-doctor" ||
+      scenario === "channel-owner-policy" ||
+      scenario === "cron-owner-doctor" ||
+      scenario === "projects-startup-migration" ||
+      scenario === "workshop-doctor-recovery" ||
+      scenario === "update-report-recovery" ||
+      scenario === "dreaming-cron-doctor"
+    ) {
       continue;
     }
     if (scenario === "legacy-operator-state") {
+      requiredPackages.add("@openclaw/codex");
       requiredPackages.add("@openclaw/discord");
       requiredPackages.add("@openclaw/duckduckgo-plugin");
+      // The baseline authors an allowlist from its enabled bundled inventory.
+      // Supply candidate providers once, even when several baselines share the registry.
+      legacyOperatorProviders ??= legacyOperatorProviderPackages(targetRoot, frozenTarget);
+      for (const packageName of legacyOperatorProviders) {
+        requiredPackages.add(packageName);
+      }
       continue;
     }
     for (const packageName of UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES) {
@@ -712,15 +815,10 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
       }
     }
   }
-  for (const packageName of (officialExternalChannelCatalog.entries ?? [])
+  for (const packageName of officialExternalChannelCatalog.entries
     .filter((entry) => {
-      const channelId = entry.openclaw?.channel?.id;
-      const install = entry.openclaw?.install;
-      return (
-        typeof entry.name === "string" &&
-        configuredChannelIds.has(channelId) &&
-        install?.npmSpec === entry.name
-      );
+      const { channel, install } = entry.openclaw;
+      return configuredChannelIds.has(channel.id) && install.npmSpec === entry.name;
     })
     .map((entry) => entry.name)) {
     requiredPackages.add(packageName);
@@ -737,12 +835,18 @@ function buildPlanJson(params: {
   releaseChunk: string;
   releaseProfile: DockerE2eReleaseProfile;
   selectedLaneNames: string[];
+  targetRoot?: string;
+  frozenTarget?: InertTargetContract;
 }) {
   const scheduledLanes = [...params.orderedLanes, ...params.orderedTailLanes];
   const imageKinds = unique(scheduledLanes.map((poolLane) => poolLane.e2eImageKind)).toSorted(
     (a, b) => a.localeCompare(b),
   );
-  const requiredPrepublishPluginPackages = requiredPrepublishPluginPackagesForLanes(scheduledLanes);
+  const requiredPrepublishPluginPackages = requiredPrepublishPluginPackagesForLanes(
+    scheduledLanes,
+    params.targetRoot,
+    params.frozenTarget,
+  );
   return {
     chunk: params.releaseChunk || undefined,
     credentials: unique(scheduledLanes.flatMap(laneCredentialRequirements)).toSorted((a, b) =>
@@ -782,8 +886,6 @@ function buildPlanJson(params: {
 
 export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
   const releaseProfile = normalizeReleaseProfile(options.releaseProfile);
-  const retriedMainLanes = applyLiveRetries(mainLanes, options.liveRetries);
-  const retriedTailLanes = applyLiveRetries(tailLanes, options.liveRetries);
   const upgradeSurvivorBaselines = options.upgradeSurvivorBaselines ?? "";
   const upgradeSurvivorScenarios = options.upgradeSurvivorScenarios ?? "";
   const unexpandedSelectableLanes = dedupeLanes([
@@ -792,9 +894,8 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       releaseProfile: "full",
     }),
     ...publicInstallerLanes,
-    fleetCacheLane,
-    ...retriedMainLanes,
-    ...retriedTailLanes,
+    ...mainLanes,
+    ...tailLanes,
   ]);
   const omittedUnsupportedLaneNames = new Set<string>();
   const expandRequestedSurvivorLanes = (poolLanes: DockerE2eLane[]) => {
@@ -806,6 +907,21 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       options.allowFrozenTargetScenarioOmissions,
       options.frozenTarget,
     );
+    const requestedBaselines = parseUpgradeSurvivorBaselineSpecs(upgradeSurvivorBaselines);
+    if (
+      poolLanes.some(
+        (lane) => lane.name === "published-upgrade-survivor" || lane.name === "update-migration",
+      ) &&
+      parseUpgradeSurvivorScenarios(upgradeSurvivorScenarios).includes("missing-load-path") &&
+      requestedBaselines.length > 0 &&
+      requestedBaselines.every(
+        (baseline) => !supportsUpgradeSurvivorScenarioAtBaseline("missing-load-path", baseline),
+      )
+    ) {
+      throw new Error(
+        `missing-load-path has no compatible published baseline in ${upgradeSurvivorBaselines}: the installed updater must admit invalid config before candidate staging.`,
+      );
+    }
     for (const laneName of expansion.omittedLaneNames) {
       omittedUnsupportedLaneNames.add(laneName);
     }
@@ -856,6 +972,7 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
             if (!survivorBaseLane) {
               return [expandedLane];
             }
+            // Exact-row reruns retain the original matrix only to reconstruct the catalog.
             const targetExpansion = expandUpgradeSurvivorBaselineLanes(
               [survivorBaseLane],
               upgradeSurvivorBaselines,
@@ -873,8 +990,12 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
             omittedUnsupportedLaneNames.add(selectedName);
             return [];
           }
-          selectNamedLanes(unfilteredSelectableLanes, [selectedName], "OPENCLAW_DOCKER_ALL_LANES");
-          return [];
+          throw new Error(
+            `OPENCLAW_DOCKER_ALL_LANES unknown lane(s): ${selectedName}. Available lanes: ${unfilteredSelectableLanes
+              .map((lane) => lane.name)
+              .toSorted((a, b) => a.localeCompare(b))
+              .join(", ")}`,
+          );
         })
       : undefined;
   let configuredLanes = selectedLanes
@@ -882,57 +1003,33 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
     : releaseLanes
       ? applyLiveMode(releaseLanes, options.liveMode)
       : options.liveMode === "only"
-        ? applyLiveMode([...retriedMainLanes, ...retriedTailLanes], options.liveMode)
-        : applyLiveMode(retriedMainLanes, options.liveMode);
+        ? applyLiveMode([...mainLanes, ...tailLanes], options.liveMode)
+        : applyLiveMode(mainLanes, options.liveMode);
   if (options.allowFrozenTargetScenarioOmissions) {
-    const unsupportedLaneRules = [
-      {
-        matches: (lane: DockerE2eLane) => lane.name === "update-first-hop-compat",
-        supported: () =>
-          supportsUpdateFirstHopCompatForTarget(
-            options.upgradeSurvivorTargetRoot,
-            options.frozenTarget,
-          ),
-      },
-      {
-        matches: (lane: DockerE2eLane) => lane.name.includes("mobile-pairing-reconnect"),
-        supported: () =>
-          supportsMobilePairingReconnectForTarget(
-            options.upgradeSurvivorTargetRoot,
-            options.frozenTarget,
-          ),
-      },
-      {
-        matches: (lane: DockerE2eLane) => lane.name === "update-corrupt-plugin",
-        supported: () =>
-          supportsCorruptPluginUpdateForTarget(
-            options.upgradeSurvivorTargetRoot,
-            options.frozenTarget,
-          ),
-      },
-    ];
-    for (const rule of unsupportedLaneRules) {
-      if (!configuredLanes.some(rule.matches) || rule.supported()) {
-        continue;
+    configuredLanes = configuredLanes.filter((lane) => {
+      const targetRoot = options.upgradeSurvivorTargetRoot;
+      const frozenTarget = options.frozenTarget;
+      const supported = isUpdateFirstHopCompatLane(lane.name)
+        ? supportsUpdateFirstHopCompatForTarget(lane.name, targetRoot, frozenTarget)
+        : lane.name.includes("mobile-pairing-reconnect")
+          ? supportsMobilePairingReconnectForTarget(targetRoot, frozenTarget)
+          : lane.name === "update-corrupt-plugin"
+            ? supportsCorruptPluginUpdateForTarget(targetRoot, frozenTarget)
+            : true;
+      if (supported) {
+        return true;
       }
-      const retainedLanes = configuredLanes.filter((lane) => !rule.matches(lane));
-      if (retainedLanes.length !== configuredLanes.length) {
-        for (const lane of configuredLanes.filter(rule.matches)) {
-          omittedUnsupportedLaneNames.add(lane.name);
-        }
-        configuredLanes = retainedLanes;
-      }
-    }
+      omittedUnsupportedLaneNames.add(lane.name);
+      return false;
+    });
   }
   if (omittedUnsupportedLaneNames.size > 0 && !options.allowFrozenTargetScenarioOmissions) {
     throw new Error("unsupported frozen target lanes require authorized scenario omissions");
   }
   const configuredTailLanes =
-    selectedLanes || releaseLanes
+    selectedLanes || releaseLanes || options.liveMode === "only"
       ? []
-      : options.liveMode === "only"
-        ? []
-        : applyLiveMode(retriedTailLanes, options.liveMode);
+      : applyLiveMode(tailLanes, options.liveMode);
   const orderedLanes = options.orderLanes(configuredLanes, options.timingStore);
   const orderedTailLanes = options.orderLanes(configuredTailLanes, options.timingStore);
   return {
@@ -948,6 +1045,8 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       releaseChunk: options.releaseChunk,
       releaseProfile,
       selectedLaneNames: options.selectedLaneNames,
+      targetRoot: options.upgradeSurvivorTargetRoot,
+      frozenTarget: options.frozenTarget,
     }),
     scheduledLanes: [...orderedLanes, ...orderedTailLanes],
   };

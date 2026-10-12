@@ -16,7 +16,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { BoundVerifySetupInferenceResult } from "../system-agent/setup-inference.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
-  installSystemAgentClaudeCliBackendTestFixture,
   createSystemAgentPluginMetadataTestSnapshot,
 } from "../system-agent/system-agent.test-helpers.js";
 import { resolveSystemAgentVerifiedInferenceRoute } from "../system-agent/verified-inference.js";
@@ -67,7 +66,6 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
 describe("runConversationalOnboarding", () => {
   let home: Awaited<ReturnType<typeof createTempHomeEnv>>;
   let metadata: ReturnType<typeof createSystemAgentPluginMetadataTestSnapshot> | undefined;
-  let restoreCliBackend: (() => void) | undefined;
   const runConversationalOnboarding: typeof runConversationalOnboardingImpl = (...args) =>
     metadata!.run(() => runConversationalOnboardingImpl(...args));
   const runSystemAgentWithInference: typeof runSystemAgentWithInferenceImpl = (...args) =>
@@ -89,34 +87,29 @@ describe("runConversationalOnboarding", () => {
     terminal.destroy();
 
     metadata = undefined;
-    restoreCliBackend?.();
-    restoreCliBackend = undefined;
     restoreActivePluginRegistrySnapshot(previousRegistry);
     vi.restoreAllMocks();
     await home.restore();
   });
 
-  async function prepareConversation(runner: "codex" | "openclaw" | "cli" = "codex") {
+  async function prepareConversation() {
     let config: OpenClawConfig = {
       agents: {
         defaults: {
           workspace: path.join(home.home, "workspace"),
-          model: runner === "cli" ? "claude-cli/sonnet-4.6" : "openai/gpt-5.6-sol",
+          model: "openai/gpt-5.6-sol",
           models: {
             "openai/gpt-5.6-sol": {
-              agentRuntime: { id: runner === "openclaw" ? "openclaw" : "codex" },
+              agentRuntime: { id: "codex" },
             },
             "fixture/model": { agentRuntime: { id: "fixture-runtime" } },
           },
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
       plugins: { entries: { codex: { enabled: true }, "fixture-runtime": { enabled: true } } },
     };
     metadata = createSystemAgentPluginMetadataTestSnapshot(config);
-    if (runner === "cli") {
-      restoreCliBackend = installSystemAgentClaudeCliBackendTestFixture();
-    }
     const fixture = await metadata.run(() => createSystemAgentVerifiedInferenceTestFixture(config));
     // Keep the handoff's actual registry lookup and artifact validation; the binding
     // factory's validator override is only for constructing synthetic probe evidence.
@@ -215,35 +208,28 @@ describe("runConversationalOnboarding", () => {
     };
   }
 
-  it.each(["onboarding", "verified setup"] as const)(
-    "acquires a cold verified harness from %s without replacing the root registry",
-    async (entrypoint) => {
-      const { currentConfig, launchConversation } = await prepareConversation();
-      expect(getRegisteredAgentHarness("codex")).toBeUndefined();
-      launchConversation.mockImplementation(async () => {
-        expect(getRegisteredAgentHarness("codex")).toBeDefined();
-        expect(getActivePluginRegistry()).toBe(rootRegistry);
-      });
-
-      if (entrypoint === "onboarding") {
-        await runConversationalOnboarding({}, makeRuntime());
-      } else {
-        await runSystemAgentWithInference({ input: terminal, output: terminal }, makeRuntime());
-      }
-
-      expect(launchConversation).toHaveBeenCalledOnce();
-      expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
-        basePluginIds: [],
-        config: currentConfig(),
-        workspaceDir: path.join(home.home, "workspace"),
-        selections: [
-          { provider: "openai", modelId: "gpt-5.6-sol", runtime: "codex", agentId: "main" },
-        ],
-      });
-      expect(getRegisteredAgentHarness("codex")).toBeUndefined();
+  it("acquires a cold verified harness from verified setup without replacing the root registry", async () => {
+    const { currentConfig, launchConversation } = await prepareConversation();
+    expect(getRegisteredAgentHarness("codex")).toBeUndefined();
+    launchConversation.mockImplementation(async () => {
+      expect(getRegisteredAgentHarness("codex")).toBeDefined();
       expect(getActivePluginRegistry()).toBe(rootRegistry);
-    },
-  );
+    });
+
+    await runSystemAgentWithInference({ input: terminal, output: terminal }, makeRuntime());
+
+    expect(launchConversation).toHaveBeenCalledOnce();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
+      basePluginIds: [],
+      config: currentConfig(),
+      workspaceDir: path.join(home.home, "workspace"),
+      selections: [
+        { provider: "openai", modelId: "gpt-5.6-sol", runtime: "codex", agentId: "main" },
+      ],
+    });
+    expect(getRegisteredAgentHarness("codex")).toBeUndefined();
+    expect(getActivePluginRegistry()).toBe(rootRegistry);
+  });
 
   it("loads current policy after an unrelated configured runtime is revoked", async () => {
     const { currentConfig, invalidate, launchConversation } = await prepareConversation();
@@ -295,19 +281,6 @@ describe("runConversationalOnboarding", () => {
 
       expect(launchConversation).toHaveBeenCalledOnce();
       expect(getRegisteredAgentHarness("codex")).toBeUndefined();
-      expect(getActivePluginRegistry()).toBe(rootRegistry);
-    },
-  );
-
-  it.each(["openclaw", "cli"] as const)(
-    "keeps the %s handoff free of plugin acquisition",
-    async (runner) => {
-      const { launchConversation } = await prepareConversation(runner);
-
-      await runConversationalOnboarding({}, makeRuntime());
-
-      expect(launchConversation).toHaveBeenCalledOnce();
-      expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
       expect(getActivePluginRegistry()).toBe(rootRegistry);
     },
   );

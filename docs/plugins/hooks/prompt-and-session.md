@@ -29,11 +29,26 @@ provider payloads, start the Gateway with `--raw-stream` and
 Use the phase-specific hooks for new plugins:
 
 - `before_model_resolve`: receives only the current prompt and attachment
-  metadata. Return `providerOverride` or `modelOverride`.
+  metadata. Return `providerOverride`, `modelOverride`, or `fallbacksOverride`.
+  When provided, `fallbacksOverride` replaces the fallback chain for this run;
+  `[]` disables model fallback, so a failed primary fails the run. Omit it to
+  preserve configured fallback behavior.
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.
-- `before_prompt_build`: receives the current prompt and session messages.
+- `before_prompt_build`: receives the prepared prompt and session messages.
+  Harnesses may also supply `currentUserMessage`, the current request before
+  history/context projection, and `currentUserMessageId`, its native admission
+  identity. The ID stays stable across rebuilds and retries of one admitted
+  request and differs between admissions. Use the explicit request for intent
+  detection when available; `prompt` may contain reconstructed history. Do not
+  parse envelope markers to recover request boundaries. An explicit empty string
+  means no textual request, including image-only input or a continuation without
+  a retained request. It must not fall back to history. Codex runtime refresh
+  retains the original recorder's text and identity. Without a recorder, Codex
+  supplies current text but no admission ID; equal text and a correlation run ID
+  alone do not identify an admission. Omitted fields preserve existing harness
+  behavior.
   Return `prependContext`, `appendContext`, `systemPrompt`,
   `prependSystemContext`, `appendSystemContext`, or `toolsAllow`. `toolsAllow`
   can only narrow the host-resolved tool surface for the current turn; `[]`
@@ -59,13 +74,39 @@ ordinary `before_prompt_build` → finalized tool policy → authorized prompt
 enrichment. `agent_turn_prepare` and queued-injection draining are not wired
 into the Codex or Copilot prompt paths.
 
-For multiple registrations, the first defined provider/model override and
+For multiple registrations, the first defined provider/model/fallback override and
 `systemPrompt` win. Context additions concatenate in priority order, and tool
 restrictions intersect. A nested ordinary `before_prompt_build` dispatch on
 the same runner is skipped while its outer dispatch is active; other hook
 families and independent turns remain available.
 
 Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
+
+### Restrict a run to local models
+
+Return an explicit fallback list when the routing decision must survive a model
+failure. Provider and model overrides alone leave configured fallbacks available.
+
+```typescript
+api.on("before_model_resolve", () => ({
+  providerOverride: "ollama",
+  modelOverride: "qwen3:8b",
+  fallbacksOverride: ["ollama/qwen3:4b"],
+}));
+```
+
+Use `fallbacksOverride: []` to allow only the selected primary. Lists replace each
+other; they are never concatenated. Hooks run in descending priority order, with
+registration order breaking ties. The first defined list wins, including an empty
+list; provider and model overrides are selected independently by the same rule.
+
+The initial routing hook runs before the logical run selects its candidate chain.
+An explicit list stays fixed across attempts, so later candidates are not redirected
+back to the primary by another invocation of the same hook. Each eligible candidate
+keeps its own configured attempt timeout. Session model locks and operator model
+restrictions still apply. These overrides are run-scoped and do not change saved
+configuration or the session's selected model.
+Installation repair retains its separately admitted model list.
 
 ### Handler lifetime
 
@@ -113,7 +154,7 @@ runtime cannot prove the authority, it skips the handler.
 
 Treat `toolAuthority` as an ephemeral capability:
 
-- `allows(toolName)` checks a canonical tool id against the finalized surface
+- `allows(toolName)` checks a standard tool id against the finalized surface
   and also verifies that the capability is still active.
 - `assertActive()` rejects after abort, cancellation, run replacement,
   lifecycle rotation, or hook dispatch completion. Call it after awaited work
@@ -124,7 +165,7 @@ Treat `toolAuthority` as an ephemeral capability:
   replace the system prompt or change `toolsAllow` after policy has settled.
 
 The host revalidates authority after each awaited handler and discards stale
-enrichment. A retained `toolAuthority` object fails closed after dispatch.
+enrichment. A retained `toolAuthority` object rejects use after dispatch.
 
 This option requires a host that implements the post-policy phase. Published
 plugins must set `package.json` `openclaw.compat.pluginApi` to a range beginning
@@ -141,7 +182,7 @@ the current user input as `prompt`, plus loaded session history in `messages`
 and the active system prompt. Return `{ outcome: "block", reason, message? }`
 to stop the run before the model reads the prompt. `reason` is internal;
 `message` is the user-facing replacement. Only `pass` and `block` outcomes are
-supported; unsupported decision shapes fail closed.
+supported; unsupported decision shapes are rejected.
 
 When a run is blocked, OpenClaw stores only the replacement text in
 `message.content` plus non-sensitive block metadata such as the blocking
@@ -310,7 +351,7 @@ whose plugin is inactive or has prompt injection disabled. `idempotencyKey`
 deduplicates unexpired pending entries for the same plugin and session; the
 key can be reused after consumption. Drained entries are reused across retries
 within the active run, but consuming an entry is not a receipt that the model
-saw it: a later failure can prevent submission. This is the right seam for
+saw it: a later failure can prevent submission. This is the right hook for
 approval resumes, policy summaries, background monitor
 deltas, and command continuations that should be visible to the model on the
 next turn but should not become permanent system prompt text.
@@ -318,6 +359,11 @@ next turn but should not become permanent system prompt text.
 Pass `agentId` with an unscoped `sessionKey`, such as `global`, when multiple
 agents are configured. Enqueueing, consumption, and plugin session state stay in
 that agent's store; the owner selector is not part of the persisted injection.
+
+Consumption stays bound to the selected stored session. A reset or a conflicting
+legacy and qualified identity prevents the drain from consuming another
+conversation's queue. Reading or consuming a legacy alias does not rename its
+stored session key.
 
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or

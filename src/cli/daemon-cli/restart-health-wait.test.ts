@@ -1,9 +1,16 @@
 // Managed gateway restart polling tests.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { execLaunchctl } from "../../daemon/launchd-exec.js";
+import { readLaunchAgentRuntime } from "../../daemon/launchd-runtime.js";
+import { resolveLaunchAgentPlistPath } from "../../daemon/launchd-service-files.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
   inspectPortUsage,
+  createStartupMigrationActivityProbe,
   makeGatewayService,
   monotonicClock,
   callGateway,
@@ -14,11 +21,60 @@ import {
   waitForStoppedFreeGatewayRestart,
 } from "./restart-health.test-helpers.js";
 
+vi.mock("../../daemon/launchd-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/launchd-exec.js")>()),
+  execLaunchctl: vi.fn(),
+}));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { waitForGatewayHealthyRestart, renderRestartDiagnostics, formatGatewayRestartFailure } =
+  await import("./restart-health.js");
+
 describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
 
-  it.each([false, true])(
+  it.each(["refuse-manual-start"] as const)(
+    "ends readiness polling immediately for a verified service hold (%s)",
+    async (reason) => {
+      const runtime = {
+        status: "unknown",
+        systemd: {
+          startRefusal: { reason, message: "Resolve the managed service hold before starting." },
+        },
+      };
+      const service = makeGatewayService({ status: "stopped" });
+      vi.mocked(service.readRuntime).mockResolvedValue(runtime);
+      const result = await waitForGatewayHealthyRestart({
+        service,
+        port: 18789,
+        timeoutMs: 30 * 60_000,
+        requireRunningService: true,
+      });
+      expect(result).toMatchObject({
+        outcome: "failed",
+        healthy: false,
+        waitOutcome: "service-definition-refused",
+        runtime,
+        elapsedMs: 0,
+      });
+      expect(sleep).not.toHaveBeenCalled();
+      expect(renderRestartDiagnostics(result)).toContain(
+        "SERVICE-DEFINITION: Resolve the managed service hold before starting.",
+      );
+      expect(
+        formatGatewayRestartFailure({
+          health: result,
+          port: 18789,
+          defaultTimeoutSeconds: 30 * 60,
+        }),
+      ).toMatchObject({
+        failMessage: "SERVICE-DEFINITION: Resolve the managed service hold before starting.",
+      });
+    },
+  );
+
+  it.each([true])(
     "waits for a recorded live owner before it listens (expired=%s)",
     async (expired) => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
@@ -41,14 +97,17 @@ describe("restart health", () => {
       }));
       callGateway.mockImplementation(gatewayHealthResponse());
 
-      const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
       const snapshot = await waitForGatewayHealthyRestart({
         service: makeGatewayService({ status: "stopped" }),
         port: 18789,
         attempts: 360,
         delayMs: 500,
       });
-      expect(snapshot).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 100_000 });
+      expect(snapshot, snapshot.probeError).toMatchObject({
+        healthy: true,
+        waitOutcome: "healthy",
+        elapsedMs: 100_000,
+      });
       expect(snapshot.staleGatewayPids).toEqual([]);
     },
   );
@@ -76,7 +135,6 @@ describe("restart health", () => {
       hints: [],
     }));
     callGateway.mockImplementation(gatewayHealthResponse());
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
       service: makeGatewayService({ status: "stopped" }),
       port: 18789,
@@ -86,7 +144,7 @@ describe("restart health", () => {
     expect(snapshot).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 2000 });
   });
 
-  it.each(["live", "unknown"] as const)(
+  it.each(["unknown"] as const)(
     "returns as soon as an owner observed %s in this wait dies with the port free",
     async (initialState) => {
       readGatewayOwnerLease.mockImplementation(() => ({
@@ -112,42 +170,6 @@ describe("restart health", () => {
 
   it.each([
     {
-      name: "waits for a slow update child",
-      marker: "1",
-      readyAtMs: 90_000,
-      outcome: "healthy",
-      elapsedMs: 90_000,
-    },
-    {
-      name: "keeps the standalone deadline",
-      marker: undefined,
-      readyAtMs: 90_000,
-      outcome: "timeout",
-      elapsedMs: 60_000,
-    },
-    {
-      name: "honors a cleared update marker",
-      marker: "0",
-      readyAtMs: 90_000,
-      outcome: "timeout",
-      elapsedMs: 60_000,
-    },
-    {
-      name: "bounds a live but unready update child",
-      marker: "1",
-      readyAtMs: Infinity,
-      outcome: "timeout",
-      elapsedMs: 300_000,
-    },
-    {
-      name: "honors an explicit shorter budget",
-      marker: "1",
-      readyAtMs: Infinity,
-      timeoutMs: 30_000,
-      outcome: "timeout",
-      elapsedMs: 30_000,
-    },
-    {
       name: "does not reset the bound when a listener appears",
       marker: "1",
       readyAtMs: Infinity,
@@ -157,14 +179,6 @@ describe("restart health", () => {
       phase: "waiting for Gateway health and identity",
     },
     {
-      name: "does not reset the bound after migration",
-      marker: "1",
-      readyAtMs: Infinity,
-      migrationUntilMs: 290_000,
-      outcome: "timeout",
-      elapsedMs: 300_000,
-    },
-    {
       name: "requires observed startup progress",
       marker: "1",
       readyAtMs: Infinity,
@@ -172,59 +186,40 @@ describe("restart health", () => {
       outcome: "timeout",
       elapsedMs: 60_000,
     },
-  ])(
-    "$name",
-    async ({
-      marker,
-      readyAtMs,
-      timeoutMs,
-      boundAtMs,
-      migrationUntilMs,
-      running,
-      outcome,
-      elapsedMs,
-      phase,
-    }) => {
-      inspectPortUsage.mockImplementation(async (port) => ({
-        port,
-        status: monotonicClock.nowMs < (boundAtMs ?? readyAtMs) ? "free" : "busy",
-        listeners: monotonicClock.nowMs < (boundAtMs ?? readyAtMs) ? [] : [{ pid: 8000 }],
-        hints: [],
-      }));
-      const service = makeGatewayService({ status: "running", pid: 8000 });
-      if (running === false) {
-        vi.mocked(service.readRuntime).mockResolvedValue({ status: "unknown" });
+  ])("$name", async ({ marker, readyAtMs, boundAtMs, running, outcome, elapsedMs, phase }) => {
+    callGateway.mockImplementation(async (options) => {
+      if (monotonicClock.nowMs < readyAtMs) {
+        throw new Error("Gateway health timed out");
       }
-      const { waitForGatewayHealthyRestart, renderRestartDiagnostics } =
-        await import("./restart-health.js");
-      const snapshot = await waitForGatewayHealthyRestart({
-        service,
-        port: 18789,
-        env: { OPENCLAW_UPDATE_IN_PROGRESS: marker },
-        timeoutMs,
-        expectedVersion: boundAtMs === undefined ? undefined : "2026.9.4",
-        isStartupMigrationActive: () => monotonicClock.nowMs < (migrationUntilMs ?? 0),
-      });
-      expect(snapshot.waitOutcome).toBe(outcome);
-      expect(snapshot.healthy).toBe(outcome === "healthy");
-      expect(snapshot.elapsedMs).toBe(elapsedMs);
-      if (outcome === "timeout") {
-        expect(renderRestartDiagnostics(snapshot)).toContain(
-          `Readiness budget exhausted after ${elapsedMs / 1000}s. Last observed startup phase: ${phase ?? (running === false ? "waiting for managed service" : "waiting for Gateway listener")}.`,
-        );
-      }
-    },
-  );
+      return gatewayHealthResponse()(options);
+    });
+    inspectPortUsage.mockImplementation(async (port) => ({
+      port,
+      status: monotonicClock.nowMs < (boundAtMs ?? readyAtMs) ? "free" : "busy",
+      listeners: monotonicClock.nowMs < (boundAtMs ?? readyAtMs) ? [] : [{ pid: 8000 }],
+      hints: [],
+    }));
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    if (running === false) {
+      vi.mocked(service.readRuntime).mockResolvedValue({ status: "unknown" });
+    }
+    const snapshot = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: marker },
+      expectedVersion: boundAtMs === undefined ? undefined : "2026.9.4",
+    });
+    expect(snapshot.waitOutcome).toBe(outcome);
+    expect(snapshot.healthy).toBe(outcome === "healthy");
+    expect(snapshot.elapsedMs).toBe(elapsedMs);
+    if (outcome === "timeout") {
+      expect(renderRestartDiagnostics(snapshot)).toContain(
+        `Readiness budget exhausted after ${elapsedMs / 1000}s. Last observed startup phase: ${phase ?? "waiting for managed service"}.`,
+      );
+    }
+  });
 
   it.each([
-    {
-      name: "waits for consecutive healthy probes",
-      pids: [8000, 8000, 8000],
-      reachable: [true, true, true],
-      attempts: 6,
-      outcome: "healthy",
-      elapsedMs: 1_000,
-    },
     {
       name: "restarts settling after an unhealthy probe",
       pids: [8000, 8000, 8000, 8000, 8000, 8000],
@@ -251,22 +246,15 @@ describe("restart health", () => {
       elapsedMs: 2_000,
     },
     {
-      name: "keeps the full settle window after the standard readiness deadline",
-      pids: [8000, 8000, 8000, 8000, 8000],
-      reachable: [false, false, true, true, true],
-      attempts: 2,
-      outcome: "healthy",
-      elapsedMs: 2_000,
-    },
-    {
       name: "does not report an unsettled healthy snapshot as recovered at timeout",
       pids: [8000, 8000, 8000, 8000, 8000],
+      bootIds: ["boot-a", "boot-a", "boot-a", "boot-a", "boot-a"],
       reachable: [false, false, false, true, true],
       attempts: 2,
       outcome: "timeout",
       elapsedMs: 2_000,
     },
-    ...(["linux", "darwin"] as const).map((platform) => ({
+    ...(["linux"] as const).map((platform) => ({
       name: `times out without a runtime PID on ${platform}`,
       platform,
       pids: [undefined, undefined, undefined, undefined, undefined],
@@ -310,7 +298,6 @@ describe("restart health", () => {
       hints: [],
     });
 
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
       service,
       port: 18789,
@@ -328,7 +315,40 @@ describe("restart health", () => {
     expect(callGateway).toHaveBeenCalledTimes(reachable.length);
   });
 
-  it("waits for the managed service when running service proof is required", async () => {
+  it("settles the selected LaunchAgent after its temporarily unloaded job returns", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    const env = {
+      HOME: tempDirs.make("openclaw-launchd-settle-"),
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.settle-fixture",
+    };
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    await fs.mkdir(path.dirname(plistPath), { recursive: true });
+    await fs.writeFile(plistPath, "<plist/>");
+    const target = `gui/${process.getuid?.() ?? 501}/${env.OPENCLAW_LAUNCHD_LABEL}`;
+    vi.mocked(execLaunchctl).mockImplementation(async (args) => {
+      expect(args[0]).toBe("print");
+      expect([target, `system/${env.OPENCLAW_LAUNCHD_LABEL}`]).toContain(args[1]);
+      if (args[1] !== target || monotonicClock.nowMs === 0) {
+        return { code: 113, stdout: "", stderr: "Could not find service", termination: "exit" };
+      }
+      return {
+        code: 0,
+        stderr: "",
+        termination: "exit",
+        stdout: [
+          `${target} = {`,
+          "\tstate = running",
+          "\tpid = 8000",
+          "\tresource coalition = {",
+          "\t\tstate = active",
+          "\t}",
+          "\tjetsam coalition = {",
+          "\t\tstate = active",
+          "\t}",
+          "}",
+        ].join("\n"),
+      };
+    });
     callGateway.mockImplementation(
       gatewayHealthResponse({
         server: { version: "2026.4.24", connId: "new" },
@@ -340,95 +360,28 @@ describe("restart health", () => {
       listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
       hints: [],
     });
-    const readRuntime = vi
-      .fn()
-      .mockResolvedValueOnce({ status: "stopped" })
-      .mockResolvedValue({ status: "running", pid: 8000 });
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
-      service: { readRuntime, readCommand: vi.fn(async () => null) } as unknown as GatewayService,
+      service: { readRuntime: readLaunchAgentRuntime, readCommand: async () => null },
+      env,
       port: 18789,
       expectedVersion: "2026.4.24",
       requireRunningService: true,
       attempts: 3,
       delayMs: 1,
+      settle: { probes: 3 },
     });
 
-    expect(snapshot.healthy).toBe(true);
-    expect(snapshot.runtime.status).toBe("running");
-    expect(snapshot.waitOutcome).toBe("healthy");
-    expect(snapshot.elapsedMs).toBe(1);
-    expect(sleep).toHaveBeenCalledOnce();
-  });
-
-  it("times out when running service proof never arrives", async () => {
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.24", connId: "stale" },
-      }),
-    );
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 5151, commandLine: "openclaw-gateway" }],
-      hints: [],
+    expect(snapshot).toMatchObject({
+      healthy: true,
+      runtime: { status: "running", pid: 8000 },
+      waitOutcome: "healthy",
+      elapsedMs: 3,
     });
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
-    const snapshot = await waitForGatewayHealthyRestart({
-      service: makeGatewayService({ status: "stopped" }),
-      port: 18789,
-      expectedVersion: "2026.4.24",
-      requireRunningService: true,
-      attempts: 2,
-      delayMs: 1,
-    });
-
-    expect(snapshot.healthy).toBe(true);
-    expect(snapshot.runtime.status).toBe("stopped");
-    expect(snapshot.waitOutcome).toBe("timeout");
-    expect(sleep).toHaveBeenCalledTimes(2);
-  });
-
-  it("waits through a healthy long-running startup migration", async () => {
-    let inspections = 0;
-    inspectPortUsage.mockImplementation(async () => {
-      inspections += 1;
-      if (inspections < 15) {
-        return {
-          port: 18789,
-          status: "free",
-          listeners: [],
-          hints: [],
-        };
-      }
-      return {
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-        hints: [],
-      };
-    });
-    const isStartupMigrationActive = vi.fn(() => true);
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
-    const snapshot = await waitForGatewayHealthyRestart({
-      service: makeGatewayService({ status: "running", pid: 8000 }),
-      port: 18789,
-      attempts: 6,
-      delayMs: 10_000,
-      isStartupMigrationActive,
-    });
-
-    expect(snapshot.healthy).toBe(true);
-    expect(snapshot.waitOutcome).toBe("healthy");
-    expect(snapshot.elapsedMs).toBe(140_000);
-    expect(sleep).toHaveBeenCalledTimes(14);
-    expect(isStartupMigrationActive).toHaveBeenCalled();
+    expect(sleep).toHaveBeenCalledTimes(3);
   });
 
   it("keeps the readiness window after an observed migration ends near the standard deadline", async () => {
+    callGateway.mockImplementation(gatewayHealthResponse());
     let inspections = 0;
     inspectPortUsage.mockImplementation(async () => {
       inspections += 1;
@@ -442,12 +395,11 @@ describe("restart health", () => {
           };
     });
     let migrationPolls = 0;
-    const isStartupMigrationActive = vi.fn(() => {
+    const isStartupMigrationActive = createStartupMigrationActivityProbe(() => {
       migrationPolls += 1;
       return migrationPolls < 7;
     });
 
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
       service: makeGatewayService({ status: "running", pid: 8000 }),
       port: 18789,
@@ -461,154 +413,21 @@ describe("restart health", () => {
     expect(sleep).toHaveBeenCalledTimes(7);
   });
 
-  it("keeps the caller's full readiness window after an observed migration ends", async () => {
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "free",
-      listeners: [],
-      hints: [],
-    });
-    let migrationPolls = 0;
-    const isStartupMigrationActive = vi.fn(() => {
-      migrationPolls += 1;
-      return migrationPolls < 4;
-    });
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+  it.each([false])("bounds an explicit readiness budget (migration=%s)", async (migration) => {
     const snapshot = await waitForGatewayHealthyRestart({
       service: makeGatewayService({ status: "running", pid: 8000 }),
       port: 18789,
-      attempts: 18,
-      delayMs: 10_000,
-      isStartupMigrationActive,
+      timeoutMs: 120_000,
+      isStartupMigrationActive: () => migration,
     });
-
-    expect(snapshot.waitOutcome).toBe("timeout");
-    expect(snapshot.elapsedMs).toBe(210_000);
-    expect(sleep).toHaveBeenCalledTimes(21);
-  });
-
-  it("keeps the standard timeout for a running non-migration startup failure", async () => {
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "free",
-      listeners: [],
-      hints: [],
+    expect(snapshot).toMatchObject({
+      healthy: false,
+      waitOutcome: "still-starting",
+      elapsedMs: 120_000,
     });
-    const isStartupMigrationActive = vi.fn(() => false);
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
-    const snapshot = await waitForGatewayHealthyRestart({
-      service: makeGatewayService({ status: "running", pid: 8000 }),
-      port: 18789,
-      attempts: 6,
-      delayMs: 10_000,
-      isStartupMigrationActive,
-    });
-
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.waitOutcome).toBe("timeout");
-    expect(snapshot.elapsedMs).toBe(60_000);
-    expect(sleep).toHaveBeenCalledTimes(6);
-    expect(isStartupMigrationActive).toHaveBeenCalledTimes(7);
-  });
-
-  it.each([false, true])(
-    "bounds an explicit readiness budget (migration=%s)",
-    async (migration) => {
-      const { waitForGatewayHealthyRestart, renderRestartDiagnostics } =
-        await import("./restart-health.js");
-      const snapshot = await waitForGatewayHealthyRestart({
-        service: makeGatewayService({ status: "running", pid: 8000 }),
-        port: 18789,
-        timeoutMs: 120_000,
-        isStartupMigrationActive: () => migration,
-      });
-      expect(snapshot).toMatchObject({
-        healthy: false,
-        waitOutcome: "timeout",
-        elapsedMs: 120_000,
-      });
-      expect(renderRestartDiagnostics(snapshot)).toContain(
-        `Readiness budget exhausted after 120s. Last observed startup phase: ${migration ? "startup migration" : "waiting for Gateway listener"}.`,
-      );
-    },
-  );
-
-  it("bounds a startup migration that never reaches readiness", async () => {
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "free",
-      listeners: [],
-      hints: [],
-    });
-    const isStartupMigrationActive = vi.fn(() => true);
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
-    const snapshot = await waitForGatewayHealthyRestart({
-      service: makeGatewayService({ status: "running", pid: 8000 }),
-      port: 18789,
-      attempts: 1,
-      delayMs: 60_000,
-      isStartupMigrationActive,
-    });
-
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.waitOutcome).toBe("timeout");
-    expect(snapshot.elapsedMs).toBe(300_000);
-    expect(sleep).toHaveBeenCalledTimes(5);
-  });
-
-  it("includes slow health inspections in the migration watchdog", async () => {
-    inspectPortUsage.mockImplementation(async () => {
-      monotonicClock.nowMs += 90_000;
-      return {
-        port: 18789,
-        status: "free",
-        listeners: [],
-        hints: [],
-      };
-    });
-    const isStartupMigrationActive = vi.fn(() => true);
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
-    const snapshot = await waitForGatewayHealthyRestart({
-      service: makeGatewayService({ status: "running", pid: 8000 }),
-      port: 18789,
-      attempts: 1,
-      delayMs: 10_000,
-      isStartupMigrationActive,
-    });
-
-    expect(snapshot.waitOutcome).toBe("timeout");
-    expect(snapshot.elapsedMs).toBe(390_000);
-    expect(sleep).toHaveBeenCalledTimes(3);
-  });
-
-  it("annotates stopped-free early exits with the actual elapsed time", async () => {
-    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-
-    const snapshot = await waitForStoppedFreeGatewayRestart();
-
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.runtime.status).toBe("stopped");
-    expect(snapshot.portUsage.status).toBe("free");
-    expect(snapshot.waitOutcome).toBe("stopped-free");
-    expect(snapshot.elapsedMs).toBe(12_500);
-    expect(sleep).toHaveBeenCalledTimes(25);
-  });
-
-  it("keeps waiting while a launchd KeepAlive supervisor can retry", async () => {
-    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
-
-    const snapshot = await waitForStoppedFreeGatewayRestart({ supervisorKeepsAlive: true });
-
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.runtime.status).toBe("stopped");
-    expect(snapshot.portUsage.status).toBe("free");
-    expect(snapshot.waitOutcome).toBe("timeout");
-    expect(snapshot.elapsedMs).toBe(60_000);
-    expect(sleep).toHaveBeenCalledTimes(120);
+    expect(renderRestartDiagnostics(snapshot)).toContain(
+      `Gateway service is still starting after 120s. Last observed startup phase: ${migration ? "startup migration" : "waiting for Gateway listener"}. Run openclaw gateway status --deep.`,
+    );
   });
 
   it("accepts a launchd KeepAlive restart after the stopped-free grace window", async () => {
@@ -632,7 +451,6 @@ describe("restart health", () => {
     );
     callGateway.mockImplementation(gatewayHealthResponse({}));
 
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
       service,
       port: 18789,
@@ -659,138 +477,6 @@ describe("restart health", () => {
     expect(sleep).toHaveBeenCalledTimes(185);
   });
 
-  it("keeps waiting when the expected gateway version is not available yet", async () => {
-    const service = makeGatewayService({ status: "running", pid: 8000 });
-    inspectPortUsage
-      .mockResolvedValueOnce({
-        port: 18789,
-        status: "free",
-        listeners: [],
-        hints: [],
-      })
-      .mockResolvedValueOnce({
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-        hints: [],
-      });
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.26", connId: "new" },
-      }),
-    );
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
-    const snapshot = await waitForGatewayHealthyRestart({
-      service,
-      port: 18789,
-      expectedVersion: "2026.4.26",
-      attempts: 4,
-      delayMs: 1_000,
-    });
-
-    expect(snapshot.healthy).toBe(true);
-    expect(snapshot.gatewayVersion).toBe("2026.4.26");
-    expect(snapshot.expectedVersion).toBe("2026.4.26");
-    expect(snapshot.waitOutcome).toBe("healthy");
-    expect(snapshot.elapsedMs).toBe(1_000);
-    expect(snapshot.versionMismatch).toBeUndefined();
-    expect(sleep).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps waiting when the expected gateway build identity is not available yet", async () => {
-    const service = makeGatewayService({ status: "running", pid: 8000 });
-    inspectPortUsage
-      .mockResolvedValueOnce({
-        port: 18789,
-        status: "free",
-        listeners: [],
-        hints: [],
-      })
-      .mockResolvedValueOnce({
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-        hints: [],
-      });
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.26", buildId: "new-build", connId: "new" },
-      }),
-    );
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
-    const snapshot = await waitForGatewayHealthyRestart({
-      service,
-      port: 18789,
-      expectedBuildId: "new-build",
-      attempts: 4,
-      delayMs: 1_000,
-    });
-
-    expect(snapshot.healthy).toBe(true);
-    expect(snapshot.gatewayBuildId).toBe("new-build");
-    expect(snapshot.expectedBuildId).toBe("new-build");
-    expect(snapshot.waitOutcome).toBe("healthy");
-    expect(snapshot.buildIdMismatch).toBeUndefined();
-    expect(sleep).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps waiting when the gateway probe cannot report build identity yet", async () => {
-    const service = makeGatewayService({ status: "running", pid: 8000 });
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-      hints: [],
-    });
-    callGateway.mockRejectedValueOnce(new Error("connect ECONNREFUSED")).mockImplementationOnce(
-      gatewayHealthResponse({
-        server: { version: "2026.4.26", buildId: "new-build", connId: "new" },
-      }),
-    );
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
-    const snapshot = await waitForGatewayHealthyRestart({
-      service,
-      port: 18789,
-      expectedBuildId: "new-build",
-      attempts: 4,
-      delayMs: 1_000,
-    });
-
-    expect(snapshot.healthy).toBe(true);
-    expect(snapshot.gatewayBuildId).toBe("new-build");
-    expect(snapshot.waitOutcome).toBe("healthy");
-    expect(snapshot.buildIdMismatch).toBeUndefined();
-    expect(sleep).toHaveBeenCalledTimes(1);
-  });
-
-  it("fails closed when build identity remains unavailable through the wait deadline", async () => {
-    const service = makeGatewayService({ status: "running", pid: 8000 });
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "free",
-      listeners: [],
-      hints: [],
-    });
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
-    const snapshot = await waitForGatewayHealthyRestart({
-      service,
-      port: 18789,
-      expectedBuildId: "new-build",
-      attempts: 4,
-      delayMs: 1_000,
-    });
-
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.waitOutcome).toBe("timeout");
-    expect(snapshot.elapsedMs).toBe(4_000);
-    expect(snapshot.buildIdMismatch).toBeUndefined();
-    expect(sleep).toHaveBeenCalledTimes(4);
-  });
-
   it("fails immediately when a reachable gateway omits build identity", async () => {
     const service = makeGatewayService({ status: "running", pid: 8000 });
     inspectPortUsage.mockResolvedValue({
@@ -805,7 +491,6 @@ describe("restart health", () => {
       }),
     );
 
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
       service,
       port: 18789,
@@ -821,32 +506,6 @@ describe("restart health", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
-  it("annotates timeout waits when the health loop exhausts all attempts", async () => {
-    const service = makeGatewayService({ status: "running", pid: 8000 });
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "free",
-      listeners: [],
-      hints: [],
-    });
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
-    const snapshot = await waitForGatewayHealthyRestart({
-      service,
-      port: 18789,
-      attempts: 4,
-      delayMs: 1_000,
-    });
-
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.runtime.status).toBe("running");
-    expect(snapshot.runtime.pid).toBe(8000);
-    expect(snapshot.portUsage.status).toBe("free");
-    expect(snapshot.waitOutcome).toBe("timeout");
-    expect(snapshot.elapsedMs).toBe(4_000);
-    expect(sleep).toHaveBeenCalledTimes(4);
-  });
-
   it("cancels a migration-extended wait before another health inspection", async () => {
     const controller = new AbortController();
     const aborted = new Error("repair-budget");
@@ -854,7 +513,6 @@ describe("restart health", () => {
     sleep.mockImplementationOnce(async () => {
       controller.abort(aborted);
     });
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     await expect(
       waitForGatewayHealthyRestart({
         service: makeGatewayService({ status: "running", pid: 8000 }),

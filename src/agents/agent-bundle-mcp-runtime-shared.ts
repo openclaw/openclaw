@@ -38,6 +38,7 @@ export function shouldLoadRequesterScopedMcpHarnessRuntime(params: {
 export type CreateSessionMcpRuntime = (params: {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   workspaceDir: string;
   agentDir?: string;
   cfg?: OpenClawConfig;
@@ -51,4 +52,5 @@ export type CreateSessionMcpRuntime = (params: {
   requesterConnect?: RequesterMcpConnect;
   configFingerprint?: string;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+  toolDenylist?: string[];
 }) => SessionMcpRuntime | Promise<SessionMcpRuntime>;

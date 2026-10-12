@@ -1,6 +1,86 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 
 type Cleanup = () => void;
+type Listener = () => void;
+
+/** Keeps existing synchronous page controllers alive while Solid owns their DOM. */
+export class ControllerHost implements ReactiveControllerHost {
+  private readonly controllers = new Set<ReactiveController>();
+  private readonly listeners = new Set<Listener>();
+  private pendingUpdate: Promise<boolean> | null = null;
+  isConnected = false;
+
+  addController(controller: ReactiveController): void {
+    this.controllers.add(controller);
+    if (this.isConnected) {
+      controller.hostConnected?.();
+    }
+  }
+
+  removeController(controller: ReactiveController): void {
+    this.controllers.delete(controller);
+  }
+
+  subscribe(listener: Listener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  requestUpdate(): void {
+    if (!this.pendingUpdate) {
+      this.pendingUpdate = Promise.resolve().then(() => {
+        this.pendingUpdate = null;
+        if (this.isConnected) {
+          for (const controller of this.controllers) {
+            controller.hostUpdate?.();
+          }
+        }
+        for (const listener of this.listeners) {
+          listener();
+        }
+        return true;
+      });
+    }
+  }
+
+  get updateComplete(): Promise<boolean> {
+    return this.pendingUpdate ?? Promise.resolve(true);
+  }
+
+  connect(): void {
+    this.isConnected = true;
+    for (const controller of this.controllers) {
+      controller.hostConnected?.();
+    }
+    this.requestUpdate();
+  }
+
+  disconnect(): void {
+    this.isConnected = false;
+    for (const controller of this.controllers) {
+      controller.hostDisconnected?.();
+    }
+  }
+}
+
+/** State stays synchronous; the setter only publishes a rendering invalidation. */
+export function viewState() {
+  return (prototype: ControllerHost, key: string): void => {
+    const values = new WeakMap<ControllerHost, unknown>();
+    Object.defineProperty(prototype, key, {
+      configurable: true,
+      get(this: ControllerHost) {
+        return values.get(this);
+      },
+      set(this: ControllerHost, value: unknown) {
+        if (!Object.is(values.get(this), value)) {
+          values.set(this, value);
+          this.requestUpdate();
+        }
+      },
+    });
+  };
+}
 
 type SourceEntry<T> = {
   readonly getSource: () => T | null | undefined;
@@ -9,6 +89,7 @@ type SourceEntry<T> = {
   source: T | undefined;
   cleanup: Cleanup | undefined;
   generation: number;
+  frame: number | undefined;
 };
 
 /**
@@ -24,10 +105,24 @@ export class SubscriptionsController implements ReactiveController {
     host.addController(this);
   }
 
+  watchStore<T extends { subscribe: (notify: () => void) => Cleanup }>(
+    getSource: () => T | null | undefined,
+    synchronize?: (source: T) => void,
+    commitInFrame?: () => void,
+  ): this {
+    return this.watch(
+      getSource,
+      (source, notify) => source.subscribe(notify),
+      synchronize,
+      commitInFrame,
+    );
+  }
+
   watch<T>(
     getSource: () => T | null | undefined,
     subscribe: (source: T, notify: () => void) => Cleanup,
     synchronize?: (source: T) => void,
+    commitInFrame?: () => void,
   ): this {
     return this.addEntry(
       getSource,
@@ -42,7 +137,27 @@ export class SubscriptionsController implements ReactiveController {
             return;
           }
           synchronize?.(source);
-          this.host.requestUpdate();
+          if (
+            !commitInFrame ||
+            globalThis.document?.visibilityState === "hidden" ||
+            typeof globalThis.requestAnimationFrame !== "function"
+          ) {
+            this.host.requestUpdate();
+          } else if (entry.frame === undefined) {
+            entry.frame = globalThis.requestAnimationFrame(() => {
+              entry.frame = undefined;
+              if (
+                !this.connected ||
+                entry.generation !== generation ||
+                !Object.is(entry.getSource(), source)
+              ) {
+                return;
+              }
+              this.host.requestUpdate();
+              // Commit bindings in the same frame, before Lit's queued microtask.
+              commitInFrame();
+            });
+          }
         };
         const cleanup = subscribe(source, notify);
         // Make cleanup visible before synchronization in case initial state
@@ -96,6 +211,7 @@ export class SubscriptionsController implements ReactiveController {
       source: undefined,
       cleanup: undefined,
       generation: 0,
+      frame: undefined,
     };
     this.entries.push(entry as SourceEntry<unknown>);
     if (this.connected) {
@@ -134,6 +250,10 @@ export class SubscriptionsController implements ReactiveController {
 
   private disconnectEntry<T>(entry: SourceEntry<T>): void {
     entry.generation += 1;
+    if (entry.frame !== undefined) {
+      globalThis.cancelAnimationFrame(entry.frame);
+      entry.frame = undefined;
+    }
     entry.source = undefined;
     const cleanup = entry.cleanup;
     entry.cleanup = undefined;

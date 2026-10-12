@@ -1,7 +1,8 @@
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import {
   BOARD_WIDGET_TOOL_MAX_LENGTH,
   type BoardWidgetDeclared,
-} from "../../packages/gateway-protocol/src/index.js";
+} from "../../packages/gateway-protocol/src/schema/board.js";
 import { normalizeSandboxHostCsp } from "../agents/sandbox-host.js";
 import { BoardValidationError } from "./board-layout.js";
 import { normalizeGitHubActionsGrant } from "./github-actions-capability.js";
@@ -13,24 +14,12 @@ function invalidDeclaration(message: string): never {
   throw new BoardValidationError("invalid_operation", message);
 }
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 31 || code === 127) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function normalizeBoardNetOrigin(value: string): string {
   if (value !== value.trim() || value.length === 0 || value.length > 2048) {
     return invalidDeclaration(`invalid board widget network origin: ${value}`);
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
+  const parsed = URL.parse(value);
+  if (!parsed) {
     return invalidDeclaration(`invalid board widget network origin: ${value}`);
   }
   const supportedHostname =
@@ -59,7 +48,7 @@ function normalizeTool(value: string): string {
     tool.length === 0 ||
     tool.length > BOARD_WIDGET_TOOL_MAX_LENGTH ||
     tool !== value ||
-    hasControlCharacter(tool)
+    containsAsciiControlCharacter(tool)
   ) {
     return invalidDeclaration(`invalid board widget tool capability: ${value}`);
   }

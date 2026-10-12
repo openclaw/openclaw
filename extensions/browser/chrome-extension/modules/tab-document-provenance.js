@@ -141,20 +141,25 @@ export function createTabDocumentProvenance({ access }) {
     send(event);
   }
 
+  function resolveTabSnapshot(tabId, tab) {
+    const rootUrl = lifetimes.get(tabId)?.rootUrl;
+    // Chrome's tab metadata can lag the native root commit, including in fresh reads.
+    return tab?.id === tabId &&
+      tab.url === "about:blank" &&
+      typeof rootUrl === "string" &&
+      tab.pendingUrl === rootUrl
+      ? { ...tab, url: rootUrl }
+      : tab;
+  }
+
   return {
     get: (tabId) => documents.get(tabId),
     rootRevision: (tabId) => lifecycle(tabId).root,
-    resolveTabUpdate: (tabId, tab, change) => {
-      const rootUrl = lifetimes.get(tabId)?.rootUrl;
-      // Chrome can deliver its initial loading snapshot after the native commit.
-      return change.status === "loading" &&
-        change.url === undefined &&
-        tab?.url === "about:blank" &&
-        typeof rootUrl === "string" &&
-        tab.pendingUrl === rootUrl
-        ? { ...tab, url: rootUrl }
-        : tab;
-    },
+    resolveTabSnapshot,
+    resolveTabUpdate: (tabId, tab, change) =>
+      change.status === "loading" && change.url === undefined
+        ? resolveTabSnapshot(tabId, tab)
+        : tab,
     observeTab,
     revokeDocument,
     retireAttachment: (tabId) => {

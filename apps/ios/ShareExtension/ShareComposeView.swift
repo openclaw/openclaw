@@ -86,25 +86,21 @@ final class ShareComposeView: UIView, UITextViewDelegate {
         case .preparing:
             self.showFooter(
                 text: NSLocalizedString("Preparing share…", comment: "Share extension preparation status"),
-                icon: nil,
-                spinning: true)
+                icon: nil)
         case .ready:
             self.statusContainer.isHidden = true
         case .sending:
             self.showFooter(
                 text: NSLocalizedString("Sending to OpenClaw gateway…", comment: "Share extension sending status"),
-                icon: nil,
-                spinning: true)
+                icon: nil)
         case .sent:
             self.showFooter(
                 text: NSLocalizedString("Sent to OpenClaw.", comment: "Share extension success status"),
-                icon: (name: "checkmark.circle.fill", tint: .systemGreen),
-                spinning: false)
+                icon: (name: "checkmark.circle.fill", tint: .systemGreen))
         case let .blocked(message), let .failed(message):
             self.showFooter(
                 text: message,
-                icon: (name: "exclamationmark.triangle.fill", tint: .systemOrange),
-                spinning: false)
+                icon: (name: "exclamationmark.triangle.fill", tint: .systemOrange))
         }
         self.updateControls()
     }
@@ -135,19 +131,16 @@ final class ShareComposeView: UIView, UITextViewDelegate {
         self.placeholderLabel.isHidden = !self.draftText.isEmpty
     }
 
-    private func showFooter(text: String, icon: (name: String, tint: UIColor)?, spinning: Bool) {
+    private func showFooter(text: String, icon: (name: String, tint: UIColor)?) {
         self.statusContainer.isHidden = false
         self.statusLabel.text = text
-        if spinning {
-            self.statusSpinner.startAnimating()
-        } else {
-            self.statusSpinner.stopAnimating()
-        }
         if let icon {
+            self.statusSpinner.stopAnimating()
             self.statusIcon.image = UIImage(systemName: icon.name)
             self.statusIcon.tintColor = icon.tint
             self.statusIcon.isHidden = false
         } else {
+            self.statusSpinner.startAnimating()
             self.statusIcon.isHidden = true
         }
         UIAccessibility.post(notification: .announcement, argument: text)
@@ -294,7 +287,12 @@ final class ShareComposeView: UIView, UITextViewDelegate {
     }
 
     private static func makeSendConfiguration() -> UIButton.Configuration {
-        var configuration = self.sendConfigurationBase()
+        // Keep the filled fallback on iOS 18 hosts (see DESIGN.md).
+        var configuration: UIButton.Configuration = if #available(iOS 26.0, *) {
+            .prominentGlass()
+        } else {
+            .filled()
+        }
         configuration.cornerStyle = .capsule
         configuration.baseBackgroundColor = self.accent
         configuration.baseForegroundColor = .white
@@ -305,15 +303,6 @@ final class ShareComposeView: UIView, UITextViewDelegate {
             NSLocalizedString("Send to OpenClaw", comment: "Share extension send action"),
             style: .headline)
         return configuration
-    }
-
-    /// Liquid Glass primary action on iOS 26 with the filled fallback that keeps
-    /// the same label, tint, and hit target on iOS 18 hosts (see DESIGN.md).
-    private static func sendConfigurationBase() -> UIButton.Configuration {
-        if #available(iOS 26.0, *) {
-            return .prominentGlass()
-        }
-        return .filled()
     }
 
     private static func attributedTitle(_ text: String, style: UIFont.TextStyle) -> AttributedString {

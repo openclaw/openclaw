@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
+import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { z } from "zod";
 import { resolveCodexAppServerAuthProfileStore } from "./app-server/auth-profile.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
@@ -20,41 +21,45 @@ export async function handleCodexAccountUsage({
   signal,
   hasCurrentClientAuthority,
 }: GatewayRequestHandlerOptions): Promise<void> {
+  const invalid = (message: string) =>
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
   const parsed = paramsSchema.safeParse(params);
   if (!parsed.success) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "Expected agentId and profileId."),
-    );
+    invalid("Expected agentId and profileId.");
     return;
   }
   const { agentId, profileId } = parsed.data;
   const config = context.getRuntimeConfig();
   if (!listAgentIds(config).includes(agentId)) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "Unknown agent."));
+    invalid("Unknown agent.");
     return;
   }
   try {
     const agentDir = resolveAgentDir(config, agentId);
-    const readStore = () =>
-      resolveCodexAppServerAuthProfileStore({ agentDir, authProfileId: profileId, config });
-    const store = structuredClone(readStore());
+    const store = structuredClone(
+      await resolveCodexAppServerAuthProfileStore({ agentDir, authProfileId: profileId, config }),
+    );
     const credential = store.profiles[profileId];
     if (!credential || credential.provider !== "openai" || credential.type === "api_key") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Select a saved Codex subscription login."),
-      );
+      invalid("Select a saved Codex subscription login.");
       return;
     }
+    // Recheck the selected credential at disclosure, after the asynchronous usage request.
     const assertCurrent = () => {
       if (
         signal?.aborted ||
         hasCurrentClientAuthority?.() === false ||
         context.getRuntimeConfig() !== config ||
-        !isDeepStrictEqual(readStore().profiles[profileId], store.profiles[profileId])
+        !isDeepStrictEqual(
+          ensureAuthProfileStore(agentDir, {
+            profileId,
+            allowKeychainPrompt: false,
+            config,
+            externalCliProviderIds: ["openai"],
+            externalCliProfileIds: [profileId],
+          }).profiles[profileId],
+          store.profiles[profileId],
+        )
       ) {
         throw new Error("Account credentials changed. Refresh Models and try again.");
       }

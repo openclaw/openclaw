@@ -151,9 +151,9 @@ describe("google video generation provider", () => {
     expect(provider.capabilities.videoToVideo?.supportsAudio).toBe(false);
   });
 
-  it("advertises Gemini video generation with a config-only Google API key", () => {
+  it("advertises Gemini video generation with a config-only Google API key", async () => {
     expect(
-      buildGoogleVideoGenerationProvider().isConfigured?.({
+      await buildGoogleVideoGenerationProvider().isConfiguredAsync?.({
         cfg: {
           models: {
             providers: {
@@ -231,7 +231,6 @@ describe("google video generation provider", () => {
   });
 
   it.each([
-    ["invalid alphabet", "not-base64!"],
     ["non-canonical pad bits", "ZE=="],
     ["mixed alphabet", "aGVsbG8+_"],
   ])("rejects %s in inline video bytes", async (_scenario, videoBytes) => {

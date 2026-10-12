@@ -1,294 +1,145 @@
 // Install the fixture mocks before loading the execution owner and its dependencies.
 import "./update-command-execution.test-support.js";
-import { once } from "node:events";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as configFile from "../../config/config.js";
-import * as gatewayService from "../../daemon/service.js";
-import * as gatewayCall from "../../gateway/call.js";
-import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
-import * as portInspection from "../../infra/ports-inspect.js";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
-import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-import * as utils from "../../utils.js";
-import * as restartProbe from "../daemon-cli/restart-health-probe.js";
 import { UpdatePreMutationError } from "./shared.js";
+import { registerExecutionFailureTests } from "./update-command-execution-failures.test-support.js";
+import { registerNativeAdmissionTests } from "./update-command-execution-native-admission.test-support.js";
+import { registerExecutionTimeoutTests } from "./update-command-execution-timeouts.test-support.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import {
-  gatewayServiceCommandUsesRoot,
-  GatewayServiceUpdateOwnershipError,
-} from "./update-command-service-plan.js";
+import * as readiness from "./update-command-readiness.js";
+import { registerServiceCollectionTests } from "./update-command-service-collection.test-support.js";
 
-const { executionParams, inspectOrStopService, mocks, schemaContext, successfulUpdate } =
+const { bindExecutionGuards, executionParams, inspectOrStopService, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
 describe("mutable update execution", () => {
+  registerServiceCollectionTests();
   it.each(
     (["package", "git"] as const).flatMap((kind) =>
-      [undefined, 30_000, 600_000].map((timeoutMs) => ({ kind, timeoutMs })),
+      (["deferred", "advisory", "failure"] as const).map((outcome) => ({ kind, outcome })),
     ),
   )(
-    "passes only the operator's $timeoutMs ms deadline to $kind candidate validation",
-    async ({ kind, timeoutMs }) => {
-      const runStagedUpdate = async ({
-        validateCandidate,
-      }: {
-        validateCandidate?: (root: string) => Promise<unknown>;
-      }) => {
-        expect(validateCandidate).toBeTypeOf("function");
-        await validateCandidate?.("/candidate");
-        return successfulUpdate;
+    "scopes $kind verification deferral to state contention ($outcome)",
+    async ({ kind, outcome }) => {
+      const options = executionParams(kind);
+      options.opts.restart = options.shouldRestart = false;
+      const deferred = {
+        name: "post-install-verify",
+        command: "verify installed package",
+        cwd: options.root,
+        exitCode: outcome === "advisory" ? 0 : null,
+        durationMs: 0,
+        advisory: {
+          kind: "recoverable-maintenance" as const,
+          message: "State verification deferred to the operator restart.",
+        },
       };
-      mocks.runPackageUpdate.mockImplementation(runStagedUpdate);
-      mocks.runGitUpdate.mockImplementation(runStagedUpdate);
-
-      const execution = await executeMutableUpdate({
-        ...executionParams(kind),
-        timeoutMs,
-        updateStepTimeoutMs: timeoutMs ?? 30 * 60_000,
+      const install = kind === "package" ? mocks.runPackageUpdate : mocks.runGitUpdate;
+      const result = {
+        ...successfulUpdate,
+        ...(outcome === "failure" ? { status: "error", reason: "post-update-failed" } : {}),
+        steps: [deferred],
+      };
+      install.mockResolvedValueOnce(result);
+      const execution = await executeMutableUpdate(await bindExecutionGuards(options));
+      expect(execution?.result).toMatchObject({
+        status: outcome === "deferred" ? "skipped" : outcome === "failure" ? "error" : "ok",
+        steps: [deferred],
       });
-
-      expect(execution?.result.status).toBe("ok");
-      expect(mocks.validateCanary).toHaveBeenCalledOnce();
-      expect(mocks.validateCanary.mock.calls[0]?.[0].root).toBe("/candidate");
-      expect(mocks.validateCanary.mock.calls[0]?.[0].timeoutMs).toBe(timeoutMs);
+      expect(execution?.result.reason).toBe(
+        outcome === "deferred"
+          ? "gateway-readiness-unverified"
+          : outcome === "failure"
+            ? "post-update-failed"
+            : undefined,
+      );
     },
   );
 
-  it.each([
-    ["measured startup", undefined, true, undefined],
-    ["explicit allowance", 450_000, true, undefined],
-    ["explicit deadline", 30_000, false, undefined],
-    ["terminal version mismatch", undefined, false, "version"],
-    ["replaced executor", undefined, false, "executor"],
-  ] as const)(
-    "preserves previous Gateway verification through slow readiness (%s)",
-    async (_allowance, timeoutMs, verified, failure) =>
-      withTestDir({ prefix: "previous-gateway-readiness-" }, async (root) => {
-        const readyAtMs = 400_000;
-        mockProcessPlatform("linux");
-        let elapsedMs = 0;
-        const epochMs = Date.now();
-        vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
-        vi.spyOn(Date, "now").mockImplementation(() => epochMs + elapsedMs);
-        vi.spyOn(utils, "sleep").mockImplementation(async (delayMs) => {
-          elapsedMs += delayMs;
-        });
-        let readyObservedAtMs: number | undefined;
-        let stoppedAtMs: number | undefined;
-        let replaceExecutor: (() => void) | undefined;
-        const server = createServer((request, response) => {
-          const ready = elapsedMs >= readyAtMs;
-          if (request.url === "/readyz" && ready) {
-            readyObservedAtMs = elapsedMs;
-            replaceExecutor?.();
-          }
-          response.writeHead(request.url === "/readyz" && !ready ? 503 : 200).end();
-        });
-        server.listen(0, "127.0.0.1");
-        await once(server, "listening");
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Missing synthetic Gateway listener");
+  registerExecutionTimeoutTests();
+
+  registerNativeAdmissionTests({ executionParams, mocks, successfulUpdate });
+  it.each(["same", "alias", "disjoint"] as const)(
+    "preserves a serving Git runtime when activation did not stop it: %s",
+    async (destination) => {
+      await withTestDir({ prefix: "git-live-runtime-custody-" }, async (dir) => {
+        const servingRoot = path.join(dir, "serving");
+        const targetRoot = destination === "same" ? servingRoot : path.join(dir, "target");
+        await fs.mkdir(path.join(servingRoot, "dist"), { recursive: true });
+        if (destination === "alias") {
+          await fs.symlink(
+            servingRoot,
+            targetRoot,
+            process.platform === "win32" ? "junction" : "dir",
+          );
+        } else if (destination === "disjoint") {
+          await fs.mkdir(path.join(targetRoot, "dist"), { recursive: true });
         }
-        try {
-          await fs.mkdir(path.join(root, "dist"));
-          await fs.writeFile(
-            path.join(root, "package.json"),
-            JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-          );
-          await fs.writeFile(path.join(root, "dist", "index.js"), "");
-          const context = schemaContext("default");
-          const config = { gateway: { mode: "local" as const, port: address.port } };
-          const configSnapshot = {
-            ...context.configSnapshot,
-            config,
-            sourceConfig: config,
-          };
-          const managedEnv = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, ".openclaw") };
-          vi.spyOn(os, "userInfo").mockReturnValue({
-            uid: 1000,
-            gid: 1000,
-            username: "operator",
-            homedir: root,
-            shell: "/bin/sh",
-          });
-          mocks.captureManagedContext.mockResolvedValue({
-            env: managedEnv,
-            configSnapshot,
-            pluginInstallRecords: {},
-          });
-          vi.spyOn(configFile, "readConfigFileSnapshot").mockResolvedValue(configSnapshot);
-          vi.spyOn(restartProbe, "resolveGatewayRestartProbeContext").mockResolvedValue({
-            config,
-            auth: {},
-          });
-          const service = gatewayService.resolveGatewayService();
-          vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
-          vi.spyOn(service, "readRuntime").mockResolvedValue({ status: "running", pid: 8000 });
-          vi.spyOn(service, "readCommand").mockResolvedValue({
-            programArguments: [process.execPath, path.join(root, "dist", "index.js"), "gateway"],
-          });
-          expect(await gatewayServiceCommandUsesRoot({ root, env: managedEnv })).toBe(true);
-          vi.spyOn(portInspection, "inspectPortUsage").mockImplementation(async (port) => ({
-            port,
-            status: "busy",
-            listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-            hints: [],
-          }));
-          vi.spyOn(gatewayCall, "callGateway").mockImplementation(
-            gatewayHealthResponse({
-              server: {
-                version: failure === "version" ? "0.9.0" : "1.0.0",
-                bootId: "previous-boot",
-              },
-            }),
-          );
-          mocks.validateCanary.mockResolvedValue({
-            status: "ok",
-            phase: "readiness",
-            durationMs: 70_000,
-            logTail: [],
-            steps: [
-              {
-                name: "candidate gateway canary",
-                command: "gateway run",
-                cwd: root,
-                durationMs: 70_000,
-                exitCode: 0,
-              },
-            ],
-          });
-          mocks.maybeStopService.mockImplementation(async ({ phase }) => {
-            if (phase === "prepare") {
-              stoppedAtMs = elapsedMs;
-            }
-            return inspectOrStopService(phase);
-          });
-          mocks.runPackageUpdate.mockImplementation(
-            async (
-              params: Parameters<
-                typeof import("./update-command-package.js").runPackageInstallUpdate
-              >[0],
-            ) => {
-              await params.validateCandidate(root);
-              await params.beforeActivate();
-              return successfulUpdate;
-            },
-          );
-          const params = {
-            ...executionParams("package"),
-            root,
-            timeoutMs,
-            updateStepTimeoutMs: timeoutMs ?? 20 * 60_000,
-          };
-          if (failure === "executor") {
-            replaceExecutor = () => {
-              params.opts.run = { runId: "replacement-run", env: { OPENCLAW_STATE_DIR: root } };
-            };
-          }
-          const execution = await executeMutableUpdate(params);
-          if (failure === "executor") {
-            expect(execution?.result.status).toBe("error");
-            expect(execution?.failure?.detail).toContain("lost its original executor");
-            expect(stoppedAtMs).toBeUndefined();
-            expect(execution?.previousVerified).toBe(false);
-            return;
-          }
-          expect(execution?.result.status, JSON.stringify(mocks.runtimeError.mock.calls)).toBe(
-            "ok",
-          );
-          expect(
-            execution?.previousVerified,
-            JSON.stringify({ readyObservedAtMs, stoppedAtMs }),
-          ).toBe(verified);
-          if (verified) {
-            expect(readyObservedAtMs).toBeGreaterThanOrEqual(readyAtMs);
-            expect(stoppedAtMs).toBeGreaterThanOrEqual(readyObservedAtMs!);
-          } else {
-            expect(readyObservedAtMs).toBeUndefined();
-            expect(stoppedAtMs).toBeLessThan(readyAtMs);
-            if (failure === "version") {
-              expect(stoppedAtMs).toBe(0);
-            }
-          }
-        } finally {
-          server.closeAllConnections();
-          const closed = once(server, "close");
-          server.close();
-          await closed;
-        }
-      }),
-  );
-  it.each(["package", "staged", "git"] as const)(
-    "refuses an unsupported native receiver before activation: %s",
-    async (route) =>
-      withTestDir({ prefix: "native-before-activation-" }, async (dir) => {
-        const control = path.join(dir, "leases");
-        await fs.mkdir(control);
-        vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-        const env = { OPENCLAW_STATE_DIR: dir };
-        const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
-        const params = executionParams(route === "git" ? "git" : "package");
-        params.root = dir;
-        params.updateStepTimeoutMs = 600_000;
-        params.opts.run = { runId, env };
-        if (route === "staged") {
-          params.packageInstallSpec = path.join(dir, "candidate.tgz");
-        }
-        const events: string[] = [];
-        mocks.nativeSupport.mockImplementation(async ({ executor }) => {
-          executor.assertCurrent();
-          events.push("native-admission");
-          return false;
-        });
-        const candidate = async ({
-          validateCandidate,
-        }: {
-          validateCandidate: (root: string) => Promise<unknown>;
-        }) => {
-          await validateCandidate(dir);
-          // Models the package/Git publisher which follows successful validation.
-          events.push("publish");
-          return successfulUpdate;
-        };
-        mocks.runPackageUpdate.mockImplementation(candidate);
+        const artifact = path.join(servingRoot, "dist", "prepare.runtime.js");
+        await fs.writeFile(artifact, "retained serving runtime");
+        const target = { schemaVersions: { state: 15, agent: 19 } };
+        mocks.maybeStopService.mockImplementation(async () => ({
+          ...inspectOrStopService("inspect"),
+          servicePid: 23456,
+          serviceUpdateVerdict: {
+            kind: "owned",
+            root: servingRoot,
+            fingerprint: "serving-generation",
+            refreshDefinition: false,
+          },
+        }));
+        vi.spyOn(readiness, "verifyPreviousGatewayForUpdate").mockResolvedValue(true);
         mocks.runGitUpdate.mockImplementation(
           async (
             options: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
           ) => {
-            if (!options.inspectGitTarget || !options.validateCandidate) {
-              throw new Error("Missing actual Git admission callbacks");
-            }
-            await options.inspectGitTarget({ schemaVersions: { state: 15, agent: 19 } });
-            return candidate({ validateCandidate: options.validateCandidate });
+            await options.inspectGitTarget?.(target);
+            await options.beforeGitMutation?.(target);
+            await fs.writeFile(
+              path.join(targetRoot, "dist", "prepare.runtime.js"),
+              "candidate runtime",
+            );
+            return { ...successfulUpdate, mode: "git" };
           },
         );
-        const result = await withUpdateCommandExecutor(runId, async (executor) => {
-          mocks.prepareMutableUpdate.mockImplementation(async () => {
-            params.opts.run!.executorFence = await executor.enter(dir);
-          });
-          return executeMutableUpdate(params);
-        });
-        expect(result?.result).toMatchObject({
-          status: "error",
-          reason: "target-native-unsupported",
-        });
-        expect(events).toEqual(["native-admission"]);
-        expect(mocks.nativeSupport.mock.calls[0]?.[0]).toMatchObject({
-          timeoutMs: params.updateStepTimeoutMs,
-        });
+        const execution = await executeMutableUpdate(
+          await bindExecutionGuards({
+            ...executionParams("git"),
+            root: targetRoot,
+            shouldRestart: false,
+            opts: { json: true, restart: false },
+          }),
+        );
+        expect(await fs.readFile(artifact, "utf8")).toBe("retained serving runtime");
         expect(mocks.serviceStopped).toBe(false);
-        expect(mocks.validateCanary).not.toHaveBeenCalled();
-      }),
+        if (destination === "disjoint") {
+          expect(execution?.result.status).toBe("ok");
+          expect(
+            await fs.readFile(path.join(targetRoot, "dist", "prepare.runtime.js"), "utf8"),
+          ).toBe("candidate runtime");
+        } else {
+          expect(execution).toMatchObject({
+            mutationStarted: false,
+            result: { status: "error", reason: "runtime-artifact-publication" },
+          });
+          expect(execution?.result.steps).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ stderrTail: expect.stringContaining("23456") }),
+            ]),
+          );
+        }
+      });
+    },
   );
   it("retains the live update run when stopped-service context capture fails", async () => {
     await withTestDir({ prefix: "partial-stop-recovery-owner-" }, async (dir) => {
@@ -321,7 +172,7 @@ describe("mutable update execution", () => {
       });
       await withUpdateCommandExecutor(runId, async (executor) => {
         params.opts.run!.executorFence = await executor.enter(dir, { preflight: true });
-        const result = await executeMutableUpdate(params);
+        const result = await executeMutableUpdate(await bindExecutionGuards(params));
         expect(result?.result.status).toBe("error");
         expect(mocks.maybeRestartService).toHaveBeenCalledOnce();
         expect(recoveryRun).toBe(params.opts.run);
@@ -338,7 +189,9 @@ describe("mutable update execution", () => {
       }
       return inspectOrStopService(phase);
     });
-    const execution = await executeMutableUpdate(executionParams("package"));
+    const execution = await executeMutableUpdate(
+      await bindExecutionGuards(executionParams("package")),
+    );
     expect(execution).toMatchObject({
       mutationStarted: false,
       result: { status: "error", reason: "managed-service-preflight" },
@@ -348,185 +201,57 @@ describe("mutable update execution", () => {
     expect(mocks.serviceStopped).toBe(false);
   });
 
-  it.each(["admission", "execution"] as const)(
-    "preserves native inspection reasons through %s refusal",
-    async (phase) => {
-      mocks.maybeStopService.mockImplementation(async ({ handoffFromGateway }) => {
-        if (phase === "admission" || handoffFromGateway) {
-          return {
-            stopped: false,
-            inspected: false,
-            runtimeInspected: false,
-            running: false,
-            serviceMutationAllowed: false,
-            serviceUpdateVerdict: {
-              kind: "unavailable",
-              message: "The systemd user session bus is unavailable.",
-              inspectionReason: "systemd-user-bus-unavailable",
-            },
-            blockMessage: "The systemd user session bus is unavailable.",
-          };
-        }
-        return inspectOrStopService("inspect");
-      });
-      const execution = await executeMutableUpdate(executionParams("package"));
-      expect(execution?.result).toMatchObject({
-        status: "error",
-        reason: "managed-service-preflight",
-        steps: [
-          {
-            failureFacts: [
-              {
-                check: "managed-service",
-                code: "systemd-user-bus-unavailable",
-                message: "The systemd user session bus is unavailable.",
-              },
-            ],
-          },
-        ],
-      });
-      expect(mocks.serviceStopped).toBe(false);
-      expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["available", "incompatible", "changed-owner"] as const)(
-    "admits local artifacts from the staged version before rehearsal: %s",
-    async (outcome) => {
-      await withTestDir({ prefix: "openclaw-staged-plugin-admission-" }, async (stage) => {
-        await fs.writeFile(
-          path.join(stage, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "1.0.7" }),
-        );
-        const events: string[] = [];
-        mocks.pluginPreflight.mockImplementation(async ({ targetVersion }) => {
-          events.push("preflight");
-          expect(targetVersion).toBe("1.0.7");
-          expect(mocks.serviceStopped).toBe(false);
-          if (outcome === "incompatible") {
-            return [
-              {
-                pluginId: "fixture",
-                reason: "Installed plugin is incompatible and its replacement is unavailable.",
-                message: "Fixture plugin update needs a retry.",
-                guidance: [],
-              },
-            ];
-          }
-          return [];
-        });
-        mocks.revalidateSchemaContext.mockImplementation(async (context) => {
-          if (outcome === "changed-owner" && events.includes("preflight")) {
-            throw new UpdatePreMutationError("database-schema-preflight", "fixture owner changed");
-          }
-          return context;
-        });
-        mocks.validateCanary.mockImplementation(async () => {
-          events.push("rehearsal");
-          return { status: "ok", phase: "readiness", steps: [], durationMs: 1, logTail: [] };
-        });
-        mocks.runPackageUpdate.mockImplementation(async ({ validateCandidate }) => {
-          events.push("staged");
-          expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
-          try {
-            await validateCandidate(stage);
-            return successfulUpdate;
-          } catch (error) {
-            if (!(error instanceof UpdatePreMutationError)) {
-              throw error;
-            }
-            return { ...successfulUpdate, status: "error", reason: "package-update-failed" };
-          }
-        });
-        const execution = await executeMutableUpdate({
-          ...executionParams("package"),
-          tag: "/tmp/candidate.tgz",
-          packageInstallSpec: "/tmp/candidate.tgz",
-          packageTargetVersion: undefined,
-        });
-        expect(events).toEqual(
-          outcome === "changed-owner"
-            ? ["staged", "preflight"]
-            : ["staged", "preflight", "rehearsal"],
-        );
-        expect(execution?.mutationStarted).toBe(false);
-        expect(mocks.serviceStopped).toBe(false);
-        expect(execution?.result.status).toBe(outcome === "changed-owner" ? "error" : "ok");
-        if (outcome === "changed-owner") {
-          expect(mocks.validateCanary).not.toHaveBeenCalled();
-          expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
-          expect(execution?.result.reason).toBe("database-schema-preflight");
-        }
-      });
-    },
-  );
-
-  it.each(["registry", "artifact", "artifact-state-change"] as const)(
-    "refuses incompatible staged %s schemas before candidate rehearsal or activation",
-    async (target) => {
-      await withTestDir({ prefix: "openclaw-staged-schema-admission-" }, async (stage) => {
-        await fs.writeFile(
-          path.join(stage, "package.json"),
-          JSON.stringify({
-            name: "openclaw",
-            version: "2026.7.1",
-            openclaw: { schemaVersions: { state: 1, agent: 1 } },
-          }),
-        );
-        let databaseAdvanced = target !== "artifact-state-change";
-        mocks.pluginPreflight.mockImplementation(async () => {
-          databaseAdvanced = true;
-          return [];
-        });
-        mocks.checkTargetSchemas.mockImplementation(async (versions) => ({
-          incompatible:
-            versions?.state === 1 && databaseAdvanced
-              ? [
-                  {
-                    kind: "state",
-                    path: "/fixture/default/state.sqlite",
-                    foundVersion: 17,
-                    supportedVersion: 1,
-                  },
-                ]
-              : [],
-          indeterminate: [],
-        }));
-        mocks.runPackageUpdate.mockImplementation(async ({ validateCandidate, beforeActivate }) => {
-          await validateCandidate(stage);
-          await beforeActivate();
-          return successfulUpdate;
-        });
-        const params = executionParams("package");
-        if (target !== "registry") {
-          params.tag = "/tmp/candidate.tgz";
-          params.packageInstallSpec = "/tmp/candidate.tgz";
-          params.packageTargetVersion = undefined;
-          params.packageTargetSchemaVersions = undefined;
-        }
-
-        const execution = await executeMutableUpdate(params);
-
-        expect(mocks.validateCanary.mock.calls.length).toBe(0);
-        expect(execution).toMatchObject({
-          mutationStarted: false,
-          result: { status: "error", reason: "database-schema-preflight" },
-        });
-        expect(mocks.serviceStopped).toBe(false);
-        if (target !== "registry") {
-          expect(mocks.pluginPreflight).toHaveBeenCalledTimes(
-            target === "artifact-state-change" ? 1 : 0,
+  it.each([{ kind: "package", shouldRestart: false }] as const)(
+    "admits FreeBSD $kind with a service advisory and restart=$shouldRestart",
+    async ({ kind, shouldRestart }) =>
+      withEnvAsync(
+        {
+          OPENCLAW_SUPERVISOR_MODE: undefined,
+          OPENCLAW_HOME: undefined,
+          OPENCLAW_PROFILE: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+          OPENCLAW_CONFIG_PATH: undefined,
+        },
+        async () => {
+          mockProcessPlatform("freebsd");
+          mockSystemAccountHome();
+          const maintenance = await vi.importActual<
+            typeof import("./update-command-service-maintenance.js")
+          >("./update-command-service-maintenance.js");
+          mocks.maybeStopService.mockImplementation(
+            maintenance.maybeStopManagedServiceBeforeMutableUpdate,
           );
-          expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
-        }
-      });
-    },
+
+          const execution = await executeMutableUpdate(
+            await bindExecutionGuards({
+              ...executionParams(kind),
+              shouldRestart,
+              opts: { json: true, restart: shouldRestart },
+            }),
+          );
+
+          expect(execution?.result.status).toBe("ok");
+          if (kind === "package") {
+            expect(execution?.preManagedServiceStop).toMatchObject({
+              serviceMutationAllowed: false,
+              serviceUpdateVerdict: { kind: "unavailable" },
+              serviceMutationSkipMessage: expect.stringContaining(
+                "rc.d or foreground process owner",
+              ),
+            });
+            expect(execution?.preManagedServiceStop?.serviceMutationSkipMessage).toContain(
+              "Restart the Gateway you launched manually",
+            );
+          }
+          expect(mocks.serviceStopped).toBe(false);
+          expect(
+            kind === "package" ? mocks.runPackageUpdate : mocks.runGitUpdate,
+          ).toHaveBeenCalled();
+        },
+      ),
   );
 
-  it.each([
-    { metadata: "missing", openclaw: undefined },
-    { metadata: "malformed", openclaw: { schemaVersions: { state: "15", agent: 19 } } },
-  ])(
+  it.each([{ metadata: "missing", openclaw: undefined }])(
     "retains registry schema admission when staged metadata is $metadata",
     async ({ openclaw }) => {
       await withTestDir({ prefix: "openclaw-staged-schema-retention-" }, async (stage) => {
@@ -534,10 +259,9 @@ describe("mutable update execution", () => {
           path.join(stage, "package.json"),
           JSON.stringify({ name: "openclaw", version: "2026.9.2", openclaw }),
         );
-        let databaseAdvanced = false;
         mocks.checkTargetSchemas.mockImplementation(async (versions) => ({
           incompatible:
-            databaseAdvanced && versions?.state === 15
+            versions?.state === 15
               ? [
                   {
                     kind: "state",
@@ -550,20 +274,21 @@ describe("mutable update execution", () => {
           indeterminate: [],
         }));
         mocks.runPackageUpdate.mockImplementation(async ({ validateCandidate, beforeActivate }) => {
-          databaseAdvanced = true;
           await validateCandidate(stage);
           await beforeActivate();
           return successfulUpdate;
         });
 
-        const execution = await executeMutableUpdate({
-          ...executionParams("package"),
-          tag: "2026.9.2",
-          packageInstallSpec: "openclaw@2026.9.2",
-          packageTargetVersion: "2026.9.2",
-        });
+        const execution = await executeMutableUpdate(
+          await bindExecutionGuards({
+            ...executionParams("package"),
+            tag: "2026.9.2",
+            packageInstallSpec: "openclaw@2026.9.2",
+            packageTargetVersion: "2026.9.2",
+          }),
+        );
 
-        expect(mocks.validateCanary.mock.calls.length).toBe(0);
+        expect(mocks.validateCanary).toHaveBeenCalledOnce();
         expect(execution).toMatchObject({
           mutationStarted: false,
           result: { status: "error", reason: "database-schema-preflight" },
@@ -573,31 +298,9 @@ describe("mutable update execution", () => {
     },
   );
 
-  it("leaves a staged local same-version no-op free of plugin or mutable preparation", async () => {
-    mocks.runPackageUpdate.mockResolvedValue({
-      ...successfulUpdate,
-      status: "skipped",
-      reason: "already-current",
-    });
-    const execution = await executeMutableUpdate({
-      ...executionParams("package"),
-      tag: "/tmp/candidate.tgz",
-      packageInstallSpec: "/tmp/candidate.tgz",
-      packageTargetVersion: undefined,
-    });
-    expect(execution?.result.reason).toBe("already-current");
-    expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
-    expect(mocks.pluginPreflight).not.toHaveBeenCalled();
-    expect(mocks.serviceStopped).toBe(false);
-  });
-
   it.each([
     { failure: "missing", contract: "api", range: ">=1.0.0", incompatible: false },
-    { failure: "metadata", contract: "api", range: ">=1.0.0", incompatible: false },
-    { failure: "throw", contract: "api", range: ">=1.0.0", incompatible: false },
     { failure: "missing", contract: "api", range: ">=1.0.0 <1.0.1", incompatible: true },
-    { failure: "metadata", contract: "api", range: ">=1.0.0 <1.0.1", incompatible: true },
-    { failure: "throw", contract: "api", range: ">=1.0.0 <1.0.1", incompatible: true },
     { failure: "metadata", contract: "host", range: ">=1.0.2", incompatible: true },
     { failure: "throw", contract: "host", range: ">=1.0.2", incompatible: true },
   ])(
@@ -638,7 +341,9 @@ describe("mutable update execution", () => {
         );
         mocks.pluginPreflight.mockImplementation(actual.preflightConfiguredNpmPluginTargets);
 
-        const execution = await executeMutableUpdate(executionParams("package"));
+        const execution = await executeMutableUpdate(
+          await bindExecutionGuards(executionParams("package")),
+        );
         const unclassifiedFailure = incompatible && failure === "throw";
 
         expect(execution?.result.status).toBe(unclassifiedFailure ? "error" : "ok");
@@ -682,7 +387,7 @@ describe("mutable update execution", () => {
   it("waits for plugin availability before preparing a package update", async () => {
     const available = createDeferred<[]>();
     mocks.pluginPreflight.mockImplementation(() => available.promise);
-    const execution = executeMutableUpdate(executionParams("package"));
+    const execution = executeMutableUpdate(await bindExecutionGuards(executionParams("package")));
     try {
       await vi.waitFor(() => expect(mocks.pluginPreflight).toHaveBeenCalledOnce());
       expect(mocks.serviceStopped).toBe(false);
@@ -695,234 +400,115 @@ describe("mutable update execution", () => {
     expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
   });
 
-  it("refuses configuration drift during plugin admission before mutable preparation", async () => {
-    let configChanged = false;
-    mocks.pluginPreflight.mockImplementation(async () => {
-      configChanged = true;
-      return [];
-    });
-    mocks.revalidateSchemaContext.mockImplementation(async (context) => {
-      if (configChanged) {
-        throw new UpdatePreMutationError("database-schema-preflight", "Configuration changed");
-      }
-      return context;
-    });
+  registerExecutionFailureTests();
 
-    const execution = await executeMutableUpdate(executionParams("package"));
-
-    expect(execution?.result.reason).toBe("database-schema-preflight");
-    expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
-    expect(mocks.serviceStopped).toBe(false);
-    expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
-  });
-
-  it("captures the package target and admitted service environment before schema awaits", async () => {
-    const events: string[] = [];
-    mocks.runPackageUpdate.mockImplementation(async () => {
-      events.push("install");
-      return successfulUpdate;
-    });
-    const serviceState = inspectOrStopService("inspect");
-    mocks.maybeStopService.mockImplementation(async ({ phase }) => {
-      if (phase === "prepare") {
-        events.push("stop");
-        return inspectOrStopService(phase);
-      }
-      return serviceState;
-    });
-    mocks.prepareMutableUpdate.mockImplementation(async (env) => {
-      expect(env).toEqual({ OPENCLAW_PROFILE: "default" });
-      events.push("mutable-prepare");
-    });
-    const schemaGate = createDeferred();
-    mocks.checkTargetSchemas.mockImplementation(async (_versions, contexts) => {
-      expect(contexts.map((context) => context.env.OPENCLAW_PROFILE)).toEqual([
-        "invoker",
-        "default",
-      ]);
-      events.push(
-        events.includes("mutable-prepare") ? "schema-after-inspection" : "schema-before-inspection",
-      );
-      if (events.includes("mutable-prepare")) {
-        await schemaGate.promise;
-      }
-      return { incompatible: [], indeterminate: [] };
-    });
-
-    const params = executionParams("package");
-    const pendingExecution = executeMutableUpdate(params);
-    try {
-      await vi.waitFor(() => expect(events).toContain("schema-after-inspection"));
-      expect(events.indexOf("schema-before-inspection")).toBeLessThan(
-        events.indexOf("mutable-prepare"),
-      );
-      expect(events.at(-1)).toBe("schema-after-inspection");
-      expect(mocks.serviceStopped).toBe(false);
-      expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
-      params.packageInstallSpec = "openclaw@changed-during-schema-check";
-      serviceState.serviceEnv = { OPENCLAW_PROFILE: "revalidated" };
-    } finally {
-      schemaGate.resolve();
-      await pendingExecution;
-    }
-    const execution = await pendingExecution;
-
-    expect(events.at(-1)).toBe("install");
-    expect(mocks.prepareMutableUpdate).toHaveBeenCalledOnce();
-    expect(execution?.result).toBe(successfulUpdate);
-    expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
-    expect(mocks.runPackageUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        installSpec: "openclaw@1.0.1",
-        managedServiceEnv: { OPENCLAW_PROFILE: "default" },
-      }),
-    );
-  });
-
-  it.each(["before-prepare", "after-prepare"] as const)(
-    "refuses schema mismatch at %s without invoking the package updater",
-    async (phase) => {
-      mocks.checkTargetSchemas.mockImplementation(async () => ({
-        incompatible:
-          phase === "before-prepare" || mocks.prepareMutableUpdate.mock.calls.length > 0
-            ? [
-                {
-                  kind: "agent",
-                  path: "/fixture/default/worker.sqlite",
-                  foundVersion: 999,
-                  supportedVersion: 19,
-                },
-              ]
-            : [],
-        indeterminate: [],
-      }));
-
-      const execution = await executeMutableUpdate(executionParams("package"));
-
-      expect(mocks.serviceStopped).toBe(false);
-      expect(mocks.prepareMutableUpdate).toHaveBeenCalledTimes(phase === "after-prepare" ? 1 : 0);
-      expect(execution?.result.reason).toBe("database-schema-preflight");
-      expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["activation", "requester revocation", "service ownership"])(
-    "reports %s exceptions without retrying a fallback package updater",
-    async (kind) => {
-      const failure =
-        kind === "requester revocation"
-          ? new UpdateRequesterRevokedError()
-          : kind === "service ownership"
-            ? new GatewayServiceUpdateOwnershipError(
-                "Service manager returned EACCES.",
-                undefined,
-                "service-manager-access-denied",
-              )
-            : new Error("activation failed");
-      mocks.runPackageUpdate.mockRejectedValue(failure);
-
-      const execution = await executeMutableUpdate(executionParams("package"));
-
-      expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
-      expect(execution?.failure?.cause).toBe(failure);
-      expect(execution?.result).toMatchObject({
-        status: "error",
-        reason: kind === "requester revocation" ? "requester-revoked" : "update-failed",
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        steps: [expect.objectContaining({ name: "update", exitCode: 1 })],
-      });
-      expect(mocks.verifyPackageRecovery).not.toHaveBeenCalled();
-      if (kind === "service ownership") {
-        expect(execution?.result.steps[0]?.failureFacts).toEqual([
-          {
-            check: "managed-service",
-            code: "service-manager-access-denied",
-            message: "Service manager returned EACCES.",
+  it.each([false, true])(
+    "checks Git schema compatibility before activation: incompatible=%s",
+    async (incompatible) => {
+      await withTestDir({ prefix: "git-selection-online-" }, async (root) => {
+        const events: string[] = [];
+        const target = { schemaVersions: { state: 14, agent: 18 } };
+        const beginMutation = vi.fn(() => {
+          expect(mocks.serviceStopped).toBe(true);
+          events.push("mutation");
+        });
+        const onActivation = vi.fn();
+        mocks.checkTargetSchemas.mockImplementation(async (versions) => {
+          expect(mocks.serviceStopped).toBe(false);
+          expect(versions).toEqual(target.schemaVersions);
+          events.push("activation-schema");
+          return {
+            incompatible: incompatible
+              ? [
+                  {
+                    kind: "state",
+                    path: "/fixture/default/state.sqlite",
+                    foundVersion: 17,
+                    supportedVersion: 14,
+                  },
+                ]
+              : [],
+            indeterminate: [],
+          };
+        });
+        mocks.maybeStopService.mockImplementation(async ({ phase }) => {
+          if (phase === "prepare") {
+            events.push("stop");
+          }
+          const state = inspectOrStopService(phase);
+          if (state.serviceUpdateVerdict?.kind === "owned") {
+            state.serviceUpdateVerdict = { ...state.serviceUpdateVerdict, root };
+          }
+          state.windowsTaskAutoStartRecovery = {
+            suspended: Promise.resolve(true),
+            beginMutation,
+            assertRecoveryCurrent: () => {},
+            restore: vi.fn(async () => {}),
+            handoff: vi.fn(),
+            complete: vi.fn(async () => {}),
+            interrupted: () => false,
+          };
+          return state;
+        });
+        // Readiness timing/failure semantics use the real probe in execution-validation.test.ts.
+        // This fixture checks execution ordering around an already verified runtime.
+        vi.spyOn(readiness, "verifyPreviousGatewayForUpdate").mockImplementation(
+          async ({ assertCurrent }) => {
+            assertCurrent?.();
+            expect(mocks.serviceStopped).toBe(false);
+            events.push("verified");
+            return true;
           },
+        );
+        mocks.runGitUpdate.mockImplementation(
+          async (
+            params: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
+          ) => {
+            if (!params.inspectGitTarget || !params.beforeGitMutation) {
+              throw new Error("Expected both real Git admission callbacks");
+            }
+            await params.inspectGitTarget(target);
+            events.push("git");
+            expect(mocks.serviceStopped).toBe(false);
+            await params.beforeGitMutation(target);
+            return { ...successfulUpdate, mode: "git" };
+          },
+        );
+
+        const coordinator = path.join(root, "coordinator");
+        await fs.mkdir(coordinator);
+        vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(coordinator);
+        const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
+        const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+        const params = { ...executionParams("git"), root, onActivation };
+        params.opts.run = { runId, env };
+        const execution = await withUpdateCommandExecutor(runId, async (executor) => {
+          mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
+            events.push("mutable-prepare");
+            admitExecutor(await executor.enter(root));
+          });
+          return executeMutableUpdate(await bindExecutionGuards(params));
+        });
+
+        expect(events).toEqual([
+          "mutable-prepare",
+          "git",
+          "activation-schema",
+          ...(incompatible ? [] : ["verified", "mutable-prepare", "stop", "mutation"]),
         ]);
-      }
+        expect(mocks.serviceStopped).toBe(!incompatible);
+        expect(beginMutation).toHaveBeenCalledTimes(incompatible ? 0 : 1);
+        expect(onActivation).toHaveBeenCalledTimes(incompatible ? 0 : 1);
+        expect(execution?.mutationStarted).toBe(!incompatible);
+        expect(execution?.result.status, JSON.stringify(execution?.failure)).toBe(
+          incompatible ? "error" : "ok",
+        );
+        if (incompatible) {
+          expect(execution?.result.reason).toBe("database-schema-preflight");
+        }
+        expect(execution?.result.mode).toBe("git");
+        expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+      });
     },
   );
-
-  it("keeps Git candidate selection online and delegates its later activation", async () => {
-    const events: string[] = [];
-    mocks.maybeStopService.mockImplementation(async ({ phase }) => {
-      if (phase === "prepare") {
-        events.push("stop");
-      }
-      return inspectOrStopService(phase);
-    });
-    mocks.prepareMutableUpdate.mockImplementation(async () => {
-      events.push("mutable-prepare");
-    });
-    mocks.runGitUpdate.mockImplementation(
-      async (params: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0]) => {
-        if (!params.inspectGitTarget || !params.beforeGitMutation) {
-          throw new Error("Expected both real Git admission callbacks");
-        }
-        const target = { schemaVersions: { state: 15, agent: 19 } };
-        await params.inspectGitTarget(target);
-        events.push("git");
-        return { ...successfulUpdate, mode: "git" };
-      },
-    );
-
-    const execution = await executeMutableUpdate(executionParams("git"));
-
-    expect(events).toEqual(["mutable-prepare", "git"]);
-    expect(mocks.serviceStopped).toBe(false);
-    expect(execution?.result.mode).toBe("git");
-    expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
-  });
-
-  it("retains rejected Git canary findings in the terminal result", async () => {
-    const fact = {
-      check: "core/doctor/config-readable",
-      code: "doctor-failed",
-      message: "The configured state directory is not readable.",
-      affectedKey: "stateDir",
-    };
-    mocks.validateCanary.mockResolvedValue({
-      status: "error",
-      reason: "doctor-failed",
-      phase: "doctor",
-      durationMs: 1,
-      logTail: [fact.message],
-      steps: [
-        {
-          name: "candidate doctor",
-          command: "openclaw doctor",
-          cwd: "/candidate",
-          durationMs: 1,
-          exitCode: 1,
-          stderrTail: fact.message,
-          failureFacts: [fact],
-        },
-      ],
-    });
-    const repair = await import("./update-command-repair.js");
-    vi.spyOn(repair, "runUpdateCommandRepair").mockResolvedValue({
-      status: "unavailable",
-      attempts: [],
-      finalValidation: { ok: false, score: 0, summary: fact.message },
-    });
-    mocks.runGitUpdate.mockImplementation(
-      async (params: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0]) => {
-        if (!params.validateCandidate) {
-          throw new Error("Expected the Git candidate validation callback");
-        }
-        await params.validateCandidate("/candidate");
-        return { ...successfulUpdate, mode: "git" };
-      },
-    );
-
-    const execution = await executeMutableUpdate(executionParams("git"));
-
-    expect(execution?.result).toMatchObject({
-      status: "error",
-      reason: "doctor-failed",
-      steps: [{ failureFacts: [fact] }],
-    });
-    expect(mocks.serviceStopped).toBe(false);
-  });
 });

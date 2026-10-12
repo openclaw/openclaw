@@ -15,7 +15,7 @@ projection. Part of the [Plugin hooks](/plugins/hooks) guide.
 
 Use `security.installPolicy` for operator-owned allow/warn/block decisions. That
 policy runs from OpenClaw config, covers CLI install and update paths, and
-fails closed when enabled but unavailable.
+blocks installation when enabled but unavailable.
 
 `before_install` is a plugin-runtime lifecycle hook. It can run after
 `security.installPolicy` in a process where plugin hooks have already been
@@ -29,7 +29,7 @@ is an empty `ok` result. Return additional findings or
 `{ block: true, blockReason }` to stop the install in that process.
 
 `block: true` is terminal. `block: false` is treated as no decision. Handler
-failures block the install fail-closed.
+failures block the install.
 
 ## Gateway lifecycle
 
@@ -37,6 +37,15 @@ Use `gateway_start` to start general plugin services and `gateway_stop` to
 clean up long-running resources. The cron scheduler can still be loading when
 `gateway_start` runs, so do not use it as the baseline signal for an external
 cron projection.
+
+Gateway hosts pass an optional `ctx.abortSignal` to `gateway_start`. It aborts
+when restart drain or Gateway close begins, before shutdown joins admitted work.
+Use it to stop periodic scheduling and prevent pending callbacks from rearming
+their timers. Check an already-aborted signal before starting work, and remove
+listeners when a service stops or reloads. Keep shared-resource disposal in
+`gateway_stop` or the service's `stop()` method so admitted work retains its
+dependencies until it settles. Plugin replacement and recovery start hooks receive
+the same Gateway drain lifetime; plugin-only replacement does not abort it.
 
 The legacy `api.on("deactivate", ...)` alias was removed in August 2026. Use
 `gateway_stop` for cleanup; see the
@@ -84,7 +93,7 @@ Keep OpenClaw as the source of truth for due checks and execution.
 ### Safe external cron projection
 
 Project a complete wake snapshot instead of forwarding cron event deltas. The
-external adapter's `replaceAll` operation must be atomic and idempotent, and it
+external adapter's `replaceAll` operation must be atomic and safe to repeat, and it
 must resolve only after the host has durably accepted the snapshot. It must
 also honor the supplied abort signal: if the signal aborts before durable
 acceptance, the adapter must not accept that snapshot.

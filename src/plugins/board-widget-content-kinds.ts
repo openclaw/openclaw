@@ -22,96 +22,86 @@ function isGatewayLocalPath(value: string): boolean {
 }
 
 function isCanonicalPublicResourcePath(value: string): boolean {
-  try {
-    // Public readers match URL pathnames, and the proxy owns its route before reader dispatch.
-    return value !== SANDBOX_HOST_PATH && new URL(value, "http://localhost").pathname === value;
-  } catch {
-    return false;
-  }
-}
-
-/** Validates and publishes one runtime board-widget content kind. */
-function registerPluginBoardWidgetContentKind(params: {
-  record: PluginRecord;
-  registry: PluginRegistry;
-  definition: PluginBoardWidgetContentKind;
-}): void {
-  const { definition, record, registry } = params;
-  const kind = typeof definition.kind === "string" ? definition.kind.trim() : "";
-  const label = typeof definition.label === "string" ? definition.label.trim() : "";
-  const surface =
-    typeof definition.resources?.surface === "string" ? definition.resources.surface.trim() : "";
-  const paths = definition.resources?.paths;
-  if (!CONTENT_KIND_PATTERN.test(kind) || RESERVED_CONTENT_KINDS.has(kind)) {
-    fail(record.id, `kind ${JSON.stringify(kind)} is invalid or reserved`);
-  }
-  if (!label || label.length > 80) {
-    fail(record.id, "label must contain 1-80 characters");
-  }
-  if (!SURFACE_PATTERN.test(surface)) {
-    fail(record.id, `resource surface ${JSON.stringify(surface)} is invalid`);
-  }
-  if (
-    !Array.isArray(paths) ||
-    paths.length === 0 ||
-    paths.length > 8 ||
-    paths.some(
-      (resourcePath) =>
-        typeof resourcePath !== "string" ||
-        resourcePath.length > 256 ||
-        !isGatewayLocalPath(resourcePath),
-    ) ||
-    new Set(paths).size !== paths.length
-  ) {
-    fail(record.id, "resource paths must be 1-8 unique gateway-local absolute paths");
-  }
-  if (
-    typeof definition.validateSource !== "function" ||
-    typeof definition.composeDocument !== "function"
-  ) {
-    fail(record.id, "validateSource and composeDocument callbacks are required");
-  }
-  const publicReader = definition.resources.readPublicResource;
-  if (publicReader !== undefined && typeof publicReader !== "function") {
-    fail(record.id, "readPublicResource must be a function");
-  }
-  if (publicReader && paths.some((resourcePath) => !isCanonicalPublicResourcePath(resourcePath))) {
-    fail(
-      record.id,
-      `public resource paths must be canonical URL pathnames and cannot use ${SANDBOX_HOST_PATH}`,
-    );
-  }
-  for (const registered of registry.boardWidgetContentKinds.values()) {
-    const existing = registered.definition.resources;
-    if (
-      (publicReader || existing.readPublicResource) &&
-      existing.paths.some((entry) => paths.includes(entry))
-    ) {
-      fail(record.id, "public resource paths must be unique across registered content kinds");
-    }
-  }
-  if (registry.boardWidgetContentKinds.has(kind)) {
-    fail(record.id, `duplicate kind ${JSON.stringify(kind)}`);
-  }
-  const pluginKind = `${record.id}:${kind}`;
-  if (!/^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$/u.test(pluginKind)) {
-    fail(record.id, `persisted kind ${JSON.stringify(pluginKind)} is invalid`);
-  }
-  registry.boardWidgetContentKinds.set(kind, {
-    pluginId: record.id,
-    pluginKind,
-    definition: {
-      ...definition,
-      kind,
-      label,
-      resources: { ...definition.resources, surface, paths: [...paths] },
-    },
-  });
+  // Public readers match URL pathnames, and the proxy owns its route before reader dispatch.
+  return value !== SANDBOX_HOST_PATH && URL.parse(value, "http://localhost")?.pathname === value;
 }
 
 export function createPluginBoardWidgetContentKindRegistrar(registry: PluginRegistry) {
-  return (record: PluginRecord, definition: PluginBoardWidgetContentKind) =>
-    registerPluginBoardWidgetContentKind({ record, registry, definition });
+  return (record: PluginRecord, definition: PluginBoardWidgetContentKind): void => {
+    const kind = typeof definition.kind === "string" ? definition.kind.trim() : "";
+    const label = typeof definition.label === "string" ? definition.label.trim() : "";
+    const surface =
+      typeof definition.resources?.surface === "string" ? definition.resources.surface.trim() : "";
+    const paths = definition.resources?.paths;
+    if (!CONTENT_KIND_PATTERN.test(kind) || RESERVED_CONTENT_KINDS.has(kind)) {
+      fail(record.id, `kind ${JSON.stringify(kind)} is invalid or reserved`);
+    }
+    if (!label || label.length > 80) {
+      fail(record.id, "label must contain 1-80 characters");
+    }
+    if (!SURFACE_PATTERN.test(surface)) {
+      fail(record.id, `resource surface ${JSON.stringify(surface)} is invalid`);
+    }
+    if (
+      !Array.isArray(paths) ||
+      paths.length === 0 ||
+      paths.length > 8 ||
+      paths.some(
+        (resourcePath) =>
+          typeof resourcePath !== "string" ||
+          resourcePath.length > 256 ||
+          !isGatewayLocalPath(resourcePath),
+      ) ||
+      new Set(paths).size !== paths.length
+    ) {
+      fail(record.id, "resource paths must be 1-8 unique gateway-local absolute paths");
+    }
+    if (
+      typeof definition.validateSource !== "function" ||
+      typeof definition.composeDocument !== "function"
+    ) {
+      fail(record.id, "validateSource and composeDocument callbacks are required");
+    }
+    const publicReader = definition.resources.readPublicResource;
+    if (publicReader !== undefined && typeof publicReader !== "function") {
+      fail(record.id, "readPublicResource must be a function");
+    }
+    if (
+      publicReader &&
+      paths.some((resourcePath) => !isCanonicalPublicResourcePath(resourcePath))
+    ) {
+      fail(
+        record.id,
+        `public resource paths must be normalized URL paths and cannot use ${SANDBOX_HOST_PATH}`,
+      );
+    }
+    for (const registered of registry.boardWidgetContentKinds.values()) {
+      const existing = registered.definition.resources;
+      if (
+        (publicReader || existing.readPublicResource) &&
+        existing.paths.some((entry) => paths.includes(entry))
+      ) {
+        fail(record.id, "public resource paths must be unique across registered content kinds");
+      }
+    }
+    if (registry.boardWidgetContentKinds.has(kind)) {
+      fail(record.id, `duplicate kind ${JSON.stringify(kind)}`);
+    }
+    const pluginKind = `${record.id}:${kind}`;
+    if (!/^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$/u.test(pluginKind)) {
+      fail(record.id, `persisted kind ${JSON.stringify(pluginKind)} is invalid`);
+    }
+    registry.boardWidgetContentKinds.set(kind, {
+      pluginId: record.id,
+      pluginKind,
+      definition: {
+        ...definition,
+        kind,
+        label,
+        resources: { ...definition.resources, surface, paths: [...paths] },
+      },
+    });
+  };
 }
 
 export function resolveBoardWidgetContentKind(
@@ -125,10 +115,7 @@ export function resolveBoardWidgetContentKindByPluginKind(
   registry: PluginRegistry | null | undefined,
   pluginKind: string,
 ): PluginBoardWidgetContentKindRegistration | undefined {
-  if (!registry) {
-    return undefined;
-  }
-  for (const registration of registry.boardWidgetContentKinds.values()) {
+  for (const registration of registry?.boardWidgetContentKinds.values() ?? []) {
     if (registration.pluginKind === pluginKind) {
       return registration;
     }

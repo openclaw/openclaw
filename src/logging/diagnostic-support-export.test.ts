@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   uninstallDiagnosticStabilityFatalHook,
-  writeDiagnosticStabilityBundleSync,
+  writeDiagnosticStabilityBundleForFailureSync,
 } from "./diagnostic-stability-bundle.js";
 import {
   resetDiagnosticStabilityRecorderForTest,
@@ -26,6 +26,10 @@ async function readZipTextEntries(file: string): Promise<Record<string, string>>
     }
   }
   return entries;
+}
+
+function emptyLogTail(file: string): LogTailPayload {
+  return { file, cursor: 0, size: 0, truncated: false, reset: false, lines: [] };
 }
 
 describe("diagnostic support export", () => {
@@ -211,11 +215,11 @@ describe("diagnostic support export", () => {
       limitBytes: 1024,
       reason: "json_body_limit",
     });
-    const bundle = writeDiagnosticStabilityBundleSync({
-      reason: "gateway.restart_startup_failed",
-      stateDir: tempDir,
-      now: new Date("2026-04-22T12:00:00.000Z"),
-    });
+    const bundle = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_startup_failed",
+      undefined,
+      { stateDir: tempDir, now: new Date("2026-04-22T12:00:00.000Z") },
+    );
     expect(bundle.status).toBe("written");
 
     const logTail: LogTailPayload = {
@@ -541,26 +545,19 @@ describe("diagnostic support export", () => {
   });
 
   it.each([
-    { agents: { list: [{ id: "legacy" }] }, expected: undefined },
+    { agents: { entries: { main: {} } }, expected: { count: 1 } },
     { agents: { defaults: {} }, expected: undefined },
     { agents: { entries: [] }, expected: undefined },
     { agents: { entries: {} }, expected: { count: 0 } },
   ])(
-    "distinguishes an absent canonical agent roster from an empty one: $agents",
+    "distinguishes absent, empty, and populated canonical agent rosters: $agents",
     async ({ agents, expected }) => {
       const configPath = path.join(tempDir, "openclaw.json");
       fs.writeFileSync(configPath, JSON.stringify({ agents }));
       const result = await writeDiagnosticSupportExport({
         env: { HOME: tempDir, OPENCLAW_CONFIG_PATH: configPath },
         stateDir: tempDir,
-        readLogTail: async () => ({
-          file: path.join(tempDir, "openclaw.log"),
-          cursor: 0,
-          size: 0,
-          truncated: false,
-          reset: false,
-          lines: [],
-        }),
+        readLogTail: async () => emptyLogTail(path.join(tempDir, "openclaw.log")),
       });
       const entries = await readZipTextEntries(result.path);
       expect(JSON.parse(entries["config/shape.json"] ?? "{}").agents).toEqual(expected);
@@ -614,14 +611,7 @@ describe("diagnostic support export", () => {
       outputPath,
       stabilityBundle: bundlePath,
       now: new Date("2026-04-22T12:00:01.000Z"),
-      readLogTail: async () => ({
-        file: path.join(tempDir, "logs", "openclaw.log"),
-        cursor: 0,
-        size: 0,
-        truncated: false,
-        reset: false,
-        lines: [],
-      }),
+      readLogTail: async () => emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
     });
 
     const entries = await readZipTextEntries(outputPath);
@@ -761,14 +751,7 @@ describe("diagnostic support export", () => {
       stateDir: tempDir,
       outputPath,
       now: new Date("2026-04-22T12:00:01.000Z"),
-      readLogTail: async () => ({
-        file: path.join(tempDir, "logs", "openclaw.log"),
-        cursor: 0,
-        size: 0,
-        truncated: false,
-        reset: false,
-        lines: [],
-      }),
+      readLogTail: async () => emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
       readStatusSnapshot: async () => {
         throw new Error(`status failed with token ${fakeToken}`);
       },
@@ -843,14 +826,7 @@ describe("diagnostic support export", () => {
         stateDir: tempDir,
         outputPath,
         now: new Date("2026-04-22T12:00:03.000Z"),
-        readLogTail: async () => ({
-          file: path.join(tempDir, "logs", "openclaw.log"),
-          cursor: 0,
-          size: 0,
-          truncated: false,
-          reset: false,
-          lines: [],
-        }),
+        readLogTail: async () => emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
       });
     } finally {
       statSpy.mockRestore();
@@ -882,14 +858,7 @@ describe("diagnostic support export", () => {
       stateDir: tempDir,
       outputPath,
       now: new Date("2026-07-18T12:00:01.000Z"),
-      readLogTail: async () => ({
-        file: path.join(tempDir, "logs", "openclaw.log"),
-        cursor: 0,
-        size: 0,
-        truncated: false,
-        reset: false,
-        lines: [],
-      }),
+      readLogTail: async () => emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
     });
 
     const entries = await readZipTextEntries(outputPath);

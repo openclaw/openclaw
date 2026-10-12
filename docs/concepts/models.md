@@ -59,12 +59,23 @@ Related model-config surfaces:
 - `agents.defaults.modelSelectionScope` chooses the scope of chat commands and Gateway session model updates without an explicit scope. The default is the current session. See [Model selection scope](/gateway/config-agents/models#agentsdefaultsmodelselectionscope).
 - `agents.defaults.modelPolicy.allow` is the optional override allowlist. Use exact refs or trailing prefix wildcards such as `provider/*` and `provider/namespace/*`. Omit it or set `[]` to allow any model. Per-agent `agents.entries.*.modelPolicy.allow` replaces the default policy for that agent.
 - `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks. Those tasks include generated dashboard session titles, supported channel thread or topic titles, progress narration, and rolling [Activity recaps](/web/control-ui/settings#activity-tab). Per-agent `agents.entries.*.utilityModel` overrides it. When unset, OpenClaw uses the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`), otherwise the agent's primary model. Set it to an empty string to disable utility routing. Generated titles retry once with the primary model when a distinct utility model fails. For dashboard titles, automatic utility derivation and the regular fallback follow the effective session provider and auth profile. An explicit utility model keeps its configured provider and auth. An empty utility model skips only the alternate small-model route, not dashboard title generation. Utility tasks are separate model calls and may send bounded task content to the selected model provider. Activity recaps use bounded transcript excerpts and the previous recap, preserve cached text on failure, and do not fall back to the primary model.
+- `agents.defaults.decisionModel` selects a plugin's typed decision model as `provider/model` for choices, scores, and boolean probabilities. It is disabled when unset or empty. Per-agent `agents.entries.*.decisionModel` inherits when unset and disables decisions when empty. The Control UI has a separate **Decision** picker beside Utility; decision models never appear in chat, primary, fallback, or utility choices. Supporting plugins call the [decision runtime](/plugins/sdk-overview/capabilities#decision-models-contract-version-1); selection alone does not start background work or replace the chat model.
 - `agents.defaults.imageModel` is used only when the primary model cannot accept images.
 - `agents.defaults.pdfModel` is used by the `pdf` tool. If unset, the tool falls back to `imageModel`, then the resolved session/default model.
 - `agents.defaults.mediaModels.{image,music,video}` backs the shared media-generation tools. If unset, each tool infers an auth-backed provider default: current default provider first, then the remaining registered providers for that capability in provider-id order. Cross-provider fallback is the fixed default behavior.
 - Per-agent `agents.entries.*.model` (plus bindings) overrides `agents.defaults.model` — see [Multi-agent routing](/concepts/multi-agent).
 
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
+
+Utility tasks reserve additional output tokens for reasoning-capable models,
+within the selected model's output limit, so reasoning can finish before the
+title, observer digest, or summary. Non-reasoning models keep the smaller task
+budget. This does not change the model's thinking settings or the task's timeout.
+For native Ollama, configured per-model `params.think`/`params.thinking` and
+`params.num_ctx` still apply; see [Ollama thinking control](/providers/ollama/advanced).
+
+For the typed decision model class, available models, rubrics, and plugin API,
+see [Decision models](/concepts/decision-models).
 
 Explicit `modelPolicy.allow` restrictions were introduced in v2026.8.1. For legacy model maps, `openclaw doctor --fix` copies the complete restriction into `modelPolicy.allow` when every ref is valid. When one supported include file owns the repair, Doctor updates that file and preserves its ancestor include directives, including during an update. Repairs spanning multiple owners still require editing the owning files. If any ref needs provider qualification, Doctor preserves the entire legacy restriction and reports how to set an explicit policy. Until then, model-map edits still change the legacy restriction. No keys are silently dropped, and no empty policy is substituted for an unresolved restriction.
 
@@ -76,40 +87,105 @@ Removing an explicit default model policy from an included config preserves an e
 
 The same `provider/model` behaves differently depending on where it came from:
 
-| Source                                                                  | Behavior                                                                                                                                                                                                                                                       |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Configured default (`agents.defaults.model.primary`, per-agent primary) | Normal starting point; uses `agents.defaults.model.fallbacks`.                                                                                                                                                                                                 |
-| Auto fallback                                                           | Temporary recovery state, stored as `modelOverrideSource: "auto"`. OpenClaw periodically reprobes the original primary, clears the auto selection on recovery, and announces fallback/recovery transitions once per state change.                              |
-| User session selection                                                  | Exact and strict. `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` store `modelOverrideSource: "user"`. If that provider/model becomes unreachable, the run fails visibly instead of falling through to another configured model. |
-| Cron `--model` / payload `model`                                        | Per-job primary. Still uses configured fallbacks unless the job supplies its own payload `fallbacks` (`fallbacks: []` forces a strict run).                                                                                                                    |
+| Source                                               | Behavior                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Configured default (`agents.defaults.model.primary`) | Normal native starting point; uses `agents.defaults.model.fallbacks`.                                                                                                                                                                                                                                                                  |
+| Native agent primary                                 | Strict unless the agent supplies `model.fallbacks`; an explicit `[]` disables fallback.                                                                                                                                                                                                                                                |
+| ACP agent primary                                    | Selects the external harness model. Native calls use the configured native default and inherit its fallback list unless the agent supplies `model.fallbacks`. Explicit native session and subagent selections still apply.                                                                                                             |
+| Automatically pinned creation/spawn model            | A concrete model selected at creation can be stored with `modelOverrideSource: "auto"`. It keeps that model across later default changes and allows configured fallbacks. Without fallback-origin metadata, it is a creation pin, not a temporary fallback awaiting recovery.                                                          |
+| Auto fallback                                        | Temporary recovery state, stored as `modelOverrideSource: "auto"`. OpenClaw periodically reprobes the original primary, clears the auto selection on recovery, and announces fallback/recovery transitions once per state change.                                                                                                      |
+| User session selection                               | Selecting a model other than the effective agent default is exact and strict (`modelOverrideSource: "user"`). If that provider/model becomes unreachable, the run fails visibly instead of falling through to another configured model. Selecting the effective default clears the model pin and keeps its configured fallback policy. |
+| Cron `--model` / payload `model`                     | Per-job primary. Still uses configured fallbacks unless the job supplies its own payload `fallbacks` (`fallbacks: []` forces a strict run).                                                                                                                                                                                            |
 
 Other selection rules:
 
-- Changing `agents.defaults.model.primary` does not rewrite existing session pins. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
+- Changing the global or per-agent primary does not rewrite existing session pins, including automatic creation pins. Select the effective agent default with `/model`, the model picker, `session_status(model=...)`, or `sessions.patch`, or reset with `/model default` or `sessions.patch {model: null}`, to follow subsequent default changes. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
-- The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published rows, including rows matched by a trailing `provider/*` policy entry. Use its explicit Refresh action to discover provider models. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published provider rows, including rows matched by a trailing `provider/*` policy entry, and discovers native harness models for that agent on first use. Use its explicit Refresh action to request immediate provider discovery. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- Configured models stay in the picker when their sign-in, key, or CLI login is missing: they show as unavailable instead of disappearing. This covers the primary, fallbacks, utility and tool models, and each `agents.defaults.models` or per-agent `models` entry.
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
+- Chat and New Session keep the Default reset choice pinned in its provider group, then the selected model, then that provider's [recommended models](/concepts/recommended-models). The provider's other models wait behind **All models (N)**; providers without recommendations list every model. The terminal `/models` picker shows the current and recommended models with an **All models (N)** row for the rest. Text `/models <provider>` pages put the current model first, then the recommended models, instead of alphabetizing the catalog. Models settings puts the selected model first. Other rows keep the Gateway's catalog order. Picker search checks the full list, not just the visible rows.
+- Signing in to a provider keeps existing choices visible in open Control UI and terminal model pickers while discovery refreshes in the background. Changes to model restrictions, operator roles, or catalog mode still retire the old choices until the replacement catalog is ready.
+- The first catalog published after Gateway startup uses the same provider-owned model order as later refreshes. Captured rows inherit provider recommendations where available; rows without a provider rank keep the catalog's alphabetical fallback.
+
+On shared Gateways, an administrator can also configure a [named role's model
+policy](/gateway/operator-scopes#named-operator-roles). Model discovery and the
+Control UI, macOS, and iOS chat pickers show only the models permitted by that policy.
+This also applies to New Session in the Control UI. The Default choice uses a permitted automatic default; it does not grant additional
+manual choices. Changes to model restrictions, operator roles, or catalog mode
+discard old choices before refreshing the catalog. Saved conversations retain
+their historical model information.
+Filtering alone does not overwrite saved New Session model preferences. A saved
+choice can return when the policy permits it again; explicitly choosing another
+model still updates the preference.
 
 The Gateway prepares one model catalog for the CLI, `/models`, the Control UI,
-and native apps. Ordinary browsing and opening or reopening a model picker read
-the published catalog without starting provider discovery.
+and native apps. Chat and session metadata read published rows without starting
+provider discovery. Ordinary `models.list` requests reuse the published catalog;
+provider response-cache expiry alone does not rebuild it. Startup, changed
+configuration or credentials, plugin and hosted metadata updates, and explicit
+**Refresh** own provider catalog acquisition. Startup discovers provider inventory
+in the background; a later configuration or credential change rediscovers only
+the affected providers. Native harnesses such as Codex discover models and account
+readiness on demand for the selected agent: opening its model picker or catalog,
+creating a native session, or running a turn. Unused agents do not start native
+app-servers at boot. Prepared-only metadata reads retain configured model hints
+with unknown native readiness until discovery completes. A provider whose discovery fails keeps its
+saved or built-in rows and retries in the background after 30 seconds, backing off
+to 30 minutes while it keeps failing. A selected native model can load its own
+metadata while that acquisition is still running.
 
-After sign-in, starter models are available immediately. The provider shows
-“checking models…” while the Gateway discovers account models, then updates the
-open picker when discovery completes. Gateway startup and credential changes
+In chat apps, `/models` and model picker buttons reuse the newest completed provider
+list. First use of an idle native agent can take a few seconds to start its harness
+and discover models. Pending providers show `checking models…`.
+Open the menu again to see newly discovered models; completing discovery does not
+edit a list that was already sent. If optional native discovery fails, ordinary
+catalog requests keep the published rows and report `refreshFailed`; selecting a
+native model or explicitly refreshing still reports the discovery error. A failed
+harness does not prevent healthy runtimes from refreshing after their clients retire.
+
+Refreshing a selected account also keeps its last completed catalog available to
+other readers until discovery succeeds. Failed refreshes retain that catalog;
+replacing the account credentials invalidates it immediately. Ordinary reads use
+the published inventory even for a newly selected personal account. Use **Refresh**
+to acquire that account's provider-specific catalog details.
+
+If preparing a large fleet takes longer than the two-minute startup budget, the
+Gateway starts with the agent model runtimes that have finished preparing. A
+warning names the remaining agents and acquisition stage, including workspace
+plugins when known. `openclaw health --json` and the Gateway `status` RPC report
+`modelRuntime.degraded` and `modelRuntime.pendingAgents`. Preparation continues
+in the background; each completed agent becomes available, and the degraded
+status clears when the full publication finishes. An unfinished agent cannot
+serve model requests until its runtime and authentication facts are ready.
+
+After sign-in, starter models are available immediately. While the Gateway
+discovers account models, a small spinner in the picker’s search field indicates
+a background refresh. Hover, focus, or tap it to see which providers are refreshing;
+existing models stay usable, and the open picker updates when discovery completes.
+An empty picker shows “Loading models…” until its first models arrive.
+Gateway startup and credential changes
 also refresh the affected catalog. Use **Refresh** in Models or
 `openclaw models list --refresh` to request another refresh, including newly
 released models. **Retry** requests discovery again after a failure.
 
+If a credential refresh loses its plugin generation, OpenClaw retries publication
+once against current plugins. If that retry fails, the recorded failure and Gateway
+warning identify the failed fresh-generation retry.
+
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication. A provider API key does not substitute for its
-native login.
+native login. When Claude Code is logged out, its models stay listed as unavailable
+and the Control UI picker and `/models` suggest `claude auth login`.
 
-If discovery fails, OpenClaw reports the failure and keeps the last compatible
-model list. Without one, it shows prepared starter models with the failure.
+If discovery fails, **Settings > Models** and `openclaw models list` report the
+failure and keep the last compatible model list. Without one, OpenClaw shows
+prepared starter models. Chat and native Quick Chat model pickers keep usable
+choices without a catalog-wide warning; selected-model availability still applies.
 Other providers can still update. A successful empty response clears that
 provider's discovered models; it does not restore old choices. Explicitly
 configured models and independent native runtime catalogs remain.
+Removing a `models.providers.<id>` entry while the Gateway is running clears saved plugin catalog rows only when their normalized base URL matches that entry's authored `baseUrl`; other discovery endpoints and entries without an authored URL stay, and removals made before this behavior was available are not cleaned retroactively.
 
 Changes to aliases or model restrictions reuse compatible inventory. Changes to
 the provider, plugin, credentials, environment, or workspace can invalidate it.
@@ -154,10 +230,23 @@ checked independently. An unrestricted policy does not make an unknown
 provider or an unsupported runtime usable. If the policy is omitted, unmigrated
 legacy model-map restrictions described above still apply.
 
+Aliases and policy entries do not prove that a model works on a provider endpoint.
+Native endpoints need a supported model definition or provider-owned resolution.
+Explicit custom and local endpoints can use unlisted model names. Subagent spawns
+check the same support before creating child state. An automatic selection keeps
+its original primary and fallback order when at least one candidate is supported.
+
 The same policy applies to explicit `provider/model` and configured-alias hints
 after `/new` or `/reset`. Unrecognized leading text stays in the prompt.
 
 If `agents.defaults.modelPolicy.allow` is non-empty, it becomes the allowlist for `/model`, session overrides, and `--model`. Selecting a model outside that allowlist returns before any normal reply is generated. A per-agent `agents.entries.*.modelPolicy.allow` replaces the default policy for that agent.
+
+An exact entry permits only that model. Configured defaults and automatic
+fallbacks do not grant extra manual choices. Updated pickers use the same
+policy as explicit model commands while retaining current-model controls.
+Older clients can still show a forbidden choice; the server rejects its selection.
+Resetting to Default clears the session pin
+and keeps the existing automatic selection behavior.
 
 ```text
 Model override "provider/model" is not allowed by agents.defaults.modelPolicy.allow.
@@ -211,6 +300,49 @@ openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthro
 ```
 
 `openclaw models set`, provider setup, and `openclaw models aliases add` can add entries under `agents.defaults.models`, but they never change `modelPolicy.allow`. This keeps model metadata and aliases independent from override policy.
+
+### Choose the same model with different runtimes
+
+Set `pickerRuntimes` on an exact model entry to offer additional runtime choices
+in the Control UI. Each entry shows its harness label. When both OpenClaw and
+Codex are configured for the same model, the Codex choice appends `codex` to its
+name. A model with only one configured harness keeps its plain name. The
+configured `agentRuntime` remains the default:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.6-sol": {
+          agentRuntime: { id: "openclaw" },
+          pickerRuntimes: ["codex"],
+        },
+      },
+    },
+  },
+}
+```
+
+The Gateway keeps one canonical model and checks each additional runtime against
+the current account, route, and enabled harness. A choice does not grant access,
+change credentials, or rename the upstream model. Each runtime supplies its own
+availability, reasoning controls, context window, and placement capabilities.
+Additional choices must also support explicit session runtime selection; a
+registered harness that cannot be selected explicitly remains disabled here.
+ACP sessions keep their existing model controls; they cannot select a different
+harness here.
+Opening the picker acquires missing native inventories once per runtime while
+preserving the configured default, then reuses current observations. Explicit
+Refresh reacquires the requested inventories.
+Session-scoped pickers evaluate model and runtime choices together after checking
+session access, and recheck access before returning the catalog.
+
+An agent can replace the inherited list through
+`agents.entries.<id>.models["provider/model"].pickerRuntimes`; an empty array removes
+the additional choices for that agent. Lists accept up to eight explicit runtime
+IDs. Duplicate runtimes and the default runtime appear only once. Wildcard model
+keys and `auto` or `default` runtime IDs are not supported here.
 </Accordion>
 
 ## Choose a model for a session
@@ -236,7 +368,7 @@ If an existing session's harness becomes unavailable, the failed turn reports
 the owner plugin when known and its activation or loading blocker. Follow the error's
 `openclaw doctor --fix` or `openclaw plugins inspect <id> --runtime --json`
 guidance, fix the plugin, and restart the Gateway before retrying. Gateway
-health probes remain independent of model execution. Use [Models status](/cli/models)
+health checks remain independent of model execution. Use [Models status](/cli/models)
 and [Doctor](/gateway/doctor) to diagnose the configured route.
 
 Choose the model when you create a session whenever possible. The Control UI's
@@ -296,12 +428,16 @@ Without a scope flag, selections change only the current session. `agents.defaul
 - **Global default:** Owner/admin `/model <model> -g` (or `--global`) changes this session and requests an update for the shared `agents.defaults.model` fallback. It does not overwrite other agents' explicit primaries or other sessions' model pins. New and existing unpinned sessions, and cron jobs that inherit this default, can use the changed model on their next run.
 - Immutable configuration stays unchanged. Asynchronous write errors are logged without reverting the session selection. Explicit model and auth-profile pins survive `/new`, `/reset`, session rollover, compaction, and cooldown windows while valid.
 - **Use the configured default:** `/model default -s` clears the current session model selection without writing configured defaults. A compatible auth-profile pin remains. An incompatible pin is cleared. Selecting the effective configured default by name also clears the session model pin, but agent/global scope still requests a write to that configured target. This does not restore an older configured default changed by a previous selection.
+- **Follow compatible runtime selections:** Model-only changes preserve a session runtime pin when it supports the selected provider. Otherwise, the pin is cleared and the selected model follows its configured runtime automatically. An explicitly requested incompatible runtime is still rejected without changing either selection. Use `/model <provider/model> --runtime <runtime> -s` to switch runtimes, or `--runtime default` to follow configured routing. Explicit runtime rows and **Default** in the Control UI still select or reset the runtime.
 - If the agent is idle, a model change applies to the next run immediately. If a run is already active, the switch is queued for the next clean retry point. It can be queued for a later point, if tool activity or reply output already started.
 - A user-selected `/model` ref is strict for that session: if it becomes unreachable, the reply fails visibly instead of silently falling back through `agents.defaults.model.fallbacks`. Configured defaults and cron job primaries still use fallback chains.
+- If you select another model while a live switch is queued, the newer selection stays pending for the next safe retry opportunity.
 - `/model status` is the detailed view: auth candidates per provider, and (when configured) the provider endpoint `baseUrl` plus `api` mode.
 - Model refs are parsed by splitting on the first `/`. Type `provider/model`. If the model ID itself contains `/` (OpenRouter-style), include the provider prefix, for example `/model openrouter/moonshotai/kimi-k2`. If you omit the provider, OpenClaw tries an alias match first. It then tries a unique configured-provider match for that exact unprefixed model id. It then tries the configured default provider, which is a deprecated fallback. If that provider no longer exposes the configured default model, OpenClaw uses the first configured provider and model instead. This avoids surfacing a stale removed-provider default.
+- An alias cannot redirect an explicit registered or configured provider ref to another provider, including when the ref has an auth-profile suffix. A colliding alias remains usable with its own provider prefix. Slash-form aliases whose leading segment is a model namespace still work.
 - When inferring a provider, exact model ID case takes precedence over case-insensitive matches within the same configuration scope. A case-insensitive match is used only when it identifies one provider. Per-agent model entries take precedence over global entries and configured provider catalogs.
 - Provider IDs are normalized to lowercase. Model IDs follow the provider's normalization rules. Use the spelling advertised by the plugin.
+- Configured primary models also accept `provider/alias`. The alias resolves within that provider before inference, while an exact model ID configured for that provider keeps its literal identity. An optional auth-profile suffix such as `@work` stays separate from the model identity.
 
 Full command behavior and config: [Slash commands](/tools/slash-commands).
 
@@ -323,9 +459,11 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 
 <AccordionGroup>
   <Accordion title="Scanning (OpenRouter free models)">
-    `openclaw models scan` inspects OpenRouter's public free-model catalog and can probe candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live probing and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they fail closed to metadata-only output.
+    `openclaw models scan` inspects OpenRouter's public free-model catalog and can check candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live checking and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they fail closed to metadata-only output.
 
-    Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, probed results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
+    Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, checked results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
+
+    A probed scan replaces `agents.defaults.model.fallbacks` even without `--set-default`; the flag additionally sets the primary. Use `--no-probe` to inspect candidates without writing config.
 
   </Accordion>
 </AccordionGroup>
@@ -340,16 +478,37 @@ JSON `GET` at startup and then checks at most every six hours. The request sends
 no prompts, credentials, model usage, or configuration payload beyond the
 normal HTTP user agent and conditional cache headers.
 
-The downloaded bundle is stored in the shared SQLite state database and becomes
-visible after the next Gateway restart. Remote data can update or add models
-only for providers declared by installed plugin manifests. It cannot supply API
-base URLs or request headers, and a catalog older than the installed release's
-build stamp is ignored.
+The downloaded bundle is stored in the shared SQLite state database. The Gateway
+prepares a new catalog generation in the background, including each agent's
+provider model discovery, then publishes its model rows and prices together
+without restarting. Picker reads keep using the current generation during
+preparation; a failed or superseded preparation leaves it in place. A provider
+whose discovery fails publishes with the new generation's built-in rows.
+Reply, scheduled-run, and agent RPC preparation retain their captured model
+generation through admission. Publishing a newer catalog does not interrupt
+those turns before their first model request. Native model lookups can finish
+for an admitted turn without replacing the newer shared catalog. Nested model
+calls keep the admitted config, and each usage-estimation operation uses one
+pricing context.
 
-The Gateway reports when a checked catalog needs a restart to become active,
-including a bundle downloaded by another process. Repeated checks of the same
-source and generation do not repeat the notice. Checking for an update does not
-activate the downloaded rows or prices.
+Catalog reads and refresh writes run through the shared-state worker. If a
+background refresh fails, the Gateway records the error and keeps serving its
+accepted catalog. The next scheduled check runs six hours later. To retry the
+download immediately, stop the Gateway through its service owner, run
+`openclaw models refresh`, then start it again.
+
+Remote data can update or add models only for providers declared by installed
+plugin manifests. It cannot supply API base URLs or request headers, and a
+catalog older than the installed release's build stamp is ignored. Hosted
+metadata does not override a provider's account-discovery or model-admission
+rules.
+
+The Gateway owns catalog writes while it is running. `openclaw models refresh`
+requires exclusive offline ownership and reports the saved download; the next
+Gateway start loads compatible metadata. An explicit Gateway model-list refresh
+triggers adoption after returning the current rows; it does not wait for adoption
+or another agent's discovery. A corrupt saved bundle leaves the accepted
+generation serving.
 
 The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
@@ -361,25 +520,40 @@ is no central provider fallback. Manifest values remain authoritative, so
 hydration only fills undefined metadata and never supplies transport settings
 or prices. Costs still come from each provider's pricing policy. Only rows with
 tool calling and text output are imported, and rows models.dev marks deprecated
-or retired are skipped. Hydration errors fail publication and preserve the last
-published artifact instead of publishing an incomplete replacement. This is a
-publication-time contract: it adds no Gateway fetches or hot reload, and updated
-metadata still becomes visible after a Gateway restart.
+or retired are skipped. If models.dev itself is unreachable or malformed,
+publication fails and the last published artifact stays in place. A single
+missing or renamed upstream provider only skips that provider's hydration; its
+manifest rows still publish, so one provider cannot block catalog updates for
+the rest. Hydration runs at publication time, not in the Gateway. Downloaded
+metadata follows the shared catalog generation publication described above.
 Its scheduled workflow checks OpenClaw's default-branch plugin manifests and
 public pricing sources every four hours. Every catalog content change is
-preserved as a public commit. Provider-owned policies select complete price
-schedules, including context tiers, without mixing rates from different sources.
+preserved as a public commit. Catalog v2 also lists each provider's matches from
+the [curated recommended models list](/concepts/recommended-models). Provider-owned
+policies select complete price schedules, including context tiers, without
+mixing rates from different sources.
 Declared native sources read the public Cerebras, Chutes, DeepInfra, OpenCode, and Venice
 catalogs, so connected installations can receive advertised price changes without
 a new OpenClaw release. When a valid native feed no longer supplies a model's
-price, publication preserves the model metadata without an estimate. It does not
-infer retirement or substitute another source's rate. Explicit user costs still
-win. DeepInfra uses its agent projection for model metadata and its native
+price, publication preserves the model metadata without an estimate. A missing
+price alone does not retire the model or substitute another source's rate.
+Explicit user costs still win. DeepInfra uses its agent projection for model
+metadata and its native
 `/models/list` feed for prices, including numeric discounts. Qualified schedules
 that cannot be represented as unconditional token costs stay unknown. Models
 remain available. See [DeepInfra price estimates](/providers/deepinfra#price-estimates).
 
-Run `openclaw models refresh` for an immediate metadata and pricing check, or
+For providers with a public model list that needs no API key (Chutes, DeepInfra,
+Hugging Face, Kilo Gateway, Novita, NVIDIA, OpenCode Zen, OpenCode Go, and
+Venice), publication also fetches that list. A published row the provider no
+longer lists is marked `deprecated`, so pickers and recommended models drop it
+while an exact configured reference still resolves. Ids are matched exactly,
+except for Novita, whose list mixes letter case, so only a case-insensitive miss
+counts. If a list is unreachable, malformed, or empty, that provider's rows
+publish as authored.
+
+With the Gateway stopped, run `openclaw models refresh` for an immediate metadata
+and pricing check, or
 disable every hosted catalog request with `models.catalogRefresh.enabled:
 false`. When disabled, pricing stays at bundled and explicitly configured
 values. A self-hosted mirror can be selected with an HTTPS
@@ -387,6 +561,13 @@ values. A self-hosted mirror can be selected with an HTTPS
 [configuration reference](/gateway/config-runtime#models).
 
 Custom providers configured under `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). Provider-plugin catalogs are stored separately as generated plugin-owned catalog shards and load automatically. This file is merged with config by default. Set `models.mode: "replace"` to use only your configured providers.
+
+In the default `merge` mode, configured model rows are combined with eligible
+provider discovery. They supply metadata and request overrides for matching
+models; they do not limit discovery to the saved IDs. Older provider model
+arrays can remain in your configuration without hiding newly advertised models.
+Use `agents.defaults.modelPolicy.allow` or a per-agent policy to restrict model
+selection, and `models.mode: "replace"` to keep a fully static configured catalog.
 
 Generated plugin catalogs supply model inventory, not request credentials. Their
 cached API keys, authentication modes, and request headers do not authorize model
@@ -417,7 +598,7 @@ apart from built-in corrections for retired Google and Together model names.
     - SecretRef-managed `apiKey` values refresh from source markers instead of persisting resolved secrets: the env variable name for env refs, `secretref-managed` for file/exec/store refs.
     - SecretRef-managed header values refresh the same way, using `secretref-env:ENV_VAR_NAME` for env refs.
     - Empty or missing `apiKey`/`baseUrl` in `models.json` fall back to config `models.providers`.
-    - Explicit model lists control membership. For matching rows, an explicit `input` wins. When the source row omits `input`, plugin discovery can fill that capability metadata.
+    - Configured and discovered model lists are combined in merge mode. For matching rows, an explicit `input` wins. When the source row omits `input`, plugin discovery can fill that capability metadata.
     - Other provider fields refresh from config and normalized catalog data.
 
   </Accordion>
@@ -434,5 +615,6 @@ Marker persistence is source-authoritative. OpenClaw writes markers from the act
 - [Model providers](/concepts/model-providers) — provider routing and auth
 - [Models CLI reference](/cli/models) — full command and flag reference
 - [Music generation](/tools/music-generation) — music model configuration
+- [Recommended models](/concepts/recommended-models) — curated list rules and publication
 - [Video generation](/tools/video-generation) — video model configuration
 - [`openclaw infer`](/cli/infer) — infer-first CLI for provider-backed model, media, and embedding workflows

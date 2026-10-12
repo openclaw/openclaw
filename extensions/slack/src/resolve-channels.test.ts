@@ -23,11 +23,12 @@ describe("resolveSlackChannelAllowlist", () => {
     const fixture = "lookup-fixture";
     slackClientMocks.conversationsList.mockResolvedValue({ channels: [] });
 
-    await resolveSlackChannelAllowlist({
+    const result = await resolveSlackChannelAllowlist({
       token: fixture,
       entries: ["#does-not-exist"],
     });
 
+    expect(result).toEqual([{ input: "#does-not-exist", resolved: false }]);
     expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledOnce();
     expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledWith(fixture);
     expect(slackClientMocks.conversationsList).toHaveBeenCalledOnce();
@@ -43,12 +44,96 @@ describe("resolveSlackChannelAllowlist", () => {
     const list = vi.fn();
     const res = await resolveSlackChannelAllowlist({
       token: "xoxb-test",
-      entries: ["C123", "channel:G456", "<#C789|general>"],
+      entries: ["C01CU3R54A1", "channel:G0AFBKXS3CP", "<#C0AG61APJ3B|general>"],
       client: { conversations: { list } } as never,
     });
 
-    expect(res.map((entry) => entry.id)).toEqual(["C123", "G456", "C789"]);
+    expect(res.map((entry) => entry.id)).toEqual(["C01CU3R54A1", "G0AFBKXS3CP", "C0AG61APJ3B"]);
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it("keeps canonical uppercase ids with a letter second character as ids", async () => {
+    const list = vi.fn();
+    const res = await resolveSlackChannelAllowlist({
+      token: "xoxb-test",
+      entries: ["CA1234567", "channel:GA1234567", "slack:CABCDEFGH"],
+      client: { conversations: { list } } as never,
+    });
+
+    expect(res.map((entry) => entry.id)).toEqual(["CA1234567", "GA1234567", "CABCDEFGH"]);
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("does not misclassify a bare channel name starting with c/g as an id (#155820)", async () => {
+    const client = {
+      conversations: {
+        list: vi.fn().mockResolvedValue({
+          channels: [
+            { id: "C0AG61APJ3B", name: "general", is_archived: false },
+            { id: "C01234567", name: "c0ag61apj3b", is_archived: false },
+          ],
+        }),
+      },
+    };
+
+    const res = await resolveSlackChannelAllowlist({
+      token: "xoxb-test",
+      entries: ["general", "c0ag61apj3b", "#c0ag61apj3b"],
+      client: client as never,
+    });
+
+    expect(client.conversations.list).toHaveBeenCalledOnce();
+    expect(res[0]).toEqual({
+      input: "general",
+      resolved: true,
+      id: "C0AG61APJ3B",
+      name: "general",
+      archived: false,
+    });
+    expect(res[1]).toMatchObject({ resolved: true, id: "C0AG61APJ3B" });
+    expect(res[2]).toMatchObject({ resolved: true, id: "C01234567" });
+  });
+
+  it("keeps folded letter-second ids as ids when a namesake channel exists", async () => {
+    const client = {
+      conversations: {
+        list: vi.fn().mockResolvedValue({
+          channels: [
+            { id: "C0AG61APJ3B", name: "general", is_archived: false },
+            { id: "C09876543", name: "ca1234567", is_archived: false },
+          ],
+        }),
+      },
+    };
+
+    const res = await resolveSlackChannelAllowlist({
+      token: "xoxb-test",
+      entries: ["general", "ca1234567", "channel:ga1234567", "#ca1234567"],
+      client: client as never,
+    });
+
+    expect(res.map((entry) => entry.id)).toEqual([
+      "C0AG61APJ3B",
+      "CA1234567",
+      "GA1234567",
+      "C09876543",
+    ]);
+  });
+
+  it("keeps a Slack DM conversation id unresolved instead of accepting it as a channel id", async () => {
+    const client = {
+      conversations: {
+        list: vi.fn().mockResolvedValue({ channels: [] }),
+      },
+    };
+
+    const res = await resolveSlackChannelAllowlist({
+      token: "xoxb-test",
+      entries: ["D0AFBKXS3CP"],
+      client: client as never,
+    });
+
+    expect(res[0]?.resolved).toBe(false);
   });
 
   it("preserves workspace-qualified channel ids without listing a workspace", async () => {
@@ -116,20 +201,4 @@ describe("resolveSlackChannelAllowlist", () => {
       expect(slackClientMocks.conversationsList).toHaveBeenCalledTimes(resolved ? 0 : 1);
     },
   );
-
-  it("keeps unresolved entries", async () => {
-    const client = {
-      conversations: {
-        list: vi.fn().mockResolvedValue({ channels: [] }),
-      },
-    };
-
-    const res = await resolveSlackChannelAllowlist({
-      token: "xoxb-test",
-      entries: ["#does-not-exist"],
-      client: client as never,
-    });
-
-    expect(res[0]?.resolved).toBe(false);
-  });
 });

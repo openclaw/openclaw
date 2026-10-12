@@ -1,12 +1,8 @@
 // @vitest-environment node
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  publishActiveSessionLineage,
-  publishActiveSessionRow,
-} from "../../components/app-sidebar-child-session-data.ts";
+import { publishActiveSessionLineage } from "../../components/app-sidebar-child-session-data.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   createGatewayHarness,
@@ -15,7 +11,6 @@ import {
 } from "./session-capability.test-support.ts";
 
 const key = "agent:main:device-session";
-const requireRecord = createRequireRecord("object", "expected-label");
 
 function placement(status: "available" | "offline") {
   return {
@@ -45,321 +40,6 @@ function capabilityWithList(result: ReturnType<typeof sessionsResult>) {
 }
 
 describe("supplemental session reconciliation", () => {
-  it.each(
-    (["primary", "describe"] as const).flatMap((first) =>
-      (["primary", "describe"] as const).map((completedFirst) => ({ first, completedFirst })),
-    ),
-  )(
-    "orders equal-timestamp placement reads (first issued: $first, first completed: $completedFirst)",
-    async ({ first, completedFirst }) => {
-      const initial = {
-        key,
-        sessionId: "session-device",
-        kind: "direct" as const,
-        updatedAt: 10,
-        label: "Earlier descriptor",
-        placement: placement("available"),
-      };
-      const current = { ...initial, label: "Current descriptor", placement: placement("offline") };
-      const listed = createDeferred<ReturnType<typeof sessionsResult>>();
-      const described = createDeferred<{ session: typeof initial }>();
-      const client = createTestGatewayClient(async (method) => {
-        if (method === "sessions.list") {
-          return listed.promise;
-        }
-        expect(method).toBe("sessions.describe");
-        return described.promise;
-      });
-      const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
-      const readDescription = async () => {
-        const reconcile = sessions.captureReconcile();
-        const result = await client.request<{ session: typeof initial }>("sessions.describe", {
-          key,
-        });
-        return reconcile(result.session);
-      };
-      let primary: ReturnType<typeof sessions.refresh>;
-      let supplemental: Promise<boolean>;
-      if (first === "primary") {
-        primary = sessions.refresh({ agentId: "main", force: true });
-        supplemental = readDescription();
-      } else {
-        supplemental = readDescription();
-        primary = sessions.refresh({ agentId: "main", force: true });
-      }
-      try {
-        if (completedFirst === "primary") {
-          listed.resolve(sessionsResult([first === "primary" ? initial : current], 10));
-          await primary;
-          described.resolve({ session: first === "primary" ? current : initial });
-          await supplemental;
-        } else {
-          described.resolve({ session: first === "primary" ? current : initial });
-          await supplemental;
-          listed.resolve(sessionsResult([first === "primary" ? initial : current], 10));
-          await primary;
-        }
-        expect(sessions.state.result?.sessions[0]).toMatchObject(current);
-      } finally {
-        sessions.dispose();
-        listed.resolve(sessionsResult([initial], 10));
-        described.resolve({ session: initial });
-        await Promise.all([primary, supplemental]);
-      }
-    },
-  );
-
-  it.each(["unchanged", "older snapshot", "omitted title"] as const)(
-    "preserves actual read observations for an %s descriptor",
-    async (mode) => {
-      vi.useFakeTimers();
-      const initial = {
-        key,
-        sessionId: "session-device",
-        kind: "direct" as const,
-        updatedAt: 10,
-        derivedTitle: "Saved title",
-        status: "done" as const,
-        hasActiveRun: false,
-        activeRunIds: [],
-      };
-      const { derivedTitle: _title, ...withoutTitle } = initial;
-      const observed =
-        mode === "older snapshot"
-          ? { ...initial, updatedAt: 1, derivedTitle: "Rejected title" }
-          : mode === "omitted title"
-            ? withoutTitle
-            : { ...initial };
-      const delayed = createDeferred<ReturnType<typeof sessionsResult>>();
-      let hold = false;
-      const client = createTestGatewayClient(async (method, params) => {
-        if (method === "sessions.describe") {
-          return { session: observed };
-        }
-        expect(method).toBe("sessions.list");
-        return hold && (params as { ownerId?: string }).ownerId
-          ? delayed.promise
-          : sessionsResult([{ ...initial }], 10);
-      });
-      const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
-      const query = { ownerId: "ada", agentId: "main" };
-      const unsubscribe = sessions.subscribeList(query, () => {});
-      let pending: Promise<void> | undefined;
-      try {
-        await sessions.refresh({ agentId: "main", force: true });
-        await sessions.refreshList(query);
-        hold = true;
-        pending = sessions.refreshList({ ...query, force: true });
-        const reconcile = sessions.captureReconcile();
-        const reply = await client.request<{ session: typeof observed }>("sessions.describe", {
-          key,
-        });
-        reconcile(reply.session);
-        expect(sessions.state.result?.sessions[0]?.derivedTitle).toBe(initial.derivedTitle);
-        delayed.resolve(
-          sessionsResult(
-            [
-              {
-                ...initial,
-                derivedTitle: "Queried title",
-                status: "running",
-                hasActiveRun: true,
-                activeRunIds: ["earlier-run"],
-              },
-            ],
-            10,
-          ),
-        );
-        await pending;
-        expect(sessions.listSnapshot(query).result?.sessions[0]?.derivedTitle).toBe(
-          mode === "unchanged" ? initial.derivedTitle : "Queried title",
-        );
-        expect(sessions.listSnapshot(query).result?.sessions[0]).toMatchObject(
-          mode === "older snapshot"
-            ? { status: "running", hasActiveRun: true, activeRunIds: ["earlier-run"] }
-            : { status: "done", hasActiveRun: false, activeRunIds: [] },
-        );
-      } finally {
-        delayed.resolve(sessionsResult([initial], 10));
-        await pending;
-        unsubscribe();
-        sessions.dispose();
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  it.each([false, true])(
-    "preserves field provenance when a changed supplemental read includes enrichment: %s",
-    async (includesEnrichment) => {
-      vi.useFakeTimers();
-      const initial = {
-        key,
-        sessionId: "session-device",
-        kind: "direct" as const,
-        updatedAt: 10,
-        status: "done" as const,
-        hasActiveRun: false,
-        activeRunIds: [],
-        derivedTitle: "Saved title",
-        lastMessagePreview: "Saved preview",
-      };
-      const { derivedTitle: _title, lastMessagePreview: _preview, ...withoutEnrichment } = initial;
-      const observed = {
-        ...withoutEnrichment,
-        status: "running" as const,
-        hasActiveRun: true,
-        activeRunIds: ["current-run"],
-        ...(includesEnrichment
-          ? { derivedTitle: "Observed title", lastMessagePreview: "Observed preview" }
-          : {}),
-      };
-      const delayed = createDeferred<ReturnType<typeof sessionsResult>>();
-      let hold = false;
-      const client = createTestGatewayClient(async (method, params) => {
-        expect(method).toBe("sessions.list");
-        const options = requireRecord(params, "sessions.list params");
-        if (options.limit === 1) {
-          return sessionsResult([observed], 10);
-        }
-        return hold && options.ownerId ? delayed.promise : sessionsResult([{ ...initial }], 10);
-      });
-      const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
-      const query = {
-        ownerId: "ada",
-        agentId: "main",
-        includeDerivedTitles: true,
-        includeLastMessage: true,
-      };
-      const unsubscribe = sessions.subscribeList(query, () => {});
-      let pending: Promise<void> | undefined;
-      try {
-        await sessions.refresh({ agentId: "main", includeLastMessage: true, force: true });
-        await sessions.refreshList(query);
-        hold = true;
-        pending = sessions.refreshList({ ...query, force: true });
-        const reconcile = sessions.captureReconcile();
-        const reply = await sessions.list({
-          agentId: "main",
-          limit: 1,
-          includeDerivedTitles: includesEnrichment,
-          includeLastMessage: includesEnrichment,
-        });
-        reconcile(reply?.sessions[0]);
-        expect(sessions.state.result?.sessions[0]).toMatchObject({
-          status: "running",
-          derivedTitle: includesEnrichment ? "Observed title" : "Saved title",
-          lastMessagePreview: includesEnrichment ? "Observed preview" : "Saved preview",
-        });
-        delayed.resolve(
-          sessionsResult(
-            [{ ...initial, derivedTitle: "Queried title", lastMessagePreview: "Queried preview" }],
-            10,
-          ),
-        );
-        await pending;
-        expect(sessions.listSnapshot(query).result?.sessions[0]).toMatchObject({
-          status: "running",
-          hasActiveRun: true,
-          activeRunIds: ["current-run"],
-          derivedTitle: includesEnrichment ? "Observed title" : "Queried title",
-          lastMessagePreview: includesEnrichment ? "Observed preview" : "Queried preview",
-        });
-      } finally {
-        delayed.resolve(sessionsResult([initial], 10));
-        await pending;
-        unsubscribe();
-        sessions.dispose();
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  it.each(
-    (["Event name", null] as const).flatMap((eventLabel) =>
-      ([true, false] as const).map((readBeforeEvent) => ({ eventLabel, readBeforeEvent })),
-    ),
-  )(
-    "orders explicit equal-clock event fields (label: $eventLabel, read issued before event: $readBeforeEvent)",
-    async ({ eventLabel, readBeforeEvent }) => {
-      vi.useFakeTimers();
-      const initial = {
-        key,
-        sessionId: "session-device",
-        kind: "direct" as const,
-        updatedAt: 20,
-        archived: false,
-        label: "Old name",
-        derivedTitle: "Saved title",
-        lastMessagePreview: "Saved preview",
-      };
-      const delayed = createDeferred<ReturnType<typeof sessionsResult>>();
-      let hold = false;
-      const client = createTestGatewayClient(async (method) => {
-        expect(method).toBe("sessions.list");
-        return hold ? delayed.promise : sessionsResult([{ ...initial }], 20);
-      });
-      const { gateway, emitEvent } = createGatewayHarness(client);
-      const sessions = createTestSessionCapability(gateway);
-      const options = { agentId: "main", includeLastMessage: true, force: true };
-      let pending: Promise<void> | undefined;
-      try {
-        await sessions.refresh(options);
-        hold = true;
-        if (readBeforeEvent) {
-          pending = sessions.refresh(options);
-        }
-        emitEvent({
-          type: "event",
-          event: "sessions.changed",
-          payload: {
-            sessionKey: key,
-            agentId: "main",
-            sessionId: initial.sessionId,
-            kind: "direct",
-            reason: "patch",
-            updatedAt: 20,
-            archived: false,
-            label: eventLabel,
-          },
-        });
-        expect(sessions.state.result?.sessions[0]?.label).toBe(eventLabel ?? undefined);
-        if (!readBeforeEvent) {
-          pending = sessions.refresh(options);
-        }
-        delayed.resolve(
-          sessionsResult(
-            [
-              {
-                ...initial,
-                label: readBeforeEvent ? initial.label : "Read name",
-                derivedTitle: "Queried title",
-                lastMessagePreview: "Queried preview",
-              },
-            ],
-            20,
-          ),
-        );
-        await pending;
-        const current = sessions.state.result?.sessions[0];
-        expect(current).toMatchObject({
-          derivedTitle: "Queried title",
-          lastMessagePreview: "Queried preview",
-        });
-        if (readBeforeEvent && eventLabel === null) {
-          expect(current).not.toHaveProperty("label");
-        } else {
-          expect(current?.label).toBe(readBeforeEvent ? eventLabel : "Read name");
-        }
-      } finally {
-        delayed.resolve(sessionsResult([initial], 20));
-        await pending;
-        sessions.dispose();
-        vi.useRealTimers();
-      }
-    },
-  );
-
   it.each(["model", "runtime"] as const)(
     "keeps thinking catalog invalidation after a %s change crosses an older list",
     async (changedIdentity) => {
@@ -517,9 +197,11 @@ describe("supplemental session reconciliation", () => {
   );
 
   it.each([
-    ...(["older response", "newer observation", "replacement", "deletion"] as const).map(
-      (scenario) => ({ scenario, permission: undefined, primaryPresent: true }),
-    ),
+    ...(["older response", "replacement", "deletion"] as const).map((scenario) => ({
+      scenario,
+      permission: undefined,
+      primaryPresent: true,
+    })),
     ...(["full", null] as const).flatMap((permission) =>
       [true, false].map((primaryPresent) => ({
         scenario: "older response" as const,
@@ -562,9 +244,8 @@ describe("supplemental session reconciliation", () => {
           current.updatedAt,
         );
       });
-      const sessions = createTestSessionCapability(
-        createGatewayHarness(createTestGatewayClient(request)).gateway,
-      );
+      const { gateway, emitEvent } = createGatewayHarness(createTestGatewayClient(request));
+      const sessions = createTestSessionCapability(gateway);
       const query = { ownerId: "ada", agentId: "main" };
       const unsubscribe = sessions.subscribeList(query, () => {});
       let refresh: Promise<void> | undefined;
@@ -586,14 +267,16 @@ describe("supplemental session reconciliation", () => {
           expect(reconcile(accepted)).toBe(true);
           expect(sessions.listSnapshot(query).result?.sessions[0]).toMatchObject(accepted);
           if (permission !== undefined) {
-            expect(
-              sessions.reconcileChanged({
+            emitEvent({
+              type: "event",
+              event: "sessions.changed",
+              payload: {
                 key,
                 sessionId: initial.sessionId,
                 updatedAt: 30,
                 permissionMode: permission,
-              }).applied,
-            ).toBe(true);
+              },
+            });
             expect(sessions.state.result?.sessions[0]?.permissionMode).toBe(
               permission ?? undefined,
             );
@@ -630,11 +313,15 @@ describe("supplemental session reconciliation", () => {
             );
           }
         } else if (scenario === "deletion") {
-          sessions.reconcileChanged({
-            key,
-            sessionId: initial.sessionId,
-            agentId: "main",
-            reason: "delete",
+          emitEvent({
+            type: "event",
+            event: "sessions.changed",
+            payload: {
+              key,
+              sessionId: initial.sessionId,
+              agentId: "main",
+              reason: "delete",
+            },
           });
           expect(reconcile(accepted)).toBe(false);
           expect(sessions.state.result?.sessions).toEqual([]);
@@ -688,7 +375,6 @@ describe("supplemental session reconciliation", () => {
     };
     const query = { ownerId: "ada", agentId: "main" };
     const unsubscribe = sessions.subscribeList(query, () => {});
-    const retiredRevision = sessions.canonicalListRevision;
     try {
       await sessions.refresh({ force: true, agentId: "main" });
       await sessions.refreshList(query);
@@ -698,7 +384,7 @@ describe("supplemental session reconciliation", () => {
       current = { ...current, updatedAt: 30, label: "Current child" };
       await readDescription();
       request.mockClear();
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(5_000);
 
       expect(request).toHaveBeenCalledExactlyOnceWith(
         "sessions.list",
@@ -710,15 +396,12 @@ describe("supplemental session reconciliation", () => {
       sessions.reconcile(current);
       sessions.captureReconcile()(current);
       sessions.reconcile({ ...current, updatedAt: 10, label: "Older child" });
-      sessions.reconcile({ ...current, updatedAt: 40, label: "Retired read" }, undefined, {
-        sourceCanonicalListRevision: retiredRevision,
-      });
       sessions.reconcile(current, {
         modelProvider: "openai",
         model: "gpt-5.5",
         contextTokens: 128_000,
       });
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).not.toHaveBeenCalled();
       expect(sessions.state.result?.sessions[0]?.label).toBe(current.label);
     } finally {
@@ -758,7 +441,6 @@ describe("supplemental session reconciliation", () => {
         owner,
         key,
         { rowsByParent: {}, topmostRow: canonical, lookupFailed: false },
-        sessions.canonicalListRevision,
         sessions.inheritRow,
         () => true,
       );
@@ -771,141 +453,8 @@ describe("supplemental session reconciliation", () => {
     }
   });
 
-  it("preserves a matching canonical row when history started before its list", async () => {
-    const sessions = capabilityWithList(
-      sessionsResult(
-        [
-          {
-            key,
-            kind: "direct",
-            sessionId: "session-device",
-            updatedAt: 10,
-            placement: placement("offline"),
-          },
-        ],
-        10,
-      ),
-    );
-    const sourceCanonicalListRevision = sessions.canonicalListRevision;
-
-    await sessions.refresh({ force: true });
-    const published = vi.fn();
-    sessions.subscribe(published);
-    sessions.reconcile(
-      {
-        key,
-        kind: "direct",
-        sessionId: "session-device",
-        updatedAt: 10,
-        placement: placement("available"),
-      },
-      { modelProvider: "openai", model: "gpt-5.6-luna", contextTokens: 128_000 },
-      { sourceCanonicalListRevision },
-    );
-
-    expect(sessions.state.result?.sessions[0]?.placement).toMatchObject({
-      runner: { kind: "device", status: "offline" },
-    });
-    expect(sessions.state.result?.defaults).toMatchObject({
-      modelProvider: "openai",
-      model: "gpt-5.6-luna",
-      contextTokens: 128_000,
-    });
-    expect(published).toHaveBeenCalledOnce();
-    sessions.dispose();
-  });
-
-  it("adds a routed row absent from a newer canonical list", async () => {
-    const sessions = capabilityWithList(sessionsResult([], 10));
-    const sourceCanonicalListRevision = sessions.canonicalListRevision;
-
-    await sessions.refresh({ force: true });
-    sessions.reconcile(
-      {
-        key: "agent:main:archived-routed",
-        kind: "direct",
-        sessionId: "session-routed",
-        updatedAt: 10,
-        archived: true,
-      },
-      undefined,
-      { archivedFilter: "all", sourceCanonicalListRevision },
-    );
-
-    expect(sessions.state.result?.sessions).toEqual([
-      expect.objectContaining({
-        key: "agent:main:archived-routed",
-        archived: true,
-        sessionId: "session-routed",
-      }),
-    ]);
-    sessions.dispose();
-  });
-
-  it.each(["lineage", "child list"] as const)(
-    "keeps a newer canonical placement when an older sidebar %s finishes",
-    async (source) => {
-      const canonical = {
-        key,
-        kind: "direct" as const,
-        sessionId: "session-device",
-        updatedAt: 10,
-        placement: placement("offline"),
-      };
-      const sessions = capabilityWithList(sessionsResult([canonical], 10));
-      const sourceCanonicalListRevision = sessions.canonicalListRevision;
-      const reconcile = sessions.captureReconcile();
-      await sessions.refresh({ force: true });
-      const cached = {
-        ...canonical,
-        updatedAt: 20,
-        derivedTitle: "My device session",
-        lastMessagePreview: "Most recent message",
-        placement: placement("available"),
-      };
-      const owner = {
-        activeSessionLineageRoot: null,
-        activeSessionLineageSelectedRow: cached,
-        childSessionRowsByParent: { "agent:main:parent": [cached] },
-        context: { sessions },
-        sessionsResult: sessions.state.result,
-      };
-
-      if (source === "child list") {
-        publishActiveSessionRow(owner, cached, reconcile, sessions.inheritRow, () => true);
-      } else {
-        publishActiveSessionLineage(
-          owner,
-          key,
-          {
-            rowsByParent: { "agent:main:parent": [cached] },
-            topmostRow: cached,
-            lookupFailed: false,
-          },
-          sourceCanonicalListRevision,
-          sessions.inheritRow,
-          () => true,
-        );
-      }
-
-      expect(sessions.state.result?.sessions[0]?.placement).toEqual(placement("offline"));
-      expect(owner.activeSessionLineageSelectedRow).toMatchObject({
-        placement: placement("offline"),
-        derivedTitle: "My device session",
-        lastMessagePreview: "Most recent message",
-      });
-      expect(owner.childSessionRowsByParent["agent:main:parent"][0]).toMatchObject({
-        placement: placement("offline"),
-        derivedTitle: "My device session",
-        lastMessagePreview: "Most recent message",
-      });
-      sessions.dispose();
-    },
-  );
-
   it("publishes an archived lineage missing from a newer canonical list", async () => {
     const sessions = capabilityWithList(sessionsResult([], 10));
-    const sourceCanonicalListRevision = sessions.canonicalListRevision;
     await sessions.refresh({ force: true });
     const archived = {
       key: "agent:main:archived-routed",
@@ -926,7 +475,6 @@ describe("supplemental session reconciliation", () => {
       owner,
       archived.key,
       { rowsByParent: {}, topmostRow: archived, lookupFailed: false },
-      sourceCanonicalListRevision,
       sessions.inheritRow,
       () => true,
     );

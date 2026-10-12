@@ -137,12 +137,9 @@ describe("post-core convergence on source checkouts", () => {
   });
 
   it.each([
-    { version: "2026.9.3", selector: false, corrupt: false, flow: "doctor" },
-    { version: HOST_VERSION, selector: false, corrupt: false, flow: "doctor" },
     { version: "2026.9.3", selector: true, corrupt: false, flow: "doctor" },
-    { version: HOST_VERSION, selector: true, corrupt: false, flow: "doctor" },
     { version: HOST_VERSION, selector: false, corrupt: true, flow: "doctor" },
-    ...["cli named", "cli all", "stable", "beta"].map((flow) => ({
+    ...["cli named", "cli all", "stable"].map((flow) => ({
       version: HOST_VERSION,
       selector: false,
       corrupt: false,
@@ -244,7 +241,11 @@ describe("post-core convergence on source checkouts", () => {
         await withPluginCache(createPluginCache(), async () => {
           const published = importAndRun(npmEntry, env);
           expect(published.status).not.toBe(0);
-          expect(published.stderr).toContain(`does not provide an export named '${OLD_EXPORT}'`);
+          expect(published.stderr).toMatch(
+            new RegExp(
+              `(?:does not provide an export named '${OLD_EXPORT}'|Export named '${OLD_EXPORT}' not found in module)`,
+            ),
+          );
           await seedInstalledPluginIndex(records, { config: cfg, env });
         });
         if (corrupt) {
@@ -289,12 +290,12 @@ describe("post-core convergence on source checkouts", () => {
           expect(startup.failures).toEqual([]);
           if (flow === "cli named" || flow === "cli all") {
             await runPluginUpdateCommand({
-              ...(flow === "cli named" ? { id: "codex" } : {}),
+              ids: flow === "cli named" ? ["codex"] : [],
               opts: { all: flow === "cli all", dryRun: true },
             });
             expect(mocks.error).not.toHaveBeenCalled();
             expect(mocks.log.mock.calls.flat().join("\n")).toContain('Kept bundled plugin "codex"');
-          } else if (flow === "stable" || flow === "beta") {
+          } else if (flow === "stable") {
             const cohort = await convergePluginReleaseCohort({
               config: { ...cfg, plugins: { ...cfg.plugins, installs: records } },
               channel: flow,

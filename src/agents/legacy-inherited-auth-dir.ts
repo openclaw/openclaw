@@ -24,10 +24,10 @@ export function resolveLegacyInheritedAuthAgentDir(
 export function resolveLegacyInheritedAuthDir(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
-  preparedLegacyAgentDir?: string,
+  preparedLegacyAgentDir?: () => string | undefined,
 ): string | undefined {
   return resolveSharedAuthStoreOwnership(env).location === "legacy-main"
-    ? (preparedLegacyAgentDir ?? resolveLegacyInheritedAuthAgentDir(config, env))
+    ? (preparedLegacyAgentDir?.() ?? resolveLegacyInheritedAuthAgentDir(config, env))
     : undefined;
 }
 

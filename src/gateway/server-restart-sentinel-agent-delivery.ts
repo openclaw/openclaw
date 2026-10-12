@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   collectAmbiguousAutomaticMediaUrls,
   collectAutomaticDeliveredMediaUrls,
@@ -15,11 +16,14 @@ import {
 } from "../agents/internal-events.js";
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import { resolveDurableCompletionDeliveryMode } from "../auto-reply/reply/completion-delivery-policy.js";
-import { resolveStateDir } from "../config/paths.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   getRestartRecoveryTerminalDeliveryEvidence,
   hasRestartRecoveryTerminalRun,
 } from "../config/sessions/restart-recovery-state.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session-transcript-turn-state.js";
 import { SessionTranscriptWriterClaimReboundError } from "../config/sessions/transcript-write-context.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -30,16 +34,21 @@ import {
   markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
   mergeSessionDeliveryPreparedMediaBlocks,
+} from "../infra/session-delivery-queue-storage.js";
+import {
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   SessionDeliveryRetryChargedError,
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
   type SessionDeliveryRoute,
-} from "../infra/session-delivery-queue-storage.js";
+} from "../infra/session-delivery-queue.records.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
 import { getMediaDir } from "../media/store.js";
+import { isSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
+import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
   attachManagedOutgoingMediaToMessage,
@@ -54,20 +63,12 @@ const AGENT_DELIVERY_OWNERSHIP_RETRY_MS = 1_000;
 
 type QueuedAgentTurnSessionDelivery = Extract<QueuedSessionDelivery, { kind: "agentTurn" }>;
 
-function sessionDeliveryStateDirArgs(stateDir?: string): [] | [string] {
-  return stateDir === undefined ? [] : [stateDir];
-}
-
 async function deadLetterSessionDelivery(
   entry: QueuedAgentTurnSessionDelivery,
   reason: string,
-  stateDir?: string,
+  queueContext: OpenClawStateWorkerContext,
 ): Promise<never> {
-  await markSessionDeliverySettlement(
-    entry,
-    "moved-to-failed",
-    ...sessionDeliveryStateDirArgs(stateDir),
-  );
+  await markSessionDeliverySettlement(entry, "moved-to-failed", queueContext);
   log.warn("queued session delivery requires durable dead-letter settlement", {
     queueId: entry.id,
   });
@@ -94,17 +95,8 @@ function resolveQueuedAgentRunId(entry: QueuedAgentTurnSessionDelivery) {
 }
 
 function collectVisiblePayloadMediaUrls(result: AgentDeliveryEvidence): string[] {
-  const urls = new Set<string>();
   const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  for (const payload of payloads) {
-    if (!hasExplicitlyVisibleAgentPayload(payload)) {
-      continue;
-    }
-    for (const url of collectDeliveredMediaUrls({ payloads: [payload] })) {
-      urls.add(url);
-    }
-  }
-  return Array.from(urls);
+  return collectDeliveredMediaUrls({ payloads: payloads.filter(hasExplicitlyVisibleAgentPayload) });
 }
 
 function collectQueuedDeliveredMediaUrls(params: {
@@ -157,7 +149,7 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
   entry: QueuedAgentTurnSessionDelivery;
   result: AgentDeliveryEvidence;
   route: SessionDeliveryRoute;
-  stateDir?: string;
+  queueContext: OpenClawStateWorkerContext;
   persistInternalMedia?: (mediaUrls: string[]) => Promise<void>;
 }) {
   if (hasUnexpectedRecoverySideEffects(params.result)) {
@@ -167,7 +159,7 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
     await deadLetterSessionDelivery(
       params.entry,
       "queued generated-media delivery dead-lettered after an unexpected committed side effect",
-      params.stateDir,
+      params.queueContext,
     );
   }
   const expectedMediaUrls = params.entry.expectedMediaUrls ?? [];
@@ -194,7 +186,7 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
     await deadLetterSessionDelivery(
       params.entry,
       "queued generated-media delivery dead-lettered after truncated evidence",
-      params.stateDir,
+      params.queueContext,
     );
   }
   if (expectedMediaUrls.length > 0 && missingMediaUrls.length === 0) {
@@ -215,28 +207,14 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
     // Charge the terminal attempt before advancing its identity. Recovery may
     // revisit the same durable evidence, but must never charge that attempt twice.
     if (!currentAttemptAlreadyCharged) {
-      await failSessionDelivery(
-        params.entry.id,
-        reason,
-        ...sessionDeliveryStateDirArgs(params.stateDir),
-      );
+      await failSessionDelivery(params.entry.id, reason, params.queueContext);
     }
     try {
-      if (updates) {
-        await advanceSessionDeliveryAgentRun(
-          params.entry.id,
-          updates,
-          ...sessionDeliveryStateDirArgs(params.stateDir),
-        );
-      } else if (params.stateDir !== undefined) {
-        await advanceSessionDeliveryAgentRun(params.entry.id, undefined, params.stateDir);
-      } else {
-        await advanceSessionDeliveryAgentRun(params.entry.id);
-      }
+      await advanceSessionDeliveryAgentRun(params.entry.id, updates, params.queueContext);
       await deferSessionDelivery(
         params.entry.id,
         AGENT_DELIVERY_OWNERSHIP_RETRY_MS,
-        ...sessionDeliveryStateDirArgs(params.stateDir),
+        params.queueContext,
       );
     } catch (error) {
       log.warn("queued generated-media terminal attempt state transition remains pending", {
@@ -266,7 +244,7 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
       await deadLetterSessionDelivery(
         params.entry,
         "queued generated-media delivery dead-lettered after ambiguous side effects",
-        params.stateDir,
+        params.queueContext,
       );
     }
   } else if (deliveryFailure) {
@@ -278,7 +256,7 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
       await deadLetterSessionDelivery(
         params.entry,
         "queued generated-media notice dead-lettered after a visible partial delivery",
-        params.stateDir,
+        params.queueContext,
       );
     }
     await rearmAgentRun(deliveryFailure);
@@ -314,35 +292,109 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   entry: QueuedSessionDelivery;
   runtimeContextFragments?: RuntimeContextFragment[];
   sessionEntry?: SessionEntry;
-  stateDir?: string;
+  queueContext: OpenClawStateWorkerContext;
   resolveGatewayContext?: GatewayContextResolver;
 }): Promise<boolean> {
   if (params.entry.kind !== "agentTurn") {
     return false;
   }
   const entry = params.entry;
+  const binding = entry.requesterBinding;
   const route = entry.route;
   if (!route || entry.inputProvenance?.kind !== "inter_session" || !entry.sourceReplyDeliveryMode) {
+    if (binding) {
+      return deadLetterSessionDelivery(
+        entry,
+        "bound media completion has no delivery route",
+        params.queueContext,
+      );
+    }
     return false;
   }
 
+  params.queueContext.admission.assertCurrent();
+  const assertRequesterAdmissionCurrent = () => {
+    params.queueContext.admission.assertCurrent();
+    if (!binding) {
+      return;
+    }
+    const context = params.resolveGatewayContext?.();
+    if (params.resolveGatewayContext && !context) {
+      throw new SessionDeliveryDeferredError("media completion Gateway owner is unavailable");
+    }
+    const cfg = context?.getRuntimeConfig() ?? getRuntimeConfig();
+    const configuredStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+      agentId: binding.agentId,
+      env: params.queueContext.environment,
+    });
+    if (
+      entry.sessionKey !== binding.sessionKey ||
+      params.canonicalKey !== binding.sessionKey ||
+      params.agentId !== binding.agentId ||
+      path.resolve(params.storePath) !== path.resolve(binding.storePath) ||
+      path.resolve(configuredStorePath) !== path.resolve(binding.storePath)
+    ) {
+      throw new SessionDeliveryDeadLetteredError("media completion requester store changed");
+    }
+  };
+  const readRequester = async (): Promise<SessionEntry | undefined> => {
+    if (!binding) {
+      return loadSessionEntry(entry.sessionKey).entry;
+    }
+    try {
+      return await withSessionEntryReadOnlyInWorker(
+        { ...binding, env: params.queueContext.environment, hydrateSkillPromptRefs: false },
+        assertRequesterAdmissionCurrent,
+        async (read) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          if (
+            !sessionMatchesExpectedTranscriptTurn(read.value ? { entry: read.value } : undefined, {
+              expectedSessionId: binding.sessionId,
+              expectedLifecycleRevision: binding.lifecycleRevision,
+            })
+          ) {
+            throw new SessionDeliveryDeadLetteredError(
+              "media completion requester session changed",
+            );
+          }
+          return read.value;
+        },
+      );
+    } catch (error) {
+      if (error instanceof SessionDeliveryDeadLetteredError) {
+        return deadLetterSessionDelivery(entry, error.message, params.queueContext);
+      }
+      throw error;
+    }
+  };
+  const sessionEntry = binding ? await readRequester() : params.sessionEntry;
   const queuedRunId = resolveQueuedAgentRunId(entry);
   const deliveryMode = resolveDurableCompletionDeliveryMode(entry.sourceReplyDeliveryMode);
   if (deliveryMode === "host_owned" && route.channel === INTERNAL_MESSAGE_CHANNEL) {
     return await deadLetterSessionDelivery(
       entry,
       "queued host-owned generated-media delivery requires an external route",
-      params.stateDir,
+      params.queueContext,
     );
   }
   const persistInternalMedia =
     route.channel === INTERNAL_MESSAGE_CHANNEL && (entry.expectedMediaUrls?.length ?? 0) > 0
       ? async (mediaUrls: string[], transcriptRunId: string | null) => {
-          const sessionId = params.sessionEntry?.sessionId?.trim();
+          const sessionId = sessionEntry?.sessionId?.trim();
           if (!sessionId) {
             throw new Error("queued internal generated-media delivery has no owning session");
           }
-          const stateDir = params.stateDir ?? resolveStateDir();
+          const stateDir = params.queueContext.environment.OPENCLAW_STATE_DIR;
+          const attachMedia = async (
+            messageId: string,
+            blocks: Parameters<typeof attachManagedOutgoingMediaToMessage>[0]["blocks"],
+          ) => {
+            if (!(await attachManagedOutgoingMediaToMessage({ messageId, blocks, stateDir }))) {
+              throw new Error("queued internal generated-media artifact attachment failed");
+            }
+          };
           const preparedMediaBlocks = { ...entry.preparedMediaBlocks };
           const content: Array<Record<string, unknown>> = [];
           for (const mediaUrl of mediaUrls) {
@@ -383,8 +435,9 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                 entry.id,
                 mediaUrl,
                 blocks,
-                stateDir,
+                params.queueContext,
               );
+              params.queueContext.admission.assertCurrent();
               preparedMediaBlocks[mediaUrl] = blocks;
             }
             content.push(...blocks);
@@ -395,12 +448,14 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
             sessionId,
             storePath: params.storePath,
           };
-          const expectedLifecycleRevision =
-            params.sessionEntry?.cronRunContinuation?.lifecycleRevision ??
-            params.sessionEntry?.lifecycleRevision ??
-            null;
+          const expectedLifecycleRevision = binding
+            ? binding.lifecycleRevision
+            : (sessionEntry?.cronRunContinuation?.lifecycleRevision ??
+              sessionEntry?.lifecycleRevision ??
+              null);
           const { enrichAssistantTranscriptMediaForRun, publishAssistantTranscriptRewrite } =
             await import("./server-methods/chat-transcript-persistence.js");
+          params.queueContext.admission.assertCurrent();
           let enriched: { messageId: string } | null = null;
           if (transcriptRunId) {
             try {
@@ -416,7 +471,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                 await deadLetterSessionDelivery(
                   entry,
                   "queued internal generated-media delivery lost its owning session",
-                  params.stateDir,
+                  params.queueContext,
                 );
               }
               throw error;
@@ -424,6 +479,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
           }
           // Keep the existing media-only delivery contract when no model reply
           // was persisted, or an older recovery receipt lacks its run binding.
+          params.queueContext.admission.assertCurrent();
           const appended = enriched
             ? { ok: true as const, messageId: enriched.messageId }
             : await appendAssistantMessageToSessionTranscript({
@@ -436,28 +492,27 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                 displayContent: content,
                 idempotencyKey: `${queuedRunId}:generated-media-transcript`,
                 updateMode: "inline",
+                onMessageCommitted: (receipt, acceptCompletion) => {
+                  acceptCompletion(() =>
+                    attachMedia(receipt.messageId, readAssistantDisplayContent(receipt.message)),
+                  );
+                },
               });
           if (!appended.ok) {
             if (appended.code === "session-rebound") {
               await deadLetterSessionDelivery(
                 entry,
                 "queued internal generated-media delivery lost its owning session",
-                params.stateDir,
+                params.queueContext,
               );
             }
             throw new Error(
               `queued internal generated-media transcript persistence failed: ${appended.reason}`,
             );
           }
-          const attached = attachManagedOutgoingMediaToMessage({
-            messageId: appended.messageId,
-            blocks: content,
-            stateDir,
-          });
-          if (!attached) {
-            throw new Error("queued internal generated-media artifact attachment failed");
-          }
+          params.queueContext.admission.assertCurrent();
           if (enriched) {
+            await attachMedia(enriched.messageId, content);
             await publishAssistantTranscriptRewrite({ scope, rewritten: [enriched] });
           }
         }
@@ -470,36 +525,29 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       entry,
       result,
       route,
-      ...(params.stateDir !== undefined ? { stateDir: params.stateDir } : {}),
+      queueContext: params.queueContext,
       ...(persistInternalMedia
         ? { persistInternalMedia: (mediaUrls) => persistInternalMedia(mediaUrls, transcriptRunId) }
         : {}),
     });
     return true;
   };
-  const terminalEvidence = getRestartRecoveryTerminalDeliveryEvidence(
-    params.sessionEntry,
-    queuedRunId,
-  );
+  const terminalEvidence = getRestartRecoveryTerminalDeliveryEvidence(sessionEntry, queuedRunId);
   if (terminalEvidence) {
     return await evaluateResult(terminalEvidence, terminalEvidence.transcriptRunId ?? null);
   }
-  if (hasRestartRecoveryTerminalRun(params.sessionEntry, queuedRunId)) {
+  if (hasRestartRecoveryTerminalRun(sessionEntry, queuedRunId)) {
     await deadLetterSessionDelivery(
       entry,
       "queued generated-media agent turn dead-lettered without durable terminal evidence",
-      params.stateDir,
+      params.queueContext,
     );
   }
   const activeRecoveryClaim =
-    params.sessionEntry?.restartRecoveryDeliverySourceRunId === queuedRunId &&
-    Boolean(params.sessionEntry.restartRecoveryDeliveryRunId);
+    sessionEntry?.restartRecoveryDeliverySourceRunId === queuedRunId &&
+    Boolean(sessionEntry.restartRecoveryDeliveryRunId);
   if (activeRecoveryClaim) {
-    await deferSessionDelivery(
-      entry.id,
-      AGENT_DELIVERY_OWNERSHIP_RETRY_MS,
-      ...sessionDeliveryStateDirArgs(params.stateDir),
-    );
+    await deferSessionDelivery(entry.id, AGENT_DELIVERY_OWNERSHIP_RETRY_MS, params.queueContext);
     throw new SessionDeliveryDeferredError(
       "queued generated-media agent turn is still owned by agent recovery",
     );
@@ -508,28 +556,61 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
     await deadLetterSessionDelivery(
       entry,
       "queued generated-media agent turn dead-lettered after an interrupted unproven attempt",
-      params.stateDir,
+      params.queueContext,
     );
+  }
+  const assertRequesterIdle = () => {
+    if (
+      isSessionWorkAdmissionActive(params.storePath, [params.canonicalKey, sessionEntry?.sessionId])
+    ) {
+      throw new SessionDeliveryDeferredError(
+        "queued generated-media turn is waiting for its requester to finish",
+      );
+    }
+  };
+  try {
+    // The originating turn can still own terminal persistence after its model has stopped.
+    assertRequesterIdle();
+  } catch (error) {
+    await deferSessionDelivery(entry.id, AGENT_DELIVERY_OWNERSHIP_RETRY_MS, params.queueContext);
+    throw error;
   }
   // `host_owned` is the explicit-send equivalent of message-tool-only policy.
   // The queue owner fixes route/media and disables the model-facing message tool,
   // so only this one system completion can use the normal final-delivery transport.
   const sourceReplyDeliveryMode = "automatic" as const;
-  const cronLifecycleRevision = params.sessionEntry?.cronRunContinuation?.lifecycleRevision?.trim();
-  const cronSessionId = cronLifecycleRevision ? params.sessionEntry?.sessionId?.trim() : undefined;
+  const cronLifecycleRevision = sessionEntry?.cronRunContinuation?.lifecycleRevision?.trim();
+  const cronSessionId = cronLifecycleRevision ? sessionEntry?.sessionId?.trim() : undefined;
   // Fence before gateway admission. Recovery clears it only for an explicit
   // pre-acceptance safe retry; accepted or deduped runs may already have effects.
-  await markSessionDeliveryAttemptStarted(entry, ...sessionDeliveryStateDirArgs(params.stateDir));
+  await markSessionDeliveryAttemptStarted(entry, {
+    ...params.queueContext,
+    admission: {
+      ...params.queueContext.admission,
+      assertCurrent: () => {
+        params.queueContext.admission.assertCurrent();
+        assertRequesterIdle();
+      },
+    },
+  });
   let accepted = false;
   let response: unknown;
   try {
+    params.queueContext.admission.assertCurrent();
+    assertRequesterAdmissionCurrent();
     response = await dispatchGatewayMethodInProcess(
       "agent",
       {
         sessionKey: params.canonicalKey,
+        ...(binding
+          ? {
+              agentId: binding.agentId,
+              expectedExistingSessionId: binding.sessionId,
+              expectedExistingSessionLifecycleRevision: binding.lifecycleRevision,
+            }
+          : {}),
         message: entry.message,
-        deliver:
-          sourceReplyDeliveryMode === "automatic" && route.channel !== INTERNAL_MESSAGE_CHANNEL,
+        deliver: route.channel !== INTERNAL_MESSAGE_CHANNEL,
         bestEffortDeliver: false,
         channel: route.channel,
         accountId: route.accountId,
@@ -545,6 +626,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       {
         ...(cronSessionId ? { allowSyntheticCronRunContinuation: true } : {}),
         expectFinal: true,
+        ...(binding ? { assertAdmissionCurrent: assertRequesterAdmissionCurrent } : {}),
         forceSyntheticClient: true,
         runtimeContextFragments:
           (entry.expectedMediaUrls?.length ?? 0) > 0
@@ -567,6 +649,9 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       },
     );
   } catch (error) {
+    if (error instanceof SessionDeliveryDeadLetteredError) {
+      return deadLetterSessionDelivery(entry, error.message, params.queueContext);
+    }
     if (!accepted) {
       throw new SessionDeliverySafeRetryError(
         "queued generated-media agent turn failed before gateway acceptance",
@@ -581,7 +666,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       response && typeof response === "object"
         ? (response as { status?: unknown }).status
         : undefined;
-    const latestEntry = loadSessionEntry(entry.sessionKey).entry;
+    const latestEntry = binding ? await readRequester() : loadSessionEntry(entry.sessionKey).entry;
     if (responseStatus === "accepted") {
       accepted = true;
     }
@@ -591,11 +676,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       (latestEntry?.restartRecoveryDeliverySourceRunId === queuedRunId &&
         latestEntry.restartRecoveryDeliveryRunId)
     ) {
-      await deferSessionDelivery(
-        entry.id,
-        AGENT_DELIVERY_OWNERSHIP_RETRY_MS,
-        ...sessionDeliveryStateDirArgs(params.stateDir),
-      );
+      await deferSessionDelivery(entry.id, AGENT_DELIVERY_OWNERSHIP_RETRY_MS, params.queueContext);
       throw new SessionDeliveryDeferredError(
         "queued generated-media agent turn is still owned by agent recovery",
       );
@@ -618,7 +699,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       await deadLetterSessionDelivery(
         entry,
         "queued generated-media agent turn dead-lettered without durable terminal evidence",
-        params.stateDir,
+        params.queueContext,
       );
     }
     if (!accepted) {

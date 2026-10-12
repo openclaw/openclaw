@@ -9,10 +9,11 @@ import {
   testing as embeddedRunsTesting,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import {
-  consumeRequesterFinalAttachment,
+  finalizeRequesterFinalAttachment,
   promoteRequesterFinalAttachment,
 } from "../../agents/subagents/requester-final-attachment.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 
@@ -51,7 +52,7 @@ vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
   consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
 }));
 
-import { createTalkClientAgentConsultRunner } from "../talk-client-agent-consult.js";
+import { createTalkClientAgentConsultRunner } from "../talk/client-agent-consult.js";
 
 const config = {} as OpenClawConfig;
 const coreParams = {
@@ -81,8 +82,10 @@ function createRunner(isRunCurrent: (runId: string) => boolean = () => true) {
     },
     getVoiceSessionId: () => "voice-session",
     initialItems: [],
-    registerRun: vi.fn(),
-    isRunCurrent,
+    registerRun: vi.fn(async ({ runId }) => ({
+      release: vi.fn(),
+      isCurrent: () => isRunCurrent(runId),
+    })),
   });
 }
 
@@ -103,7 +106,11 @@ describe("Talk requester-final consult ownership", () => {
     );
     mocks.runEmbeddedAgentCore.mockResolvedValue({ payloads: [] });
     mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
-      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 60_000 });
+      await params.onRunStarted?.({
+        runId: "run-talk",
+        sessionId: "session-talk",
+        timeoutMs: 60_000,
+      });
       await params.agentRuntime.runEmbeddedAgent(coreParams);
       return { text: "done" };
     });
@@ -122,6 +129,7 @@ describe("Talk requester-final consult ownership", () => {
     };
     mocks.createOperationalRunInstanceRef.mockReturnValueOnce(operationalRunInstance);
     mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
+      const project = (_overlay: ReplyToolAuthorityOverlay) => "authority";
       await withGatewayToolCallerIdentity(
         {
           agentId: "researcher",
@@ -129,7 +137,8 @@ describe("Talk requester-final consult ownership", () => {
           operationalRunInstance,
           embeddedRunToolAuthorityBinding: () => ({
             source: "attempt",
-            project: () => "authority",
+            project,
+            projectAsync: async (overlay) => project(overlay),
             assertActive: () => {},
           }),
         },
@@ -159,16 +168,17 @@ describe("Talk requester-final consult ownership", () => {
     core.resolve({ payloads: [] });
     await expect(run).resolves.toEqual({ text: "done" });
     expect(runner.runPrompt.claimAppend()).toBe(true);
-    expect(
-      consumeRequesterFinalAttachment({
-        requesterAgentId: "researcher",
-        requesterSessionKey: "agent:researcher:talk",
-        requesterSessionId: "session-talk",
-        batchRunIds: ["run-child"],
-        rearmGeneration: 1,
-        text: "late final",
-      }),
-    ).toBe("appended");
+    finalizeRequesterFinalAttachment({
+      requesterAgentId: "researcher",
+      requesterSessionKey: "agent:researcher:talk",
+      requesterSessionId: "session-talk",
+      batchRunIds: ["run-child"],
+      rearmGeneration: 1,
+      requesterYieldBatch: true,
+      pause: false,
+      delivered: true,
+      finalAssistantVisibleText: "late final",
+    });
     expect(append).toHaveBeenCalledExactlyOnceWith("late final");
   });
 
@@ -196,16 +206,17 @@ describe("Talk requester-final consult ownership", () => {
 
     runCurrent = false;
     expect(runner.runPrompt.claimAppend()).toBe(false);
-    expect(
-      consumeRequesterFinalAttachment({
-        requesterAgentId: "researcher",
-        requesterSessionKey: "agent:researcher:talk",
-        requesterSessionId: "session-talk",
-        batchRunIds: ["run-child"],
-        rearmGeneration: 2,
-        text: "stale final",
-      }),
-    ).toBe("missing");
+    finalizeRequesterFinalAttachment({
+      requesterAgentId: "researcher",
+      requesterSessionKey: "agent:researcher:talk",
+      requesterSessionId: "session-talk",
+      batchRunIds: ["run-child"],
+      rearmGeneration: 2,
+      requesterYieldBatch: true,
+      pause: false,
+      delivered: true,
+      finalAssistantVisibleText: "stale final",
+    });
     expect(append).not.toHaveBeenCalled();
   });
 });

@@ -13,7 +13,7 @@ scenario:
   successCriteria:
     - Sending /approve abc constructor replies with the /approve usage text.
     - The usage reply is produced without a model request.
-    - Sending /approve abc deny still reaches the Gateway approval resolver.
+    - Sending /approve abc deny reaches the Gateway approval resolver and reports that the unknown approval is no longer available.
   docsRefs:
     - docs/channels/qa-channel.md
   codeRefs:
@@ -21,7 +21,7 @@ scenario:
     - src/auto-reply/reply/fast-approve.ts
   execution:
     kind: flow
-    summary: Send /approve with a prototype-name decision over a DM and verify the usage reply, then send a real decision and verify it is submitted.
+    summary: Send /approve with a prototype-name decision over a DM and verify the usage reply, then send a real decision for an unknown approval and verify the resolver response.
     config:
       conversationId: approve-prototype-dm
       prototypeCommandText: /approve abc constructor
@@ -45,8 +45,8 @@ flow:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
             conversation: { id: { ref: config.conversationId }, kind: direct }
-            senderId: qa-approver
-            senderName: QA Approver
+            senderId: qa-operator
+            senderName: QA Operator
             text: { ref: config.prototypeCommandText }
         - waitForOutbound:
             conversation: { id: { ref: config.conversationId }, kind: direct }
@@ -73,17 +73,16 @@ flow:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
             conversation: { id: { ref: config.conversationId }, kind: direct }
-            senderId: qa-approver
-            senderName: QA Approver
+            senderId: qa-operator
+            senderName: QA Operator
             text: { ref: config.realCommandText }
         - waitForOutbound:
             conversation: { id: { ref: config.conversationId }, kind: direct }
             sinceIndex: { ref: realStartIndex }
-            textIncludes: Failed to submit approval
             timeoutMs: 60000
           saveAs: realReply
         - assert:
-            expr: "!realReply.text.includes(config.usageNeedle)"
+            expr: "realReply.text === 'That approval is no longer available. Check the request in the Control UI.'"
             message:
-              expr: "`real decision was rejected as usage: ${realReply.text}`"
+              expr: "`real decision did not receive the unknown-approval response: ${realReply.text}`"
       detailsExpr: "formatTransportTranscript(state, { conversationId: config.conversationId })"

@@ -5,4 +5,19 @@ export type ProviderCatalogOutcome = {
   /** Limits an auth rejection to catalog discovery rather than model execution. */
   rejectionScope?: "catalog";
   status: "ready" | "auth-rejected" | "unavailable";
+  /** Private account-scoped observations from successful discovery, never static model hints. */
+  modelServiceTiers?: readonly {
+    modelId: string;
+    runtimeId: string;
+    api: string;
+    baseUrl: string;
+    serviceTiers: readonly string[];
+  }[];
+  /** Optional successful discovery order for models already present in the catalog. */
+  modelOrder?: readonly string[];
+  /**
+   * Private provenance: every model id a successful account listing returned, including hidden
+   * rows; never projected publicly. Subscription routes for other ids are not entitled.
+   */
+  listedModelIds?: readonly string[];
 };

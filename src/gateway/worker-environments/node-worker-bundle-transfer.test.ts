@@ -1,45 +1,43 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NodeWorkerBundleInstaller } from "../../node-host/node-worker-bundle-installer.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   readWorkerBundleDirectoryManifest,
 } from "../../shared/worker-bundle-archive.js";
 import { hashWorkerBundleManifest } from "../../shared/worker-bundle-hash.js";
-import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
+import { NODE_WORKER_BUNDLE_TRANSFER_PATH } from "../../worker/node-bundle-install-protocol.js";
+import { classifyNodeWorkerBundleTransferPath } from "../gateway-http-route-contracts.js";
 import {
-  createNodeWorkerBundleTransferHttpCallback,
-  handleNodeWorkerBundleTransferHttpRequest,
-} from "./node-worker-bundle-transfer-http.js";
+  createArtifactTransferHttpCallback,
+  handleArtifactTransferHttpRequest,
+} from "./artifact-transfer-http.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
 
 describe("node worker bundle transfer", () => {
   let root: string;
-  let server: http.Server | undefined;
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  let cleanupServer: (() => Promise<void>) | undefined;
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-bundle-wire-"));
+  beforeEach(() => {
+    root = tempDirs.make("openclaw-bundle-wire-");
   });
 
   afterEach(async () => {
-    await new Promise<void>((resolve) => {
-      if (!server) {
-        resolve();
-        return;
-      }
-      server.close(() => resolve());
-    });
-    await fs.rm(root, { recursive: true, force: true });
+    await cleanupServer?.();
+    cleanupServer = undefined;
   });
 
-  it("streams one authorized Gateway artifact into an atomic node install", async () => {
+  it("reports cumulative progress despite a throwing observer and rejects serves after owner release", async ({
+    onTestFinished,
+  }) => {
     const source = path.join(root, "source");
     const tarballPath = path.join(root, "bundle.tgz");
     await fs.mkdir(source, { recursive: true });
@@ -47,6 +45,10 @@ describe("node worker bundle transfer", () => {
     for (const artifact of artifacts) {
       await fs.writeFile(path.join(source, artifact), "export {};\n", { mode: 0o700 });
     }
+    await fs.writeFile(
+      path.join(source, "worker.mjs"),
+      `/*${randomBytes(128 * 1024).toString("hex")}*/\nexport {};\n`,
+    );
     const manifest = await readWorkerBundleDirectoryManifest({
       root: source,
       limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
@@ -57,19 +59,9 @@ describe("node worker bundle transfer", () => {
     const service = createNodeWorkerBundleTransferService({
       generateToken: () => "A".repeat(43),
     });
-    const node: NodeWorkerSupervisorNodeProof = {
-      nodeId: "node-1",
-      connId: "conn-1",
-      pairingIdentity: "pairing-1",
-      pairingGeneration: "generation-1",
-      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-      clientMode: "node",
-      protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-      workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
-      commands: [],
-    };
+    onTestFinished(() => service.closeAll());
+    const progress: number[] = [];
     const prepared = service.prepare({
-      node,
       gatewayNamespace: "gateway-test",
       artifact: {
         install: "bundle",
@@ -81,19 +73,41 @@ describe("node worker bundle transfer", () => {
         tarballPath,
       },
       isAuthorized: () => true,
+      onProgress: (servedBytes) => {
+        progress.push(servedBytes);
+        throw new Error("progress observer failed");
+      },
     });
-    const callback = createNodeWorkerBundleTransferHttpCallback(service);
-    server = http.createServer((req, res) => {
-      void handleNodeWorkerBundleTransferHttpRequest({
-        req,
-        res,
-        clientIp: "127.0.0.1",
-        callback,
-      }).catch((error: unknown) => res.destroy(error as Error));
+    const callback = createArtifactTransferHttpCallback(service);
+    const served = createDeferredCore();
+    const {
+      listener: server,
+      releaseListener,
+      claim,
+    } = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        http.createServer((req, res) => {
+          void handleArtifactTransferHttpRequest({
+            classifyPath: classifyNodeWorkerBundleTransferPath,
+            routePrefix: `${NODE_WORKER_BUNDLE_TRANSFER_PATH}/bundles/`,
+            req,
+            res,
+            clientIp: "127.0.0.1",
+            callback,
+          })
+            .then(() => served.resolve())
+            .catch((error: unknown) => res.destroy(error as Error));
+        }),
     });
-    await new Promise<void>((resolve) => {
-      server!.listen(0, "127.0.0.1", resolve);
-    });
+    cleanupServer = async () => {
+      try {
+        await releaseListener();
+      } finally {
+        await claim.release();
+        service.closeAll();
+      }
+    };
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("test server did not bind a TCP port");
@@ -106,6 +120,19 @@ describe("node worker bundle transfer", () => {
         gatewayUrl: `ws://127.0.0.1:${address.port}`,
       }),
     ).resolves.toEqual(prepared.input.build);
-    expect(service.authorize({ token: prepared.token, bundleHash })).toBeUndefined();
+    await served.promise;
+    service.revoke(prepared.token);
+    const replay = await fetch(
+      `http://127.0.0.1:${address.port}${NODE_WORKER_BUNDLE_TRANSFER_PATH}/bundles/${bundleHash}`,
+      { headers: { authorization: `Bearer ${prepared.token}` } },
+    );
+    expect(replay.status).toBe(404);
+    await expect(replay.json()).resolves.toEqual({ error: "not_found" });
+    expect(progress.length).toBeGreaterThan(1);
+    for (let index = 0; index < progress.length; index++) {
+      expect(progress[index]).toBeGreaterThan(progress[index - 1] ?? 0);
+    }
+    expect(progress.at(-1)).toBe(tarball.byteLength);
+    expect(service.authorize({ token: prepared.token, artifactKey: bundleHash })).toBeUndefined();
   });
 });

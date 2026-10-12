@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { inflateRawSync } from "node:zlib";
+import { crc32, inflateRawSync } from "node:zlib";
 
 const ACTIONS_ARTIFACT_API_VERSION = "2026-03-10";
 const DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES = 256 * 1024 * 1024;
@@ -68,7 +68,7 @@ function assertTrimmedString(value, label) {
   return value;
 }
 
-function hasControlCharacters(value) {
+export function hasControlCharacters(value) {
   for (const character of value) {
     const codePoint = character.codePointAt(0);
     if (codePoint <= 0x1f || codePoint === 0x7f) {
@@ -78,7 +78,7 @@ function hasControlCharacters(value) {
   return false;
 }
 
-function boundedLimit(value, fallback, label) {
+export function boundedLimit(value, fallback, label) {
   if (value === undefined) {
     return fallback;
   }
@@ -175,7 +175,7 @@ export function sha256Digest(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
-function compareCodeUnits(left, right) {
+export function compareCodeUnits(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
@@ -258,17 +258,6 @@ function findEndOfCentralDirectory(bytes) {
   );
 }
 
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
 function normalizeArchivePolicy(policy) {
   if (!policy || typeof policy !== "object") {
     throw new Error("Actions artifact ZIP policy is required.");
@@ -324,7 +313,6 @@ function normalizeArchivePolicy(policy) {
   }
   return {
     expectedEntries,
-    expectedEntrySet: expectedEntries ? new Set(expectedEntries) : undefined,
     maxArchiveBytes,
     maxEntries,
     maxExpandedBytes,
@@ -708,7 +696,11 @@ function requireExpectedBinding(params) {
     "workflow head branch",
   );
   const runStatePolicy = assertTrimmedString(expected.runStatePolicy, "workflow run-state policy");
-  if (runStatePolicy !== "completed-success" && runStatePolicy !== "same-run-producer-success") {
+  if (
+    runStatePolicy !== "completed-success" &&
+    runStatePolicy !== "same-run-producer-success" &&
+    runStatePolicy !== "completed-producer-success"
+  ) {
     throw new Error(`Unsupported workflow run-state policy: ${runStatePolicy}`);
   }
   const consumerRunAttempt =
@@ -716,9 +708,17 @@ function requireExpectedBinding(params) {
       ? assertPositiveInteger(expected.consumerRunAttempt, "consumer workflow run attempt")
       : undefined;
   const producerJobName =
-    runStatePolicy === "same-run-producer-success"
+    runStatePolicy === "same-run-producer-success" ||
+    runStatePolicy === "completed-producer-success"
       ? assertTrimmedString(expected.producerJobName, "producer job name")
       : undefined;
+  const producerStepName =
+    expected.producerStepName === undefined
+      ? undefined
+      : assertTrimmedString(expected.producerStepName, "producer step name");
+  if (producerStepName && runStatePolicy === "completed-success") {
+    throw new Error("Producer step binding requires a producer-success policy.");
+  }
   if (consumerRunAttempt !== undefined && runAttempt > consumerRunAttempt) {
     throw new Error("Producer workflow run attempt must not be newer than the consumer attempt.");
   }
@@ -726,6 +726,7 @@ function requireExpectedBinding(params) {
     ...identity,
     consumerRunAttempt,
     producerJobName,
+    ...(producerStepName ? { producerStepName } : {}),
     runStatePolicy,
     runAttempt,
     workflowEvent,
@@ -776,13 +777,24 @@ export function validateActionsArtifactBinding(params) {
     if (run.status !== "completed" || run.conclusion !== "success") {
       throw new Error("Actions workflow run does not match the immutable publication tuple.");
     }
+  } else if (expected.runStatePolicy === "completed-producer-success") {
+    // Protected recovery runs after the original workflow is terminal. Exact
+    // producer-step success preserves its artifacts even after cancellation.
+    if (
+      run.status !== "completed" ||
+      typeof run.conclusion !== "string" ||
+      run.conclusion.length === 0
+    ) {
+      throw new Error("Producer workflow attempt must be completed.");
+    }
   } else if (expected.runAttempt === expected.consumerRunAttempt) {
     // Environment protection can expose any nonterminal Actions transition
     // while approval propagates. Exact producer-job success remains mandatory.
     const active = ACTIVE_SAME_RUN_STATUSES.has(run.status) && run.conclusion === null;
-    const failed = run.status === "completed" && run.conclusion === "failure";
-    if (!active && !failed) {
-      throw new Error("Current producer workflow attempt must still be active or failed.");
+    const sealedTerminal =
+      run.status === "completed" && ["success", "failure"].includes(run.conclusion);
+    if (!active && !sealedTerminal) {
+      throw new Error("Current producer workflow attempt must still be active or sealed.");
     }
   } else if (
     run.status !== "completed" ||
@@ -796,7 +808,10 @@ export function validateActionsArtifactBinding(params) {
 
 export function validateActionsArtifactProducerJob(params) {
   const expected = requireExpectedBinding(params);
-  if (expected.runStatePolicy !== "same-run-producer-success") {
+  if (
+    expected.runStatePolicy !== "same-run-producer-success" &&
+    expected.runStatePolicy !== "completed-producer-success"
+  ) {
     return expected;
   }
   const response = params.workflowJobs;
@@ -816,14 +831,31 @@ export function validateActionsArtifactProducerJob(params) {
     throw new Error("Actions artifact producer job must be unique.");
   }
   const [producerJob] = matches;
+  const producerCompleted =
+    producerJob.status === "completed" &&
+    typeof producerJob.conclusion === "string" &&
+    producerJob.conclusion.length > 0;
   if (
     producerJob.run_id !== expected.runId ||
     producerJob.run_attempt !== expected.runAttempt ||
     producerJob.head_sha !== expected.workflowSha ||
-    producerJob.status !== "completed" ||
-    producerJob.conclusion !== "success"
+    !producerCompleted ||
+    (!expected.producerStepName && producerJob.conclusion !== "success")
   ) {
     throw new Error("Actions artifact producer job did not complete successfully.");
+  }
+  if (expected.producerStepName) {
+    // A later publication/readback failure does not erase a completed immutable
+    // artifact upload. Require its exact successful step, not inferred progress.
+    const steps = producerJob.steps?.filter((step) => step.name === expected.producerStepName);
+    if (
+      !Array.isArray(steps) ||
+      steps.length !== 1 ||
+      steps[0].status !== "completed" ||
+      steps[0].conclusion !== "success"
+    ) {
+      throw new Error("Actions artifact producer step did not complete successfully.");
+    }
   }
   return expected;
 }
@@ -1179,7 +1211,10 @@ export async function downloadActionsArtifactArchive(params) {
   );
   validateActionsArtifactBinding({ artifactMetadata, expected, workflowRun });
   let workflowJobs;
-  if (expected.runStatePolicy === "same-run-producer-success") {
+  if (
+    expected.runStatePolicy === "same-run-producer-success" ||
+    expected.runStatePolicy === "completed-producer-success"
+  ) {
     workflowJobs = await transfer.json(
       `actions/runs/${expected.runId}/attempts/${expected.runAttempt}/jobs?per_page=100`,
       "GitHub Actions producer jobs",

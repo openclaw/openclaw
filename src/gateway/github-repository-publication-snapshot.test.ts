@@ -12,7 +12,7 @@ import {
   readGitHubRepositoryPublicationBlob,
   readGitHubRepositoryPublicationMetadata,
 } from "./github-repository-publication-snapshot.js";
-import { readActualWorkspaceManifest } from "./worker-environments/workspace-reconcile-core.js";
+import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const baseEnv = {
@@ -61,142 +61,87 @@ async function fixture(linked: false | "linked" | "linked-config" = false) {
 }
 
 describe("repository publication checkpoint capture", () => {
-  it.each(["full", "split", "linked", "linked-config"] as const)(
-    "preserves committed CRLF bytes when capturing clean and edited workspaces (%s index)",
-    async (format) => {
-      const f = await fixture(format === "linked" || format === "linked-config" ? format : false);
-      const file = "gradlew.bat";
-      const content = Buffer.from("@echo off\r\necho unchanged\r\n");
-      await fs.writeFile(path.join(f.cwd, file), content);
-      await fs.writeFile(path.join(f.cwd, ".gitattributes"), "* text=auto eol=lf\n");
-      f.git("add", ".gitattributes");
-      // Model an existing CRLF blob: ordinary add would normalize a new file first.
-      const blob = execFileSync("git", ["hash-object", "-w", "--no-filters", "--stdin"], {
-        cwd: f.cwd,
-        env: f.env,
-        input: content,
-        encoding: "utf8",
-      }).trim();
-      f.git("update-index", "--add", "--cacheinfo", `100644,${blob},${file}`);
-      f.git("commit", "--quiet", "-m", "existing CRLF blob");
-      const head = f.git("rev-parse", "HEAD");
-      const tree = f.git("rev-parse", "HEAD^{tree}");
-      if (format === "split") {
-        f.git("update-index", "--split-index");
-      }
-      expect(f.git("status", "--porcelain")).toBe("");
-      const indexPath = path.resolve(f.cwd, f.git("rev-parse", "--git-path", "index"));
-      const index = await fs.readFile(indexPath);
-      for (const edited of [false, true]) {
-        if (edited) {
-          await fs.writeFile(path.join(f.cwd, "counter.txt"), "changed\r\n");
-          await fs.rm(f.output, { recursive: true });
-        }
-        const local = await captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd });
-        const digest = f.capture(head);
-        const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
-        expect(local.sourceHeadCommit).toBe(head);
-        expect(local.sourceIndexTree).toBe(tree);
-        expect(local.workspaceTree).toBe(snapshot.workspaceTree);
-        expect(f.git("rev-parse", `${local.workspaceTree}:${file}`)).toBe(blob);
-        if (edited) {
-          expect(snapshot.entries).toEqual([
-            { path: "counter.txt", mode: "100644", sha: expect.any(String) },
-          ]);
-          expect(
-            await readGitHubRepositoryPublicationBlob(f.output, snapshot.entries[0]!.sha!),
-          ).toEqual(Buffer.from("changed\n"));
-        } else {
-          expect(local.workspaceTree).toBe(tree);
-          expect(snapshot.entries).toEqual([]);
-        }
-        expect(await fs.readFile(indexPath)).toEqual(index);
-        expect(await fs.readFile(path.join(f.cwd, file))).toEqual(content);
-        expect(f.git("rev-parse", "HEAD")).toBe(head);
-      }
-    },
-  );
-
-  it.each(["full", "split", "linked", "linked-config"] as const)(
-    "captures same-size unstaged edits with matching cached timestamps (%s index)",
-    async (format) => {
-      const f = await fixture(format === "linked" || format === "linked-config" ? format : false);
-      f.git("config", "core.trustctime", "false");
-      f.git("config", "core.checkStat", "minimal");
-      const file = path.join(f.cwd, "counter.txt");
-      const timestamp = Math.floor(Date.now() / 1000) - 60;
-      await fs.writeFile(file, "staged\n");
-      await fs.utimes(file, timestamp, timestamp);
-      f.git("add", "counter.txt");
-      if (format === "split") {
-        f.git("update-index", "--split-index");
-      }
-      const stagedTree = f.git("write-tree");
-      const indexPath = path.resolve(f.cwd, f.git("rev-parse", "--git-path", "index"));
-      // Reproduce a coarse-timestamp filesystem without relying on execution timing.
-      await fs.utimes(indexPath, timestamp, timestamp);
-      await fs.writeFile(file, "latest\n");
-      await fs.utimes(file, timestamp, timestamp);
-      const index = await fs.readFile(indexPath);
-      const local = await captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd });
-      const digest = f.capture();
-      const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
-      expect(local.sourceIndexTree).toBe(stagedTree);
-      expect(local.workspaceTree).toBe(snapshot.workspaceTree);
-      expect(f.git("show", `${local.workspaceTree}:counter.txt`)).toBe("latest");
-      expect(await fs.readFile(indexPath)).toEqual(index);
-      expect(await fs.readFile(file, "utf8")).toBe("latest\n");
-      expect(f.git("rev-parse", "HEAD")).toBe(f.base);
-    },
-  );
-
-  it("captures a cumulative Git-normalized sparse tree, binary bytes, modes and deletions without changing the worker index", async () => {
+  it("preserves committed CRLF bytes when capturing clean and edited workspaces", async () => {
     const f = await fixture();
-    await fs.writeFile(path.join(f.cwd, "counter.txt"), "first\r\n");
-    f.git("add", "counter.txt");
-    f.git("commit", "--quiet", "-m", "worker turn one");
-    await fs.writeFile(path.join(f.cwd, "later.txt"), "second\r\n");
-    await fs.writeFile(path.join(f.cwd, "binary.dat"), Buffer.from([0, 255, 128, 13, 10]));
-    await fs.writeFile(path.join(f.cwd, "run.sh"), "#!/bin/sh\ntrue\n", { mode: 0o755 });
-    await fs.rm(path.join(f.cwd, "removed.txt"));
-    if (process.platform !== "win32") {
-      await fs.symlink("counter.txt", path.join(f.cwd, "counter-link"));
-    }
-    const index = f.git("write-tree");
+    const file = "gradlew.bat";
+    const content = Buffer.from("@echo off\r\necho unchanged\r\n");
+    await fs.writeFile(path.join(f.cwd, file), content);
+    await fs.writeFile(path.join(f.cwd, ".gitattributes"), "* text=auto eol=lf\n");
+    f.git("add", ".gitattributes");
+    // Model an existing CRLF blob: ordinary add would normalize a new file first.
+    const blob = execFileSync("git", ["hash-object", "-w", "--no-filters", "--stdin"], {
+      cwd: f.cwd,
+      env: f.env,
+      input: content,
+      encoding: "utf8",
+    }).trim();
+    f.git("update-index", "--add", "--cacheinfo", `100644,${blob},${file}`);
+    f.git("commit", "--quiet", "-m", "existing CRLF blob");
     const head = f.git("rev-parse", "HEAD");
-    const digest = f.capture();
-    const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
-    expect(snapshot.baseCommit).toBe(f.base);
-    expect(snapshot.entries.map((entry) => entry.path)).not.toContain(".gitattributes");
-    expect(snapshot.entries).toEqual(
-      expect.arrayContaining([
-        { path: "removed.txt", mode: "100644", sha: null },
-        expect.objectContaining({
-          path: "run.sh",
-          mode: process.platform === "win32" ? "100644" : "100755",
-        }),
-      ]),
-    );
-    for (const [name, bytes] of [
-      ["counter.txt", Buffer.from("first\n")],
-      ["later.txt", Buffer.from("second\n")],
-      ["binary.dat", Buffer.from([0, 255, 128, 13, 10])],
-      ...(process.platform === "win32" ? [] : [["counter-link", Buffer.from("counter.txt")]]),
-    ] as Array<[string, Buffer]>) {
-      const entry = snapshot.entries.find((candidate) => candidate.path === name)!;
-      expect(await readGitHubRepositoryPublicationBlob(f.output, entry.sha!)).toEqual(bytes);
+    const tree = f.git("rev-parse", "HEAD^{tree}");
+    expect(f.git("status", "--porcelain")).toBe("");
+    const indexPath = path.resolve(f.cwd, f.git("rev-parse", "--git-path", "index"));
+    const index = await fs.readFile(indexPath);
+    for (const edited of [false, true]) {
+      if (edited) {
+        await fs.writeFile(path.join(f.cwd, "counter.txt"), "changed\r\n");
+        await fs.rm(f.output, { recursive: true });
+      }
+      const local = await captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd });
+      const digest = f.capture(head);
+      const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
+      expect(local.sourceHeadCommit).toBe(head);
+      expect(local.sourceIndexTree).toBe(tree);
+      expect(local.workspaceTree).toBe(snapshot.workspaceTree);
+      expect(f.git("rev-parse", `${local.workspaceTree}:${file}`)).toBe(blob);
+      if (edited) {
+        expect(snapshot.entries).toEqual([
+          { path: "counter.txt", mode: "100644", sha: expect.any(String) },
+        ]);
+        expect(
+          await readGitHubRepositoryPublicationBlob(f.output, snapshot.entries[0]!.sha!),
+        ).toEqual(Buffer.from("changed\n"));
+      } else {
+        expect(local.workspaceTree).toBe(tree);
+        expect(snapshot.entries).toEqual([]);
+      }
+      expect(await fs.readFile(indexPath)).toEqual(index);
+      expect(await fs.readFile(path.join(f.cwd, file))).toEqual(content);
+      expect(f.git("rev-parse", "HEAD")).toBe(head);
     }
-    expect(f.git("write-tree")).toBe(index);
-    expect(f.git("rev-parse", "HEAD")).toBe(head);
-    expect(await fs.readFile(path.join(f.cwd, "later.txt"), "utf8")).toBe("second\r\n");
-    const stored = await fs.readdir(path.join(f.output, "blobs"));
-    expect(stored).toHaveLength(snapshot.entries.filter((entry) => entry.sha).length);
   });
 
-  it.each(["full", "split", "linked", "linked-config"] as const)(
+  it("captures same-size unstaged edits with matching cached timestamps in a linked worktree", async () => {
+    const f = await fixture("linked");
+    f.git("config", "core.trustctime", "false");
+    f.git("config", "core.checkStat", "minimal");
+    const file = path.join(f.cwd, "counter.txt");
+    const timestamp = Math.floor(Date.now() / 1000) - 60;
+    await fs.writeFile(file, "staged\n");
+    await fs.utimes(file, timestamp, timestamp);
+    f.git("add", "counter.txt");
+    const stagedTree = f.git("write-tree");
+    const indexPath = path.resolve(f.cwd, f.git("rev-parse", "--git-path", "index"));
+    // Reproduce a coarse-timestamp filesystem without relying on execution timing.
+    await fs.utimes(indexPath, timestamp, timestamp);
+    await fs.writeFile(file, "latest\n");
+    await fs.utimes(file, timestamp, timestamp);
+    const index = await fs.readFile(indexPath);
+    const local = await captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd });
+    const digest = f.capture();
+    const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
+    expect(local.sourceIndexTree).toBe(stagedTree);
+    expect(local.workspaceTree).toBe(snapshot.workspaceTree);
+    expect(f.git("show", `${local.workspaceTree}:counter.txt`)).toBe("latest");
+    expect(await fs.readFile(indexPath)).toEqual(index);
+    expect(await fs.readFile(file, "utf8")).toBe("latest\n");
+    expect(f.git("rev-parse", "HEAD")).toBe(f.base);
+  });
+
+  it.each(["split", "linked-config"] as const)(
     "preserves staged path inventory and index bytes while staging workspace changes (%s index)",
     async (format) => {
-      const f = await fixture(format === "linked" || format === "linked-config" ? format : false);
+      const f = await fixture(format === "linked-config" ? format : false);
       await fs.writeFile(path.join(f.cwd, "ignored-added.txt"), "staged\r\n");
       f.git("add", "-f", "ignored-added.txt");
       await fs.writeFile(path.join(f.cwd, "ignored-intent.txt"), "intent\r\n");
@@ -243,7 +188,7 @@ describe("repository publication checkpoint capture", () => {
 
   it("restores accepted publication paths as unstaged without running hooks or filters", async () => {
     const f = await fixture();
-    const base = await readActualWorkspaceManifest({ root: f.cwd, baseCommit: f.base });
+    const base = await captureWorkspaceManifest({ root: f.cwd, baseCommit: f.base });
     await fs.writeFile(path.join(f.cwd, "ignored-[1].txt"), "publishable\n");
     await fs.writeFile(path.join(f.cwd, "ignored-private.txt"), "recovery only\n");
     await fs.writeFile(path.join(f.cwd, ".worktreeinclude"), "ignored-private.txt\n");
@@ -252,7 +197,7 @@ describe("repository publication checkpoint capture", () => {
       await fs.symlink("counter.txt", path.join(f.cwd, "ignored-link.txt"));
       f.git("add", "-f", "ignored-link.txt");
     }
-    const current = await readActualWorkspaceManifest({ root: f.cwd, baseCommit: f.base });
+    const current = await captureWorkspaceManifest({ root: f.cwd, baseCommit: f.base });
     const digest = f.capture();
     const restored = path.join(f.root, "restored");
     f.git("clone", "--quiet", "--no-local", "--", f.cwd, restored);

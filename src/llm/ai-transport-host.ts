@@ -3,6 +3,7 @@
 import { configureAiTransportHost } from "@openclaw/ai";
 import { configureProviderErrorRedactor } from "@openclaw/ai/diagnostics";
 import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-setting.js";
+import { unwrapModelHeaderSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
 import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
@@ -16,6 +17,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAnthropicInlineContentBlocks } from "../media/anthropic-inline-images.js";
 import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 
 const transportLogBySubsystem = new Map<string, ReturnType<typeof createSubsystemLogger>>();
 
@@ -31,10 +33,12 @@ function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogge
 }
 
 configureAiTransportHost({
+  runInDetachedAsyncContext,
   observePendingProviderWork: (pending) => {
     void trackAsyncWork(() => pending).catch(() => {});
   },
   buildModelFetch: buildGuardedModelFetch,
+  unwrapModelTransportSentinels: unwrapModelHeaderSentinelsForProviderEgress,
   resolveSecretSentinel: (value) => {
     const swapped = swapSecretSentinelsInText(value);
     const unknown = swapped.unknown[0];

@@ -112,57 +112,48 @@ export function execApprovalAllowlistMissingTarget(agentId: string | undefined):
     : execApprovalsPolicyUri(`agents/${ocPathSegment(agentId)}/allowlist`);
 }
 
-export function formatExecApprovalAllowlistRequirement(
-  entry: ExecApprovalAllowlistRequirement,
-): string {
-  return formatExecApprovalAllowlistParts(entry.pattern, entry.argPattern);
-}
-
 export function formatExecApprovalAllowlistEntry(
-  entry: PolicyExecApprovalEvidence | undefined,
+  entry: Pick<PolicyExecApprovalEvidence, "pattern" | "argPattern"> | undefined,
 ): string {
-  return formatExecApprovalAllowlistParts(entry?.pattern ?? "", entry?.argPattern);
+  const pattern = entry?.pattern ?? "";
+  return entry?.argPattern === undefined ? pattern : `${pattern} argPattern=${entry.argPattern}`;
 }
 
-function formatExecApprovalAllowlistParts(pattern: string, argPattern: string | undefined): string {
-  return argPattern === undefined ? pattern : `${pattern} argPattern=${argPattern}`;
-}
-
-export function effectiveExecApprovalAgentSecurityEntry(
+export function execApprovalAgentEntries(
   entries: readonly PolicyExecApprovalEvidence[],
-  agentId: string,
-): PolicyExecApprovalEvidence | undefined {
-  const exact = entries.find(
-    (entry) =>
-      entry.kind === "agent" &&
-      entry.agentId !== undefined &&
-      normalizeAgentId(entry.agentId) === normalizeAgentId(agentId),
-  );
-  const wildcard = entries.find((entry) => entry.kind === "agent" && entry.agentId === "*");
-  if (exact?.security !== undefined || exact?.securityConfigured === true) {
-    return exact;
+  defaults: PolicyExecApprovalEvidence | undefined,
+  field: "security" | "autoAllowSkills",
+  agentId?: string,
+): readonly PolicyExecApprovalEvidence[] {
+  const agents = entries.filter((entry) => entry.kind === "agent");
+  const wildcard = agents.find((entry) => entry.agentId === "*");
+  const hasValue = (entry: PolicyExecApprovalEvidence) =>
+    entry[field] !== undefined || (field === "security" && entry.securityConfigured === true);
+  if (agentId === undefined) {
+    const explicit = agents.filter(
+      (entry) => hasValue(entry) || (field === "security" && entry.agentId === "*"),
+    );
+    const usesDefaults =
+      field === "security" ? wildcard === undefined : wildcard?.autoAllowSkills === undefined;
+    return usesDefaults
+      ? [...explicit, defaults ?? syntheticExecApprovalAgentEntry("*")]
+      : explicit;
   }
-  return wildcard?.security === undefined ? (exact ?? wildcard) : wildcard;
+  const exact = agents.find(
+    (entry) =>
+      entry.agentId !== undefined && normalizeAgentId(entry.agentId) === normalizeAgentId(agentId),
+  );
+  if (exact !== undefined && hasValue(exact)) {
+    return [exact];
+  }
+  if (wildcard?.[field] !== undefined) {
+    return [wildcard];
+  }
+  const inherited = field === "security" ? (exact ?? wildcard) : undefined;
+  return [inherited ?? defaults ?? syntheticExecApprovalAgentEntry(agentId)];
 }
 
-export function effectiveExecApprovalAgentAutoAllowSkillsEntry(
-  entries: readonly PolicyExecApprovalEvidence[],
-  agentId: string,
-): PolicyExecApprovalEvidence | undefined {
-  const exact = entries.find(
-    (entry) =>
-      entry.kind === "agent" &&
-      entry.agentId !== undefined &&
-      normalizeAgentId(entry.agentId) === normalizeAgentId(agentId),
-  );
-  if (exact?.autoAllowSkills !== undefined) {
-    return exact;
-  }
-  const wildcard = entries.find((entry) => entry.kind === "agent" && entry.agentId === "*");
-  return wildcard?.autoAllowSkills === undefined ? undefined : wildcard;
-}
-
-export function syntheticExecApprovalAgentEntry(agentId: string): PolicyExecApprovalEvidence {
+function syntheticExecApprovalAgentEntry(agentId: string): PolicyExecApprovalEvidence {
   return {
     id: `agent:${agentId}:runtime-defaults`,
     kind: "agent",

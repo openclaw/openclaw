@@ -1,7 +1,7 @@
-/**
- * Thin Codex app-server timeout adapter around OpenClaw's shared timeout helper.
- */
-import { withTimeout as withSharedTimeout } from "openclaw/plugin-sdk/time-runtime";
+import {
+  racePromiseWithAbortSignal,
+  withTimeout as withSharedTimeout,
+} from "openclaw/plugin-sdk/time-runtime";
 
 function resolveAbortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error
@@ -9,7 +9,6 @@ function resolveAbortError(signal: AbortSignal): Error {
     : new Error("Codex app-server operation aborted", { cause: signal.reason });
 }
 
-/** Awaits a promise with a Codex-specific timeout error message. */
 export async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -55,4 +54,30 @@ export async function withAbortableTimeout<T>(params: {
   } finally {
     removeAbortListener?.();
   }
+}
+
+export async function waitForPromiseOrAbort(
+  promise: Promise<unknown>,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (signal.aborted) {
+    return false;
+  }
+  const aborted = Symbol("codex-promise-aborted");
+  return await racePromiseWithAbortSignal(
+    promise.then(() => true),
+    signal,
+    () => aborted,
+  ).catch((error: unknown) => {
+    if (error !== aborted) {
+      throw error;
+    }
+    return false;
+  });
+}
+
+export function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error(String(signal.reason ?? "codex app-server thread route aborted"));
 }

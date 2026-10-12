@@ -1,12 +1,12 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
+import { serializeCacheTtlToolResultProjections } from "./cache-ttl-checkpoint.js";
 import { appendAttemptCacheTtlIfNeeded } from "./run/attempt-thread-helpers.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
-  serializeCacheTtlToolResultProjections,
+  retainEmbeddedSessionPromptState,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
 import {
@@ -120,86 +120,79 @@ function toolText(messages: AgentMessage[], id: string): string {
 
 describe("cache-TTL tool-result projection", () => {
   it.each([
-    { reset: "restart", maxChars: 4_000 },
-    { reset: "restart", maxChars: 8_000 },
-    { reset: "eviction", maxChars: 4_000 },
-    { reset: "eviction", maxChars: 8_000 },
-  ])(
-    "preserves ordinary projected bytes after $reset with a $maxChars character cap",
-    ({ reset, maxChars }) => {
-      const sessionId = `ordinary-${reset}`;
-      const sessionIds = [sessionId];
-      try {
-        const state = getEmbeddedSessionPromptState(sessionId).toolResults;
-        const history: AgentMessage[] = [user("start")];
-        let sent: AgentMessage[] = [];
-        for (let batch = 0; batch < 3; batch++) {
-          history.push(
-            assistant(),
-            tool({ id: `batch-${batch}`, text: `${batch}`.repeat(6_000), image: true }),
-          );
-          sent = truncateOversizedToolResultsInMessages(
-            history,
-            128_000,
-            maxChars,
-            8_000,
-            state,
-          ).messages;
-        }
-        expect(sent.filter((message) => message.role === "toolResult")).toHaveLength(3);
-        expect(toolText(sent, "batch-0").includes("truncated")).toBe(maxChars === 4_000);
-        expect(
-          [0, 1, 2].reduce((sum, batch) => sum + toolText(sent, `batch-${batch}`).length, 0),
-        ).toBeGreaterThan(8_000);
-        const markerData = JSON.stringify(serializeCacheTtlToolResultProjections(state));
-        const entries = [
-          {
-            type: "custom",
-            customType: "openclaw.cache-ttl",
-            data: JSON.parse(markerData),
-          },
-        ];
-        if (reset === "restart") {
-          clearEmbeddedSessionPromptStates([sessionId]);
-        } else {
-          for (let index = 0; index < 65; index++) {
-            const otherId = `${sessionId}-${index}`;
-            sessionIds.push(otherId);
-            getEmbeddedSessionPromptState(otherId);
-          }
-        }
-        const restored = getEmbeddedSessionPromptState(sessionId).toolResults;
-        expect(restored).not.toBe(state);
-        restoreCacheTtlToolResultProjections(restored, entries);
-        expect(
-          JSON.stringify(
-            truncateOversizedToolResultsInMessages(history, 128_000, maxChars, 8_000, restored)
-              .messages,
-          ) === JSON.stringify(sent),
-        ).toBe(true);
-        const compacted = [user("summary"), ...history.slice(-2)];
-        reconcileToolResultPromptProjectionState(compacted, restored);
-        expect(restored.frozen.size).toBe(1);
-        expect(restored.replacements.size).toBe(maxChars === 4_000 ? 1 : 0);
-        const compactedSnapshot = serializeCacheTtlToolResultProjections(restored);
-        expect(JSON.stringify(compactedSnapshot)).not.toContain("batch-0");
-        const reopened = createToolResultPromptProjectionState();
-        restoreCacheTtlToolResultProjections(reopened, [
-          { ...entries[0], data: compactedSnapshot },
-        ]);
-        expect(
-          truncateOversizedToolResultsInMessages(compacted, 128_000, maxChars, 8_000, reopened)
-            .messages,
-        ).toEqual([user("summary"), ...sent.slice(-2)]);
-      } finally {
-        clearEmbeddedSessionPromptStates(sessionIds);
+    ["restart", 4_000],
+    ["restart", 8_000],
+    ["turn teardown", 4_000],
+    ["turn teardown", 8_000],
+  ])("preserves ordinary projected bytes after %s with a %s character cap", (reset, maxChars) => {
+    const sessionId = `ordinary-${reset}`;
+    const sessionIds = [sessionId];
+    try {
+      using initialLease = retainEmbeddedSessionPromptState(sessionId);
+      const state = initialLease.state.toolResults;
+      const history: AgentMessage[] = [user("start")];
+      let sent: AgentMessage[] = [];
+      for (let batch = 0; batch < 3; batch++) {
+        history.push(
+          assistant(),
+          tool({ id: `batch-${batch}`, text: `${batch}`.repeat(6_000), image: true }),
+        );
+        sent = truncateOversizedToolResultsInMessages(
+          history,
+          128_000,
+          maxChars,
+          8_000,
+          state,
+        ).messages;
       }
-    },
-  );
+      expect(sent.filter((message) => message.role === "toolResult")).toHaveLength(3);
+      expect(toolText(sent, "batch-0").includes("truncated")).toBe(maxChars === 4_000);
+      expect(
+        [0, 1, 2].reduce((sum, batch) => sum + toolText(sent, `batch-${batch}`).length, 0),
+      ).toBeGreaterThan(8_000);
+      const markerData = JSON.stringify(serializeCacheTtlToolResultProjections(state));
+      const entries = [
+        {
+          type: "custom",
+          customType: "openclaw.cache-ttl",
+          data: JSON.parse(markerData),
+        },
+      ];
+      if (reset === "restart") {
+        clearEmbeddedSessionPromptStates([sessionId]);
+      } else {
+        initialLease[Symbol.dispose]();
+      }
+      using restoredLease = retainEmbeddedSessionPromptState(sessionId);
+      const restored = restoredLease.state.toolResults;
+      expect(restored).not.toBe(state);
+      restoreCacheTtlToolResultProjections(restored, entries);
+      expect(
+        JSON.stringify(
+          truncateOversizedToolResultsInMessages(history, 128_000, maxChars, 8_000, restored)
+            .messages,
+        ) === JSON.stringify(sent),
+      ).toBe(true);
+      const compacted = [user("summary"), ...history.slice(-2)];
+      reconcileToolResultPromptProjectionState(compacted, restored);
+      expect(restored.frozen.size).toBe(1);
+      expect(restored.replacements.size).toBe(maxChars === 4_000 ? 1 : 0);
+      const compactedSnapshot = serializeCacheTtlToolResultProjections(restored);
+      expect(JSON.stringify(compactedSnapshot)).not.toContain("batch-0");
+      const reopened = createToolResultPromptProjectionState();
+      restoreCacheTtlToolResultProjections(reopened, [{ ...entries[0], data: compactedSnapshot }]);
+      expect(
+        truncateOversizedToolResultsInMessages(compacted, 128_000, maxChars, 8_000, reopened)
+          .messages,
+      ).toEqual([user("summary"), ...sent.slice(-2)]);
+    } finally {
+      clearEmbeddedSessionPromptStates(sessionIds);
+    }
+  });
 
   it.each(["soft", "hard"] as const)(
     "replays %s pruning after TTL refresh and restart, until compaction/reset",
-    (mode) => {
+    async (mode) => {
       const sessionId = `cache-ttl-${mode}`;
       clearEmbeddedSessionPromptStates([sessionId]);
       try {
@@ -208,7 +201,8 @@ describe("cache-TTL tool-result projection", () => {
             tool({ id: `tool-${index}`, text: `${index}:` + "x".repeat(6_000), image: true }),
           ),
         );
-        const state = getEmbeddedSessionPromptState(sessionId).toolResults;
+        using initialLease = retainEmbeddedSessionPromptState(sessionId);
+        const state = initialLease.state.toolResults;
         truncateOversizedToolResultsInMessages(messages, 1_000, 5_500, 100_000, state);
         let pruningRounds = 0;
         const options = { projectionState: state, onPruned: () => pruningRounds++ };
@@ -232,12 +226,12 @@ describe("cache-TTL tool-result projection", () => {
         const entries: { type: string; customType: string; data: unknown }[] = [];
         const sessionManager = {
           getEntries: () => entries,
-          appendCustomEntry: (customType: string, data: unknown) => {
+          appendCustomEntryAsync: async (customType: string, data: unknown) => {
             const serialized = JSON.stringify(data);
             entries.push({ type: "custom", customType, data: JSON.parse(serialized) });
           },
         };
-        appendAttemptCacheTtlIfNeeded({
+        await appendAttemptCacheTtlIfNeeded({
           sessionManager,
           config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
           provider: "anthropic",
@@ -257,7 +251,8 @@ describe("cache-TTL tool-result projection", () => {
         // The marker carries keys only; pruned bytes never enter the transcript.
         expect(JSON.stringify(entries.at(-1)?.data)).not.toContain("x".repeat(20));
         clearEmbeddedSessionPromptStates([sessionId]);
-        const restarted = getEmbeddedSessionPromptState(sessionId).toolResults;
+        using restartedLease = retainEmbeddedSessionPromptState(sessionId);
+        const restarted = restartedLease.state.toolResults;
         restoreCacheTtlToolResultProjections(restarted, entries);
         const restored = project(messages, {
           projectionState: restarted,
@@ -278,7 +273,8 @@ describe("cache-TTL tool-result projection", () => {
         expect(restarted.replacements.size).toBe(0);
         expect(restarted.restoredCacheTtl.size).toBe(0);
         clearEmbeddedSessionPromptStates([sessionId]);
-        expect(getEmbeddedSessionPromptState(sessionId).toolResults.replacements.size).toBe(0);
+        using resetLease = retainEmbeddedSessionPromptState(sessionId);
+        expect(resetLease.state.toolResults.replacements.size).toBe(0);
       } finally {
         clearEmbeddedSessionPromptStates([sessionId]);
       }

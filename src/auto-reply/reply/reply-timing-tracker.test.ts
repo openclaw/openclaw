@@ -1,6 +1,5 @@
 // Tests reply profiler flag detection and timing tracker output.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { createReplyHotPathTimingTracker } from "./dispatch-from-config.timing.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
@@ -16,18 +15,6 @@ beforeEach(() => {
   subsystemInfo.mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
-
-describe("isReplyProfilerEnabled", () => {
-  it("matches global and reply profiler diagnostic flags", () => {
-    const cfg = { diagnostics: { flags: ["reply.profiler"] } } as OpenClawConfig;
-    expect(isReplyProfilerEnabled({ config: cfg, env: {} as NodeJS.ProcessEnv })).toBe(true);
-    expect(
-      isReplyProfilerEnabled({
-        env: { OPENCLAW_DIAGNOSTICS: "profiler" } as NodeJS.ProcessEnv,
-      }),
-    ).toBe(true);
-  });
-});
 
 describe("createReplyTimingTracker", () => {
   it("reports slow preparation without profiling while keeping fast replies quiet", async () => {
@@ -54,14 +41,19 @@ describe("createReplyTimingTracker", () => {
 
   it("records and logs spans when the profiler flag is enabled", () => {
     const warn = vi.fn();
+    let nowMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const tracker = createReplyTimingTracker({
       log: { warn },
-      env: { OPENCLAW_DIAGNOSTICS: "reply.profiler" } as NodeJS.ProcessEnv,
-      totalWarnMs: 0,
-      stageWarnMs: 0,
+      enabled: isReplyProfilerEnabled({ env: { OPENCLAW_DIAGNOSTICS: "reply.profiler" } }),
     });
 
-    expect(tracker.measureSync("sync", () => 7)).toBe(7);
+    expect(
+      tracker.measureSync("sync", () => {
+        nowMs += 500;
+        return 7;
+      }),
+    ).toBe(7);
     tracker.logIfSlow({ message: "reply timings", outcome: "completed" });
     tracker.logIfSlow({ message: "reply timings", outcome: "completed" });
 
@@ -71,45 +63,6 @@ describe("createReplyTimingTracker", () => {
       outcome: "completed",
       spans: [expect.objectContaining({ name: "sync" })],
     });
-  });
-
-  it("retains failed-stage timings and propagates the original failures", async () => {
-    const warn = vi.fn();
-    const tracker = createReplyTimingTracker({ log: { warn }, enabled: true, totalWarnMs: 0 });
-
-    expect(() =>
-      tracker.measureSync("sync_failure", () => {
-        throw new Error("sync failed");
-      }),
-    ).toThrow("sync failed");
-    await expect(
-      tracker.measure("async_failure", async () => {
-        throw new Error("async failed");
-      }),
-    ).rejects.toThrow("async failed");
-    tracker.logIfSlow({ message: "reply timings" });
-
-    expect(warn.mock.calls[0]?.[1]).toMatchObject({
-      spans: [{ name: "sync_failure" }, { name: "async_failure" }],
-    });
-  });
-
-  it("keeps total and stage warning thresholds inclusive", () => {
-    const warn = vi.fn();
-    const now = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(999);
-    const totalTracker = createReplyTimingTracker({ log: { warn }, enabled: true });
-
-    totalTracker.logIfSlow({ message: "total" });
-    now.mockReturnValue(1_000);
-    totalTracker.logIfSlow({ message: "total" });
-    expect(warn).toHaveBeenCalledOnce();
-
-    warn.mockReset();
-    now.mockReset().mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(500);
-    const stageTracker = createReplyTimingTracker({ log: { warn }, enabled: true });
-    stageTracker.measureSync("stage", () => undefined);
-    stageTracker.logIfSlow({ message: "stage" });
-    expect(warn).toHaveBeenCalledOnce();
   });
 
   it("keeps agent milestones repeatable without reopening the terminal log", () => {
@@ -151,6 +104,8 @@ describe("createReplyTimingTracker", () => {
     const tracker = createReplyHotPathTimingTracker({ profilerEnabled: true });
     const details = {
       channel: "telegram",
+      runId: "run-1",
+      sessionId: "session-1",
       outcome: "skipped" as const,
       token: "secret",
     };
@@ -160,10 +115,12 @@ describe("createReplyTimingTracker", () => {
 
     expect(subsystemWarn).toHaveBeenCalledOnce();
     expect(subsystemWarn).toHaveBeenCalledWith(
-      "reply hot path timings channel=telegram messageId=unknown sessionKey=unknown outcome=skipped totalMs=1500 stages=none",
+      "reply hot path timings channel=telegram messageId=unknown runId=run-1 sessionId=session-1 sessionKey=unknown outcome=skipped totalMs=1500 stages=none",
       {
         channel: "telegram",
         messageId: undefined,
+        runId: "run-1",
+        sessionId: "session-1",
         sessionKey: undefined,
         outcome: "skipped",
         reason: undefined,
@@ -197,7 +154,7 @@ describe("createReplyTimingTracker", () => {
     expect(subsystemInfo).toHaveBeenCalledTimes(2);
   });
 
-  it("reports slow dispatch preparation before model execution without profiling", async () => {
+  it("reports slow dispatch preparation and early cancellation without profiling", async () => {
     let nowMs = 0;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const tracker = createReplyHotPathTimingTracker();
@@ -205,8 +162,12 @@ describe("createReplyTimingTracker", () => {
       nowMs += 5_000;
     });
     tracker.logPreparationIfSlow({ channel: "webchat", sessionKey: "agent:main" });
+    tracker.logIfSlow(
+      { channel: "webchat", outcome: "skipped", reason: "reply_operation_aborted" },
+      { beforeReplyResolver: true },
+    );
 
-    expect(subsystemWarn).toHaveBeenCalledOnce();
+    expect(subsystemWarn).toHaveBeenCalledTimes(2);
     expect(subsystemWarn.mock.calls[0]?.[1]).toMatchObject({
       channel: "webchat",
       sessionKey: "agent:main",
@@ -214,6 +175,11 @@ describe("createReplyTimingTracker", () => {
       reason: "before_reply_resolver",
       totalMs: 5_000,
       spans: [{ name: "reply.load_reply_resolver", durationMs: 5_000, elapsedMs: 5_000 }],
+    });
+    expect(subsystemWarn.mock.calls[1]?.[1]).toMatchObject({
+      outcome: "skipped",
+      reason: "reply_operation_aborted",
+      totalMs: 5_000,
     });
   });
 

@@ -14,7 +14,7 @@ import {
   collectExplicitCliErrorText,
   decodeCliRecords,
   describeClaudeTurnStop,
-  isStreamJsonDialect,
+  supportsCliJsonlToolEvents,
   parseCliJson,
 } from "./cli-output-records.js";
 import {
@@ -44,31 +44,28 @@ export function formatCliOutputError(
     sessionId ? `OpenClaw session: ${sessionId}.` : undefined,
     cliSessionId ? `Claude session: ${cliSessionId}.` : undefined,
   ].filter((entry): entry is string => Boolean(entry));
-  if (terminalFailure.reason === "max_turns") {
-    const limit = terminalFailure.limit;
-    return [
-      `Claude CLI stopped after reaching the maximum number of turns${limit ? ` (limit: ${limit})` : ""}.`,
-      ...context,
-      "Tool actions may already have run; verify their effects before retrying.",
-      "Retry with a higher --max-turns value or a narrower task.",
-    ].join(" ");
-  }
+  const maxTurns = terminalFailure.reason === "max_turns";
   // A user-scope Claude Code hook can end a headless turn the operator never
   // sees configured here, and the settings source is the backend's own choice,
   // so the guidance names the hook rather than one backend's CLI flags.
   const hookStopped =
-    terminalFailure.terminalReason === "hook_stopped" ||
-    terminalFailure.terminalReason === "stop_hook_prevented";
+    !maxTurns &&
+    (terminalFailure.terminalReason === "hook_stopped" ||
+      terminalFailure.terminalReason === "stop_hook_prevented");
   return [
-    describeClaudeTurnStop(terminalFailure),
+    maxTurns
+      ? `Claude CLI stopped after reaching the maximum number of turns${terminalFailure.limit ? ` (limit: ${terminalFailure.limit})` : ""}.`
+      : describeClaudeTurnStop(terminalFailure),
     ...context,
     "Tool actions may already have run; verify their effects before retrying.",
-    ...(hookStopped
-      ? [
-          "A Claude Code hook stopped this turn; user-scope hooks (including plugin hooks) " +
-            "apply to headless runs — move or disable that hook.",
-        ]
-      : []),
+    ...(maxTurns
+      ? ["Retry with a higher --max-turns value or a narrower task."]
+      : hookStopped
+        ? [
+            "A Claude Code hook stopped this turn; user-scope hooks (including plugin hooks) " +
+              "apply to headless runs — move or disable that hook.",
+          ]
+        : []),
   ].join(" ");
 }
 
@@ -83,9 +80,6 @@ export function parseCliOutput(params: {
   fallbackSessionId?: string;
 }): CliOutput {
   const outputMode = params.outputMode ?? "text";
-  if (outputMode === "text") {
-    return { text: params.raw.trim(), sessionId: params.fallbackSessionId };
-  }
   if (outputMode === "jsonl") {
     const parser = createCliJsonlStreamingParser({
       backend: params.backend,
@@ -100,30 +94,25 @@ export function parseCliOutput(params: {
     if (parsed) {
       return parsed;
     }
-    if (isStreamJsonDialect(params)) {
+    if (supportsCliJsonlToolEvents(params)) {
       return {
         text: "",
         sessionId: params.fallbackSessionId,
         errorText: CLI_STREAM_JSON_MISSING_RESULT_ERROR,
       };
     }
-    return { text: params.raw.trim(), sessionId: params.fallbackSessionId };
-  }
-  return (
-    parseCliJson(params.raw, params.backend, params.providerId) ?? {
-      text: params.raw.trim(),
-      sessionId: params.fallbackSessionId,
+  } else if (outputMode !== "text") {
+    const parsed = parseCliJson(params.raw, params.backend, params.providerId);
+    if (parsed) {
+      return parsed;
     }
-  );
+  }
+  return { text: params.raw.trim(), sessionId: params.fallbackSessionId };
 }
 
 /** Extracts a human-readable error message from mixed CLI stderr/stdout text. */
 export function extractCliErrorMessage(raw: string): string | null {
   const parsedRecords = decodeCliRecords(raw);
-  if (parsedRecords.length === 0) {
-    return null;
-  }
-
   let errorText = "";
   for (const parsed of parsedRecords) {
     const next = collectExplicitCliErrorText(parsed);

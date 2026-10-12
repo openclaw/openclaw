@@ -4,18 +4,14 @@ import {
   stripSelfProviderModelPrefix,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 
-export type CompiledModelAllowlist = {
-  configured: boolean;
-  allowAny: boolean;
-  models: Set<string>;
-};
+export type CompiledModelAllowlist = ReturnType<typeof compileModelAllowlist>;
 
 export function compileModelAllowlist(params: {
   configured: boolean;
   values?: readonly string[];
   // Match the caller's resolved-target representation, including provider-qualified model IDs.
   formatKey: (provider: string, model: string) => string;
-}): CompiledModelAllowlist {
+}) {
   const models = new Set<string>();
   let allowAny = false;
   for (const raw of params.values ?? []) {

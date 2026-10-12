@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as noteModule from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginVersionDriftReport } from "../plugins/plugin-version-drift.js";
 import {
   createPluginLoadResult,
@@ -17,17 +18,14 @@ import {
 const mocks = vi.hoisted(() => ({
   listAgentIds: vi.fn<(_cfg: OpenClawConfig) => string[]>(() => ["default"]),
   resolveAgentWorkspaceDir: vi.fn(),
-  resolveDefaultAgentId: vi.fn(),
   buildPluginRegistrySnapshotReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
-  listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
-  listTasksForFlowId: vi.fn<(flowId: string) => unknown[]>((_flowId: string) => []),
 }));
 
-vi.mock("../agents/agent-scope.js", () => ({
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   listAgentIds: (cfg: OpenClawConfig) => mocks.listAgentIds(cfg),
   resolveAgentWorkspaceDir: (...args: unknown[]) => mocks.resolveAgentWorkspaceDir(...args),
-  tryResolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
 }));
 
 vi.mock("../plugins/status.js", () => ({
@@ -37,38 +35,15 @@ vi.mock("../plugins/status.js", () => ({
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
 
-vi.mock("../tasks/task-flow-registry.store.sqlite.js", () => ({
-  loadTaskFlowRegistryStateFromSqliteReadOnly: () => ({
-    flows: new Map(
-      mocks.listTaskFlowRecords().map((flow) => [(flow as { flowId: string }).flowId, flow]),
-    ),
-  }),
-}));
-
-vi.mock("../tasks/task-registry.store.sqlite.js", () => ({
-  loadTaskRegistryStateFromSqliteReadOnly: () => ({
-    tasks: new Map(
-      mocks
-        .listTaskFlowRecords()
-        .flatMap((flow) => mocks.listTasksForFlowId((flow as { flowId: string }).flowId))
-        .map((task) => [(task as { taskId: string }).taskId, task]),
-    ),
-    deliveryStates: new Map(),
-  }),
-}));
-
 async function runNoteWorkspaceStatusForTest(
   loadResult: ReturnType<typeof createPluginLoadResult>,
   compatibilityWarnings: string[] = [],
   opts?: {
     cfg?: OpenClawConfig;
     pluginVersionDrift?: PluginVersionDriftReport;
-    flows?: unknown[];
-    tasksByFlowId?: (flowId: string) => unknown[];
   },
 ) {
   const cfg: OpenClawConfig = opts?.cfg ?? {};
-  mocks.resolveDefaultAgentId.mockReturnValue("default");
   mocks.listAgentIds.mockReturnValue(["default"]);
   mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
   mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
@@ -76,10 +51,6 @@ async function runNoteWorkspaceStatusForTest(
     ...loadResult,
   });
   mocks.buildPluginCompatibilityWarnings.mockReturnValue(compatibilityWarnings);
-  mocks.listTaskFlowRecords.mockReturnValue(opts?.flows ?? []);
-  mocks.listTasksForFlowId.mockImplementation((flowId: string) =>
-    opts?.tasksByFlowId ? opts.tasksByFlowId(flowId) : [],
-  );
 
   const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
   noteWorkspaceStatus(cfg, {
@@ -91,30 +62,58 @@ async function runNoteWorkspaceStatusForTest(
 }
 
 describe("noteWorkspaceStatus", () => {
-  it("warns when plugins use legacy compatibility paths", async () => {
-    const noteSpy = await runNoteWorkspaceStatusForTest(
-      createPluginLoadResult({
-        plugins: [
-          createPluginRecord({
-            id: "legacy-plugin",
-            name: "Legacy Plugin",
-            hookCount: 1,
-          }),
-        ],
-        typedHooks: [
-          createTypedHook({ pluginId: "legacy-plugin", hookName: "before_prompt_build" }),
-        ],
-      }),
-    );
+  it("shares scoped workspace inspection while reporting identical registrar failures once", () => {
+    const diagnostic = {
+      level: "error" as const,
+      pluginId: "broken-fixture",
+      source: "/plugins/broken-fixture/index.js",
+      message: "board widget registration has invalid kind",
+    };
+    mocks.listAgentIds.mockReturnValue(["alpha", "beta"]);
+    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/workspace/${agentId}`);
+    let activeWorkspace: string | undefined;
+    const runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner = (scope, run) => {
+      activeWorkspace = scope.workspaceDir;
+      try {
+        return run();
+      } finally {
+        activeWorkspace = undefined;
+      }
+    };
+    mocks.buildPluginRegistrySnapshotReport.mockImplementation(({ workspaceDir }) => {
+      expect(activeWorkspace).toBe(workspaceDir);
+      return {
+        workspaceDir,
+        ...createPluginLoadResult({ plugins: [], diagnostics: [diagnostic] }),
+      };
+    });
+    mocks.buildPluginCompatibilityWarnings.mockImplementation(({ workspaceDir }) => {
+      expect(activeWorkspace).toBe(workspaceDir);
+      return ["legacy-plugin is hook-only"];
+    });
+
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {
+      expect(activeWorkspace).toBeDefined();
+    });
     try {
-      expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
-        config: {},
-        workspaceDir: "/workspace",
-      });
-      const compatibilityCalls = noteSpy.mock.calls.filter(
-        ([, title]) => title === "Plugin compatibility",
-      );
-      expect(compatibilityCalls).toHaveLength(0);
+      noteWorkspaceStatus({}, { runWithPluginMetadataSnapshot });
+      expect(noteSpy.mock.calls).toEqual([
+        ['Agent "alpha":\n- legacy-plugin is hook-only', "Plugin compatibility"],
+        [
+          'Agent "alpha":\n- ERROR broken-fixture: board widget registration has invalid kind (/plugins/broken-fixture/index.js)',
+          "Plugin diagnostics",
+        ],
+        ['Agent "beta":\n- legacy-plugin is hook-only', "Plugin compatibility"],
+      ]);
+
+      const findings = collectWorkspaceStatusHealthFindings({}, { runWithPluginMetadataSnapshot });
+      expect(findings.map((finding) => finding.message)).toEqual([
+        'Agent "alpha": legacy-plugin is hook-only',
+        'Agent "alpha": board widget registration has invalid kind',
+        'Agent "beta": legacy-plugin is hook-only',
+      ]);
+      expect(findings.filter((finding) => finding.target === "broken-fixture")).toHaveLength(1);
+      expect(activeWorkspace).toBeUndefined();
     } finally {
       noteSpy.mockRestore();
     }
@@ -136,7 +135,7 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      expect(noteSpy.mock.calls.filter(([, title]) => title === "Plugins")).toHaveLength(0);
+      expect(noteSpy).not.toHaveBeenCalled();
     } finally {
       noteSpy.mockRestore();
     }
@@ -188,14 +187,12 @@ describe("noteWorkspaceStatus", () => {
   });
 
   it("collects plugin version drift as structured findings", async () => {
-    mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
     mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",
       ...createPluginLoadResult({ plugins: [] }),
     });
     mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
-    mocks.listTaskFlowRecords.mockReturnValue([]);
 
     const findings = collectWorkspaceStatusHealthFindings(
       {
@@ -233,14 +230,12 @@ describe("noteWorkspaceStatus", () => {
   });
 
   it("reports npm target lookup failure without an uninstallable fix hint", () => {
-    mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
     mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",
       ...createPluginLoadResult({ plugins: [] }),
     });
     mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
-    mocks.listTaskFlowRecords.mockReturnValue([]);
 
     const findings = collectWorkspaceStatusHealthFindings(
       { plugins: { entries: { brave: { enabled: true } } } },
@@ -281,8 +276,7 @@ describe("noteWorkspaceStatus", () => {
     expect(findings[0]?.fixHint).not.toContain("openclaw gateway restart");
   });
 
-  it("collects compatibility warnings, plugin diagnostics, and TaskFlow recovery findings", async () => {
-    mocks.resolveDefaultAgentId.mockReturnValue("default");
+  it("collects compatibility warnings and plugin diagnostics", async () => {
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
     mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",
@@ -296,27 +290,11 @@ describe("noteWorkspaceStatus", () => {
             source: "/tmp/plugin.json",
             code: "channel-setup-failure",
           },
+          { level: "info", pluginId: "selected", message: "explicit plugin source selected" },
         ],
       }),
     });
     mocks.buildPluginCompatibilityWarnings.mockReturnValue(["legacy-plugin is hook-only"]);
-    mocks.listTaskFlowRecords.mockReturnValue([
-      {
-        flowId: "flow-123",
-        syncMode: "managed",
-        status: "blocked",
-        blockedTaskId: "task-missing",
-      },
-      {
-        flowId: "flow-history",
-        syncMode: "task_mirrored",
-        status: "blocked",
-        blockedTaskId: "task-pruned",
-        endedAt: 100,
-      },
-    ]);
-    mocks.listTasksForFlowId.mockReturnValue([]);
-
     const findings = collectWorkspaceStatusHealthFindings({});
 
     expect(findings).toEqual([
@@ -337,13 +315,9 @@ describe("noteWorkspaceStatus", () => {
         message: "channel setup failed",
       }),
       expect.objectContaining({
-        checkId: "core/doctor/workspace-status",
-        severity: "warning",
-        path: "tasks.flows",
-        target: "flow-123",
-        requirement: "taskflow-recovery",
-        message: expect.stringContaining("task-missing"),
-        fixHint: expect.stringContaining("openclaw tasks flow show flow-123"),
+        severity: "info",
+        target: "selected",
+        message: "explicit plugin source selected",
       }),
     ]);
   });
@@ -453,60 +427,6 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
-  it("omits plugin version drift when no daemon status report is supplied", async () => {
-    const noteSpy = await runNoteWorkspaceStatusForTest(
-      createPluginLoadResult({
-        plugins: [
-          createPluginRecord({
-            id: "codex",
-            name: "Codex",
-            origin: "global",
-            source: "/tmp/codex/index.js",
-          }),
-        ],
-      }),
-      [],
-      {
-        cfg: {
-          gateway: {
-            mode: "remote",
-          },
-          plugins: {
-            entries: {
-              codex: { enabled: true },
-            },
-          },
-        },
-      },
-    );
-    try {
-      expect(noteSpy.mock.calls.map(([, title]) => title)).not.toContain(
-        "Plugin restart readiness",
-      );
-    } finally {
-      noteSpy.mockRestore();
-    }
-  });
-
-  it("omits plugin compatibility note when no legacy compatibility paths are present", async () => {
-    const noteSpy = await runNoteWorkspaceStatusForTest(
-      createPluginLoadResult({
-        plugins: [
-          createPluginRecord({
-            id: "modern-plugin",
-            name: "Modern Plugin",
-            providerIds: ["modern"],
-          }),
-        ],
-      }),
-    );
-    try {
-      expect(noteSpy.mock.calls.map(([, title]) => title)).not.toContain("Plugin compatibility");
-    } finally {
-      noteSpy.mockRestore();
-    }
-  });
-
   it("passes the shared status report into compatibility warnings", async () => {
     const loadResult = createPluginLoadResult({
       plugins: [
@@ -543,35 +463,6 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
-  it("adds TaskFlow recovery hints for broken blocked flows", async () => {
-    const noteSpy = await runNoteWorkspaceStatusForTest(createPluginLoadResult(), [], {
-      flows: [
-        {
-          flowId: "flow-123",
-          syncMode: "managed",
-          ownerKey: "agent:main:main",
-          revision: 0,
-          status: "blocked",
-          notifyPolicy: "done_only",
-          goal: "Investigate PR batch",
-          blockedTaskId: "task-missing",
-          createdAt: 100,
-          updatedAt: 100,
-        },
-      ],
-      tasksByFlowId: () => [],
-    });
-    try {
-      const recoveryCalls = noteSpy.mock.calls.filter(([, title]) => title === "TaskFlow recovery");
-      expect(recoveryCalls).toHaveLength(1);
-      const [body] = expectDefined(recoveryCalls[0], "(recoveryCalls)[0] test invariant");
-      expect(body).toContain("flow-123");
-      expect(body).toContain("openclaw tasks flow show <flow-id>");
-    } finally {
-      noteSpy.mockRestore();
-    }
-  });
-
   it("labels workspace diagnostics for the affected secondary agent", () => {
     mocks.buildPluginRegistrySnapshotReport.mockClear();
     mocks.listAgentIds.mockReturnValue(["default", "secondary"]);
@@ -587,7 +478,6 @@ describe("noteWorkspaceStatus", () => {
       }),
     }));
     mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
-    mocks.listTaskFlowRecords.mockReturnValue([]);
 
     const findings = collectWorkspaceStatusHealthFindings({});
 

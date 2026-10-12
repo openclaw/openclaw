@@ -19,7 +19,6 @@ describe("loadPromptTemplates", () => {
       cwd: root,
       agentDir: join(root, "agent"),
       promptPaths: [promptsDir],
-      includeDefaults: false,
     });
 
     expect(templates).toHaveLength(1);
@@ -37,7 +36,6 @@ describe("loadPromptTemplates", () => {
       cwd: root,
       agentDir: join(root, "agent"),
       promptPaths: [promptsDir],
-      includeDefaults: false,
     });
 
     expect(templates).toHaveLength(1);
@@ -61,7 +59,6 @@ describe("loadPromptTemplates", () => {
             cwd: root,
             agentDir: join(root, "AGENT"),
             promptPaths: [promptDir],
-            includeDefaults: false,
           })[0]?.sourceInfo.scope,
       ),
     ).toBe("user");

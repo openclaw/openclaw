@@ -1,7 +1,7 @@
 // Control UI tests cover Agents page Set Default persistence behavior.
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -25,7 +25,11 @@ suite.define(() => {
   it("persists Set Default through config.set instead of only staging the form draft", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const initialConfig = {
-        agents: { entries: { main: { default: true }, kimi: {} } },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, kimi: {} },
+        },
       };
       const savedConfig = {
         agents: {
@@ -87,7 +91,7 @@ suite.define(() => {
   });
 
   it.each([true, false])(
-    "uses Gateway ownership for default badges (selection required: %s)",
+    "uses Gateway ownership for Set Default state (selection required: %s)",
     async (selectionRequired) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const defaultId = selectionRequired ? "main" : "research";
@@ -133,18 +137,19 @@ suite.define(() => {
             selectionRequired ? "ownerless.png" : "designated.png",
           ),
         });
-        expect(await page.locator("wa-dropdown-item .agent-select__badge").count()).toBe(
-          selectionRequired ? 0 : 1,
-        );
-        if (!selectionRequired) {
-          expect(
-            await page
-              .locator("wa-dropdown-item")
-              .filter({ hasText: "Research agent" })
-              .locator(".agent-select__badge")
-              .textContent(),
-          ).toBe("Default");
-        }
+        expect(await page.locator("wa-dropdown-item .agent-select__badge").count()).toBe(0);
+        await page
+          .getByRole("menuitemradio", {
+            name: selectionRequired ? "Main agent" : "Research agent",
+            exact: true,
+          })
+          .click();
+        const defaultAction = page.getByRole("button", {
+          name: selectionRequired ? "Set Default" : "Default",
+          exact: true,
+        });
+        await defaultAction.waitFor();
+        await expect.poll(() => defaultAction.isDisabled()).toBe(!selectionRequired);
       });
     },
   );

@@ -11,19 +11,37 @@ import {
   SessionGoalOperationError,
   type SessionGoalOperation,
 } from "../../config/sessions/goals-operations.js";
-import { recordSessionGoalChanged } from "../../sessions/session-state-events.js";
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
+import {
+  captureIncognitoSessionBinding,
+  withIncognitoSessionBinding,
+} from "../../config/sessions/session-incognito-binding.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+  prepareSessionSourceAuthority,
+  releaseSessionSourceAuthorities,
+  type SessionSourceAssertion,
+  type SessionSourcePredicate,
+} from "../../config/sessions/session-source-authority.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import {
+  captureIncognitoSessionMutationFacts,
+  captureSessionActorMutationFacts,
+} from "../session-sharing-incognito.js";
+import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
+import { prepareSessionSharingSource } from "../session-sharing-source.js";
 import {
   resolveSessionMutationAuthorization,
   resolveSessionSharingTarget,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { emitSessionsChanged } from "./session-change-event.js";
+import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import { fingerprintSessionGoalRequest } from "./session-goal-request.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 async function handleSessionGoalMutation(
   options: GatewayRequestHandlerOptions,
@@ -63,14 +81,22 @@ async function handleSessionGoalMutation(
       );
       return;
     }
-    const assertCurrent = () => {
-      options.sessionMutationCommitGuard?.();
-      authorization.authorization?.assertCurrent();
-      const current = resolveSessionSharingTarget({
-        cfg: context.getRuntimeConfig(),
-        sessionKey: request.sessionKey,
-        agentId: requestedAgent.agentId,
-      });
+    const sessionChanged = () =>
+      new SessionMutationAuthorizationChangedError(
+        errorShape(ErrorCodes.INVALID_REQUEST, "Session changed before its Goal update; retry."),
+      );
+    const actorTarget = {
+      agentId: target.agentId,
+      sessionKey: target.storeKey,
+      storePath: target.storePath,
+    };
+    const memory = getSessionActorStorageBinding(actorTarget);
+    const binding = memory ? undefined : captureIncognitoSessionBinding(actorTarget);
+    const actorFacts = memory
+      ? captureSessionActorMutationFacts(memory, target.storeKey, false)
+      : binding && captureIncognitoSessionMutationFacts(binding, target.storeKey, false);
+    const assertRouting = captureSessionMutationRouting(cfg, sessionChanged, [request]);
+    const assertTarget = (current: ReturnType<typeof resolveSessionSharingTarget>) => {
       // Reset can keep the same session ID. Fence the lifecycle and resolved store as well.
       if (
         !current ||
@@ -80,13 +106,16 @@ async function handleSessionGoalMutation(
         current.entry.sessionId !== target.entry.sessionId ||
         current.entry.lifecycleRevision !== target.entry.lifecycleRevision
       ) {
-        throw new SessionMutationAuthorizationChangedError(
-          errorShape(ErrorCodes.INVALID_REQUEST, "Session changed before its Goal update; retry."),
-        );
+        throw sessionChanged();
       }
       const ownershipError = resolvePluginSessionOwnershipError({
         action: "patch",
-        entry: current.entry,
+        entry: binding
+          ? {
+              ...current.entry,
+              pluginOwnerId: binding.actor.sessions.readPolicy(current.storeKey)?.pluginOwnerId,
+            }
+          : current.entry,
         key: current.canonicalKey,
         pluginOwnerId: client?.internal?.pluginRuntimeOwnerId,
       });
@@ -94,21 +123,105 @@ async function handleSessionGoalMutation(
         throw new SessionMutationAuthorizationChangedError(ownershipError);
       }
     };
-    assertCurrent();
+    const assertCurrent = () => {
+      options.sessionMutationCommitGuard?.();
+      authorization.authorization?.assertCurrent();
+      if (!memory) {
+        assertRouting(context.getRuntimeConfig());
+      }
+      assertTarget(
+        actorFacts
+          ? actorFacts.readCurrent().target
+          : resolveSessionSharingTarget({
+              cfg: context.getRuntimeConfig(),
+              sessionKey: request.sessionKey,
+              agentId: requestedAgent.agentId,
+            }),
+      );
+    };
+    if (!memory) {
+      assertCurrent();
+    }
+    const source: SessionSourceAssertion = Object.assign(assertCurrent, {
+      async prepareSessionSource() {
+        if (memory) {
+          return { assertCurrent, checks: [] };
+        }
+        const authority = await prepareSessionSourceAuthority(
+          composeSessionSourceAssertion([
+            captureExternalSessionCommitGuard(options.sessionMutationCommitGuard),
+            captureExternalSessionCommitGuard(authorization.authorization?.assertCurrent),
+          ]),
+        );
+        if (authority.nativeSource) {
+          return authority;
+        }
+        const assertHost = () => {
+          authority.assertCurrent();
+          assertRouting(context.getRuntimeConfig());
+        };
+        let read: Awaited<ReturnType<typeof prepareSessionSharingSource>> | undefined;
+        try {
+          read = await (binding
+            ? withIncognitoSessionBinding(binding, () =>
+                prepareSessionSharingSource(target, assertHost),
+              )
+            : prepareSessionSharingSource(target, assertHost));
+          const held = read;
+          const assertPrepared = () => {
+            assertHost();
+            held.assertCurrent();
+            assertTarget(held.target);
+          };
+          assertPrepared();
+          return {
+            assertCurrent: assertPrepared,
+            checks: [
+              ...authority.checks,
+              ...(held.actorSource
+                ? []
+                : [
+                    {
+                      predicate: {
+                        source: held.source,
+                        sessionKey: target.storeKey,
+                        fields: ["sessionId", "lifecycleRevision", "pluginOwnerId"],
+                        expected: held.target?.entry,
+                      } satisfies SessionSourcePredicate,
+                      refuse(
+                        facts: import("../../config/sessions/session-source-authority.js").SessionSourcePredicateFacts,
+                      ): never {
+                        assertTarget(facts.entry ? { ...target, entry: facts.entry } : null);
+                        throw new Error("Goal target source changed");
+                      },
+                    },
+                  ]),
+            ],
+            release: () => releaseSessionSourceAuthorities([authority, held]),
+          };
+        } catch (error) {
+          await releaseSessionSourceAuthorities(read ? [authority, read] : [authority], [error]);
+          throw error;
+        }
+      },
+    });
     const identity = {
       operationId: request.operationId,
       issuedAtMs: request.issuedAtMs,
-      requestFingerprint: fingerprintSessionGoalRequest({ method, ...request }),
+      requestFingerprint: await fingerprintSessionGoalRequest({ method, ...request }),
       goalId: request.goalId,
     };
+    if (!memory) {
+      assertCurrent();
+    }
     if (request.action === "resume") {
       const { handleSessionGoalResumeChat } = await import("./chat-send-handler.js");
       await handleSessionGoalResumeChat(
         {
           ...options,
           sessionMutationAuthorization: {
-            assertCurrent,
-            assertTargetCurrent: assertCurrent,
+            assertCurrent: source,
+            assertTargetCurrent: source,
           },
           params: {
             sessionKey: target.canonicalKey,
@@ -140,20 +253,15 @@ async function handleSessionGoalMutation(
       storePath: target.storePath,
       expectedSessionId: target.entry.sessionId,
       operation,
-      assertCurrent,
+      assertCurrent: source,
     });
     if (!committed.replayed && committed.sessionEntry) {
-      recordSessionGoalChanged({
+      await publishCommittedSessionGoalChange(context, {
         sessionKey: target.canonicalKey,
         agentId: target.agentId,
         entry: committed.sessionEntry,
         actor: gatewayClientSessionCreator(client),
         summary: `goal ${request.action}`,
-      });
-      emitSessionsChanged(context, {
-        sessionKey: target.canonicalKey,
-        agentId: target.agentId,
-        reason: "goal",
       });
     }
     respond(
@@ -184,20 +292,14 @@ async function handleSessionGoalMutation(
 }
 
 export const sessionGoalHandlers: GatewayRequestHandlers = {
-  "sessions.goal.update": async (options) => {
-    const { params, respond } = options;
-    if (
-      assertValidParams(params, validateSessionsGoalUpdateParams, "sessions.goal.update", respond)
-    ) {
-      await handleSessionGoalMutation(options, params);
-    }
-  },
-  "sessions.goal.clear": async (options) => {
-    const { params, respond } = options;
-    if (
-      assertValidParams(params, validateSessionsGoalClearParams, "sessions.goal.clear", respond)
-    ) {
-      await handleSessionGoalMutation(options, { ...params, action: "clear" });
-    }
-  },
+  "sessions.goal.update": defineValidatedGatewayHandler(
+    "sessions.goal.update",
+    validateSessionsGoalUpdateParams,
+    (options) => handleSessionGoalMutation(options, options.params),
+  ),
+  "sessions.goal.clear": defineValidatedGatewayHandler(
+    "sessions.goal.clear",
+    validateSessionsGoalClearParams,
+    (options) => handleSessionGoalMutation(options, { ...options.params, action: "clear" }),
+  ),
 };

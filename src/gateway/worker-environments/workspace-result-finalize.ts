@@ -7,7 +7,9 @@ import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-poli
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { withSessionPlacementComputer } from "../../agents/session-placement-computer.js";
 import { withSessionSkillResources } from "../../agents/session-placement-skill-resources.js";
+import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import {
   attachErrorDiagnostic,
   formatErrorMessageForDisplay,
@@ -39,6 +41,7 @@ import {
   formatWorkspaceConflictSummary,
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+  type WorkerWorkspaceResultConflict,
 } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -54,10 +57,7 @@ type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "act
 type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel"> &
   Partial<Pick<WorkerEnvironmentService, "prepareComputer">>;
 
-type WorkspaceConflictReport = {
-  paths: string[];
-  stagedResultRef: string;
-  totalCount: number;
+type WorkspaceConflictReport = Required<WorkerWorkspaceResultConflict> & {
   summary: string;
 };
 
@@ -77,7 +77,10 @@ function retainRemoteExecCleanupFailure(error: unknown, diagnostic?: string): Er
     : primary;
 }
 
-function remoteExecWorkspaceFailure(executionError: unknown, reconciliationError: unknown): Error {
+export function workerWorkspaceFailure(
+  executionError: unknown,
+  reconciliationError: unknown,
+): Error {
   const executionMessage = formatErrorMessageForDisplay(executionError);
   const reconciliationDetail =
     reconciliationError instanceof WorkerWorkspaceReconciliationError &&
@@ -102,27 +105,39 @@ export async function recoverWorkspaceBeforeTurn(params: {
   turnClaim: WorkerSessionTurnClaim;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   workspace: WorkerSessionWorkspace;
+  signal?: AbortSignal;
 }): Promise<void> {
   if (params.workspace.kind === "repository") {
     return;
   }
   const localWorkspaceDir = params.workspace.path;
-  const journal = createWorkspaceResultJournal(params).adapter;
+  const assertCurrent = () => {
+    if (!params.placements.validateTurnClaim(params.turnClaim)) {
+      throw new Error("Cloud worker workspace recovery lost its turn claim");
+    }
+  };
+  const journal = createWorkspaceResultJournal({ ...params, assertCurrent }).adapter;
   try {
-    await params.workspaceOperations.run(params.placement.environmentId, async () => {
-      if (!params.placements.validateTurnClaim(params.turnClaim)) {
-        throw new Error("Cloud worker workspace recovery lost its turn claim");
-      }
-      const pending = journal.load();
-      if (pending) {
-        await recoverWorkerWorkspaceReconciliation({
-          root: localWorkspaceDir,
-          journal: pending,
-        });
-        journal.abort();
-      }
-    });
+    await params.workspaceOperations.run(
+      params.placement.environmentId,
+      async () => {
+        assertCurrent();
+        const pending = await journal.load();
+        if (pending) {
+          await recoverWorkerWorkspaceReconciliation({
+            root: localWorkspaceDir,
+            journal: pending,
+            assertCurrent,
+          });
+          await journal.abort();
+        }
+      },
+      params.signal,
+    );
   } catch (error) {
+    if (params.signal?.aborted && error === params.signal.reason) {
+      throw error;
+    }
     throw new WorkerWorkspaceReconciliationError(
       `Cloud worker workspace recovery could not complete: ${workspaceError(error)}`,
       { cause: error },
@@ -136,45 +151,45 @@ export async function reconcileWorkspaceAfterTurn(params: {
   turnClaim: WorkerSessionTurnClaim;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   workspace: WorkerSessionWorkspace;
-  transcriptTarget: Parameters<typeof SessionManager.open>[0];
+  transcriptTarget: ReturnType<typeof resolveWorkerTurnTranscriptTarget>;
   tunnel: WorkerTunnelHandle;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }): Promise<WorkspaceConflictReport | undefined> {
-  const currentPlacement = params.placements.get(params.placement.sessionId);
-  const generationMatches =
-    currentPlacement?.state === "active"
-      ? currentPlacement.generation === params.turnClaim.placementGeneration
-      : currentPlacement?.state === "draining"
-        ? currentPlacement.generation === params.turnClaim.placementGeneration + 1
-        : false;
-  if (
-    (currentPlacement?.state !== "active" && currentPlacement?.state !== "draining") ||
-    currentPlacement.environmentId !== params.placement.environmentId ||
-    currentPlacement.activeOwnerEpoch !== params.placement.activeOwnerEpoch ||
-    !generationMatches
-  ) {
-    throw new Error("Cloud worker placement changed before workspace reconciliation");
-  }
-  const completed = SessionManager.open(params.transcriptTarget);
+  const transcriptTarget = { ...params.transcriptTarget };
+  const requireCurrentPlacement = () => {
+    const currentPlacement = params.placements.preparedWorkspaceResultPlacement(params.turnClaim);
+    if (currentPlacement?.state !== "active" && currentPlacement?.state !== "draining") {
+      throw new Error("Cloud worker placement changed before workspace reconciliation");
+    }
+    return currentPlacement;
+  };
+  const assertResultCurrent = () => {
+    if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
+      throw new Error("Cloud worker workspace result lost its placement owner");
+    }
+    resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
+  };
+  await params.placements.prepareWorkspaceResultClaim(params.turnClaim);
+  const completed = await SessionManager.openAsync(transcriptTarget);
+  const currentPlacement = requireCurrentPlacement();
+  assertResultCurrent();
   const priorWorkspaceConflict =
     currentPlacement.workspaceResultConflict ??
     latestDurableWorkspaceConflict(completed.getBranch());
-  const pendingWorkspaceResult = params.placements
-    .listPendingWorkspaceResults()
-    .some(
-      (pending) =>
-        pending.sessionId === params.turnClaim.sessionId &&
-        pending.claimId === params.turnClaim.claimId &&
-        pending.runId === params.turnClaim.runId,
-    );
-  if (!pendingWorkspaceResult) {
+  if (!params.placements.preparedWorkspaceResult(params.turnClaim)) {
     throw new Error("Cloud worker completed without a durable workspace-result fence");
   }
+  const assertWorkspaceResultCurrent = () => {
+    if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
+      throw new Error("Cloud worker workspace result lost its placement owner");
+    }
+  };
   const journal = createWorkspaceResultJournal({
     placement: currentPlacement,
     placements: params.placements,
     turnClaim: params.turnClaim,
+    assertCurrent: assertWorkspaceResultCurrent,
   });
   let workspaceConflict: WorkspaceConflictReport | undefined;
   try {
@@ -194,20 +209,15 @@ export async function reconcileWorkspaceAfterTurn(params: {
             journal: journal.adapter,
             stagedResult: {
               ref: stagedResultRef,
-              record: (ref) =>
+              record: (ref, workspaceId) =>
                 params.placements.recordStagedWorkspaceResult(
                   params.turnClaim,
                   ref,
-                  params.workspace.kind === "repository"
-                    ? params.workspace.repository.workspaceId
-                    : undefined,
+                  workspaceId,
+                  assertWorkspaceResultCurrent,
                 ),
             },
-            assertCurrent: () => {
-              if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
-                throw new Error("Cloud worker workspace result lost its placement owner");
-              }
-            },
+            assertCurrent: assertWorkspaceResultCurrent,
           }),
         );
         const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
@@ -217,19 +227,16 @@ export async function reconcileWorkspaceAfterTurn(params: {
         if (params.prepareAcceptedWorkspacePublication) {
           await params.prepareAcceptedWorkspacePublication(params.turnClaim).catch(() => undefined);
         }
-        params.placements.acceptWorkspaceResult(params.turnClaim);
-        const recordedStagedResultRef = params.placements
-          .listPendingWorkspaceResults()
-          .find(
-            (pending) =>
-              pending.sessionId === params.turnClaim.sessionId &&
-              pending.claimId === params.turnClaim.claimId &&
-              pending.runId === params.turnClaim.runId,
-          )?.stagedResultRef;
+        await params.placements.acceptWorkspaceResult(params.turnClaim, assertResultCurrent);
+        const recordedStagedResultRef = params.placements.preparedWorkspaceResult(
+          params.turnClaim,
+        )?.stagedResultRef;
+        assertResultCurrent();
         if (applied?.conflictPaths.length && !recordedStagedResultRef) {
           throw new Error("Cloud workspace conflict has no staged result reference");
         }
         const finalized = await finalizeWorkspaceResultConflicts({
+          assertCurrent: assertResultCurrent,
           placements: params.placements,
           turnClaim: params.turnClaim,
           conflictPaths: applied?.conflictPaths ?? [],
@@ -237,36 +244,47 @@ export async function reconcileWorkspaceAfterTurn(params: {
           stagedResultRef: recordedStagedResultRef,
           workspace: params.workspace,
           report: async (report) => {
-            if ("cleared" in report) {
-              SessionManager.open(params.transcriptTarget).appendCustomMessageEntry(
-                WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
-                "A later cloud workspace result superseded the previous conflict.",
-                false,
-              );
-              return;
-            }
-            workspaceConflict = {
-              ...report,
-              summary: formatWorkspaceConflictSummary(
-                report.paths,
-                report.stagedResultRef,
-                report.totalCount,
-              ),
-            };
-            SessionManager.open(params.transcriptTarget).appendCustomMessageEntry(
-              WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
-              workspaceConflict.summary,
-              true,
-              {
-                paths: workspaceConflict.paths,
-                stagedResultRef: workspaceConflict.stagedResultRef,
-                totalCount: workspaceConflict.totalCount,
-              },
+            const manager = await SessionManager.openAsync(transcriptTarget);
+            assertResultCurrent();
+            await withSessionTranscriptWriteAssertion(transcriptTarget, assertResultCurrent, () =>
+              withSessionManagerWrite(manager, async () => {
+                // Execution may have ended; the exact pending result still owns settlement.
+                assertResultCurrent();
+                if ("cleared" in report) {
+                  await manager.appendCustomMessageEntryAsync(
+                    WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
+                    "A later cloud workspace result superseded the previous conflict.",
+                    false,
+                  );
+                  return;
+                }
+                const committedConflict = {
+                  ...report,
+                  summary: formatWorkspaceConflictSummary(
+                    report.paths,
+                    report.stagedResultRef,
+                    report.totalCount,
+                  ),
+                };
+                await manager.appendCustomMessageEntryAsync(
+                  WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+                  committedConflict.summary,
+                  true,
+                  {
+                    paths: committedConflict.paths,
+                    stagedResultRef: committedConflict.stagedResultRef,
+                    totalCount: committedConflict.totalCount,
+                  },
+                );
+                assertResultCurrent();
+                workspaceConflict = committedConflict;
+              }),
             );
           },
         });
         await params.publishAcceptedWorkspace?.(params.turnClaim);
         await settleStagedWorkspaceResult({
+          assertCurrent: assertResultCurrent,
           placements: params.placements,
           turnClaim: params.turnClaim,
           workspace: params.workspace,
@@ -314,7 +332,7 @@ function appendWorkspaceConflict(
 
 export async function executeRemoteExecTurn(params: {
   environments: RemoteExecEnvironmentService;
-  onHandoff: () => void;
+  onHandoff: (custody?: { requiresTerminalReceipt: true }) => void;
   placement: ActiveWorkerPlacement;
   placements: WorkerSessionPlacementStore;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
@@ -337,13 +355,14 @@ export async function executeRemoteExecTurn(params: {
   ) {
     throw new Error("Active remote-exec placement does not match its attached environment");
   }
-  await recoverWorkspaceBeforeTurn(params);
+  await recoverWorkspaceBeforeTurn({ ...params, signal: params.turn.abortSignal });
   params.assertRunCurrent?.();
   const tunnel = await waitForTurnOperation({
-    operation: params.environments.startTunnel({
-      environmentId: params.placement.environmentId,
-      ownerEpoch: params.placement.activeOwnerEpoch,
-    }),
+    start: () =>
+      params.environments.startTunnel({
+        environmentId: params.placement.environmentId,
+        ownerEpoch: params.placement.activeOwnerEpoch,
+      }),
     ...(params.turn.abortSignal ? { signal: params.turn.abortSignal } : {}),
     timeoutMs: params.turn.timeoutMs,
   });
@@ -360,7 +379,8 @@ export async function executeRemoteExecTurn(params: {
     },
   });
   params.assertRunCurrent?.();
-  params.placements.markWorkspaceResultPending(params.turnClaim);
+  await params.placements.markWorkspaceResultPending(params.turnClaim, params.assertRunCurrent);
+  params.assertRunCurrent?.();
   params.onHandoff();
   let execution: Result<EmbeddedAgentRunResult, unknown>;
   let executionActive = true;
@@ -371,6 +391,7 @@ export async function executeRemoteExecTurn(params: {
   try {
     skillResources = await transferSkillResources({
       snapshot: params.turn.skillsSnapshot,
+      workspaceDir: params.turn.workspaceDir,
       explicitSelections: params.turn.explicitSkillSelections,
       tunnel,
       remoteWorkspaceDir: params.placement.remoteWorkspaceDir,
@@ -491,36 +512,43 @@ export async function executeRemoteExecTurn(params: {
     workspace: params.workspace,
     transcriptTarget,
     tunnel,
-    ...(params.prepareAcceptedWorkspacePublication
-      ? { prepareAcceptedWorkspacePublication: params.prepareAcceptedWorkspacePublication }
-      : {}),
-    ...(params.publishAcceptedWorkspace
-      ? { publishAcceptedWorkspace: params.publishAcceptedWorkspace }
-      : {}),
-  }).catch((reconciliationError: unknown) => {
-    const currentEnvironment = params.environments.get(params.placement.environmentId);
+    prepareAcceptedWorkspacePublication: params.prepareAcceptedWorkspacePublication,
+    publishAcceptedWorkspace: params.publishAcceptedWorkspace,
+  }).catch(async (reconciliationError: unknown) => {
+    const isDisconnectedOwnerCurrent = () => {
+      const currentEnvironment = params.environments.get(params.placement.environmentId);
+      return Boolean(
+        environment.nodeDeviceId &&
+        currentEnvironment?.state === "attached" &&
+        currentEnvironment.providerId === environment.providerId &&
+        currentEnvironment.environmentId === environment.environmentId &&
+        currentEnvironment.ownerEpoch === environment.ownerEpoch &&
+        currentEnvironment.nodeDeviceId === environment.nodeDeviceId &&
+        currentEnvironment.attachedSessionIds.length === 1 &&
+        currentEnvironment.attachedSessionIds[0] === params.placement.sessionId,
+      );
+    };
     if (
-      environment.nodeDeviceId &&
-      currentEnvironment?.state === "attached" &&
-      currentEnvironment.providerId === environment.providerId &&
-      currentEnvironment.environmentId === environment.environmentId &&
-      currentEnvironment.ownerEpoch === environment.ownerEpoch &&
-      currentEnvironment.nodeDeviceId === environment.nodeDeviceId &&
-      currentEnvironment.attachedSessionIds.length === 1 &&
-      currentEnvironment.attachedSessionIds[0] === params.placement.sessionId &&
+      isDisconnectedOwnerCurrent() &&
       reconciliationError instanceof WorkerWorkspaceReconciliationError &&
       reconciliationError.cause instanceof WorkerTunnelOwnerDisconnectedError
     ) {
       // Offline nodes keep their exact lease; the next turn reconciles its dirty workspace.
-      params.placements.cancelWorkspaceResultAndReleaseTurn(params.turnClaim, {
-        reason: "node-disconnect",
-      });
+      await params.placements.cancelWorkspaceResultAndReleaseTurn(
+        params.turnClaim,
+        { reason: "node-disconnect" },
+        () => {
+          if (!isDisconnectedOwnerCurrent()) {
+            throw new Error("Cloud worker owner changed before disconnected result settlement");
+          }
+        },
+      );
     }
     if (!execution.ok) {
-      throw remoteExecWorkspaceFailure(execution.error, reconciliationError);
+      throw workerWorkspaceFailure(execution.error, reconciliationError);
     }
     if (execution.value.meta.error) {
-      throw remoteExecWorkspaceFailure(execution.value.meta.error.message, reconciliationError);
+      throw workerWorkspaceFailure(execution.value.meta.error.message, reconciliationError);
     }
     throw reconciliationError;
   });

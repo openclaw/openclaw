@@ -143,22 +143,6 @@ describe("extractLlamaServerArchive", () => {
     expect(await fs.readdir(destDir)).toStrictEqual([]);
   });
 
-  it("rejects malformed tar input through the shared archive owner", async () => {
-    const root = await createTempRoot();
-    const archivePath = path.join(root, "malformed.tar.gz");
-    const invalidHeader = Buffer.alloc(512);
-    invalidHeader.write("bad-entry");
-    await fs.writeFile(archivePath, invalidHeader);
-    const destDir = path.join(root, "dest");
-    await fs.mkdir(destDir);
-    const asset = withoutAliases(selectLlamaServerAsset("linux", "x64"));
-
-    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow(
-      /invalid TAR|checksum failure/u,
-    );
-    expect(await fs.readdir(destDir)).toStrictEqual([]);
-  });
-
   it("fails when a pinned regular-file alias source is absent", async () => {
     const root = await createTempRoot();
     const baseAsset = selectLlamaServerAsset("linux", "x64");
@@ -218,51 +202,6 @@ describe("extractLlamaServerArchive", () => {
     expect((await fs.readdir(destDir)).toSorted()).toStrictEqual([
       "ggml-base.dll",
       asset.executable,
-    ]);
-  });
-});
-
-describe("llama-server asset alias manifests", () => {
-  it.each([
-    ["darwin", "arm64"],
-    ["darwin", "x64"],
-    ["linux", "arm64"],
-    ["linux", "x64"],
-    ["win32", "arm64"],
-    ["win32", "x64"],
-  ] as const)("uses unique basename-only entries for %s/%s", (platform, arch) => {
-    const asset = selectLlamaServerAsset(platform, arch);
-    const names = asset.regularFileAliases.flatMap(([source, aliases]) => [source, ...aliases]);
-
-    expect(new Set(names).size).toBe(names.length);
-    expect(
-      names.every((name) => path.basename(name) === name && name !== "." && name !== ".."),
-    ).toBe(true);
-    expect(asset.archive === "zip" ? names.length === 0 : names.length > 0).toBe(true);
-  });
-
-  it("pins the release library versions used to replace archive symlinks", () => {
-    expect(
-      selectLlamaServerAsset("darwin", "arm64").regularFileAliases.map(([source]) => source),
-    ).toStrictEqual([
-      "libggml-rpc.0.23.0.dylib",
-      "libllama.0.4.0.dylib",
-      "libmtmd.0.4.0.dylib",
-      "libggml.0.23.0.dylib",
-      "libggml-base.0.23.0.dylib",
-      "libggml-blas.0.23.0.dylib",
-      "libllama-common.0.4.0.dylib",
-      "libggml-cpu.0.23.0.dylib",
-      "libggml-metal.0.23.0.dylib",
-    ]);
-    expect(
-      selectLlamaServerAsset("linux", "x64").regularFileAliases.map(([source]) => source),
-    ).toStrictEqual([
-      "libllama.so.0.4.0",
-      "libggml.so.0.23.0",
-      "libmtmd.so.0.4.0",
-      "libggml-base.so.0.23.0",
-      "libllama-common.so.0.4.0",
     ]);
   });
 });

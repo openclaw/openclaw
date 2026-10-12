@@ -54,6 +54,29 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(buildGrant({ modelHasVision: true }).modelHasVision).toBe(true);
   });
 
+  it("snapshots only the resolved logical model into the loopback grant", () => {
+    const requesterModel = {
+      provider: "selected-provider",
+      model: "selected-provider/literal-model",
+      nativeModelId: "native-model[1m]",
+    };
+    const grant = buildGrant({ requesterModel });
+    requesterModel.model = "later-model";
+
+    expect(grant.requesterModel).toEqual({
+      provider: "selected-provider",
+      model: "selected-provider/literal-model",
+    });
+    expect(buildGrant()).not.toHaveProperty("requesterModel");
+  });
+
+  it("binds screen commands to the requesting browser in the server-owned grant", () => {
+    const gatewayUiCommandTarget = { connId: "requester-tab", profileId: "requester" };
+    expect(buildGrant({ gatewayUiCommandTarget }).gatewayUiCommandTarget).toEqual(
+      gatewayUiCommandTarget,
+    );
+  });
+
   it("carries the prepared reply mode into loopback message tools", () => {
     expect(buildGrant({ replyToMode: "all" }).replyToMode).toBe("all");
   });
@@ -109,19 +132,6 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
 
     expect(grant.execSession?.permissionMode).toBe("guarded");
     expect(grant.execOverrides?.mode).toBe("allowlist");
-  });
-
-  it("carries the exact Skill Workshop revision into the loopback grant", () => {
-    const proposalRevision = {
-      agentId: "proposal-owner",
-      workspaceDir: "/proposal-workspace",
-      proposalId: "proposal-h1",
-      expectedRevisionHash: "1".repeat(64),
-    };
-
-    expect(buildGrant({ skillWorkshopProposalRevision: proposalRevision }).skillWorkshop).toEqual({
-      proposalRevision,
-    });
   });
 
   it.each([

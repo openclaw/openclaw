@@ -15,40 +15,39 @@ import {
   type RedactionField,
 } from "./redact-json-tokens.js";
 import {
-  iterateRedactMatches,
+  visitRedactMatches,
   type RedactMatch,
   type ResolvedRedactPattern,
 } from "./redact-pattern-runtime.js";
 
 export type { RedactionField, RedactionOrigins } from "./redact-json-tokens.js";
 
-export type RedactionTarget = {
+type RedactionTarget = {
   start: number;
   end: number;
   value: string;
 };
-export type RedactionEditSelector = (
+export type RedactionCapture = RedactionTarget & {
+  redact: (target: RedactionTarget) => RedactionEdit | undefined;
+};
+type RedactionCaptureSelector = (
   match: RedactMatch,
   pattern: ResolvedRedactPattern,
-  project: (start: number, end: number) => RedactionTarget | undefined,
-) => RedactionEdit | undefined;
+) => RedactionCapture | undefined;
 
 export function getPatternRedactionEdits(
   value: string,
   pattern: ResolvedRedactPattern,
-  getEdit: RedactionEditSelector,
+  getCapture: RedactionCaptureSelector,
 ): RedactionEdit[] {
   const edits: RedactionEdit[] = [];
-  for (const match of iterateRedactMatches(value, pattern)) {
-    const edit = getEdit(match, pattern, (start, end) => ({
-      start,
-      end,
-      value: value.slice(start, end),
-    }));
+  visitRedactMatches(value, pattern, (match) => {
+    const capture = getCapture(match, pattern);
+    const edit = capture?.redact(capture);
     if (edit && edit.end >= edit.start) {
       edits.push(edit);
     }
-  }
+  });
   return edits;
 }
 
@@ -65,14 +64,14 @@ export type RedactionMessage = {
   }[];
 };
 
-function stringBoundaries(text: string, token: ScalarToken): Map<number, number> {
+function stringBoundaries(text: string, start: number, end: number): Map<number, number> {
   const boundaries = new Map<number, number>();
   let decoded = 0;
-  for (let offset = token.start + 1; offset < token.end - 1; decoded += 1) {
+  for (let offset = start; offset < end; decoded += 1) {
     boundaries.set(offset, decoded);
     offset += text[offset] === "\\" ? (text[offset + 1] === "u" ? 6 : 2) : 1;
   }
-  boundaries.set(token.end - 1, decoded);
+  boundaries.set(end, decoded);
   return boundaries;
 }
 
@@ -80,7 +79,7 @@ function decodedBoundary(text: string, token: ScalarToken, offset: number): numb
   if (!token.escaped) {
     return offset - token.start - 1;
   }
-  token.boundaries ??= stringBoundaries(text, token);
+  token.boundaries ??= stringBoundaries(text, token.start + 1, token.end - 1);
   return token.boundaries.get(offset);
 }
 
@@ -89,7 +88,7 @@ function encodedBoundary(text: string, token: ScalarToken, offset: number): numb
     return token.start + 1 + offset;
   }
   if (!token.encodedBoundaries) {
-    token.boundaries ??= stringBoundaries(text, token);
+    token.boundaries ??= stringBoundaries(text, token.start + 1, token.end - 1);
     token.encodedBoundaries = [];
     for (const [encoded, decoded] of token.boundaries) {
       token.encodedBoundaries[decoded] = encoded;
@@ -238,14 +237,7 @@ function currentDecodedBoundary(
     }
     let boundaries = replacements.get(edit.replacement);
     if (!boundaries) {
-      boundaries = new Map();
-      let decoded = 0;
-      for (let encoded = 0; encoded < edit.replacement.length; decoded += 1) {
-        boundaries.set(encoded, decoded);
-        encoded +=
-          edit.replacement[encoded] === "\\" ? (edit.replacement[encoded + 1] === "u" ? 6 : 2) : 1;
-      }
-      boundaries.set(edit.replacement.length, decoded);
+      boundaries = stringBoundaries(edit.replacement, 0, edit.replacement.length);
       replacements.set(edit.replacement, boundaries);
     }
     const decoded = boundaries.get(within);
@@ -259,7 +251,7 @@ function currentDecodedBoundary(
     : decoded + (previous ? previous.decodedEnd - previous.sourceDecodedEnd : 0);
 }
 
-function commitPatternEdits(input: string, token: ScalarToken): boolean {
+function commitPatternEdits(token: ScalarToken): boolean {
   const pending = token.pending;
   token.pending = undefined;
   if (!pending) {
@@ -272,7 +264,6 @@ function commitPatternEdits(input: string, token: ScalarToken): boolean {
   }
   token.edits = composeRedactionEdits(token.value.length, token.edits, edits);
   token.currentValue = value;
-  updateCurrentToken(input, token);
   return true;
 }
 
@@ -298,7 +289,7 @@ function changedRedactionEdits(
   });
 }
 
-function commitOriginalEdits(input: string, token: ScalarToken, edits: RedactionEdit[]): boolean {
+function commitOriginalEdits(token: ScalarToken, edits: RedactionEdit[]): boolean {
   if (edits.length === 0) {
     return false;
   }
@@ -309,11 +300,11 @@ function commitOriginalEdits(input: string, token: ScalarToken, edits: Redaction
   }
   token.edits = combined;
   token.currentValue = value;
-  updateCurrentToken(input, token);
   return true;
 }
 
 function updateCurrentRecord(
+  input: string,
   current: string,
   tokens: ScalarToken[],
   changed: ReadonlySet<ScalarToken>,
@@ -325,6 +316,7 @@ function updateCurrentRecord(
     const start = token.currentStart;
     const end = token.currentEnd;
     if (changed.has(token)) {
+      updateCurrentToken(input, token);
       const raw = expectDefined(token.currentRaw, "changed JSON token");
       parts.push(current.slice(cursor, start), raw);
       cursor = end;
@@ -361,22 +353,24 @@ function projectedStringEnd(
     : token.currentValue.length;
 }
 
+type RedactionPatternGroup = {
+  patterns: ResolvedRedactPattern[];
+  couldMatch?: (input: string) => boolean;
+};
+
 export function redactJsonRecord(
   input: string,
   origins: RedactionOrigins,
-  patternPhases: readonly [ResolvedRedactPattern[], ResolvedRedactPattern[]],
-  getEdit: RedactionEditSelector,
-  legacyFieldEdits: (field: RedactionField, original: string) => RedactionEdit[],
+  patternPhases: readonly [readonly RedactionPatternGroup[], readonly RedactionPatternGroup[]],
+  getCapture: RedactionCaptureSelector,
+  legacyFieldEdits: (field: RedactionField, currentValue: string) => RedactionEdit[],
   fieldEdits: (field: RedactionField) => RedactionEdit[],
   prepEdits: (field: RedactionField) => RedactionEdit[],
-  preserveDecodedField: (field: RedactionField) => boolean,
+  skipDecodedPatterns: (field: RedactionField, currentValue: string) => boolean,
   message?: RedactionMessage,
   batch?: { preserveLines: boolean },
 ): string {
   let tokens = batch ? [] : readScalarTokens(input, origins);
-  const decodedTokens = tokens.filter(
-    (token) => !token.isKey && token.string && !preserveDecodedField(token),
-  );
   const messageToken = message
     ? tokens.find((token) => !token.isKey && token.path.length === 1 && token.key === "message")
     : undefined;
@@ -386,13 +380,16 @@ export function redactJsonRecord(
   let current = input;
   const prepared = new Set<ScalarToken>();
   for (const token of tokens) {
-    if (commitOriginalEdits(input, token, prepEdits(token))) {
+    if (commitOriginalEdits(token, prepEdits(token))) {
       prepared.add(token);
     }
   }
   if (prepared.size > 0) {
-    current = updateCurrentRecord(current, tokens, prepared);
+    current = updateCurrentRecord(input, current, tokens, prepared);
   }
+  const decodedTokens = tokens.filter(
+    (token) => !token.isKey && token.string && !skipDecodedPatterns(token, token.currentValue),
+  );
   const projectMessage = (): boolean => {
     if (!messageToken || !message) {
       return false;
@@ -442,137 +439,156 @@ export function redactJsonRecord(
       projectedMessageEdits,
       sourceEdits,
     );
-    return commitPatternEdits(input, messageToken);
+    return commitPatternEdits(messageToken);
   };
-  for (const [phase, patterns] of patternPhases.entries()) {
-    for (const pattern of patterns) {
-      const pending = new Set<ScalarToken>();
-      const add = (token: ScalarToken, edit: RedactionEdit) => {
-        (token.pending ??= []).push(edit);
-        pending.add(token);
-      };
-      if (phase === 0) {
-        for (const token of decodedTokens) {
-          for (const edit of getPatternRedactionEdits(token.currentValue, pattern, getEdit)) {
-            add(token, edit);
+  for (const [phase, groups] of patternPhases.entries()) {
+    const changed = new Set<ScalarToken>();
+    const pending = new Set<ScalarToken>();
+    const add = (token: ScalarToken, edit: RedactionEdit) => {
+      (token.pending ??= []).push(edit);
+      pending.add(token);
+    };
+    let decodedToken: ScalarToken;
+    const visitDecodedMatch = (match: RedactMatch, pattern: ResolvedRedactPattern) => {
+      const capture = getCapture(match, pattern);
+      const edit = capture?.redact(capture);
+      if (edit && edit.end >= edit.start) {
+        add(decodedToken, edit);
+      }
+    };
+    for (const group of groups) {
+      // Earlier serialized rules can change the boundaries inspected by the next group.
+      if (group.couldMatch && !group.couldMatch(current)) {
+        continue;
+      }
+      for (const pattern of group.patterns) {
+        if (phase === 0) {
+          for (decodedToken of decodedTokens) {
+            visitRedactMatches(decodedToken.currentValue, pattern, visitDecodedMatch);
           }
-        }
-      } else {
-        for (const match of iterateRedactMatches(current, pattern)) {
-          let capture: { start: number; end: number } | undefined;
-          getEdit(match, pattern, (start, end) => {
-            capture = { start, end };
-            return undefined;
+        } else {
+          visitRedactMatches(current, pattern, (match) => {
+            const capture = getCapture(match, pattern);
+            if (!capture || capture.end < capture.start) {
+              return;
+            }
+            // Batch rules need token coordinates only after a serialized match exists.
+            if (batch && tokens.length === 0) {
+              tokens = readBatchTokens(input, origins, batch.preserveLines);
+            }
+            for (
+              let index = firstIntersectingToken(tokens, capture.start);
+              index < tokens.length;
+              index += 1
+            ) {
+              const token = expectDefined(tokens[index], "serialized capture token");
+              if (token.currentStart >= capture.end) {
+                break;
+              }
+              const unquoted = token.raw || token.deferEncoding;
+              const padding = unquoted ? 0 : 1;
+              const captureInsideToken =
+                capture.start >= token.currentStart + padding &&
+                capture.end <= token.currentEnd - padding;
+              if (batch && token.isKey && !captureInsideToken) {
+                continue;
+              }
+              const value = token.currentValue;
+              if (!token.raw && !token.string && token.edits.length === 0) {
+                add(token, { start: 0, end: value.length, replacement: "***" });
+                continue;
+              }
+              let startPosition = Math.max(capture.start, token.currentStart + padding);
+              let start = unquoted
+                ? startPosition - token.currentStart
+                : currentDecodedBoundary(input, token, startPosition, replacementBoundaries);
+              let endPosition = Math.min(capture.end, token.currentEnd - padding);
+              let end = unquoted
+                ? endPosition - token.currentStart
+                : currentDecodedBoundary(input, token, endPosition, replacementBoundaries);
+              if (start === undefined || end === undefined) {
+                while (start === undefined) {
+                  start = currentDecodedBoundary(
+                    input,
+                    token,
+                    --startPosition,
+                    replacementBoundaries,
+                  );
+                }
+                while (end === undefined) {
+                  end = currentDecodedBoundary(input, token, ++endPosition, replacementBoundaries);
+                }
+                const maskEnd =
+                  token === messageToken && message
+                    ? projectedStringEnd(input, tokens, message, token, start, end)
+                    : value.length;
+                add(token, { start, end: maskEnd, replacement: "***" });
+                continue;
+              }
+              if (end < start || (batch && end === start)) {
+                continue;
+              }
+              const { start: captureStart, end: captureEnd } = capture;
+              const edit = capture.redact({
+                start,
+                end,
+                value: current.slice(
+                  Math.max(captureStart, token.currentStart + padding),
+                  Math.min(captureEnd, token.currentEnd - padding),
+                ),
+              });
+              if (!edit) {
+                continue;
+              }
+              let replacement = "***";
+              if (captureInsideToken) {
+                try {
+                  replacement = unquoted ? edit.replacement : JSON.parse(`"${edit.replacement}"`);
+                } catch {
+                  // A legacy hint can cut an escape; its selected span still receives a full mask.
+                }
+              }
+              add(token, { ...edit, replacement });
+            }
           });
-          if (!capture || capture.end < capture.start) {
-            continue;
-          }
-          // Batch rules need token coordinates only after a serialized match exists.
-          if (batch && tokens.length === 0) {
-            tokens = readBatchTokens(input, origins, batch.preserveLines);
-          }
-          for (
-            let index = firstIntersectingToken(tokens, capture.start);
-            index < tokens.length;
-            index += 1
-          ) {
-            const token = expectDefined(tokens[index], "serialized capture token");
-            if (token.currentStart >= capture.end) {
-              break;
-            }
-            const unquoted = token.raw || token.deferEncoding;
-            const padding = unquoted ? 0 : 1;
-            const captureInsideToken =
-              capture.start >= token.currentStart + padding &&
-              capture.end <= token.currentEnd - padding;
-            if (batch && token.isKey && !captureInsideToken) {
-              continue;
-            }
-            const value = token.currentValue;
-            if (!token.raw && !token.string && token.edits.length === 0) {
-              add(token, { start: 0, end: value.length, replacement: "***" });
-              continue;
-            }
-            let startPosition = Math.max(capture.start, token.currentStart + padding);
-            let start = unquoted
-              ? startPosition - token.currentStart
-              : currentDecodedBoundary(input, token, startPosition, replacementBoundaries);
-            let endPosition = Math.min(capture.end, token.currentEnd - padding);
-            let end = unquoted
-              ? endPosition - token.currentStart
-              : currentDecodedBoundary(input, token, endPosition, replacementBoundaries);
-            if (start === undefined || end === undefined) {
-              while (start === undefined) {
-                start = currentDecodedBoundary(
-                  input,
-                  token,
-                  --startPosition,
-                  replacementBoundaries,
-                );
-              }
-              while (end === undefined) {
-                end = currentDecodedBoundary(input, token, ++endPosition, replacementBoundaries);
-              }
-              const maskEnd =
-                token === messageToken && message
-                  ? projectedStringEnd(input, tokens, message, token, start, end)
-                  : value.length;
-              add(token, { start, end: maskEnd, replacement: "***" });
-              continue;
-            }
-            if (end < start || (batch && end === start)) {
-              continue;
-            }
-            const { start: captureStart, end: captureEnd } = capture;
-            const edit = getEdit(match, pattern, () => ({
-              start,
-              end,
-              value: current.slice(
-                Math.max(captureStart, token.currentStart + padding),
-                Math.min(captureEnd, token.currentEnd - padding),
-              ),
-            }));
-            if (!edit) {
-              continue;
-            }
-            let replacement = "***";
-            if (captureInsideToken) {
-              try {
-                replacement = unquoted ? edit.replacement : JSON.parse(`"${edit.replacement}"`);
-              } catch {
-                // A legacy hint can cut an escape; its selected span still receives a full mask.
-              }
-            }
-            add(token, { ...edit, replacement });
+        }
+        if (pending.size === 0) {
+          continue;
+        }
+        for (const token of pending) {
+          if (!commitPatternEdits(token)) {
+            pending.delete(token);
+          } else if (phase === 0) {
+            changed.add(token);
           }
         }
-      }
-      for (const token of pending) {
-        if (!commitPatternEdits(input, token)) {
-          pending.delete(token);
+        // Decoded rules read current field values; serialized rules need each rebuilt record.
+        if (phase !== 0 && pending.size > 0) {
+          current = updateCurrentRecord(input, current, tokens, pending);
         }
-      }
-      if (pending.size > 0) {
-        current = updateCurrentRecord(current, tokens, pending);
+        pending.clear();
       }
     }
-    const changed = new Set<ScalarToken>();
     for (const token of tokens) {
       if (phase === 0) {
-        token.pending = legacyFieldEdits({ ...token, value: token.currentValue }, token.value);
-        if (commitPatternEdits(input, token)) {
+        token.pending = legacyFieldEdits(token, token.currentValue);
+        if (commitPatternEdits(token)) {
           changed.add(token);
         }
-      } else if (commitOriginalEdits(input, token, fieldEdits(token))) {
+      } else if (commitOriginalEdits(token, fieldEdits(token))) {
         // Final field protection must not change the hints consumed by configured rules.
         changed.add(token);
       }
     }
-    if (projectMessage() && messageToken) {
+    if (
+      (phase !== 0 || prepared.size > 0 || changed.size > 0) &&
+      projectMessage() &&
+      messageToken
+    ) {
       changed.add(messageToken);
     }
     if (changed.size > 0) {
-      current = updateCurrentRecord(current, tokens, changed);
+      current = updateCurrentRecord(input, current, tokens, changed);
     }
   }
   if (messageToken && message) {

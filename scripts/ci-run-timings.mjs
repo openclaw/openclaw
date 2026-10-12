@@ -4,6 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
@@ -20,21 +21,12 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function parseJsonCommand(command, args, onAttempt = null, options = {}) {
+function parseJsonCommand(args, onAttempt = null) {
   let lastError;
   for (let attempt = 0; attempt <= GH_JSON_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
       onAttempt?.();
-      const stdout =
-        command === "gh"
-          ? execPlainGh(args, {
-              encoding: "utf8",
-              ...options,
-            })
-          : execFileSync(command, args, {
-              encoding: "utf8",
-              ...options,
-            });
+      const stdout = execPlainGh(args, { encoding: "utf8" });
       return JSON.parse(stdout);
     } catch (error) {
       lastError = error;
@@ -112,25 +104,13 @@ function summarizeDistribution(values) {
   };
 }
 
+function summarizeMetric(rows, key) {
+  return summarizeDistribution(rows.map((row) => row[key]).filter((value) => value !== null));
+}
+
 function parseRunList(raw) {
   const parsed = JSON.parse(raw);
   return Array.isArray(parsed) ? parsed : [];
-}
-
-function isPnpmStoreWarmupGatedJobName(name) {
-  return (
-    name === "build-artifacts" ||
-    name === "check-docs" ||
-    name === "check-guards" ||
-    name === "check-npm-lock" ||
-    name === "check-prod-types" ||
-    name === "check-lint" ||
-    name === "check-dependencies" ||
-    name === "check-test-types" ||
-    name.startsWith("check-additional-") ||
-    name.startsWith("checks-fast-") ||
-    (name.startsWith("checks-node-") && !name.startsWith("checks-node-compat-"))
-  );
 }
 
 function collectRunTimingContext(run) {
@@ -184,49 +164,6 @@ export function summarizeRunTimings(run, limit = 15) {
     status: run.status ?? "",
     wallSeconds: secondsBetween(created, updated),
     badJobs,
-  };
-}
-
-/**
- * Summarizes pnpm store warmup overlap near run start.
- */
-export function summarizePnpmStoreWarmupBarrier(run, windowSeconds = 5) {
-  const { jobs } = collectRunTimingContext(run);
-  const preflight = jobs.find((job) => job.name === "preflight");
-  const warmup = jobs.find((job) => job.name === "pnpm-store-warmup");
-  if (!warmup?.started || !warmup?.completed) {
-    return null;
-  }
-
-  const postWarmupJobs = jobs.filter(
-    (job) =>
-      job.name !== "preflight" &&
-      job.name !== "security-fast" &&
-      job.name !== "pnpm-store-warmup" &&
-      isPnpmStoreWarmupGatedJobName(job.name) &&
-      job.status === "completed" &&
-      job.conclusion !== "skipped" &&
-      job.started !== null &&
-      job.started >= warmup.completed &&
-      (job.durationSeconds ?? 0) > 5,
-  );
-  const startDelays = postWarmupJobs
-    .map((job) => secondsBetween(warmup.completed, job.started))
-    .filter((delay) => delay !== null);
-
-  return {
-    activePostWarmupJobCount: postWarmupJobs.length,
-    firstPostWarmupStartDelaySeconds: startDelays.length === 0 ? null : Math.min(...startDelays),
-    postWarmupP95StartDelaySeconds: percentile(startDelays, 0.95),
-    postWarmupStartedWithinWindow: startDelays.filter((delay) => delay <= windowSeconds).length,
-    preflightToWarmupCompleteSeconds: secondsBetween(
-      preflight?.completed ?? null,
-      warmup.completed,
-    ),
-    preflightToWarmupStartSeconds: secondsBetween(preflight?.completed ?? null, warmup.started),
-    warmupDurationSeconds: secondsBetween(warmup.started, warmup.completed),
-    warmupResult: `${warmup.status}/${warmup.conclusion}`,
-    windowSeconds,
   };
 }
 
@@ -331,7 +268,6 @@ function loadRunJobs(runId, runAttempt = null) {
   let requestCount = 0;
   for (let page = 1; page <= RUN_JOBS_MAX_PAGES; page += 1) {
     const payload = parseJsonCommand(
-      "gh",
       [
         "api",
         "-X",
@@ -356,7 +292,7 @@ function loadRunJobs(runId, runAttempt = null) {
 }
 
 function loadRun(runId) {
-  const run = parseJsonCommand("gh", [
+  const run = parseJsonCommand([
     "run",
     "view",
     runId,
@@ -388,7 +324,6 @@ function listTrendCiRuns(cutoffMs) {
   let requestCount = 0;
   for (let page = 1; page <= TREND_RUNS_MAX_PAGES; page += 1) {
     const payload = parseJsonCommand(
-      "gh",
       [
         "api",
         "-X",
@@ -597,15 +532,9 @@ function summarizeTrendCohort(runs, runSummaries) {
   return {
     criticalOwners: summarizeCriticalOwners(successfulRuns),
     jobMetrics: {
-      dependencyGatedSeconds: summarizeDistribution(
-        jobTimings.map((job) => job.dependencyGatedSeconds).filter((value) => value !== null),
-      ),
-      executionSeconds: summarizeDistribution(
-        jobTimings.map((job) => job.executionSeconds).filter((value) => value !== null),
-      ),
-      runnerQueueSeconds: summarizeDistribution(
-        jobTimings.map((job) => job.runnerQueueSeconds).filter((value) => value !== null),
-      ),
+      dependencyGatedSeconds: summarizeMetric(jobTimings, "dependencyGatedSeconds"),
+      executionSeconds: summarizeMetric(jobTimings, "executionSeconds"),
+      runnerQueueSeconds: summarizeMetric(jobTimings, "runnerQueueSeconds"),
     },
     outcomes: summarizeOutcomes(runs),
     samples: {
@@ -614,15 +543,9 @@ function summarizeTrendCohort(runs, runSummaries) {
       timedJobs: jobTimings.length,
     },
     runMetrics: {
-      admittedWallSeconds: summarizeDistribution(
-        successfulRuns.map((run) => run.admittedWallSeconds).filter((value) => value !== null),
-      ),
-      successfulWallSeconds: summarizeDistribution(
-        successfulRuns.map((run) => run.wallSeconds).filter((value) => value !== null),
-      ),
-      workflowAdmissionSeconds: summarizeDistribution(
-        successfulRuns.map((run) => run.workflowAdmissionSeconds).filter((value) => value !== null),
-      ),
+      admittedWallSeconds: summarizeMetric(successfulRuns, "admittedWallSeconds"),
+      successfulWallSeconds: summarizeMetric(successfulRuns, "wallSeconds"),
+      workflowAdmissionSeconds: summarizeMetric(successfulRuns, "workflowAdmissionSeconds"),
     },
   };
 }
@@ -659,12 +582,8 @@ function summarizeNamedJobComparison(runSummaries, priorWindow, comparisonWindow
   return [...new Set([...prior.keys(), ...comparison.keys()])]
     .map((name) => {
       const summarize = (timings) => ({
-        executionSeconds: summarizeDistribution(
-          (timings ?? []).map((job) => job.executionSeconds).filter((value) => value !== null),
-        ),
-        runnerQueueSeconds: summarizeDistribution(
-          (timings ?? []).map((job) => job.runnerQueueSeconds).filter((value) => value !== null),
-        ),
+        executionSeconds: summarizeMetric(timings ?? [], "executionSeconds"),
+        runnerQueueSeconds: summarizeMetric(timings ?? [], "runnerQueueSeconds"),
       });
       return {
         comparison: summarize(comparison.get(name)),
@@ -703,15 +622,12 @@ export function summarizeTrendTimings(runs, options) {
   const runSummaries = baselineRuns
     .map(summarizeTrendRun)
     .toSorted((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
-  const baselineSummaries = runSummaries.filter((run) =>
-    inWindow(run, baselineFromMs, generatedAtMs),
-  );
   const priorSummaries = runSummaries.filter((run) => inWindow(run, priorFromMs, comparisonFromMs));
   const comparisonSummaries = runSummaries.filter((run) =>
     inWindow(run, comparisonFromMs, generatedAtMs),
   );
   const cohorts = {
-    baseline: summarizeTrendCohort(baselineRuns, baselineSummaries),
+    baseline: summarizeTrendCohort(baselineRuns, runSummaries),
     comparison: summarizeTrendCohort(comparisonRuns, comparisonSummaries),
     prior: summarizeTrendCohort(priorRuns, priorSummaries),
   };
@@ -882,79 +798,67 @@ function printSection(title, jobs, metric) {
  * Parses CI run timing CLI arguments.
  */
 export function parseRunTimingArgs(args) {
-  let compareHours = DEFAULT_TREND_COMPARE_HOURS;
-  let compareHoursSpecified = false;
-  let detailRuns = DEFAULT_TREND_DETAIL_RUNS;
-  let detailRunsSpecified = false;
-  let explicitRunId;
-  let json = false;
-  let limit = 15;
-  let limitSpecified = false;
-  let outputPath = null;
-  let recentLimit = null;
-  let trendHours = null;
-  let useLatestMain = false;
+  /** @type {{ compareHours: number; detailRuns: number; explicitRunId: string | undefined; json: boolean; limit: number; outputPath: string | null; recentLimit: number | null; trendHours: number | null; useLatestMain: boolean }} */
+  const options = {
+    compareHours: DEFAULT_TREND_COMPARE_HOURS,
+    detailRuns: DEFAULT_TREND_DETAIL_RUNS,
+    explicitRunId: undefined,
+    json: false,
+    limit: 15,
+    outputPath: null,
+    recentLimit: null,
+    trendHours: null,
+    useLatestMain: false,
+  };
+  const numericFlags = [
+    ["--limit", "limit"],
+    ["--recent", "recentLimit"],
+    ["--trend-hours", "trendHours"],
+    ["--compare-hours", "compareHours"],
+    ["--detail-runs", "detailRuns"],
+  ];
+  const specified = new Set();
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--") {
       continue;
     }
-    if (arg === "--latest-main") {
-      useLatestMain = true;
+    if (arg === "--latest-main" || arg === "--json") {
+      options[arg === "--json" ? "json" : "useLatestMain"] = true;
       continue;
     }
-    if (arg === "--json") {
-      json = true;
+    const numericFlag = numericFlags.find(([flag]) => arg === flag || arg.startsWith(`${flag}=`));
+    if (numericFlag) {
+      const [flag, key] = numericFlag;
+      const value =
+        arg === flag ? requireOptionArgument(args, index++, flag) : arg.slice(flag.length + 1);
+      options[key] = parsePositiveInt(value, flag);
+      specified.add(flag);
       continue;
     }
-    const limitOption = consumePositiveIntFlag(args, index, "--limit");
-    if (limitOption) {
-      limit = limitOption.value;
-      limitSpecified = true;
-      index = limitOption.nextIndex;
-      continue;
-    }
-    const recentOption = consumePositiveIntFlag(args, index, "--recent");
-    if (recentOption) {
-      recentLimit = recentOption.value;
-      index = recentOption.nextIndex;
-      continue;
-    }
-    const trendOption = consumePositiveIntFlag(args, index, "--trend-hours");
-    if (trendOption) {
-      trendHours = trendOption.value;
-      index = trendOption.nextIndex;
-      continue;
-    }
-    const compareOption = consumePositiveIntFlag(args, index, "--compare-hours");
-    if (compareOption) {
-      compareHours = compareOption.value;
-      compareHoursSpecified = true;
-      index = compareOption.nextIndex;
-      continue;
-    }
-    const detailOption = consumePositiveIntFlag(args, index, "--detail-runs");
-    if (detailOption) {
-      detailRuns = detailOption.value;
-      detailRunsSpecified = true;
-      index = detailOption.nextIndex;
-      continue;
-    }
-    const outputOption = consumeStringFlag(args, index, "--output");
-    if (outputOption) {
-      outputPath = outputOption.value;
-      index = outputOption.nextIndex;
+    if (arg === "--output" || arg.startsWith("--output=")) {
+      const value =
+        arg === "--output"
+          ? requireOptionArgument(args, index++, "--output")
+          : arg.slice("--output=".length);
+      if (!value) {
+        throw new Error("--output requires a value");
+      }
+      options.outputPath = value;
       continue;
     }
     if (arg.startsWith("-")) {
       throw new Error(`Unknown CI run timing option: ${arg}`);
     }
-    if (explicitRunId) {
+    if (options.explicitRunId) {
       throw new Error(`Unexpected CI run id argument: ${arg}`);
     }
-    explicitRunId = arg;
+    options.explicitRunId = arg;
   }
+
+  const { compareHours, explicitRunId, json, outputPath, recentLimit, trendHours, useLatestMain } =
+    options;
 
   if (recentLimit !== null && (explicitRunId || useLatestMain)) {
     throw new Error("--recent cannot be combined with a run id or --latest-main");
@@ -963,69 +867,22 @@ export function parseRunTimingArgs(args) {
     throw new Error("A run id cannot be combined with --latest-main");
   }
   if (trendHours !== null) {
-    if (explicitRunId || useLatestMain || recentLimit !== null || limitSpecified) {
+    if (explicitRunId || useLatestMain || recentLimit !== null || specified.has("--limit")) {
       throw new Error("--trend-hours cannot be combined with single-run or --recent options");
     }
     if (trendHours < compareHours * 2) {
       throw new Error("--trend-hours must cover at least two --compare-hours windows");
     }
-  } else if (compareHoursSpecified || detailRunsSpecified || json || outputPath !== null) {
+  } else if (
+    specified.has("--compare-hours") ||
+    specified.has("--detail-runs") ||
+    json ||
+    outputPath !== null
+  ) {
     throw new Error("--compare-hours, --detail-runs, --json, and --output require --trend-hours");
   }
 
-  return {
-    compareHours,
-    detailRuns,
-    explicitRunId,
-    json,
-    limit,
-    outputPath,
-    recentLimit,
-    trendHours,
-    useLatestMain,
-  };
-}
-
-function consumePositiveIntFlag(args, index, flag) {
-  const arg = args[index];
-  const inlinePrefix = `${flag}=`;
-  if (arg.startsWith(inlinePrefix)) {
-    return {
-      nextIndex: index,
-      value: parsePositiveInt(arg.slice(inlinePrefix.length), flag),
-    };
-  }
-  if (arg !== flag) {
-    return null;
-  }
-  const rawValue = args[index + 1];
-  if (!rawValue || rawValue.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return {
-    nextIndex: index + 1,
-    value: parsePositiveInt(rawValue, flag),
-  };
-}
-
-function consumeStringFlag(args, index, flag) {
-  const arg = args[index];
-  const inlinePrefix = `${flag}=`;
-  if (arg.startsWith(inlinePrefix)) {
-    const value = arg.slice(inlinePrefix.length);
-    if (!value) {
-      throw new Error(`${flag} requires a value`);
-    }
-    return { nextIndex: index, value };
-  }
-  if (arg !== flag) {
-    return null;
-  }
-  const value = args[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return { nextIndex: index + 1, value };
+  return options;
 }
 
 function selectTrendDetailCandidates(runs, generatedAtMs, compareDurationMs, limit) {
@@ -1058,12 +915,7 @@ function selectTrendDetailCandidates(runs, generatedAtMs, compareDurationMs, lim
       priorIndex += 1;
     }
   }
-  return [
-    ...selected,
-    ...comparison.slice(comparisonIndex),
-    ...prior.slice(priorIndex),
-    ...older,
-  ].slice(0, limit);
+  return [...selected, ...older].slice(0, limit);
 }
 
 function runTrendReport(options) {
@@ -1163,30 +1015,10 @@ async function main() {
   const runId = explicitRunId ?? (useLatestMain ? getLatestMainPushCiRunId() : getLatestCiRunId());
   const run = loadRun(runId);
   const summary = summarizeRunTimings(run, limit);
-  const warmupBarrier = summarizePnpmStoreWarmupBarrier(run);
 
   console.log(
     `CI run ${runId}: ${summary.status}/${summary.conclusion} wall=${formatSeconds(summary.wallSeconds)}`,
   );
-  if (warmupBarrier) {
-    console.log("\npnpm-store-warmup barrier");
-    console.log(
-      [
-        `result=${warmupBarrier.warmupResult}`,
-        `preflight->start=${formatSeconds(warmupBarrier.preflightToWarmupStartSeconds)}`,
-        `duration=${formatSeconds(warmupBarrier.warmupDurationSeconds)}`,
-        `preflight->complete=${formatSeconds(warmupBarrier.preflightToWarmupCompleteSeconds)}`,
-      ].join("  "),
-    );
-    console.log(
-      [
-        `active-post-warmup-jobs=${warmupBarrier.activePostWarmupJobCount}`,
-        `first-start-delay=${formatSeconds(warmupBarrier.firstPostWarmupStartDelaySeconds)}`,
-        `p95-start-delay=${formatSeconds(warmupBarrier.postWarmupP95StartDelaySeconds)}`,
-        `started-within-${warmupBarrier.windowSeconds}s=${warmupBarrier.postWarmupStartedWithinWindow}`,
-      ].join("  "),
-    );
-  }
   printSection("\nSlowest jobs", summary.byDuration, "durationSeconds");
   printSection(
     "\nLongest start delays (dependencies + runner queue)",

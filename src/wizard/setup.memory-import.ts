@@ -157,6 +157,16 @@ export async function runSetupMemoryImportStep(params: {
         const progress = params.prompter.progress(
           t("wizard.memoryImport.importing", { label: offer.provider.label }),
         );
+        const reportFailure = async (reason: string) => {
+          failureLines.push(
+            t("wizard.memoryImport.failureLine", { label: offer.provider.label, reason }),
+          );
+          progress.stop(t("wizard.memoryImport.importFailed", { label: offer.provider.label }));
+          await params.prompter.note(
+            t("wizard.memoryImport.applyFailed", { label: offer.provider.label, reason }),
+            t("wizard.memoryImport.errorTitle"),
+          );
+        };
         // Host authority and config-drift guards run before the apply attempt and
         // must stop the hosted wizard rather than masquerade as copy failures.
         try {
@@ -193,20 +203,7 @@ export async function runSetupMemoryImportStep(params: {
               target: offer.plan.target ?? workspace,
             }),
           );
-          failureLines.push(
-            t("wizard.memoryImport.failureLine", {
-              label: offer.provider.label,
-              reason,
-            }),
-          );
-          progress.stop(t("wizard.memoryImport.importFailed", { label: offer.provider.label }));
-          await params.prompter.note(
-            t("wizard.memoryImport.applyFailed", {
-              label: offer.provider.label,
-              reason,
-            }),
-            t("wizard.memoryImport.errorTitle"),
-          );
+          await reportFailure(reason);
           continue;
         }
         summaryLines.push(
@@ -220,36 +217,20 @@ export async function runSetupMemoryImportStep(params: {
         // Conflicts count as incomplete: a selected item was skipped because its
         // target appeared between planning and copying.
         const incomplete = result.summary.errors + result.summary.conflicts;
-        if (incomplete > 0) {
-          const reason = t("wizard.memoryImport.partialFailure", { count: incomplete });
-          recordProviderOutcome({
-            providerId: offer.provider.id,
-            label: offer.provider.label,
-            migrated: result.summary.migrated,
-            skipped: result.summary.skipped,
-            failure: reason,
-          });
-          failureLines.push(
-            t("wizard.memoryImport.failureLine", {
-              label: offer.provider.label,
-              reason,
-            }),
-          );
-          progress.stop(t("wizard.memoryImport.importFailed", { label: offer.provider.label }));
-          await params.prompter.note(
-            t("wizard.memoryImport.applyFailed", {
-              label: offer.provider.label,
-              reason,
-            }),
-            t("wizard.memoryImport.errorTitle"),
-          );
+        const failure =
+          incomplete > 0
+            ? t("wizard.memoryImport.partialFailure", { count: incomplete })
+            : undefined;
+        recordProviderOutcome({
+          providerId: offer.provider.id,
+          label: offer.provider.label,
+          migrated: result.summary.migrated,
+          skipped: result.summary.skipped,
+          ...(failure !== undefined ? { failure } : {}),
+        });
+        if (failure !== undefined) {
+          await reportFailure(failure);
         } else {
-          recordProviderOutcome({
-            providerId: offer.provider.id,
-            label: offer.provider.label,
-            migrated: result.summary.migrated,
-            skipped: result.summary.skipped,
-          });
           progress.stop(t("wizard.memoryImport.imported", { label: offer.provider.label }));
         }
       }

@@ -1,23 +1,30 @@
 // Registry Jiti mock helpers install Vitest mocks for plugin registry import tests.
 import { vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 
 const registryJitiMocks = vi.hoisted(() => ({
   createJiti: vi.fn(),
+  discoverConfiguredPluginLoadPaths: vi.fn(),
   discoverOpenClawPlugins: vi.fn(),
   loadPluginManifestRegistry: vi.fn(),
   loadPluginRegistrySnapshot: vi.fn(),
 }));
 
 vi.mock("../discovery.js", () => ({
+  discoverConfiguredPluginLoadPaths: (
+    ...args: Parameters<typeof registryJitiMocks.discoverConfiguredPluginLoadPaths>
+  ) => registryJitiMocks.discoverConfiguredPluginLoadPaths(...args),
   discoverOpenClawPlugins: (
     ...args: Parameters<typeof registryJitiMocks.discoverOpenClawPlugins>
   ) => registryJitiMocks.discoverOpenClawPlugins(...args),
 }));
 
-vi.mock("../manifest-registry.js", () => ({
+vi.mock("../manifest-registry-build.js", () => ({
   loadBundledPluginManifestRegistry: (
     ...args: Parameters<typeof registryJitiMocks.loadPluginManifestRegistry>
   ) => registryJitiMocks.loadPluginManifestRegistry(...args),
+}));
+vi.mock("../manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: (
     ...args: Parameters<typeof registryJitiMocks.loadPluginManifestRegistry>
   ) => registryJitiMocks.loadPluginManifestRegistry(...args),
@@ -47,10 +54,15 @@ vi.mock("../plugin-registry.js", async (importOriginal) => {
 });
 export function resetRegistryJitiMocks(): void {
   registryJitiMocks.createJiti.mockReset();
+  registryJitiMocks.discoverConfiguredPluginLoadPaths.mockReset();
   registryJitiMocks.discoverOpenClawPlugins.mockReset();
   registryJitiMocks.loadPluginManifestRegistry.mockReset();
   registryJitiMocks.loadPluginRegistrySnapshot.mockReset();
   registryJitiMocks.discoverOpenClawPlugins.mockReturnValue({
+    candidates: [],
+    diagnostics: [],
+  });
+  registryJitiMocks.discoverConfiguredPluginLoadPaths.mockReturnValue({
     candidates: [],
     diagnostics: [],
   });

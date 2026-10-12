@@ -1,8 +1,8 @@
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import { screencastParams } from "./test-support.js";
 import { clearBrowserScreencastTokens, mintBrowserScreencastToken } from "./tokens.js";
 import * as tokens from "./tokens.js";

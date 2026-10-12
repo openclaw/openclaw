@@ -1,4 +1,3 @@
-// Control UI module implements provider quota summary behavior.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "../api/types.ts";
 
@@ -31,19 +30,18 @@ export function formatQuotaReset(resetAt?: number): string | null {
   return new Date(timestampMs).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-/** Auth-status source props for surfaces that render provider plan usage. */
 export type ProviderUsageDisplayProps = {
   basePath?: string;
   modelAuthStatusResult?: ModelAuthStatusResult | null;
 };
 
-export type QuotaLimitSummary = {
+type QuotaLimitSummary = {
   label: string;
   usedPercent: number;
   resetAt?: number;
 };
 
-export type QuotaBudgetSummary = {
+type QuotaBudgetSummary = {
   label?: string;
   used: number;
   limit: number;
@@ -55,7 +53,6 @@ export type ProviderQuotaGroup = {
   providers: string[];
   displayName: string;
   plan?: string;
-  /** Account email the usage was fetched under, when known. */
   accountEmail?: string;
   windows: QuotaLimitSummary[];
   budgets: QuotaBudgetSummary[];
@@ -75,22 +72,18 @@ export function collectProviderQuotaGroups(
   status: ModelAuthStatusResult | null,
   filter: (provider: ModelAuthStatusProvider) => boolean,
 ): ProviderQuotaGroup[] {
-  const groups: Array<{ identity: string; group: ProviderQuotaGroup }> = [];
+  const groups = new Map<string, ProviderQuotaGroup>();
   for (const provider of (status?.providers ?? []).filter(filter)) {
     const usage = provider.usage;
     if (!usage) {
       continue;
     }
-    const windows: QuotaLimitSummary[] = (usage.windows ?? []).map((limit) => {
-      const summary: QuotaLimitSummary = {
-        label: (limit.label || "").trim(),
-        usedPercent: clampPercent(limit.usedPercent),
-      };
-      if (limit.resetAt !== undefined) {
-        summary.resetAt = limit.resetAt;
-      }
-      return summary;
-    });
+    const windows: QuotaLimitSummary[] = (usage.windows ?? []).map((limit) =>
+      Object.assign(
+        { label: (limit.label || "").trim(), usedPercent: clampPercent(limit.usedPercent) },
+        limit.resetAt !== undefined ? { resetAt: limit.resetAt } : {},
+      ),
+    );
     const budgets: QuotaBudgetSummary[] = (usage.billing ?? []).flatMap((entry) => {
       if (
         entry.type !== "budget" ||
@@ -101,15 +94,14 @@ export function collectProviderQuotaGroups(
       ) {
         return [];
       }
-      const budget: QuotaBudgetSummary = {
-        used: entry.used,
-        limit: entry.limit,
-        unit: entry.unit,
-      };
-      if (entry.label) {
-        budget.label = entry.label;
-      }
-      return [budget];
+      return [
+        {
+          used: entry.used,
+          limit: entry.limit,
+          unit: entry.unit,
+          ...(entry.label ? { label: entry.label } : {}),
+        },
+      ];
     });
     if (windows.length === 0 && budgets.length === 0) {
       continue;
@@ -125,26 +117,23 @@ export function collectProviderQuotaGroups(
       windows,
       budgets,
     ]);
-    const existing = groups.find((group) => group.identity === identity);
+    const existing = groups.get(identity);
     if (existing) {
       for (const id of providerIds) {
-        if (!existing.group.providers.includes(id)) {
-          existing.group.providers.push(id);
+        if (!existing.providers.includes(id)) {
+          existing.providers.push(id);
         }
       }
       continue;
     }
-    groups.push({
-      identity,
-      group: {
-        providers: providerIds,
-        displayName: provider.displayName,
-        ...(usage.plan ? { plan: usage.plan } : {}),
-        ...(usage.accountEmail ? { accountEmail: usage.accountEmail } : {}),
-        windows,
-        budgets,
-      },
+    groups.set(identity, {
+      providers: providerIds,
+      displayName: provider.displayName,
+      ...(usage.plan ? { plan: usage.plan } : {}),
+      ...(usage.accountEmail ? { accountEmail: usage.accountEmail } : {}),
+      windows,
+      budgets,
     });
   }
-  return groups.map((entry) => entry.group);
+  return [...groups.values()];
 }

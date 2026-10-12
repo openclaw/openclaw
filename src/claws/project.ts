@@ -1,7 +1,9 @@
 import { lstat, mkdir, readdir, realpath, rmdir, unlink, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
+import { basename, dirname, parse, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { clawContainedRelativePath } from "./path-containment.js";
 import { readClawManifestFile } from "./reader.js";
 import { isCanonicalClawHubPackageName, portableClawPathKey } from "./schema-portability.js";
 import type { ClawDiagnostic, ClawReadResult } from "./types.js";
@@ -95,19 +97,11 @@ async function isConfinedManifestFile(root: string): Promise<boolean> {
   if (!rootReal || !targetReal) {
     return false;
   }
-  const targetRelative = relative(rootReal, targetReal);
-  if (
-    targetRelative === "" ||
-    targetRelative === ".." ||
-    targetRelative.startsWith(`..${sep}`) ||
-    isAbsolute(targetRelative) ||
-    isExcludedProjectSource(targetRelative)
-  ) {
+  const targetRelative = clawContainedRelativePath(rootReal, targetReal);
+  if (!targetRelative || isExcludedProjectSource(targetRelative)) {
     return false;
   }
-  return lstat(targetReal)
-    .then((target) => target.isFile())
-    .catch(() => false);
+  return isFile(targetReal);
 }
 
 async function discoverClawProjectRoot(projectPath: string): Promise<string> {
@@ -227,7 +221,7 @@ export async function createClawProject(
   if (!isCanonicalClawHubPackageName(name)) {
     throw new ClawProjectError(
       "invalid_package_name",
-      `Package name ${JSON.stringify(name)} must be a canonical ClawHub package name.`,
+      `Package name ${JSON.stringify(name)} must be a valid ClawHub package name.`,
     );
   }
 
@@ -272,21 +266,20 @@ export async function createClawProject(
 export async function validateClawProject(
   projectPath: string,
 ): Promise<ClawProjectValidationResult> {
-  let root: string;
+  let root = resolve(projectPath);
+  const failure = (code: string, path: string, message: string): ClawProjectValidationResult => ({
+    ok: false,
+    root,
+    diagnostics: [diagnostic(code, path, message)],
+  });
   try {
     root = await discoverClawProjectRoot(projectPath);
   } catch (error) {
-    return {
-      ok: false,
-      root: resolve(projectPath),
-      diagnostics: [
-        diagnostic(
-          error instanceof ClawProjectError ? error.code : "project_discovery_failed",
-          "$",
-          coerceErrorMessage(error),
-        ),
-      ],
-    };
+    return failure(
+      error instanceof ClawProjectError ? error.code : "project_discovery_failed",
+      "$",
+      coerceErrorMessage(error),
+    );
   }
   let packageValue: unknown;
   try {
@@ -294,32 +287,19 @@ export async function validateClawProject(
     const read = await sourceRoot.read("package.json", {
       hardlinks: "reject",
       maxBytes: MAX_PACKAGE_JSON_BYTES,
-      nonBlockingRead: true,
       symlinks: "reject",
     });
     packageValue = JSON.parse(read.buffer.toString("utf8"));
   } catch (error) {
-    return {
-      ok: false,
-      root,
-      diagnostics: [
-        diagnostic(
-          "invalid_project_package",
-          "package.json",
-          `Could not read a safe project package.json: ${(error as Error).message}`,
-        ),
-      ],
-    };
+    return failure(
+      "invalid_project_package",
+      "package.json",
+      `Could not read a safe project package.json: ${(error as Error).message}`,
+    );
   }
 
-  const record =
-    packageValue && typeof packageValue === "object" && !Array.isArray(packageValue)
-      ? (packageValue as Record<string, unknown>)
-      : undefined;
-  const openclaw =
-    record?.openclaw && typeof record.openclaw === "object" && !Array.isArray(record.openclaw)
-      ? (record.openclaw as Record<string, unknown>)
-      : undefined;
+  const record = asOptionalRecord(packageValue);
+  const openclaw = asOptionalRecord(record?.openclaw);
   const scripts = record?.scripts;
   const diagnostics: ClawDiagnostic[] = [];
   if (openclaw?.claw !== "CLAW.md") {
@@ -369,33 +349,21 @@ export async function validateClawProject(
     })),
   ].find((source) => isExcludedProjectSource(source.path));
   if (excludedSource) {
-    return {
-      ok: false,
-      root,
-      diagnostics: [
-        diagnostic(
-          "project_excluded_source",
-          excludedSource.diagnosticPath,
-          `Selected project source ${JSON.stringify(excludedSource.path)} cannot come from .git or node_modules.`,
-        ),
-      ],
-    };
+    return failure(
+      "project_excluded_source",
+      excludedSource.diagnosticPath,
+      `Selected project source ${JSON.stringify(excludedSource.path)} cannot come from .git or node_modules.`,
+    );
   }
   const reservedPackageSource = claw.snapshot.workspaceSources.find(
     (source) => source.sourcePath.normalize("NFC").toLowerCase() === "package.json",
   );
   if (reservedPackageSource) {
-    return {
-      ok: false,
-      root,
-      diagnostics: [
-        diagnostic(
-          "project_invalid",
-          "$.workspace.files",
-          `Workspace source ${JSON.stringify(reservedPackageSource.sourcePath)} collides with generated package metadata.`,
-        ),
-      ],
-    };
+    return failure(
+      "project_invalid",
+      "$.workspace.files",
+      `Workspace source ${JSON.stringify(reservedPackageSource.sourcePath)} collides with generated package metadata.`,
+    );
   }
   const selectedPathList = [
     "package.json",
@@ -409,17 +377,11 @@ export async function validateClawProject(
     const key = portableClawPathKey(path);
     const existing = portableSelectedPaths.get(key);
     if (existing && existing !== path) {
-      return {
-        ok: false,
-        root,
-        diagnostics: [
-          diagnostic(
-            "project_path_collision",
-            "$",
-            `Selected project paths ${JSON.stringify(existing)} and ${JSON.stringify(path)} collide on portable filesystems.`,
-          ),
-        ],
-      };
+      return failure(
+        "project_path_collision",
+        "$",
+        `Selected project paths ${JSON.stringify(existing)} and ${JSON.stringify(path)} collide on portable filesystems.`,
+      );
     }
     portableSelectedPaths.set(key, path);
   }
@@ -428,17 +390,11 @@ export async function validateClawProject(
   try {
     excludedPaths = await collectExcludedPaths(root, selectedPaths);
   } catch (error) {
-    return {
-      ok: false,
-      root,
-      diagnostics: [
-        diagnostic(
-          error instanceof ClawProjectError ? error.code : "project_enumeration_failed",
-          "$",
-          coerceErrorMessage(error),
-        ),
-      ],
-    };
+    return failure(
+      error instanceof ClawProjectError ? error.code : "project_enumeration_failed",
+      "$",
+      coerceErrorMessage(error),
+    );
   }
   return {
     ok: true,

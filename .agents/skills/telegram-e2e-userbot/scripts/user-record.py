@@ -51,10 +51,6 @@ def message_text(message):
     return content_text(message.get("content") or {})
 
 
-def content_kind(message):
-    return (message.get("content") or {}).get("@type", "")
-
-
 class EventRecorder:
     def __init__(self, client, chat_id, record_path, sut_user_id=None):
         self.client = client
@@ -156,7 +152,7 @@ class EventRecorder:
                     "senderId": sender,
                     "isSut": self.sut_user_id is not None and sender == self.sut_user_id,
                     "isOutgoing": bool(message.get("is_outgoing")),
-                    "contentType": content_kind(message),
+                    "contentType": content.get("@type", ""),
                     "textLen": len(text),
                     "text": text,
                     "richMessageIsFull": rich_message.get("is_full") if isinstance(rich_message, dict) else None,
@@ -214,13 +210,14 @@ class EventRecorder:
             # Ack and status reactions arrive here, on the *user's own* message.
             # A bot reacting to its own message produces no update for the user,
             # so probe this by reacting to a message the QA user sent.
-            reactions = (
-                ((update.get("interaction_info") or {}).get("reactions") or {}).get("reactions") or []
-            )
+            reactions = [
+                reaction
+                for reaction in ((update.get("interaction_info") or {}).get("reactions") or {}).get("reactions") or []
+                if isinstance(reaction, dict)
+            ]
             emojis = "".join(
                 (reaction.get("type") or {}).get("emoji", "")
                 for reaction in reactions
-                if isinstance(reaction, dict)
             )
             yield (
                 "reaction",
@@ -232,11 +229,8 @@ class EventRecorder:
                     "reactionCount": sum(
                         int(reaction.get("total_count") or 0)
                         for reaction in reactions
-                        if isinstance(reaction, dict)
                     ),
-                    "reactionTypes": [
-                        reaction.get("type") for reaction in reactions if isinstance(reaction, dict)
-                    ],
+                    "reactionTypes": [reaction.get("type") for reaction in reactions],
                 },
             )
         elif kind == "updateChatAction":
@@ -306,23 +300,12 @@ class EventRecorder:
                     "elapsedMs": e["elapsedMs"],
                     "kind": e["kind"],
                     "messageId": e["messageId"],
-                    "botApiMessageId": e.get("botApiMessageId"),
-                    "textLen": e.get("textLen"),
-                    "contentType": e.get("contentType"),
-                    "senderId": e.get("senderId"),
-                    "isSut": e.get("isSut"),
-                    "isOutgoing": e.get("isOutgoing"),
-                    "replyToMessageId": e.get("replyToMessageId"),
-                    "quoteText": e.get("quoteText"),
-                    "topicType": e.get("topicType"),
-                    "topicId": e.get("topicId"),
-                    "reactionText": e.get("reactionText"),
-                    "reactionCount": e.get("reactionCount"),
-                    "actionType": e.get("actionType"),
-                    "status": e.get("status"),
-                    "buttonText": e.get("buttonText"),
-                    "durationMs": e.get("durationMs"),
-                    "error": e.get("error"),
+                    **{key: e.get(key) for key in (
+                        "botApiMessageId", "textLen", "contentType", "senderId", "isSut",
+                        "isOutgoing", "replyToMessageId", "quoteText", "topicType", "topicId",
+                        "reactionText", "reactionCount", "actionType", "status", "buttonText",
+                        "durationMs", "error", "actionIndex", "sentMessageId", "replyToChatId",
+                    )},
                 }
                 for e in self.events
             ],
@@ -353,12 +336,79 @@ def scenario_barriers_ready(actions, action_index, barrier_dir):
     )
 
 
+def await_scenario_reply(recorder, action, sent, known_ids, deadline):
+    sent_id = sent.get("id")
+    context = recorder._reply_fields(sent)
+    if (not isinstance(sent_id, int) or sent_id <= 0 or sent_id in known_ids
+            or sent.get("chat_id") != recorder.chat_id
+            or (action.get("forumTopicId") is not None
+                and (context["topicType"] != "messageTopicForum"
+                     or context["topicId"] != action["forumTopicId"]))):
+        raise driver.DriverError("Cannot bind visible reply to an invalid native send receipt")
+    expected = action["awaitReply"]
+    while time.time() < deadline:
+        update = recorder.client.next_update(timeout=min(0.2, max(0, deadline - time.time())))
+        if not update:
+            continue
+        cursor = len(recorder.events)
+        recorder.ingest(update)
+        if time.time() >= deadline:
+            break
+        for event in recorder.events[cursor:]:
+            reply_id = event.get("replyToMessageId")
+            if (event["kind"] not in {"message", "edit"}
+                    or event.get("isSut") is not True or event.get("isOutgoing")
+                    or not isinstance(event["messageId"], int) or event["messageId"] <= 0
+                    or event["messageId"] == sent_id or event["messageId"] in known_ids
+                    or event.get("text") != expected["text"]
+                    or event.get("richMessageIsFull") is False
+                    or (event.get("topicType"), event.get("topicId")) != (context["topicType"], context["topicId"])
+                    or (reply_id is not None and reply_id != sent_id)
+                    or event.get("replyToChatId") not in (None, 0, recorder.chat_id)
+                    or (expected.get("requireQuote") and reply_id != sent_id)):
+                continue
+            return event
+    raise driver.DriverError("No matching visible reply before the recording deadline")
+
+
+def fail_reply_barrier(recorder, action_index, barrier_dir, error, sent_id=None):
+    failure = recorder._append("action", None, actionType="awaitReply", actionIndex=action_index,
+                               sentMessageId=sent_id, status="failed", error=str(error))
+    if barrier_dir:
+        publish_recorder_state(Path(barrier_dir) / "action-failure.json", failure)
+    raise error
+
+
+def await_forward_sources(recorder, text, cursor, deadline):
+    source_ids = []
+
+    def collect(events):
+        nonlocal cursor
+        for event in events[cursor:]:
+            cursor += 1
+            if event["kind"] != "message" or not event.get("isSut") or event.get("isOutgoing"):
+                continue
+            if not source_ids and event.get("text") == text:
+                source_ids.append(event["messageId"])
+            elif source_ids and event.get("contentType") == "messagePhoto":
+                source_ids.append(event["messageId"])
+                return True
+        return False
+
+    deadline = min(deadline, time.time() + 30)
+    if not collect(recorder.events):
+        recorder.pump(max(0, deadline - time.time()), stop_when=collect)
+    if len(source_ids) != 2:
+        raise driver.DriverError("Timed out waiting for the bot's forward source text and photo in the selected DM")
+    return source_ids
+
+
 def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
     telegram_actions = sorted(
         (
             (index, action)
             for index, action in enumerate(actions)
-            if action["type"] in {"send", "click"}
+            if action["type"] in {"send", "click", "forwardBurst"}
         ),
         key=lambda item: item[1]["atMs"],
     )
@@ -372,18 +422,105 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
             if now_ms >= action["atMs"] and scenario_barriers_ready(
                 actions, action_index, barrier_dir
             ):
-                if action["type"] == "send":
+                if action["type"] == "forwardBurst":
                     text, _run = driver.apply_template(action["text"], sut)
-                    result = driver_obj.send_text(recorder.chat_id, text)
+                    send_outcome = "not-sent"
+                    try:
+                        source_cursor = len(recorder.events)
+                        driver_obj.post_forward_sources(text, action["photo"])
+                        source_ids = await_forward_sources(recorder, text, source_cursor, deadline)
+                        send_outcome = "unknown"
+                        forwarded = driver_obj.forward_messages(recorder.chat_id, recorder.chat_id, source_ids)
+                    except driver.DriverError as error:
+                        failure = recorder._append(
+                            "action", None, actionType="forwardBurst", actionIndex=action_index,
+                            status="failed", sendOutcome=send_outcome, error=str(error),
+                        )
+                        if barrier_dir:
+                            publish_recorder_state(Path(barrier_dir) / "action-failure.json", failure)
+                        recorder.pump(max(0, deadline - time.time()))
+                        raise
+                    message_ids = [message["id"] for message in forwarded]
+                    sent_ids.extend(message_ids)
+                    recorder._append(
+                        "action", message_ids[0], actionType="forwardBurst", actionIndex=action_index,
+                        status="completed", text=text, photo=action["photo"],
+                        messageIds=message_ids, sourceMessageIds=source_ids,
+                    )
+                    next_action += 1
+                    continue
+
+                if action["type"] == "send":
+                    known_ids = set(recorder.messages).union(sent_ids) if action.get("awaitReply") else set()
+                    text, _run = driver.apply_template(action["text"], sut)
+                    # replyToPrevious targets the newest message this scenario sent.
+                    reply_to = sent_ids[-1] if action.get("replyToPrevious") and sent_ids else None
+                    photo = action.get("photo")
+                    photos = action.get("photos") or ([photo] if photo else [])
+                    album_ids = []
+                    try:
+                        if photos:
+                            results = driver_obj.send_photos(
+                                recorder.chat_id,
+                                photos,
+                                text,
+                                reply_to=reply_to,
+                                forum_topic_id=action.get("forumTopicId"),
+                            )
+                            result = results[0] if results else None
+                            if action.get("photos"):
+                                album_ids = [message.get("id") for message in results]
+                        else:
+                            result = driver_obj.send_text(
+                                recorder.chat_id,
+                                text,
+                                reply_to=reply_to,
+                                forum_topic_id=action.get("forumTopicId"),
+                            )
+                    except driver.DriverError as error:
+                        failure = recorder._append(
+                            "action",
+                            None,
+                            actionType="send",
+                            actionIndex=action_index,
+                            status="failed",
+                            sendOutcome="unknown",
+                            error=str(error),
+                        )
+                        if barrier_dir:
+                            publish_recorder_state(Path(barrier_dir) / "action-failure.json", failure)
+                        # A confirmation timeout can follow an accepted send. Keep
+                        # observing without resending or claiming a sent receipt.
+                        recorder.pump(max(0, deadline - time.time()))
+                        raise
                     message_id = (result or {}).get("id")
-                    sent_ids.append(message_id)
+                    sent_ids.extend(album_ids or [message_id])
                     recorder._append(
                         "action",
                         message_id,
                         actionType="send",
+                        actionIndex=action_index,
                         status="completed",
                         text=text,
+                        **({"photo": photo} if photo else {}),
+                        **({"photos": photos, "messageIds": album_ids} if album_ids else {}),
+                        **(recorder._reply_fields(result or {}) if action.get("awaitReply")
+                           else {"replyToMessageId": reply_to} if reply_to else {}),
                     )
+                    if action.get("awaitReply"):
+                        try:
+                            reply = await_scenario_reply(recorder, action, result or {}, known_ids, deadline)
+                        except driver.DriverError as error:
+                            fail_reply_barrier(recorder, action_index, barrier_dir, error, message_id)
+                        receipt = recorder._append(
+                            "action", reply["messageId"], actionType="awaitReply", actionIndex=action_index,
+                            sentMessageId=message_id, status="completed", text=reply["text"],
+                            **{key: reply.get(key) for key in (
+                                "replyToMessageId", "replyToChatId", "quoteText", "topicType", "topicId",
+                            )},
+                        )
+                        if barrier_dir:
+                            publish_recorder_state(Path(barrier_dir) / str(action_index), receipt)
                     next_action += 1
                     continue
 
@@ -433,15 +570,29 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
         update = driver_obj.client.next_update(timeout=0.2)
         if update:
             recorder.ingest(update)
+    if next_action < len(telegram_actions) and any(action.get("awaitReply") for action in actions):
+        fail_reply_barrier(recorder, telegram_actions[next_action][0], barrier_dir,
+                           driver.DriverError("Scenario ended before the next send and visible reply"))
     return sent_ids
 
 
-def publish_recorder_ready(path, recorder, require_dm_peer=False):
+def publish_recorder_state(path, payload):
     if not path:
         return
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     pending = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    with pending.open("w") as handle:
+        json.dump(payload, handle)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(pending, target)
+
+
+def publish_recorder_ready(path, recorder, require_dm_peer=False):
+    if not path:
+        return
     payload = {
         "schemaVersion": 1,
         "startedAtUnixMs": int(recorder.started_at * 1000),
@@ -454,12 +605,7 @@ def publish_recorder_ready(path, recorder, require_dm_peer=False):
             raise driver.DriverError("Proof recorder requires the selected SUT private chat")
         payload["chatType"] = "private"
         payload["peerUserId"] = chat_type["user_id"]
-    with pending.open("w") as handle:
-        json.dump(payload, handle)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(pending, target)
+    publish_recorder_state(path, payload)
 
 
 def main():
@@ -511,6 +657,7 @@ def main():
     publish_recorder_ready(args.ready_file, recorder, args.proof_dm_peer)
 
     sent_ids = []
+    action_error = None
     try:
         if args.scenario:
             scenario = json.loads(Path(args.scenario).read_text())
@@ -534,6 +681,18 @@ def main():
             sent_ids.extend(message.get("id") for message in results)
         if not args.scenario:
             recorder.pump(args.seconds)
+    except driver.DriverError as error:
+        if not args.scenario:
+            raise
+        action_error = str(error)
+        sent_ids = [
+            message_id
+            for event in recorder.events
+            if event["kind"] == "action"
+            and event.get("actionType") in {"send", "forwardBurst"}
+            and event.get("status") == "completed"
+            for message_id in event.get("messageIds", [event["messageId"]])
+        ]
     finally:
         recorder.close()
 
@@ -553,6 +712,8 @@ def main():
         else None
     )
     summary["recordPath"] = str(args.record)
+    if action_error:
+        summary["actionError"] = action_error
 
     payload = json.dumps(summary, indent=2)
     if args.output:
@@ -560,7 +721,7 @@ def main():
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(f"{payload}\n")
     print(payload)
-    return 0
+    return 1 if action_error else 0
 
 
 if __name__ == "__main__":

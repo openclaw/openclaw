@@ -5,11 +5,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  detectRepointedWorkspaceAlias,
+  rebindRepointedWorkspaceAlias,
+} from "../agents/workspace-alias-rebind.js";
+import {
   mergeWorkspaceSetupState,
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
 } from "../agents/workspace-state-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as snapshots from "../infra/sqlite-snapshot-source.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
@@ -31,6 +37,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   await testState?.cleanup();
   testState = undefined;
@@ -65,14 +72,19 @@ async function runWorkspaceRepair(params: { cfg: OpenClawConfig; prompter: Docto
   await repair!(params.cfg);
 }
 
-async function repointAlias(params: { seedAttestedFile?: boolean }): Promise<{
+async function repointAlias(params: { seedAttestedFile?: boolean; name?: string }): Promise<{
   alias: string;
   original: string;
   replacement: string;
 }> {
-  const original = testState!.workspaceDir;
-  const alias = testState!.path("workspace-link");
-  const replacement = testState!.path("replacement-workspace");
+  const original = params.name ? testState!.path(params.name, "original") : testState!.workspaceDir;
+  const alias = params.name
+    ? testState!.path(params.name, "workspace-link")
+    : testState!.path("workspace-link");
+  const replacement = params.name
+    ? testState!.path(params.name, "replacement-workspace")
+    : testState!.path("replacement-workspace");
+  fs.mkdirSync(original, { recursive: true });
   fs.symlinkSync(original, alias, process.platform === "win32" ? "junction" : "dir");
   await mergeWorkspaceSetupState(alias, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
   if (params.seedAttestedFile) {
@@ -127,24 +139,60 @@ describe("doctor workspace alias repair", () => {
     expect((await readWorkspaceStateSnapshot(changed)).setupExists).toBe(false);
   });
 
-  it("reports a repointed alias as a warning finding", async () => {
-    const { alias } = await repointAlias({ seedAttestedFile: false });
+  it("shares one private snapshot across alias findings and rereads committed repairs", async () => {
+    const aliases = [];
+    for (const name of ["first", "second", "third"]) {
+      aliases.push(await repointAlias({ name }));
+    }
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: Object.fromEntries(
+          aliases.map(({ alias }, index) => [`agent-${index}`, { workspace: alias }]),
+        ),
+      },
+    };
+    closeOpenClawStateDatabaseForTest();
+    const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+    const inspect = () =>
+      withArtifactPreservingStateReads(() => collectRepointedWorkspaceAliasFindings(cfg));
 
-    const findings = await collectRepointedWorkspaceAliasFindings(buildAliasCfg(alias));
+    const findings = await inspect();
+    expect(findings).toHaveLength(3);
+    for (const [index, finding] of findings.entries()) {
+      expect(finding).toMatchObject({
+        checkId: "core/doctor/workspace-alias",
+        severity: "warning",
+        fixHint: expect.stringContaining("doctor --fix"),
+        message: expect.stringContaining(aliases[index]!.alias),
+      });
+    }
+    expect(prepare).toHaveBeenCalledOnce();
+    const firstSnapshot = prepare.mock.results[0]?.value;
+    expect(fs.existsSync(firstSnapshot.location)).toBe(false);
 
-    expect(findings).toHaveLength(1);
-    expect(findings[0]).toMatchObject({
-      checkId: "core/doctor/workspace-alias",
-      severity: "warning",
-      fixHint: expect.stringContaining("doctor --fix"),
-    });
-  });
+    const first = aliases[0]!;
+    const facts = detectRepointedWorkspaceAlias(first.alias);
+    expect(facts).toBeDefined();
+    expect(
+      await rebindRepointedWorkspaceAlias(
+        first.alias,
+        facts!,
+        {},
+        aliases.map(({ alias }) => alias),
+      ),
+    ).toBe("rebound");
+    closeOpenClawStateDatabaseForTest();
+    prepare.mockClear();
 
-  it("reports nothing when aliases are intact", async () => {
-    const dir = testState!.workspaceDir;
-    await mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
-
-    expect(await collectRepointedWorkspaceAliasFindings(buildAliasCfg(dir))).toHaveLength(0);
+    const remaining = await inspect();
+    expect(remaining).toHaveLength(2);
+    expect(remaining.map(({ message }) => message)).toEqual(
+      aliases.slice(1).map(({ alias }) => expect.stringContaining(alias)),
+    );
+    expect(prepare).toHaveBeenCalledOnce();
+    const nextSnapshot = prepare.mock.results[0]?.value;
+    expect(nextSnapshot.location).not.toBe(firstSnapshot.location);
+    expect(fs.existsSync(nextSnapshot.location)).toBe(false);
   });
 
   it("requires explicit confirmation even when generated hashes match", async () => {
@@ -170,22 +218,6 @@ describe("doctor workspace alias repair", () => {
       prompter: secondPrompter,
     });
     expect(secondPrompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-  });
-
-  it("requires the explicit operator gate when continuity is unproven", async () => {
-    const { alias, original } = await repointAlias({ seedAttestedFile: false });
-    const prompter = buildPrompter();
-
-    await expect(runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter })).rejects.toThrow();
-
-    expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
-    expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
-    // Declined: stored state stays with the original canonical target.
-    expect((await readWorkspaceStateSnapshot(original)).setupExists).toBe(true);
-
-    const approving = buildPrompter({ confirmRuntimeRepair: vi.fn(async () => true) });
-    await runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter: approving });
-    expect((await readWorkspaceStateSnapshot(alias)).setupExists).toBe(true);
   });
 
   it("refuses to merge when the current target already owns state", async () => {

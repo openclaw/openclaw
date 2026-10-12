@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import type {
   CliBackendExecuteContext,
   CliBackendLiveSessionCapability,
@@ -11,7 +12,13 @@ import type {
 } from "openclaw/plugin-sdk/cli-backend";
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  withinTest,
+  type FixtureReceiptChannel,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { CLAUDE_PROTOCOL_FIXTURE } from "./cli-runtime.test-support.js";
@@ -19,6 +26,13 @@ import { executeClaudeCli } from "./cli.runtime.js";
 
 const roots: string[] = [];
 const handles = new Set<CliBackendLiveSessionHandle>();
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 afterEach(async () => {
   for (const handle of handles) {
@@ -37,7 +51,11 @@ async function createContext(
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-claude-protocol-")));
   roots.push(root);
   const fixture = path.join(root, "claude.mjs");
-  await writeFile(fixture, CLAUDE_PROTOCOL_FIXTURE);
+  await writeFile(
+    fixture,
+    `${fixtureReceiptClientSource(receipts.endpoint)}
+${CLAUDE_PROTOCOL_FIXTURE}`,
+  );
   return {
     command: process.execPath,
     args: [fixture],
@@ -52,6 +70,7 @@ async function createContext(
     systemPrompt: "synthetic operator instructions",
     modelId: "claude-sonnet-4-6",
     useResume: false,
+    liveSession: createLiveSession(),
     timeoutMs: 10_000,
     abortSignal: AbortSignal.timeout(10_000),
     requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(async () => ({
@@ -118,13 +137,59 @@ function resultDetail(records: Record<string, unknown>[]): Record<string, unknow
   return JSON.parse(String(result?.result)) as Record<string, unknown>;
 }
 
+async function fixtureReadyBeforeSettlement(
+  context: CliBackendExecuteContext,
+  fileName: string,
+  operation: PromiseLike<unknown>,
+  signal: AbortSignal,
+): Promise<void> {
+  const readyPath = path.join(context.cwd, fileName);
+  const recorded = async () => {
+    expect(await readFile(readyPath, "utf8")).toBe("ready");
+  };
+  // The fixture writes this record before replying; receipt and protocol pipes are unordered.
+  const settled = Promise.resolve(operation).then(recorded, async (error: unknown) => {
+    try {
+      await recorded();
+    } catch {
+      throw error;
+    }
+  });
+  await withinTest(Promise.race([receipts.waitFor(readyPath, "ready"), settled]), signal);
+}
+
+// Native transport joins its root and signal dispatch, not foreign descendant extinction.
+async function waitForProcessExit(pids: number[], signal: AbortSignal): Promise<void> {
+  try {
+    for (;;) {
+      if (
+        pids.every((pid) => {
+          try {
+            process.kill(pid, 0);
+            return false;
+          } catch {
+            return true;
+          }
+        })
+      ) {
+        return;
+      }
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (cause) {
+    throw new Error(`Claude process tree ${pids.join(", ")} did not exit before the test aborted`, {
+      cause,
+    });
+  }
+}
+
 describe("Claude native stdio boundary", () => {
-  it.each([
+  it.for([
     { scenario: "shutdown-ignore", name: "native parent and child ignore EOF and SIGTERM" },
     { scenario: "shutdown-eof", name: "native parent exits immediately on EOF" },
   ])(
     "closes its whole process tree within the host cancellation window when $name",
-    async ({ scenario }) => {
+    async ({ scenario }, { signal }) => {
       const liveSession = createLiveSession();
       const context = await createContext(scenario, { liveSession });
       const iterator = executeClaudeCli(context)[Symbol.asyncIterator]();
@@ -144,17 +209,16 @@ describe("Claude native stdio boundary", () => {
         );
       });
       try {
-        await Promise.race([
-          (async () => {
-            await iterator.return?.();
-            await vi.waitFor(() => {
-              for (const pid of pids) {
-                expect(() => process.kill(pid, 0)).toThrow();
-              }
-            });
-          })(),
-          deadlineExceeded,
-        ]);
+        await withinTest(
+          Promise.race([
+            (async () => {
+              await iterator.return?.();
+              await waitForProcessExit(pids, AbortSignal.any([signal, deadline]));
+            })(),
+            deadlineExceeded,
+          ]),
+          signal,
+        );
         expect(liveSession.current()).toBeUndefined();
       } finally {
         for (const pid of pids) {
@@ -168,10 +232,21 @@ describe("Claude native stdio boundary", () => {
 
   it("starts a fresh process after host cleanup when the execution fingerprint changes", async () => {
     const gate = createDeferred<void>();
-    const cleanup = vi.fn(() => gate.promise);
+    const cleanupStarted = createDeferred<void>();
+    const cleanup = vi.fn(() => {
+      cleanupStarted.resolve();
+      return gate.promise;
+    });
     const liveSession = createLiveSession(cleanup);
-    const context = await createContext("normal", { liveSession });
+    const context = await createContext("normal", {
+      liveSession,
+      sessionId: "a174e16f-b6e9-48da-ad5a-c437dfc2f9b4",
+    });
     const first = resultDetail(await collect(context));
+    expect(first.initialize).toMatchObject({
+      appendSystemPrompt: "synthetic operator instructions",
+      systemPromptSnapshot: false,
+    });
     liveSession.fingerprint = "changed-authoritative-prompt";
     const pending = collect({
       ...context,
@@ -180,19 +255,37 @@ describe("Claude native stdio boundary", () => {
     });
     void pending.catch(() => {});
     try {
-      await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+      await cleanupStarted.promise;
+      expect(cleanup).toHaveBeenCalledOnce();
       expect(liveSession.current()).toBeUndefined();
       gate.resolve();
       const second = resultDetail(await pending);
       expect(second.pid).not.toBe(first.pid);
       expect(second.turn).toBe(1);
+      expect(second.argv).toEqual(expect.arrayContaining(["--resume", context.sessionId]));
       expect(second.initialize).toMatchObject({
         appendSystemPrompt: "changed authoritative instructions",
+        systemPromptSnapshot: false,
       });
       expect(() => process.kill(Number(first.pid), 0)).toThrow();
     } finally {
       gate.resolve();
     }
+  });
+
+  it("refuses replacement when the retired predecessor's cleanup failed", async () => {
+    const failure = new Error("artifact cleanup failed");
+    const liveSession = createLiveSession(async () => {
+      throw failure;
+    });
+    const context = await createContext("normal", { liveSession });
+    const first = resultDetail(await collect(context));
+    liveSession.fingerprint = "changed-authoritative-prompt";
+    await expect(
+      collect({ ...context, useResume: true, systemPrompt: "changed authoritative instructions" }),
+    ).rejects.toBe(failure);
+    expect(liveSession.current()).toBeUndefined();
+    expect(() => process.kill(Number(first.pid), 0)).toThrow();
   });
 
   it("refuses process startup when the admitted owner rejects capture activation", async () => {
@@ -207,28 +300,200 @@ describe("Claude native stdio boundary", () => {
     await expect(access(path.join(context.cwd, "fixture.pid"))).rejects.toThrow();
   });
 
-  it("keeps an interim result open until native background agents report their final answer", async () => {
-    const context = await createContext("background-success", { liveSession: createLiveSession() });
-    let settled = false;
-    const running = collect(context).then((records) => {
-      settled = true;
-      return records;
-    });
-    await vi.waitFor(async () => {
-      expect(await readFile(path.join(context.cwd, "background.ready"), "utf8")).toBe("ready");
-    });
-    expect(settled).toBe(false);
-    await writeFile(path.join(context.cwd, "background.release"), "release");
-    expect(resultDetail(await running).finalBackgroundAnswer).toBe(true);
-  });
+  it.each(["background-success", "background-agent-subagent-bash"])(
+    "keeps an interim result open until native background agents report their final answer (%s)",
+    async (scenario) => {
+      const liveSession = createLiveSession();
+      const release = createDeferred<CliBackendToolPermissionResult>();
+      const decision = { behavior: "deny" as const, message: "Fixture released." };
+      const context = await createContext(scenario, {
+        liveSession,
+        requestToolPermission: () => release.promise,
+      });
+      const results: Record<string, unknown>[] = [];
+      try {
+        for await (const record of executeClaudeCli(context)) {
+          if (record.type !== "result") {
+            continue;
+          }
+          results.push(record);
+          if (results.length === 1) {
+            expect(record).toHaveProperty("openclaw_interim_result", true);
+            expect(liveSession.current()?.isIdle()).toBe(false);
+            release.resolve(decision);
+          } else {
+            expect(resultDetail([record]).finalBackgroundAnswer).toBe(true);
+            expect(record).not.toHaveProperty("openclaw_interim_result");
+          }
+        }
+      } finally {
+        release.resolve(decision);
+      }
+      expect(results).toHaveLength(2);
+      expect(liveSession.current()?.isIdle()).toBe(true);
+    },
+  );
 
-  it.each([
+  const allowRead = { behavior: "allow" as const, updatedInput: { file_path: "approved.txt" } };
+  it.for([
+    {
+      scenario: "background-bash-success",
+      decision: { behavior: "deny" as const, message: "Fixture denied." },
+    },
+    { scenario: "background-bash-batched", decision: allowRead },
+    { scenario: "background-bash-early", decision: allowRead },
+    { scenario: "background-bash-inline", decision: allowRead },
+    { scenario: "background-bash-overlap", replayReceipts: true, decision: allowRead },
+    { scenario: "background-bash-overlap", replayReceipts: false, decision: allowRead },
+    {
+      scenario: "background-bash-overlap",
+      replayReceipts: false,
+      taskType: "local_agent",
+      decision: allowRead,
+    },
+  ])(
+    "retains host policy's $decision.behavior decision for $scenario (replay: $replayReceipts, type: $taskType)",
+    async ({ scenario, decision, replayReceipts, taskType }, { signal }) => {
+      const context = await createContext(scenario, {
+        requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
+          async () => decision,
+        ),
+      });
+      if (replayReceipts === false) {
+        context.env.CLAUDE_FIXTURE_REPLAY_RECEIPTS = "0";
+      }
+      if (taskType) {
+        context.env.CLAUDE_FIXTURE_TASK_TYPE = taskType;
+      }
+      let settled = false;
+      const running = collect(context).then((records) => {
+        settled = true;
+        return records;
+      });
+      void running.catch(() => {});
+      try {
+        await fixtureReadyBeforeSettlement(context, "background.ready", running, signal);
+        expect(settled).toBe(false);
+      } finally {
+        await writeFile(path.join(context.cwd, "background.release"), "release");
+      }
+      const records = await withinTest(running, signal);
+      if (scenario === "background-bash-overlap") {
+        expect(records.filter((record) => record.type === "result")).toHaveLength(3);
+      }
+      const detail = resultDetail(records);
+      expect(detail.finalBackgroundAnswer).toBe(true);
+      expect(records.at(-1)).not.toHaveProperty("openclaw_interim_result");
+      for (const interim of records.filter((record) => record.type === "result").slice(0, -1)) {
+        expect(interim).toHaveProperty("openclaw_interim_result", true);
+      }
+      if (replayReceipts === false) {
+        expect(records.some((record) => record.type === "user" && record.isReplay === true)).toBe(
+          false,
+        );
+        expect(context.liveSession?.current()?.isIdle()).toBe(true);
+        const next = resultDetail(
+          await collect({
+            ...context,
+            prompt: "next input",
+            useResume: true,
+            requestToolPermission: async () => ({ behavior: "deny", message: "Fixture denied." }),
+          }),
+        );
+        expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: "next input" });
+      }
+      // Host policy, not the stale-run guard, answered the notification turn's hook.
+      expect(context.requestToolPermission).toHaveBeenCalledWith(
+        expect.objectContaining({ toolName: "Read", toolCallId: "tool-bg-read" }),
+      );
+      expect(detail.notificationDecision).toMatchObject({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: decision.behavior,
+          ...(decision.behavior === "allow"
+            ? { updatedInput: decision.updatedInput }
+            : { permissionDecisionReason: decision.message }),
+        },
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "distinguishes explicit=%s when Bash first appears backgrounded",
+    async (explicit) => {
+      const context = await createContext("background-bash-first-seen", {
+        requestToolPermission: async ({ toolInput }) => ({
+          behavior: "allow",
+          updatedInput: toolInput,
+        }),
+      });
+      context.env.CLAUDE_FIXTURE_EXPLICIT_BACKGROUND = explicit ? "1" : "0";
+      const records = await collect(context);
+      const results = records.filter((record) => record.type === "result");
+      expect(results).toHaveLength(explicit ? 1 : 2);
+      expect(results[0]?.openclaw_interim_result).toBe(explicit ? undefined : true);
+      expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
+      expect(context.liveSession?.current()?.isIdle()).toBe(true);
+      if (explicit) {
+        const first = resultDetail(records);
+        const handle = context.liveSession?.current();
+        expect(resultDetail(await collect({ ...context, useResume: true }))).toMatchObject({
+          firstSeenBackground: true,
+          turn: 2,
+          pid: first.pid,
+        });
+        expect(context.liveSession?.current()).toBe(handle);
+      }
+    },
+  );
+
+  it.for(["abort", "process exit"])(
+    "rejects a pending Bash continuation on %s and starts the next turn in a fresh process",
+    async (termination, { signal }) => {
+      const liveSession = createLiveSession();
+      const controller = new AbortController();
+      const context = await createContext("background-bash-success", {
+        liveSession,
+        abortSignal: controller.signal,
+      });
+      const running = collect(context);
+      const outcome = running.catch((error: unknown) => error);
+      let firstPid: number;
+      try {
+        await fixtureReadyBeforeSettlement(context, "background.ready", running, signal);
+        firstPid = Number(await readFile(path.join(context.cwd, "fixture.pid"), "utf8"));
+        expect(liveSession.current()?.isIdle()).toBe(false);
+        if (termination === "abort") {
+          controller.abort(new Error("Synthetic background turn cancelled."));
+        } else {
+          process.kill(firstPid, "SIGTERM");
+        }
+        expect(await withinTest(outcome, signal)).toBeInstanceOf(Error);
+      } finally {
+        controller.abort();
+      }
+      expect(liveSession.current()).toBeUndefined();
+      expect(() => process.kill(firstPid, 0)).toThrow();
+      const next = resultDetail(
+        await collect({
+          ...context,
+          useResume: true,
+          env: { ...context.env, CLAUDE_FIXTURE_SCENARIO: "normal" },
+          abortSignal: AbortSignal.timeout(10_000),
+        }),
+      );
+      expect(next.turn).toBe(1);
+      expect(next.pid).not.toBe(firstPid);
+    },
+  );
+
+  it.for([
     { type: "token" as const, descriptor: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR" },
     { type: "api_key" as const, descriptor: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" },
   ])(
     "keeps a selected $type in a reopenable one-use descriptor and closes its process tree",
-    async ({ type, descriptor }) => {
-      const context = await createContext("credential-tree", { liveSession: createLiveSession() });
+    async ({ type, descriptor }, { signal }) => {
+      const context = await createContext("credential-tree");
       const credential = "synthetic-selected-descriptor-value";
       const backend = buildAnthropicCliBackend();
       const prepared = (await backend.prepareExecution?.({
@@ -269,7 +534,7 @@ describe("Claude native stdio boundary", () => {
         await prepared.cleanup();
       }
       try {
-        await vi.waitFor(() => expect(() => process.kill(descendantPid!, 0)).toThrow());
+        await waitForProcessExit([descendantPid], signal);
       } finally {
         if (descendantPid) {
           try {
@@ -288,7 +553,6 @@ describe("Claude native stdio boundary", () => {
     const approvalStarted = createDeferred<void>();
     const approval = createDeferred<CliBackendToolPermissionResult>();
     const context = await createContext("revoked-approval", {
-      liveSession: createLiveSession(),
       assertCurrent: () => {
         if (!active) {
           throw new Error("Synthetic owner revoked.");
@@ -312,29 +576,16 @@ describe("Claude native stdio boundary", () => {
 
   it("preserves native resume and plugin controls while sending the private system prompt only over stdin", async () => {
     const context = await createContext("normal", {
-      liveSession: createLiveSession(),
       sessionId: "a174e16f-b6e9-48da-ad5a-c437dfc2f9b4",
       useResume: true,
     });
-    const nativeArgs = [
-      "--fork-session",
-      "--resume-session-at",
-      "checkpoint-before-stall",
-      "--plugin-dir",
-      "/tmp/synthetic-skills",
-      "--plugin-dir-no-mcp",
-      "/tmp/synthetic-isolated-skills",
-      "--effort",
-      "max",
-      "--mcp-config",
-      "/tmp/synthetic-private-mcp.json",
-      "--strict-mcp-config",
-      "--add-dir",
-      "/tmp/synthetic-a",
-      "/tmp/synthetic-b",
-      "--cache-system-prompt",
+    const nativeArgs = ["--fork-session", "--plugin-dir", "/tmp/synthetic-skills"];
+    context.args = [
+      ...context.args,
+      ...nativeArgs,
+      "--exclude-dynamic-system-prompt-sections",
+      "--replay-user-messages",
     ];
-    context.args = [...context.args, ...nativeArgs, "--exclude-dynamic-system-prompt-sections"];
     const detail = resultDetail(await collect(context));
     const args = detail.argv as string[];
 
@@ -342,6 +593,7 @@ describe("Claude native stdio boundary", () => {
     expect(args).toEqual(expect.arrayContaining(["--resume", context.sessionId]));
     expect(args).not.toContain("--session-id");
     expect(args).not.toContain(context.systemPrompt);
+    expect(args.filter((arg) => arg === "--replay-user-messages")).toHaveLength(1);
     expect(detail.initialize).toMatchObject({
       appendSystemPrompt: context.systemPrompt,
       excludeDynamicSections: true,
@@ -349,14 +601,14 @@ describe("Claude native stdio boundary", () => {
   });
 
   it("leaves admitted OpenClaw MCP tools with their own host policy", async () => {
-    const context = await createContext("mcp-hook", { liveSession: createLiveSession() });
+    const context = await createContext("mcp-hook");
     const detail = resultDetail(await collect(context));
     expect(detail.hookDecision).toEqual({ continue: true });
     expect(context.requestToolPermission).not.toHaveBeenCalled();
   });
 
   it("declines unsupported MCP elicitation without interrupting the native turn", async () => {
-    const context = await createContext("mcp-elicitation", { liveSession: createLiveSession() });
+    const context = await createContext("mcp-elicitation");
     const detail = resultDetail(await collect(context));
     expect(detail.elicitation).toEqual({ action: "decline" });
     expect(context.requestUserInput).not.toHaveBeenCalled();
@@ -365,7 +617,6 @@ describe("Claude native stdio boundary", () => {
 
   it("ignores replayed records until the lifecycle acknowledges the current input UUID", async () => {
     const context = await createContext("input-lifecycle", {
-      liveSession: createLiveSession(),
       requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
         async ({ toolInput }) => ({
           behavior: "allow",
@@ -395,18 +646,6 @@ describe("Claude native stdio boundary", () => {
     expect(context.requestToolPermission).not.toHaveBeenCalled();
   });
 
-  it("closes a partially consumed native process when its event iterator is returned", async () => {
-    const liveSession = createLiveSession();
-    const context = await createContext("stream-then-wait", { liveSession });
-    const iterator = executeClaudeCli(context)[Symbol.asyncIterator]();
-    const first = await iterator.next();
-    expect(first.value).toMatchObject({ subtype: "fixture_waiting", pid: expect.any(Number) });
-    const pid = Number(first.value?.pid);
-    await iterator.return?.();
-    expect(liveSession.current()).toBeUndefined();
-    expect(() => process.kill(pid, 0)).toThrow();
-  });
-
   it("rejects an already aborted run before reading its credential or creating a native process", async () => {
     const controller = new AbortController();
     const reason = new Error("Synthetic owner cancelled before startup.");
@@ -423,7 +662,9 @@ describe("Claude native stdio boundary", () => {
     await expect(access(path.join(context.cwd, "fixture.pid"))).rejects.toThrow();
   });
 
-  it("revalidates the admitted owner after native initialization before sending any user input", async () => {
+  it("revalidates the admitted owner after native initialization before sending any user input", async ({
+    signal,
+  }) => {
     let active = true;
     const reason = new Error("Synthetic admitted owner was released.");
     const liveSession = createLiveSession();
@@ -437,12 +678,13 @@ describe("Claude native stdio boundary", () => {
     });
     const running = collect(context);
     const outcome = running.catch((error: unknown) => error);
-    await vi.waitFor(async () => {
-      expect(await readFile(path.join(context.cwd, "initialize.ready"), "utf8")).toBe("ready");
-    });
-    active = false;
-    await writeFile(path.join(context.cwd, "initialize.release"), "release");
-    expect(await outcome).toBe(reason);
+    try {
+      await fixtureReadyBeforeSettlement(context, "initialize.ready", running, signal);
+      active = false;
+    } finally {
+      await writeFile(path.join(context.cwd, "initialize.release"), "release");
+    }
+    expect(await withinTest(outcome, signal)).toBe(reason);
     expect(liveSession.current()).toBeUndefined();
     await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
   });
@@ -495,7 +737,6 @@ describe("Claude native stdio boundary", () => {
       answers: { question_1: ["Shared flow"] },
     }));
     const context = await createContext("user-question", {
-      liveSession: createLiveSession(),
       requestUserInput,
     });
     const detail = resultDetail(await collect(context));
@@ -510,7 +751,6 @@ describe("Claude native stdio boundary", () => {
 
   it("keeps bypass arguments and native allow rules behind the admitted host policy", async () => {
     const context = await createContext("normal", {
-      liveSession: createLiveSession(),
       toolAvailability: { native: ["Read"], openClaw: ["message"] },
     });
     context.args = [
@@ -544,7 +784,6 @@ describe("Claude native stdio boundary", () => {
   it("cancels a pending native permission without blocking the protocol reader", async () => {
     let cancelled = false;
     const context = await createContext("cancel-permission", {
-      liveSession: createLiveSession(),
       requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
         async ({ toolInput, abortSignal }) => {
           if (toolInput.file_path === "cancel.txt") {
@@ -569,16 +808,20 @@ describe("Claude native stdio boundary", () => {
     expect(context.requestToolPermission).toHaveBeenCalledTimes(3);
   });
 
-  it("fences a permission decision from the completed turn after the next turn starts", async () => {
+  it("fences background permission decisions after the next turn starts", async () => {
     const approval = createDeferred<CliBackendToolPermissionResult>();
-    const context = await createContext("late-approval", {
-      liveSession: createLiveSession(),
+    const context = await createContext("background-bash-late-approval", {
       requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
-        () => approval.promise,
+        async ({ toolCallId }) =>
+          toolCallId === "late-tool"
+            ? approval.promise
+            : { behavior: "deny", message: "Fixture denied." },
       ),
     });
+    context.env.CLAUDE_FIXTURE_REPLAY_RECEIPTS = "0";
+    await writeFile(path.join(context.cwd, "background.release"), "release");
     await collect(context);
-    expect(context.requestToolPermission).toHaveBeenCalledOnce();
+    expect(context.requestToolPermission).toHaveBeenCalledTimes(2);
     const records: Record<string, unknown>[] = [];
     for await (const record of executeClaudeCli({
       ...context,
@@ -595,15 +838,11 @@ describe("Claude native stdio boundary", () => {
       behavior: "deny",
       message: "The OpenClaw run is no longer active.",
     });
-    expect(context.requestToolPermission).toHaveBeenCalledOnce();
+    expect(context.requestToolPermission).toHaveBeenCalledTimes(2);
   });
 
   it("frames a large native record across UTF-8 byte boundaries without corrupting it", async () => {
-    const records = await collect(
-      await createContext("large-split-record", {
-        liveSession: createLiveSession(),
-      }),
-    );
+    const records = await collect(await createContext("large-split-record"));
     expect(records).toContainEqual({
       type: "assistant",
       message: {
@@ -615,40 +854,22 @@ describe("Claude native stdio boundary", () => {
   });
 
   it("reports a native exit with bounded process diagnostics instead of a successful empty reply", async () => {
-    const error = await collect(
-      await createContext("missing-result", {
-        liveSession: createLiveSession(),
-      }),
-    ).catch((failure: unknown) => failure);
+    const error = await collect(await createContext("missing-result")).catch(
+      (failure: unknown) => failure,
+    );
     expect(error).toBeInstanceOf(Error);
     expect(formatErrorMessageForDisplay(error)).toContain(
       "PermissionError: fixture cannot read its input",
     );
   });
 
-  it("keeps an ordinary failed turn warm when no native background work remains", async () => {
-    const liveSession = createLiveSession();
-    const context = await createContext("ordinary-error", { liveSession });
-    const first = await collect(context);
-    expect(first.at(-1)).toMatchObject({
-      type: "result",
-      is_error: true,
-      errors: ["fixture foreground turn failed"],
-    });
-    const handle = liveSession.current();
-    expect(handle?.isIdle()).toBe(true);
-    const second = resultDetail(await collect({ ...context, useResume: true }));
-    expect(second.turn).toBe(2);
-    expect(liveSession.current()).toBe(handle);
-  });
-
   it.each([
     {
-      scenario: "background-error",
+      scenario: "background-bash-queued-error",
       expected: { is_error: true, errors: ["fixture background turn failed"] },
     },
     {
-      scenario: "background-raw-result",
+      scenario: "background-bash-queued-raw-result",
       expected: { result: expect.stringContaining('<invoke name="Read">') },
     },
   ])(
@@ -658,6 +879,7 @@ describe("Claude native stdio boundary", () => {
       const context = await createContext(scenario, { liveSession });
       const records = await collect(context);
       expect(records.at(-1)).toMatchObject({ type: "result", ...expected });
+      expect(records.at(-1)).not.toHaveProperty("openclaw_interim_result");
       const firstPid = Number(await readFile(path.join(context.cwd, "fixture.pid"), "utf8"));
       expect(liveSession.current()).toBeUndefined();
       expect(() => process.kill(firstPid, 0)).toThrow();

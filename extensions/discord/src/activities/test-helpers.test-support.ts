@@ -19,9 +19,14 @@ type DiscordActivityPendingLaunch =
 type DiscordActivityStores = ConstructorParameters<typeof DiscordActivityStore>[0];
 
 export function createMemoryKeyedStore<T>(): PluginStateKeyedStore<T> & {
-  update: NonNullable<PluginStateKeyedStore<T>["update"]>;
+  observe: NonNullable<PluginStateKeyedStore<T>["observe"]>;
+  compareAndApply: NonNullable<PluginStateKeyedStore<T>["compareAndApply"]>;
 } {
   const values = new Map<string, PluginStateEntry<T>>();
+  const observe = (key: string) => ({
+    value: structuredClone(values.get(key)?.value),
+    comparison: JSON.stringify(values.get(key)) ?? "missing",
+  });
   return {
     async register(key, value) {
       values.set(key, { key, value, createdAt: Date.now() });
@@ -33,13 +38,22 @@ export function createMemoryKeyedStore<T>(): PluginStateKeyedStore<T> & {
       values.set(key, { key, value, createdAt: Date.now() });
       return true;
     },
-    async update(key, updateValue) {
-      const next = updateValue(values.get(key)?.value);
-      if (next === undefined) {
-        return false;
+    async observe(key) {
+      return observe(key);
+    },
+    async compareAndApply(key, comparison, intent) {
+      const current = observe(key);
+      if (comparison !== current.comparison) {
+        return { status: "conflict", current };
       }
-      values.set(key, { key, value: next, createdAt: values.get(key)?.createdAt ?? Date.now() });
-      return true;
+      if (intent.action === "keep") {
+        return { status: "unchanged" };
+      }
+      if (intent.action === "delete") {
+        return { status: values.delete(key) ? "applied" : "unchanged" };
+      }
+      values.set(key, { key, value: structuredClone(intent.value), createdAt: Date.now() });
+      return { status: "applied" };
     },
     async lookup(key) {
       return values.get(key)?.value;
@@ -51,10 +65,6 @@ export function createMemoryKeyedStore<T>(): PluginStateKeyedStore<T> & {
     },
     async delete(key) {
       return values.delete(key);
-    },
-    async deleteIf(key, predicate) {
-      const entry = values.get(key);
-      return entry !== undefined && predicate(entry.value) ? values.delete(key) : false;
     },
     async entries() {
       return [...values.values()];

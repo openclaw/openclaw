@@ -1,5 +1,8 @@
 import type { CreateGhosttyTerminalOptions } from "@openclaw/libterminal/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { t } from "../../i18n/index.ts";
+import { showToast } from "../../lib/toast.ts";
+import { observeTerminalFonts } from "./terminal-fonts.ts";
 
 function isEventListener(value: unknown): value is EventListener {
   return typeof value === "function";
@@ -14,7 +17,26 @@ export async function createIsolatedGhosttyTerminal(options: CreateGhosttyTermin
   // ghostty-web 0.4.0 reuses freed WASM pages, exposing stale cells and corrupting
   // later terminals (coder/ghostty-web#142). Per-tab runtimes confine disposal.
   const runtime = await loadGhosttyRuntime({ module: ghosttyModule });
-  const controller = await createGhosttyTerminal({ ...options, runtime, autoFit: false });
+  let disposed = false;
+  const controller = await createGhosttyTerminal({
+    ...options,
+    runtime,
+    autoFit: false,
+    terminalOptions: {
+      ...options.terminalOptions,
+      // Selection changes fire before clipboard completion; the patched callback confirms success.
+      onCopy: () => {
+        if (disposed || options.signal?.aborted || !options.parent.checkVisibility()) {
+          return;
+        }
+        showToast({
+          message: t("terminal.copiedToClipboard"),
+          anchor: options.parent,
+          durationMs: 2_000,
+        });
+      },
+    },
+  });
   const dispose = controller.dispose.bind(controller);
   const terminal = controller.terminal;
   const measurement = new runtime.FitAddon();
@@ -25,7 +47,7 @@ export async function createIsolatedGhosttyTerminal(options: CreateGhosttyTermin
   terminal.attachCustomKeyEventHandler((event) => event.defaultPrevented);
   const mouseUpCandidate = asOptionalRecord(terminal)?.handleMouseUp;
   let handleMouseUp = isEventListener(mouseUpCandidate) ? mouseUpCandidate : undefined;
-  let disposed = false;
+  let stopObservingFonts: (() => void) | undefined;
   // Ghostty 0.4.0 drops resize notifications during its 50ms fit lock. Measure
   // through its public addon, but let one owner apply every final layout size.
   controller.fit = () => {
@@ -43,6 +65,7 @@ export async function createIsolatedGhosttyTerminal(options: CreateGhosttyTermin
     }
     disposed = true;
     observer?.disconnect();
+    stopObservingFonts?.();
     measurement.dispose();
     // ghostty-web 0.4.0 clears isOpen before cleanup, skipping this listener removal.
     if (handleMouseUp) {
@@ -59,6 +82,12 @@ export async function createIsolatedGhosttyTerminal(options: CreateGhosttyTermin
     if (!options.size) {
       controller.fit();
     }
+  }
+  if (!disposed) {
+    stopObservingFonts = observeTerminalFonts(
+      controller,
+      options.autoFit !== false && !options.size,
+    );
   }
   return controller;
 }

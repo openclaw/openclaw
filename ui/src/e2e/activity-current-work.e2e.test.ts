@@ -137,6 +137,7 @@ suite.define(() => {
         label: "Literal unknown session",
       };
       const activeRows = [mainGlobal, workGlobal, literal, ...unknown, literalUnknown];
+      const remainingRows = activeRows.filter((row) => row !== mainGlobal);
       const gateway = await installMockGateway(page, {
         sessionScope: "global",
         heldMethods: ["sessions.list"],
@@ -150,7 +151,8 @@ suite.define(() => {
           },
           "sessions.list": {
             cases: [
-              { match: { activeOnly: true }, response: listing(activeRows) },
+              // Only the held first snapshot predates the completion event.
+              { match: { activeOnly: true }, response: listing(remainingRows) },
               { match: { agentId: "work" }, response: listing([workGlobal, literal]) },
               { match: {}, response: listing([mainGlobal, literal]) },
             ],
@@ -162,6 +164,8 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.list", { match: { activeOnly: true } });
       const current = page.getByRole("region", { name: "Active sessions", exact: true });
       await current.getByText("Loading active sessions…", { exact: true }).waitFor();
+      const currentRequests = (await gateway.getRequests("sessions.list", { activeOnly: true }))
+        .length;
       await gateway.emitGatewayEvent("sessions.changed", {
         key: "global",
         agentId: "main",
@@ -172,6 +176,11 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("sessions.list", listing(activeRows));
       await expect.poll(() => current.locator(".activity-current-work__row").count()).toBe(5);
+      // The completion fully reconciles this bounded snapshot; no catch-up RPC is needed.
+      await expect.poll(() => current.getAttribute("aria-busy")).toBe("false");
+      expect(await gateway.getRequests("sessions.list", { activeOnly: true })).toHaveLength(
+        currentRequests,
+      );
       const work = current.locator('[data-session-key="global"][data-agent-id="work"]');
       await work.getByText("work global work", { exact: true }).waitFor();
       expect(await work.getAttribute("href")).toBe("/chat/work");
@@ -181,6 +190,7 @@ suite.define(() => {
       expect(
         await current.locator('[data-session-key="global"][data-agent-id="main"]').count(),
       ).toBe(0);
+      expect(await current.locator(".activity-current-work__row").count()).toBe(5);
       expect(await current.locator('[data-session-key="unknown"]').count()).toBe(2);
       expect(await current.locator('a[data-session-key="unknown"]').count()).toBe(0);
       expect(

@@ -48,7 +48,8 @@ describe("config form collection defaults", () => {
       onPatch,
     });
 
-    expect(container.textContent).toContain('Using default: {"mode":"balanced"}');
+    expect(container.textContent).not.toContain("Using default:");
+    expect(container.querySelector(".settings-row__desc")).toBeNull();
     expect(
       expectElement(container.querySelector<HTMLTextAreaElement>("textarea"), "inherited JSON")
         .value,
@@ -87,7 +88,8 @@ describe("config form collection defaults", () => {
       onPatch,
     });
 
-    expect(container.textContent).toContain('Using default: ["a","b"]');
+    expect(container.textContent).not.toContain("Using default:");
+    expect(container.querySelector(".settings-row__desc")).toBeNull();
     expect(container.textContent).toContain("2 items");
     const inheritedInputs = Array.from(container.querySelectorAll<HTMLInputElement>("input"));
     expect(inheritedInputs.map((input) => input.value)).toEqual(["", ""]);
@@ -188,72 +190,6 @@ describe("config form collection defaults", () => {
     expect(container.textContent).not.toContain("default-token");
   });
 
-  it("shows inherited child defaults without an object JSON summary or nested section", () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    const onRemove = vi.fn();
-    const schema = {
-      type: "object" as const,
-      title: "Settings",
-      default: { mode: "balanced" },
-      properties: {
-        mode: { type: "string" as const, title: "Mode" },
-      },
-    };
-
-    renderObjectFixture(container, {
-      schema,
-      value: { mode: "custom" },
-      path: ["settings"],
-      onPatch,
-      onRemove,
-    });
-
-    expect(container.textContent).not.toContain('{"mode":"balanced"}');
-    expect(container.querySelector("details")).toBeNull();
-    expect(onPatch).not.toHaveBeenCalled();
-
-    onPatch.mockClear();
-    onRemove.mockClear();
-    renderObjectFixture(container, {
-      schema,
-      value: undefined,
-      path: ["settings"],
-      onPatch,
-      onRemove,
-    });
-
-    expect(container.textContent).not.toContain('{"mode":"balanced"}');
-    expect(container.querySelector("details")).toBeNull();
-    expect(
-      expectElement(container.querySelector<HTMLInputElement>("input"), "inherited mode")
-        .placeholder,
-    ).toBe("Default: balanced");
-    expect(onPatch).not.toHaveBeenCalled();
-    expect(onRemove).not.toHaveBeenCalled();
-  });
-
-  it("conceals a sensitive top-level object default", () => {
-    const container = document.createElement("div");
-
-    renderObjectFixture(container, {
-      schema: {
-        type: "object",
-        title: "Settings",
-        default: { apiKey: "default-secret" },
-        properties: { apiKey: { type: "string" } },
-      },
-      value: { apiKey: "authored-secret" },
-      path: ["settings"],
-      hints: { settings: { sensitive: true } },
-      revealSensitive: false,
-      onPatch: vi.fn(),
-    });
-
-    expect(container.textContent).not.toContain("default-secret");
-    expect(container.querySelector("details")).toBeNull();
-  });
-
   it("keeps optional object children inherited until edited", () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
@@ -322,8 +258,8 @@ describe("config form collection defaults", () => {
       ),
       "inherited mode row",
     );
-    expect(enabledRow.textContent).toContain("Using default: true");
-    expect(modeRow.textContent).toContain("Using default: balanced");
+    expect(enabledRow.textContent).not.toContain("Using default:");
+    expect(modeRow.textContent).not.toContain("Using default:");
     expect(
       expectElement(modeRow.querySelector<HTMLInputElement>("input"), "inherited mode input")
         .placeholder,

@@ -65,6 +65,8 @@ suite.define(() => {
             [routeAgentId]: { name: "Writer", workspace: writerWorkspace },
           },
         },
+        // Keep the injected registry active without loading unrelated runtime plugins.
+        plugins: { allow: ["codex"], entries: { codex: { enabled: false } } },
         gateway: {
           auth: { mode: "none" },
           controlUi: {

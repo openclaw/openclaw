@@ -33,6 +33,7 @@ type A2aOutboundSendParams = {
   accountId?: string | null;
   to: string;
   text: string;
+  assertDirectAdapterHandoff?: () => void;
 };
 
 export async function sendA2aChannelText(
@@ -46,6 +47,13 @@ export async function sendA2aChannelText(
   const peer = account.config.peers?.[peerName];
   if (!peer?.url) {
     throw new Error(`peer ${peerName} has no url configured for outbound A2A`);
+  }
+  if (account.unresolvedOutboundPeers.includes(peerName)) {
+    // Fail before any I/O: sending without the authored credential would deliver the
+    // message anonymously to a peer that was configured to require authentication.
+    throw new Error(
+      `peer ${peerName} outboundToken reference did not resolve; set the variable and reload before sending`,
+    );
   }
 
   const messageId = randomUUID();
@@ -84,6 +92,7 @@ export async function sendA2aChannelText(
       auditContext: "a2a.outbound_send",
       // A redirected A2A task could be delivered to an unintended agent.
       maxRedirects: 0,
+      beforeRequest: params.assertDirectAdapterHandoff,
       init: {
         method: "POST",
         headers,

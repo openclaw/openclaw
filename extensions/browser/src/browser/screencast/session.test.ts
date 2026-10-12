@@ -1,8 +1,8 @@
 import { EventEmitter, getEventListeners } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Page } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WebSocket } from "ws";
 import { attachBrowserScreencastViewer, stopBrowserScreencasts } from "./session.js";
 import { parseScreencastFrame, screencastParams, ScreencastViewer } from "./test-support.js";
 
@@ -438,7 +438,9 @@ describe("browser screencast sessions", () => {
     await flush();
     expect(pending.close).toHaveBeenCalledWith(4004, "target_closed");
     expect(page.newCDPSession).not.toHaveBeenCalled();
-    const successor = await attach(screencastParams({ lifecycleGeneration: 1 }));
+    const successor = await attach(
+      screencastParams({ profileSignal: new AbortController().signal }),
+    );
     const stale = await attach(params);
     expect(stale.close).toHaveBeenCalledWith(4004, "target_closed");
     expect(successor.close).not.toHaveBeenCalled();

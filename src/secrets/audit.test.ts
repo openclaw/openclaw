@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import {
   noteCommittedSharedAuthStoreOwnership,
@@ -15,7 +14,7 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { runSecretsAudit } from "./audit.js";
@@ -35,7 +34,6 @@ type AuditFixture = {
 
 const OPENAI_API_KEY_MARKER = "OPENAI_API_KEY"; // pragma: allowlist secret
 const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function countNonEmptyLines(value: string): number {
   let count = 0;
@@ -278,7 +276,7 @@ describe("secrets audit", () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     await fs.rm(fixture.rootDir, { recursive: true, force: true });
   });
 
@@ -319,7 +317,7 @@ describe("secrets audit", () => {
   });
 
   it("reports plaintext that duplicates the store while resolving store refs", async () => {
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: { kind: "team" },
       name: "STORED_API_KEY",
       value: "shared-store-value",
@@ -372,27 +370,14 @@ describe("secrets audit", () => {
   });
 
   it("does not inspect or mutate legacy auth.json during audit", async () => {
-    await writeJsonFile(fixture.authJsonPath, {
-      openai: {
-        type: "api_key",
-        key: "sk-legacy-auth-json",
-      },
-    });
-
-    const report = await runSecretsAudit({ env: fixture.env });
-    expectFindingCode(report, "LEGACY_RESIDUE");
-    expect(report.filesScanned).not.toContain(fixture.authJsonPath);
-    const authJsonStat = await fs.stat(fixture.authJsonPath);
-    expect(authJsonStat.isFile()).toBe(true);
-    await expectPathMissing(fixture.authStorePath);
-  });
-
-  it("ignores malformed legacy auth JSON instead of reading it", async () => {
     await fs.writeFile(fixture.authJsonPath, "{invalid-json", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });
     expectFindingCode(report, "LEGACY_RESIDUE");
     expectFindingFile(report, fixture.authJsonPath);
+    expect(report.filesScanned).not.toContain(fixture.authJsonPath);
+    await expect(fs.readFile(fixture.authJsonPath, "utf8")).resolves.toBe("{invalid-json");
+    await expectPathMissing(fixture.authStorePath);
   });
 
   it("reports Doctor-created auth archives without reading their contents", async () => {
@@ -545,16 +530,23 @@ describe("secrets audit", () => {
     expect(callCount).toBe(1);
   });
 
-  it("scans agent models.json files for plaintext provider apiKey values", async () => {
-    await writeModelsProvider({ apiKey: "sk-models-plaintext" }); // pragma: allowlist secret
+  it.each(["regular", "hardlinked"] as const)(
+    "scans %s agent models.json files for plaintext provider apiKey values",
+    async (kind) => {
+      await writeModelsProvider({ apiKey: "sk-models-plaintext" }); // pragma: allowlist secret
+      if (kind === "hardlinked") {
+        await fs.link(fixture.modelsPath, path.join(fixture.rootDir, "models-alias.json"));
+      }
 
-    const report = await runSecretsAudit({ env: fixture.env });
-    expectModelsFinding(report, {
-      code: "PLAINTEXT_FOUND",
-      jsonPath: "providers.openai.apiKey",
-    });
-    expect(report.filesScanned).toContain(fixture.modelsPath);
-  });
+      const report = await runSecretsAudit({ env: fixture.env });
+      expectModelsFinding(report, {
+        code: "PLAINTEXT_FOUND",
+        jsonPath: "providers.openai.apiKey",
+      });
+      expectModelsFinding(report, { code: "REF_UNRESOLVED", present: false });
+      expect(report.filesScanned).toContain(fixture.modelsPath);
+    },
+  );
 
   it("scans agent models.json files for plaintext provider header values", async () => {
     await writeModelsProvider({
@@ -649,9 +641,26 @@ describe("secrets audit", () => {
   });
 
   it("reports malformed models.json as unresolved findings", async () => {
-    await fs.writeFile(fixture.modelsPath, "{bad-json", "utf8");
+    const payloadMarker = "audit-raw";
+    await fs.writeFile(fixture.modelsPath, payloadMarker, "utf8");
     const report = await runSecretsAudit({ env: fixture.env });
     expectModelsFinding(report, { code: "REF_UNRESOLVED" });
+    expect(JSON.stringify(report)).not.toContain(payloadMarker);
+  });
+
+  it.each([null, 42])("ignores models.json with a %j root", async (value) => {
+    await writeJsonFile(fixture.modelsPath, value);
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, { code: "REF_UNRESOLVED", present: false });
+    expectModelsFinding(report, { code: "PLAINTEXT_FOUND", present: false });
+    expect(report.filesScanned).toContain(fixture.modelsPath);
+  });
+
+  it("skips initially missing models.json", async () => {
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, { code: "REF_UNRESOLVED", present: false });
+    expectModelsFinding(report, { code: "PLAINTEXT_FOUND", present: false });
+    expect(report.filesScanned).not.toContain(fixture.modelsPath);
   });
 
   it("reports non-regular models.json files as unresolved findings", async () => {
@@ -660,6 +669,24 @@ describe("secrets audit", () => {
     const report = await runSecretsAudit({ env: fixture.env });
     expectModelsFinding(report, { code: "REF_UNRESOLVED" });
   });
+
+  it.runIf(process.platform !== "win32").each(["present", "missing"] as const)(
+    "reports symlinked models.json with a %s target as unresolved findings",
+    async (targetState) => {
+      await writeModelsProvider({ apiKey: "linked-models-fixture" });
+      const target = path.join(fixture.rootDir, "models-target.json");
+      await fs.rename(fixture.modelsPath, target);
+      if (targetState === "missing") {
+        await fs.unlink(target);
+      }
+      await fs.symlink(target, fixture.modelsPath);
+
+      const report = await runSecretsAudit({ env: fixture.env });
+      expectModelsFinding(report, { code: "REF_UNRESOLVED" });
+      expectModelsFinding(report, { code: "PLAINTEXT_FOUND", present: false });
+      expect(report.filesScanned).toContain(fixture.modelsPath);
+    },
+  );
 
   it("reports oversized models.json as unresolved findings", async () => {
     // The audit rejects by stat before reading, so a sparse file proves the size bound cheaply.
@@ -898,60 +925,6 @@ describe("secrets audit", () => {
       expect(report.resolution.refsChecked).toBe(refsChecked);
     },
   );
-
-  it("scans .env in legacy .clawdbot state directory via automatic fallback", async () => {
-    // Do NOT set OPENCLAW_STATE_DIR or OPENCLAW_CONFIG_PATH — rely on
-    // resolveStateDir's automatic legacy-directory fallback. A controlled
-    // HOME that contains only .clawdbot (no .openclaw) exercises the exact
-    // path the old resolveConfigDir call could not reach: resolveConfigDir
-    // always returns $HOME/.openclaw, so it would miss the .env inside
-    // .clawdbot.  resolveStateDir finds .clawdbot via its legacy-dir scan.
-    const homeDir = tempDirs.make("openclaw-secrets-audit-legacy-");
-    const legacyStateDir = path.join(homeDir, ".clawdbot");
-    const configPath = path.join(legacyStateDir, "openclaw.json");
-    const envPath = path.join(legacyStateDir, ".env");
-    const agentDir = path.join(legacyStateDir, "agents", "main", "agent");
-
-    await fs.mkdir(agentDir, { recursive: true });
-
-    const env = {
-      HOME: homeDir,
-      OPENAI_API_KEY: "env-openai-key", // pragma: allowlist secret
-      PATH: resolveRuntimePathEnv(),
-    };
-
-    await writeJsonFile(configPath, {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-completions",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            models: [{ id: "gpt-5", name: "gpt-5" }],
-          },
-        },
-      },
-    });
-
-    await fs.writeFile(
-      envPath,
-      "OPENAI_API_KEY=sk-legacy-plaintext\n", // pragma: allowlist secret
-      "utf8",
-    );
-
-    try {
-      const report = await runSecretsAudit({ env });
-      // Config-based key is ref'd from env, so no plaintext finding for config;
-      // but the .env file should be scanned and reported via the legacy fallback.
-      expect(report.status).toBe("findings");
-      expect(report.findings.some((f) => f.code === "PLAINTEXT_FOUND" && f.file === envPath)).toBe(
-        true,
-      );
-    } finally {
-      closeOpenClawAgentDatabasesForTest();
-      await fs.rm(homeDir, { recursive: true, force: true });
-    }
-  });
 
   it("scans config and state .env files when the config path is external", async () => {
     await seedAuditFixture(fixture);

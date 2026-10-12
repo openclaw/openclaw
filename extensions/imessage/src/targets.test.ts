@@ -1,11 +1,6 @@
 // Imessage tests cover targets plugin behavior.
 import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import {
-  resolveIMessageGroupRequireMention,
-  resolveIMessageGroupToolPolicy,
-} from "./group-policy.js";
 import { imessageDmPolicy } from "./setup-core.js";
 import { parseIMessageAllowFromEntries } from "./setup-surface.js";
 import {
@@ -39,9 +34,15 @@ describe("imessage targets", () => {
     });
   });
 
-  it("normalizes handles", () => {
-    expect(normalizeIMessageHandle("Name@Example.com")).toBe("name@example.com");
-    expect(normalizeIMessageHandle(" +1 (555) 222-3333 ")).toBe("+15552223333");
+  it.each([
+    ["Name@Example.com", "name@example.com"],
+    [" +1 (555) 222-3333 ", "+15552223333"],
+    ["Alice Smith", "AliceSmith"],
+    ["auto:Alice Smith", "AliceSmith"],
+    ["sms:auto:Alice Smith", "AliceSmith"],
+    ["auto:chatident:AbC", "chat_identifier:AbC"],
+  ])("normalizes handle %s", (input, expected) => {
+    expect(normalizeIMessageHandle(input)).toBe(expected);
   });
 
   it("normalizes chat_id prefixes case-insensitively", () => {
@@ -197,39 +198,10 @@ describe("imessage targets", () => {
 
   it("accepts the all-digit edge of the 32-hex identifier contract", () => {
     const identifier = "1".repeat(32);
+    expect(normalizeIMessageHandle(identifier)).toBe(`chat_identifier:${identifier}`);
     expect(parseIMessageTarget(identifier)).toEqual({
       kind: "chat_identifier",
       chatIdentifier: identifier,
-    });
-  });
-});
-
-describe("imessage group policy", () => {
-  it("uses generic channel group policy helpers", () => {
-    const cfg = {
-      channels: {
-        imessage: {
-          groups: {
-            "chat:family": {
-              requireMention: false,
-              tools: { deny: ["exec"] },
-            },
-            "*": {
-              requireMention: true,
-              tools: { allow: ["message.send"] },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveIMessageGroupRequireMention({ cfg, groupId: "chat:family" })).toBe(false);
-    expect(resolveIMessageGroupRequireMention({ cfg, groupId: "chat:other" })).toBe(true);
-    expect(resolveIMessageGroupToolPolicy({ cfg, groupId: "chat:family" })).toEqual({
-      deny: ["exec"],
-    });
-    expect(resolveIMessageGroupToolPolicy({ cfg, groupId: "chat:other" })).toEqual({
-      allow: ["message.send"],
     });
   });
 });

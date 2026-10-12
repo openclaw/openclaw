@@ -6,16 +6,12 @@ import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "../../auth-rate-limit.js
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
+import type { WorkerConnectionService } from "./worker-connection-dispatch.js";
 
-type WorkerAdmissionService = {
-  admitWorker(
-    admission: WorkerConnectParams["admission"],
-  ): Promise<
-    | { ok: true; identity: WorkerConnectionIdentity }
-    | { ok: false; reason: WorkerProtocolCloseReason }
-  >;
-  validateWorkerConnection(identity: WorkerConnectionIdentity): WorkerProtocolCloseReason | null;
-};
+type WorkerAdmissionService = Pick<
+  WorkerConnectionService,
+  "admitWorker" | "validateWorkerConnection"
+>;
 
 type WorkerAdmissionBoundaryResult =
   | { ok: true; identity: WorkerConnectionIdentity }
@@ -25,15 +21,12 @@ type WorkerAdmissionBoundaryResult =
 export async function runWorkerAdmissionBoundary(params: {
   service: WorkerAdmissionService | undefined;
   admission: WorkerConnectParams["admission"];
-  publicAdmission: PublicWorkerIngressContext | undefined;
+  publicAdmission: PublicWorkerIngressContext;
   claim(identity: WorkerConnectionIdentity): boolean;
 }): Promise<WorkerAdmissionBoundaryResult> {
+  const { clientIp, rateLimiter } = params.publicAdmission;
   const run = async (): Promise<WorkerAdmissionBoundaryResult> => {
-    const publicAdmission = params.publicAdmission;
-    const rateCheck = publicAdmission?.rateLimiter?.check(
-      publicAdmission.clientIp,
-      AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
-    );
+    const rateCheck = rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
     if (rateCheck && !rateCheck.allowed) {
       return { ok: false, reason: "rate-limited" };
     }
@@ -41,35 +34,26 @@ export async function runWorkerAdmissionBoundary(params: {
       (await params.service?.admitWorker(params.admission)) ??
       ({ ok: false, reason: "environment-unavailable" } as const);
     if (!admission.ok) {
-      publicAdmission?.rateLimiter?.recordFailure(
-        publicAdmission.clientIp,
-        AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
-      );
+      rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
       return admission;
     }
     const ownershipFailure = params.service?.validateWorkerConnection(admission.identity);
     if (ownershipFailure) {
-      publicAdmission?.rateLimiter?.recordFailure(
-        publicAdmission.clientIp,
-        AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
-      );
+      rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
       return { ok: false, reason: ownershipFailure };
     }
     if (!params.claim(admission.identity)) {
       return { ok: false, reason: "claim-rejected" };
     }
-    publicAdmission?.rateLimiter?.reset(
-      publicAdmission.clientIp,
-      AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
-    );
+    rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
     return admission;
   };
 
-  if (!params.publicAdmission?.rateLimiter) {
+  if (!rateLimiter) {
     return await run();
   }
   return await withSerializedRateLimitAttempt({
-    ip: params.publicAdmission.clientIp,
+    ip: clientIp,
     scope: AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
     run,
   });

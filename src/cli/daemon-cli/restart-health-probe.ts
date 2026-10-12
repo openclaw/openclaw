@@ -2,14 +2,11 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveReadOnlyLocalGatewayAuth } from "../../gateway/call-device-auth.js";
 import { callGateway } from "../../gateway/call.js";
 import { isGatewayProtocolResponseError } from "../../gateway/client.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
@@ -19,6 +16,10 @@ import {
 } from "../../gateway/local-http-probe.js";
 import { READ_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
+import {
+  classifyGatewayStaleConnectionError,
+  type GatewayStaleConnectionReason,
+} from "../../gateway/stale-install.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
@@ -30,7 +31,40 @@ import type {
 } from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 
-export type GatewayRestartProbeAuth = {
+export const GATEWAY_RESTART_PROBE_TIMEOUT_MS = 3_000;
+
+export async function readGatewayStartupPhase(params: {
+  configuredProbe: ConfiguredGatewayLocalProbe;
+  port: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<string | undefined> {
+  const response = await params.configuredProbe.requestHttp({
+    host: "127.0.0.1",
+    pathname: "/startupz",
+    port: params.port,
+    timeoutMs: Math.min(
+      params.timeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+      GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+    ),
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+  if (response?.statusCode !== 503) {
+    return undefined;
+  }
+  try {
+    const startup = asOptionalRecord(JSON.parse(response.body));
+    return startup?.status === "starting" &&
+      typeof startup.pendingReason === "string" &&
+      startup.pendingReason.trim()
+      ? formatGatewayRestartProbeError(startup.pendingReason)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+type GatewayRestartProbeAuth = {
   token?: string;
   password?: string;
 };
@@ -43,10 +77,13 @@ export type GatewayReachability = {
   activatedPluginErrors: PluginHealthErrorSummary[];
   unavailablePlugins: UnavailablePluginHealthSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
+  channelProbeTimeouts?: Array<{ id: string; error: string }>;
+  channelRuntimeWarnings?: Array<{ id: string; error: string }>;
   probeError?: string;
+  staleConnection?: GatewayStaleConnectionReason;
 };
 
-export type GatewayHttpReadiness = {
+type GatewayHttpReadiness = {
   healthz: number | null;
   readyz: number | null;
 };
@@ -55,48 +92,42 @@ export type GatewayHttpReadiness = {
 export async function waitForGatewayHttpReadiness(params: {
   attempts: number;
   config?: OpenClawConfig;
+  /** Absolute deadline in the performance.now() clock domain. */
   deadlineAt: number;
   delayMs: number;
   probeTimeoutMs?: number;
   port: number;
   signal?: AbortSignal;
+  onObservation?: (readiness: GatewayHttpReadiness) => void;
 }): Promise<GatewayHttpReadiness> {
   params.signal?.throwIfAborted();
   const probe = createConfiguredGatewayLocalProbe(params.config ?? {});
   let latest: GatewayHttpReadiness = { healthz: null, readyz: null };
   for (let attempt = 0; attempt < params.attempts; attempt += 1) {
     params.signal?.throwIfAborted();
-    const remainingMs = params.deadlineAt - Date.now();
+    const remainingMs = params.deadlineAt - performance.now();
     if (remainingMs <= 0) {
       return latest;
     }
-    const [healthz, readyz] = await Promise.all([
-      probe
-        .requestHttp({
-          host: "127.0.0.1",
-          pathname: "/healthz",
-          port: params.port,
-          timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? 3_000),
-          ...(params.signal ? { signal: params.signal } : {}),
-        })
-        .then((result) => result?.statusCode ?? null),
-      probe
-        .requestHttp({
-          host: "127.0.0.1",
-          pathname: "/readyz",
-          port: params.port,
-          timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? 3_000),
-          ...(params.signal ? { signal: params.signal } : {}),
-        })
-        .then((result) => result?.statusCode ?? null),
-    ]);
+    const probeStatus = async (pathname: "/healthz" | "/readyz") => {
+      const result = await probe.requestHttp({
+        host: "127.0.0.1",
+        pathname,
+        port: params.port,
+        timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS),
+        ...(params.signal ? { signal: params.signal } : {}),
+      });
+      return result?.statusCode ?? null;
+    };
+    const [healthz, readyz] = await Promise.all([probeStatus("/healthz"), probeStatus("/readyz")]);
     params.signal?.throwIfAborted();
     latest = { healthz, readyz };
+    params.onObservation?.(latest);
     if (healthz === 200 && readyz === 200) {
       return latest;
     }
     if (attempt + 1 < params.attempts) {
-      const remainingDelayMs = params.deadlineAt - Date.now();
+      const remainingDelayMs = params.deadlineAt - performance.now();
       if (remainingDelayMs <= 0) {
         return latest;
       }
@@ -148,77 +179,67 @@ function isGatewayAuthRejection(reason: string): boolean {
 }
 
 function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] {
-  if (!health || typeof health !== "object") {
-    return [];
-  }
-  const plugins = (health as { plugins?: unknown }).plugins;
-  if (!plugins || typeof plugins !== "object") {
-    return [];
-  }
-  const errors = (plugins as { errors?: unknown }).errors;
+  const errors = asOptionalRecord(asOptionalRecord(health)?.plugins)?.errors;
   if (!Array.isArray(errors)) {
     return [];
   }
-  return errors
-    .filter((entry): entry is PluginHealthErrorSummary => {
-      if (!entry || typeof entry !== "object") {
-        return false;
+  return errors.flatMap((value) => {
+    const entry = asOptionalRecord(value);
+    if (
+      entry?.activated !== true ||
+      typeof entry.id !== "string" ||
+      typeof entry.error !== "string"
+    ) {
+      return [];
+    }
+    const error: PluginHealthErrorSummary = {
+      id: entry.id,
+      origin: typeof entry.origin === "string" ? entry.origin : "unknown",
+      activated: true,
+      error: entry.error,
+    };
+    for (const key of ["activationSource", "activationReason", "failurePhase"] as const) {
+      if (typeof entry[key] === "string") {
+        error[key] = entry[key];
       }
-      const candidate = entry as Partial<PluginHealthErrorSummary>;
-      return (
-        candidate.activated === true &&
-        typeof candidate.id === "string" &&
-        typeof candidate.error === "string"
-      );
-    })
-    .map((entry) => {
-      const error: PluginHealthErrorSummary = {
-        id: entry.id,
-        origin: typeof entry.origin === "string" ? entry.origin : "unknown",
-        activated: true,
-        error: entry.error,
-      };
-      if (typeof entry.activationSource === "string") {
-        error.activationSource = entry.activationSource;
-      }
-      if (typeof entry.activationReason === "string") {
-        error.activationReason = entry.activationReason;
-      }
-      if (typeof entry.failurePhase === "string") {
-        error.failurePhase = entry.failurePhase;
-      }
-      return error;
-    });
+    }
+    return [error];
+  });
 }
 
-function readChannelProbeErrors(health: unknown): Array<{ id: string; error: string }> {
-  if (!health || typeof health !== "object") {
-    return [];
-  }
-  const channels = (health as { channels?: unknown }).channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
-    return [];
-  }
-  const errors: Array<{ id: string; error: string }> = [];
-  for (const [id, summary] of Object.entries(channels)) {
-    if (!summary || typeof summary !== "object") {
+function readChannelProbeFailures(health: unknown) {
+  const errors: GatewayReachability["channelProbeErrors"] = [];
+  const timeouts: GatewayReachability["channelProbeErrors"] = [];
+  const warnings: GatewayReachability["channelProbeErrors"] = [];
+  const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
+  for (const [id, summary] of Object.entries(channels ?? {})) {
+    const accounts = Object.entries(asOptionalRecord(asOptionalRecord(summary)?.accounts) ?? {});
+    for (const [accountId, value] of accounts.length ? accounts : Object.entries({ "": summary })) {
+      const account = asOptionalRecord(value);
+      if (account?.enabled === false || account?.configured === false) {
+        continue;
+      }
+      if (account?.running === false || account?.healthState === "not-running") {
+        warnings.push({
+          id: accountId ? `${id}/${accountId}` : id,
+          error:
+            typeof account.lastError === "string" && account.lastError.trim()
+              ? account.lastError
+              : "not running",
+        });
+      }
+    }
+    const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
+    if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
       continue;
     }
-    const probe = (summary as { probe?: unknown }).probe;
-    if (!probe || typeof probe !== "object") {
-      continue;
-    }
-    const ok = (probe as { ok?: unknown }).ok;
-    if (ok !== false) {
-      continue;
-    }
-    const error = (probe as { error?: unknown }).error;
-    errors.push({
+    // Retain the explicit timeout marker from older Gateways that also sent ok:false.
+    (probe.timedOut === true ? timeouts : errors).push({
       id,
-      error: typeof error === "string" && error.trim() ? error : "probe failed",
+      error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
     });
   }
-  return errors;
+  return { errors, timeouts, warnings };
 }
 
 function readUnavailablePlugins(health: unknown): UnavailablePluginHealthSummary[] {
@@ -264,33 +285,30 @@ export async function confirmGatewayReachable(params: {
   try {
     const context = params.config
       ? { config: params.config, auth: params.auth }
-      : await resolveGatewayRestartProbeContext(params.env);
+      : await resolveGatewayRestartProbeContext(params.env, undefined, params.signal);
+    params.signal?.throwIfAborted();
     const auth = params.auth ?? context.auth;
     const configuredProbe =
       params.configuredProbe ?? createConfiguredGatewayLocalProbe(context.config);
     const target = await configuredProbe.resolveWebSocketTarget(params.port, params.signal);
+    params.signal?.throwIfAborted();
     if (!target) {
-      return { ...result, gatewayBuildId: null, probeError: "gateway TLS certificate unavailable" };
+      return { ...result, probeError: "gateway TLS certificate unavailable" };
     }
-    const authNone = context.config.gateway?.auth?.mode === "none";
-    // Readiness is first-party local control. CLI shared auth preserves read scopes;
-    // auth-none uses the existing loopback backend contract without pairing a device.
+    const controlAuth = await resolveReadOnlyLocalGatewayAuth({
+      auth,
+      authNone: context.config.gateway?.auth?.mode === "none",
+      env: params.env,
+    });
     params.signal?.throwIfAborted();
     const health = await callGateway({
       config: context.config,
       localPortOverride: params.port,
-      token: auth?.token,
-      password: auth?.password,
-      skipImplicitAuth: true,
+      ...controlAuth,
       tlsFingerprint: target.tlsFingerprint,
       method: "health",
       scopes: [READ_SCOPE],
-      clientName: authNone ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
-      mode: authNone ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
-      requireLocalBackendSharedAuth: authNone,
-      deviceIdentity: null,
-      sharedStateMode: "read-only",
-      timeoutMs: params.timeoutMs ?? 3_000,
+      timeoutMs: params.timeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
       ...(params.signal ? { signal: params.signal } : {}),
       onHelloOk: (hello) => {
         result.gatewayVersion = hello.server.version;
@@ -301,7 +319,12 @@ export async function confirmGatewayReachable(params: {
     result.reachable = true;
     result.activatedPluginErrors = readActivatedPluginErrors(health);
     result.unavailablePlugins = readUnavailablePlugins(health);
-    result.channelProbeErrors = readChannelProbeErrors(health);
+    const { errors, timeouts, warnings } = readChannelProbeFailures(health);
+    result.channelProbeErrors = errors;
+    result.channelRuntimeWarnings = warnings.length ? warnings : undefined;
+    if (timeouts.length) {
+      result.channelProbeTimeouts = timeouts;
+    }
   } catch (error) {
     params.signal?.throwIfAborted();
     // Only a correlated Gateway rejection proves protocol reachability. Bare socket
@@ -312,9 +335,8 @@ export async function confirmGatewayReachable(params: {
       (isGatewayAuthRejection(error.message) ||
         (params.allowDeviceIdentityRequired === true &&
           error.message === "device identity required"));
-    if (result.reachable) {
-      result.gatewayBuildId ??= null;
-    } else {
+    if (!result.reachable) {
+      result.staleConnection = classifyGatewayStaleConnectionError(error);
       result.probeError = formatGatewayRestartProbeError(error);
     }
   }
@@ -329,7 +351,10 @@ export type GatewayRestartProbeContext = {
 
 export async function resolveGatewayRestartProbeContext(
   env: NodeJS.ProcessEnv | undefined,
+  explicitAuth?: GatewayRestartProbeAuth,
+  signal?: AbortSignal,
 ): Promise<GatewayRestartProbeContext> {
+  signal?.throwIfAborted();
   const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
   const cfg = await createConfigIO({
     env: mergedEnv,
@@ -339,11 +364,14 @@ export async function resolveGatewayRestartProbeContext(
   })
     .readBestEffortConfig()
     .catch((): OpenClawConfig => ({}));
+  signal?.throwIfAborted();
   const resolved = await resolveGatewayProbeAuthSafeWithSecretInputs({
     cfg,
     mode: "local",
     env: mergedEnv,
+    explicitAuth,
   });
+  signal?.throwIfAborted();
   return { auth: resolved.auth, config: cfg };
 }
 

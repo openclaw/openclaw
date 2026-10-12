@@ -1,9 +1,12 @@
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { mergeRestartRecoveryTerminalRunIds } from "../../config/sessions/restart-recovery-state.js";
 import { retryAsync } from "../../infra/retry.js";
+import { isAgentLifecycleYieldedWaiting } from "../agent-lifecycle-parent-state.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
+import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import {
   buildMainSessionRecoveryClearPatch,
+  removeMainSessionRecoveryForegroundClaim,
   type MainRecoveryStateFields,
 } from "./main-session-recovery-clear.js";
 
@@ -13,7 +16,7 @@ const MAIN_SESSION_RECOVERY_RETRY_MAX_DELAY_MS = 30_000;
 type MainRecoveryLifecycleEvent = {
   runId?: string;
   lifecycleGeneration?: string;
-  data?: { error?: unknown; phase?: unknown; stopReason?: unknown };
+  data?: Parameters<typeof isAgentLifecycleYieldedWaiting>[0];
 };
 
 export async function retryMainSessionRecoveryMutation<T>(mutation: () => Promise<T>): Promise<T> {
@@ -57,28 +60,25 @@ export function scheduleMainSessionRecoveryMutation<T>(params: {
   }, delayMs).unref?.();
 }
 
-function lifecyclePhase(event: MainRecoveryLifecycleEvent): "start" | "end" | "error" | null {
-  const phase = event.data?.phase;
-  return phase === "start" || phase === "end" || phase === "error" ? phase : null;
-}
-
-function isRestartCancellation(event: MainRecoveryLifecycleEvent): boolean {
-  const phase = lifecyclePhase(event);
-  if (phase !== "end" && phase !== "error") {
-    return false;
-  }
-  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: event.data });
-  return outcome.reason === "cancelled" && outcome.stopReason === "restart";
-}
-
-export function isMainSessionRecoveryLifecycleEvent(params: {
-  entry?: Partial<Pick<SessionEntry, "restartRecoveryRuns">> | null;
+export function inspectMainSessionRecoveryLifecycleEvent(params: {
+  currentLifecycleGeneration: string;
+  entry?: Partial<Pick<SessionEntry, "restartRecoveryRuns" | "abortedLastRun">> | null;
   event: MainRecoveryLifecycleEvent;
-}): boolean {
+  abortSignal?: AbortSignal;
+}) {
   const runId = params.event.runId?.trim();
   const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
-  const phase = lifecyclePhase(params.event);
-  const interrupted = isRestartCancellation(params.event);
+  const phase = params.event.data?.phase;
+  const terminal =
+    phase === "end" || phase === "error"
+      ? buildAgentRunTerminalOutcomeFromLifecycleEvent({
+          phase,
+          data: {
+            ...params.event.data,
+            ...resolveAgentRunErrorLifecycleFields(params.event.data?.error, params.abortSignal),
+          },
+        })
+      : undefined;
   const matchesFence = Boolean(
     runId &&
     lifecycleGeneration &&
@@ -86,9 +86,20 @@ export function isMainSessionRecoveryLifecycleEvent(params: {
       (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
     ),
   );
-  return (
-    matchesFence && (phase === "start" || ((phase === "end" || phase === "error") && interrupted))
-  );
+  const interrupted = terminal?.reason === "cancelled" && terminal.stopReason === "restart";
+  return {
+    runId,
+    lifecycleGeneration,
+    terminal,
+    matchesFence,
+    interrupted,
+    suppress:
+      matchesFence &&
+      ((phase === "start" &&
+        (params.entry?.abortedLastRun === true ||
+          lifecycleGeneration !== params.currentLifecycleGeneration)) ||
+        (interrupted && lifecycleGeneration !== params.currentLifecycleGeneration)),
+  };
 }
 
 function settleForegroundOwner(
@@ -112,17 +123,7 @@ function settleForegroundOwner(
         ) || state?.reservation?.lifecycleGeneration === currentLifecycleGeneration,
     };
   }
-  const tokens = claims.tokens.filter((token) => token !== claimId);
-  const runIdsByClaimId = Object.fromEntries(
-    Object.entries(claims.runIdsByClaimId ?? {}).filter(([token]) => token !== claimId),
-  );
-  const foregroundClaims = tokens.length
-    ? {
-        lifecycleGeneration: claims.lifecycleGeneration,
-        tokens,
-        ...(Object.keys(runIdsByClaimId).length ? { runIdsByClaimId } : {}),
-      }
-    : undefined;
+  const foregroundClaims = removeMainSessionRecoveryForegroundClaim(claims, claimId);
   return {
     claimId,
     state: { ...state, revision: state.revision + 1, foregroundClaims },
@@ -145,32 +146,27 @@ export function projectMainSessionRecoveryLifecycle(params: {
   snapshotPatch: Partial<SessionEntry>;
 }): { action: "suppress" } | { action: "apply"; patch: Partial<SessionEntry> } {
   const apply = (patch: Partial<SessionEntry>) => ({ action: "apply" as const, patch });
-  if (params.entry?.mainRestartRecovery?.tombstone) {
-    // Keep the operator boundary while allowing unrelated lifecycle status to settle.
-    return isMainSessionRecoveryLifecycleEvent(params)
-      ? { action: "suppress" }
-      : apply({
-          ...params.snapshotPatch,
-          abortedLastRun: params.entry.abortedLastRun,
-          restartRecoveryRuns: params.entry.restartRecoveryRuns,
-          mainRestartRecovery: params.entry.mainRestartRecovery,
-        });
-  }
-  if (isMainSessionRecoveryLifecycleEvent(params)) {
+  const { runId, lifecycleGeneration, terminal, matchesFence, suppress, interrupted } =
+    inspectMainSessionRecoveryLifecycleEvent(params);
+  if (suppress) {
     return { action: "suppress" };
   }
-  const phase = lifecyclePhase(params.event);
-  const settlesRecovery =
-    (phase === "end" || phase === "error") && !isRestartCancellation(params.event);
+  if (params.entry?.mainRestartRecovery?.tombstone) {
+    // Keep the operator boundary while allowing unrelated lifecycle status to settle.
+    return apply({
+      ...params.snapshotPatch,
+      abortedLastRun: params.entry.abortedLastRun,
+      restartRecoveryRuns: params.entry.restartRecoveryRuns,
+      mainRestartRecovery: params.entry.mainRestartRecovery,
+    });
+  }
   const patch = { ...params.snapshotPatch };
-  const runId = params.event.runId?.trim();
-  const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
+  if (interrupted || isAgentLifecycleYieldedWaiting(params.event.data ?? {})) {
+    return lifecycleGeneration && lifecycleGeneration !== params.currentLifecycleGeneration
+      ? { action: "suppress" }
+      : apply(patch);
+  }
   const runs = params.entry?.restartRecoveryRuns;
-  const matchesFence = Boolean(
-    runId &&
-    lifecycleGeneration &&
-    runs?.some((run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration),
-  );
   // The current owner retires stale generations of its own run id. An older
   // delayed event consumes only its matching fence and cannot settle its replacement.
   const remaining = matchesFence
@@ -181,7 +177,7 @@ export function projectMainSessionRecoveryLifecycle(params: {
             run.lifecycleGeneration !== lifecycleGeneration),
       )
     : runs;
-  if (settlesRecovery) {
+  if (terminal) {
     if (!matchesFence || !runId || !lifecycleGeneration) {
       // No terminal snapshot may settle a recovery row it cannot identify.
       return params.entry?.mainRestartRecovery || runs?.length
@@ -209,8 +205,7 @@ export function projectMainSessionRecoveryLifecycle(params: {
       params.entry?.abortedLastRun === true &&
       !foreground.claimId &&
       !foreground.hasCurrentOwner &&
-      buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: params.event.data }).reason !==
-        "hard_timeout"
+      terminal.reason !== "hard_timeout"
     ) {
       // The restart marker won the session transaction before this normal terminal.
       // Retire the old fence, but only a fresh owner may settle the handoff itself.
@@ -228,17 +223,11 @@ export function projectMainSessionRecoveryLifecycle(params: {
         ...(foreground.claimId ? { mainRestartRecovery: foreground.state } : {}),
       });
     }
-    if (foreground.claimId) {
-      // This exact foreground run completed while its release lease was still
-      // active. Its terminal snapshot is authoritative and consumes the cycle.
-      Object.assign(patch, buildMainSessionRecoveryClearPatch(params.entry));
-      return apply(patch);
-    }
     const recoveryDeliveryRunId =
       typeof params.entry?.restartRecoveryDeliveryRunId === "string"
         ? params.entry.restartRecoveryDeliveryRunId.trim()
         : undefined;
-    if ((remaining?.length ?? 0) > 0 && recoveryDeliveryRunId !== runId) {
+    if (!foreground.claimId && (remaining?.length ?? 0) > 0 && recoveryDeliveryRunId !== runId) {
       // A different terminal run may consume only its own fence. Another
       // admitted recovery remains the durable owner of the aggregate.
       patch.abortedLastRun = false;
@@ -246,17 +235,10 @@ export function projectMainSessionRecoveryLifecycle(params: {
       patch.mainRestartRecovery = params.entry?.mainRestartRecovery;
       return apply(patch);
     }
-    // An admitted recovery clears the interruption flag before it runs. With
-    // no live owner left, that exact delivery run is the durable cleanup boundary.
+    // The exact foreground or delivery owner retires the cycle once no live owner remains.
     Object.assign(patch, buildMainSessionRecoveryClearPatch(params.entry));
+    patch.abortedLastRun = params.snapshotPatch.abortedLastRun ?? false;
     return apply(patch);
   }
-  if (phase === "start" || !matchesFence || !remaining) {
-    return apply(patch);
-  }
-  if (params.entry?.abortedLastRun === true && remaining.length > 0) {
-    return apply({ restartRecoveryRuns: remaining });
-  }
-  patch.restartRecoveryRuns = remaining.length > 0 ? remaining : undefined;
   return apply(patch);
 }

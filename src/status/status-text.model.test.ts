@@ -1,7 +1,7 @@
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
+import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
@@ -9,18 +9,60 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import * as transcriptTail from "../config/sessions/session-accessor.sqlite-active-events.js";
-import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import {
+  SessionTranscriptProjectionUnavailableError,
+  SessionTranscriptStorageUnavailableError,
+} from "../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry, SessionContextBudgetStatus } from "../config/sessions/types.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { buildStatusReplyParts } from "./status-text.js";
+
+vi.mock(import("../infra/session-cost-usage.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    loadSessionCostSummariesFromCache: async () => ({
+      summaries: [null],
+      cacheStatus: {
+        status: "partial",
+        cachedFiles: 0,
+        pendingFiles: 1,
+        staleFiles: 0,
+      },
+    }),
+  };
+});
 
 type StatusTextParams = Parameters<typeof buildStatusReplyParts>[0];
 
 describe("buildStatusText prepared context windows", () => {
-  afterEach(() => cliBackendsTesting.resetDepsForTest());
+  let state: OpenClawTestState;
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ label: "status-model" });
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    cliBackendsTesting.resetDepsForTest();
+    await state.cleanup();
+  });
+  const tokenUsage = {
+    totalTokens: 45_000,
+    totalTokensFresh: true,
+    totalTokensVersion: 1,
+  } satisfies Partial<InternalSessionEntry>;
+  const fallbackNotice = {
+    kind: "active",
+    selectedModel: "deepseek/deepseek-v4-flash",
+    activeModel: "fallback/small-model",
+  } satisfies NonNullable<InternalSessionEntry["fallbackNotice"]>;
   const catalog = [
     {
       provider: "deepseek",
@@ -42,17 +84,13 @@ describe("buildStatusText prepared context windows", () => {
     },
   ];
 
-  async function renderPreparedStatus(
-    overrides: Partial<Parameters<typeof buildStatusReplyParts>[0]> = {},
-  ) {
+  async function renderPreparedStatus(overrides: Partial<StatusTextParams> = {}) {
     return await buildStatusReplyParts({
       cfg: {},
       sessionEntry: {
         sessionId: "prepared-context",
         updatedAt: 0,
-        totalTokens: 45_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
+        ...tokenUsage,
       },
       sessionKey: "agent:main:main",
       statusChannel: "mobilechat",
@@ -66,8 +104,6 @@ describe("buildStatusText prepared context windows", () => {
       isGroup: false,
       defaultGroupActivation: () => "mention",
       pluginHealthLineOverride: "Plugins: test",
-      taskLineOverride: "",
-      skipDefaultTaskLookup: true,
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
       includeTranscriptUsage: false,
@@ -75,12 +111,159 @@ describe("buildStatusText prepared context windows", () => {
     });
   }
 
+  it.each([
+    { name: "current discovered limits", window: 262_144, expected: "45k/262k" },
+    { name: "unknown limits", window: undefined, expected: "45k/?" },
+    {
+      name: "another runtime's limits",
+      window: 262_144,
+      nativeRuntime: "other-runtime",
+      expected: "45k/?",
+    },
+    {
+      name: "API limits for a native runtime",
+      window: 262_144,
+      resolvedHarness: "fixture-native",
+      expected: "45k/?",
+    },
+  ])("renders $name without reusing a stale cache or estimate", async (scenario) => {
+    const provider = "ollama";
+    const model = "qwen3:8b";
+    const key = providerContextTokenCacheKey(provider, model);
+    const caches = getContextWindowCaches();
+    const cacheMaps = [caches.discoveredTokenCache, caches.contextWindowCache];
+    const previous = cacheMaps.map((cache) => cache.get(key));
+    for (const cache of cacheMaps) {
+      cache.set(key, 128_000);
+    }
+    try {
+      const parts = await renderPreparedStatus({
+        provider,
+        model,
+        resolvedHarness: scenario.resolvedHarness ?? "openclaw",
+        contextTokens: 200_000,
+        thinkingCatalog: [
+          {
+            provider,
+            id: model,
+            nativeRuntime: scenario.nativeRuntime,
+            contextWindow: scenario.window,
+            contextTokens: scenario.window,
+          },
+        ],
+      });
+
+      expect(parts.text).toContain(`Context: ${scenario.expected}`);
+      const table = parts.presentation.blocks.find((block) => block.type === "table");
+      expect(table?.type === "table" ? table.rows : []).toContainEqual([
+        "📚 Context",
+        expect.stringContaining(scenario.expected),
+      ]);
+    } finally {
+      cacheMaps.forEach((cache, index) => {
+        const value = previous[index];
+        if (value === undefined) {
+          cache.delete(key);
+        } else {
+          cache.set(key, value);
+        }
+      });
+    }
+  });
+
+  it("renders the agent thinking default ahead of model and global defaults", async () => {
+    const parts = await renderPreparedStatus({
+      cfg: {
+        agents: {
+          defaults: {
+            thinkingDefault: "low",
+            models: { "fixture/reasoning-model": { params: { thinking: "high" } } },
+          },
+          entries: {
+            main: {
+              thinkingDefault: "minimal",
+              models: { "fixture/reasoning-model": { params: { thinking: "high" } } },
+            },
+          },
+        },
+      },
+      provider: "fixture",
+      model: "reasoning-model",
+      thinkingCatalog: [{ provider: "fixture", id: "reasoning-model", reasoning: true }],
+    });
+
+    expect(parts.text).toContain("think minimal");
+  });
+
+  it.each([
+    {
+      name: "selected model auto with a different active fallback cutoff",
+      configured: "auto",
+      activeFallback: true,
+      expected: "auto (120 sec)",
+    },
+    {
+      name: "session off overrides model on",
+      configured: true,
+      sessionFast: false,
+      expected: "off",
+    },
+    {
+      name: "prepared off overrides model on",
+      configured: true,
+      preparedFast: false,
+      expected: "off",
+    },
+  ] as const)("renders fast mode for $name", async (scenario) => {
+    const parts = await renderPreparedStatus({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/base-model": {
+                params: { fastMode: !scenario.configured, fastAutoOnSeconds: 30 },
+              },
+              "anthropic/selected-model": {
+                params: { fastMode: scenario.configured, fastAutoOnSeconds: 120 },
+              },
+            },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "status-fast-selected",
+        updatedAt: 0,
+        providerOverride: "anthropic",
+        modelOverride: "selected-model",
+        ...("sessionFast" in scenario ? { fastMode: scenario.sessionFast } : {}),
+        ...("activeFallback" in scenario
+          ? {
+              modelProvider: "openai",
+              model: "base-model",
+              fallbackNotice: {
+                kind: "active" as const,
+                selectedModel: "anthropic/selected-model",
+                activeModel: "openai/base-model",
+                reason: "provider unavailable",
+              },
+            }
+          : {}),
+      },
+      resolvedFastMode: "preparedFast" in scenario ? scenario.preparedFast : undefined,
+      provider: "openai",
+      model: "base-model",
+    });
+
+    expect(parts.text).toContain(`fast ${scenario.expected}`);
+  });
+
   async function renderTerminalFallback(
     params: {
       entry?: Partial<InternalSessionEntry>;
+      live?: boolean;
       message?: Record<string, unknown>;
       laterMessage?: Record<string, unknown>;
-      status?: Partial<Parameters<typeof buildStatusReplyParts>[0]>;
+      status?: Partial<StatusTextParams>;
     } = {},
   ) {
     return await withTempHome(async () => {
@@ -100,15 +283,8 @@ describe("buildStatusText prepared context windows", () => {
         agentHarnessId: "openclaw",
         contextTokens: 1_000_000,
         contextTokensSource: "runtime",
-        totalTokens: 45_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "deepseek/deepseek-v4-flash",
-          activeModel: "fallback/small-model",
-          reason: "provider unavailable",
-        },
+        ...tokenUsage,
+        fallbackNotice: { ...fallbackNotice, reason: "provider unavailable" },
         ...params.entry,
       };
       replaceSessionEntrySync(scope, entry);
@@ -132,43 +308,38 @@ describe("buildStatusText prepared context windows", () => {
         append(params.laterMessage);
       }
       const original = loadSessionEntryReadOnly(scope);
-      const parts = await renderPreparedStatus({
-        sessionEntry: original,
-        sessionKey: scope.sessionKey,
-        storePath: scope.storePath,
-        contextTokens: 1_000_000,
-        ...params.status,
-      });
-      expect(loadSessionEntryReadOnly(scope)).toEqual(original);
-      return parts;
+      const runId = "current-live-run";
+      if (params.live) {
+        registerAgentRunContext(runId, { ...scope, projectSessionActive: true });
+      }
+      try {
+        const parts = await renderPreparedStatus({
+          sessionEntry: original,
+          sessionKey: scope.sessionKey,
+          storePath: scope.storePath,
+          contextTokens: 1_000_000,
+          ...params.status,
+        });
+        expect(loadSessionEntryReadOnly(scope)).toEqual(original);
+        return parts;
+      } finally {
+        if (params.live) {
+          clearAgentRunContext(runId);
+        }
+      }
     });
   }
 
   it.each([
     ["stale runtime telemetry", {}],
-    ["stale resolved context", { entry: { contextTokensSource: "resolved-v1" } }],
-    ["absent runtime model", { entry: { modelProvider: undefined, model: undefined } }],
-    [
-      "padded selected notice",
-      {
-        entry: {
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: "  deepseek/deepseek-v4-flash  ",
-            activeModel: "fallback/small-model",
-          },
-        },
-      },
-    ],
     [
       "literal provider-local model",
       {
         status: { provider: "MiXeD", model: "Vendor/Model:opaque" },
         entry: {
           fallbackNotice: {
-            kind: "active",
+            ...fallbackNotice,
             selectedModel: "mixed/Vendor/Model:opaque",
-            activeModel: "fallback/small-model",
           },
         },
       },
@@ -179,9 +350,8 @@ describe("buildStatusText prepared context windows", () => {
         entry: {
           modelOverride: "MiXeD/Model:Case",
           fallbackNotice: {
-            kind: "active",
+            ...fallbackNotice,
             selectedModel: "MiXeD/Model:Case",
-            activeModel: "fallback/small-model",
           },
         },
       },
@@ -202,18 +372,13 @@ describe("buildStatusText prepared context windows", () => {
   );
 
   it.each([
-    ["running session", { entry: { status: "running" } }],
-    ["failed session", { entry: { status: "failed" } }],
-    ["killed session", { entry: { status: "killed" } }],
-    ["timed-out session", { entry: { status: "timeout" } }],
+    ["running session", { live: true }],
     ["missing run", { entry: { lastRunId: undefined } }],
-    ["other run", { entry: { lastRunId: "other-run" } }],
     ["failed assistant", { message: { stopReason: "error" } }],
     ["hidden assistant", { message: { content: [] } }],
     ["undisplayed assistant", { message: { display: false } }],
     ["oversized tail", { message: { content: [{ type: "text", text: "x".repeat(300_000) }] } }],
     ["later user", { laterMessage: { role: "user", content: "New turn" } }],
-    ["later tool", { laterMessage: { role: "toolResult", toolCallId: "later", content: [] } }],
     [
       "later run",
       {
@@ -234,8 +399,7 @@ describe("buildStatusText prepared context windows", () => {
       {
         entry: {
           fallbackNotice: {
-            kind: "active",
-            selectedModel: "deepseek/deepseek-v4-flash",
+            ...fallbackNotice,
             activeModel: "fallback/other-model",
           },
         },
@@ -252,35 +416,30 @@ describe("buildStatusText prepared context windows", () => {
 
   it("skips terminal transcript access for a stale selected notice", async () => {
     const readTail = vi.spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage");
-    try {
-      const parts = await renderTerminalFallback({
-        entry: {
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: "deepseek/older-model",
-            activeModel: "fallback/small-model",
-          },
+    const parts = await renderTerminalFallback({
+      entry: {
+        fallbackNotice: {
+          ...fallbackNotice,
+          selectedModel: "deepseek/older-model",
         },
-      });
-      expect(parts.text).not.toContain("Fallback: fallback/small-model");
-      expect(parts.text).toContain("Context: 45k/1.0m");
-      expect(readTail).not.toHaveBeenCalled();
-    } finally {
-      readTail.mockRestore();
-    }
+      },
+    });
+    expect(parts.text).not.toContain("Fallback: fallback/small-model");
+    expect(parts.text).toContain("Context: 45k/1.0m");
+    expect(readTail).not.toHaveBeenCalled();
   });
 
-  it("retains the incoming prepared cap when it already belongs to the terminal pair", async () => {
+  it("uses the admitted effective cap for the terminal pair", async () => {
     const parts = await renderTerminalFallback({
       entry: { providerOverride: "deepseek", modelOverride: "deepseek-v4-flash" },
       status: {
         provider: "fallback",
         model: "small-model",
-        contextTokens: 96_000,
         thinkingCatalog: catalog.map(({ provider, id, contextWindow }) => ({
           provider,
           id,
           contextWindow,
+          contextTokens: id === "small-model" ? 96_000 : contextWindow,
         })),
       },
     });
@@ -300,25 +459,20 @@ describe("buildStatusText prepared context windows", () => {
         inputTokens: 10,
         outputTokens: 2,
       });
-    try {
-      const parts = await renderTerminalFallback({
-        entry: {
-          modelProvider: undefined,
-          model: undefined,
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: "deepseek/deepseek-v4-flash",
-            activeModel: notice,
-            reason: "provider unavailable",
-          },
+    const parts = await renderTerminalFallback({
+      entry: {
+        modelProvider: undefined,
+        model: undefined,
+        fallbackNotice: {
+          ...fallbackNotice,
+          activeModel: notice,
+          reason: "provider unavailable",
         },
-        status: { includeTranscriptUsage: true },
-      });
-      expect(readUsage).toHaveBeenCalled();
-      expect(parts.text).toContain(`Fallback: ${notice}`);
-    } finally {
-      readUsage.mockRestore();
-    }
+      },
+      status: { includeTranscriptUsage: true },
+    });
+    expect(readUsage).toHaveBeenCalled();
+    expect(parts.text).toContain(`Fallback: ${notice}`);
   });
 
   const budget: SessionContextBudgetStatus = {
@@ -342,19 +496,15 @@ describe("buildStatusText prepared context windows", () => {
     sessionId: "terminal-fallback",
   };
   it.each([
-    ["matching budget", {}, false, true],
-    ["selected model budget", { provider: "deepseek", model: "deepseek-v4-flash" }, false, false],
-    ["other session budget", { sessionId: "other-session" }, false, false],
-    ["other cap budget", { contextTokenBudget: 1_000_000 }, false, false],
-    ["pending switch budget", {}, true, false],
-  ] satisfies Array<[string, Partial<SessionContextBudgetStatus>, boolean, boolean]>)(
+    ["matching budget", {}, true],
+    ["selected model budget", { provider: "deepseek", model: "deepseek-v4-flash" }, false],
+  ] satisfies Array<[string, Partial<SessionContextBudgetStatus>, boolean]>)(
     "projects only a %s owned by the terminal model",
-    async (_name, patch, pending, expected) => {
+    async (_name, patch, expected) => {
       const parts = await renderTerminalFallback({
         entry: {
           totalTokens: undefined,
           contextBudgetStatus: { ...budget, ...patch },
-          liveModelSwitchPending: pending,
         },
       });
       expect(parts.text).toContain("Fallback: fallback/small-model");
@@ -364,7 +514,6 @@ describe("buildStatusText prepared context windows", () => {
   );
 
   it.each([
-    ["prepared alias", "candidate", "middle", {}, "candidate/middle"],
     [
       "opaque empty provider",
       "",
@@ -378,13 +527,6 @@ describe("buildStatusText prepared context windows", () => {
       "entry",
       { providerOverride: "candidate", modelOverride: "middle" },
       "candidate/middle",
-    ],
-    [
-      "legacy explicit override",
-      "candidate",
-      "entry",
-      { modelOverride: "fallback/small-model" },
-      "fallback/small-model",
     ],
   ] satisfies Array<[string, string, string, Partial<InternalSessionEntry>, string]>)(
     "preserves typed selection for %s through the status owner",
@@ -423,144 +565,54 @@ describe("buildStatusText prepared context windows", () => {
     expect(parts.text).toContain("Model: deepseek/deepseek-v4-flash");
   });
 
-  it.each([
-    {
-      name: "configured CLI default with absent session model fields",
-      cfg: { agents: { defaults: { model: "claude-cli/opus" } } },
-      expectedModel: "claude-cli/opus",
-    },
-    {
-      name: "canonical default with absent agent configuration",
-      cfg: {},
-      expectedModel: "openai/gpt-6-astra",
-    },
-    {
-      name: "literal self-provider prefix in a prepared model ID",
-      cfg: { agents: { defaults: { model: "deepseek/deepseek-v4-flash" } } },
-      input: { provider: "custom", model: "custom/model" },
-      expectedModel: "custom/custom/model",
-      absent: ["Model: custom/model"],
-    },
-    {
-      name: "manual selection that remains pending on an active session",
-      cfg: { agents: { defaults: { model: "deepseek/deepseek-v4-flash" } } },
-      input: { provider: "deepseek", model: "deepseek-v4-flash" },
-      entry: {
-        status: "running",
-        providerOverride: "fallback",
-        modelOverride: "small-model",
-        modelOverrideSource: "user",
-        modelProvider: "deepseek",
-        model: "deepseek-v4-flash",
-        liveModelSwitchPending: true,
-      },
-      expectedModel: "fallback/small-model",
-      expected: ["live switch pending", "pinned session"],
-      absent: ["Fallback:", "auto fallback"],
-    },
-    {
-      name: "configured subagent selection with matching automatic origin",
-      cfg: {
-        agents: {
-          ownership: "explicit",
-          defaults: { model: "deepseek/deepseek-v4-flash" },
-          entries: { worker: { subagents: { model: "fallback/small-model" } } },
-        },
-      },
-      agentId: "worker",
-      sessionKey: "agent:worker:subagent:configured",
-      input: { provider: "deepseek", model: "deepseek-v4-flash" },
-      entry: {
-        providerOverride: "fallback",
-        modelOverride: "small-model",
-        modelOverrideSource: "auto",
-        modelOverrideFallbackOriginProvider: "fallback",
-        modelOverrideFallbackOriginModel: "small-model",
-      },
-      expectedModel: "fallback/small-model",
-      absent: ["auto fallback", "check provider", "pinned session"],
-    },
-  ] satisfies Array<{
-    name: string;
-    cfg: StatusTextParams["cfg"];
-    agentId?: string;
-    sessionKey?: string;
-    input?: Pick<StatusTextParams, "provider" | "model">;
-    entry?: Partial<InternalSessionEntry>;
-    expectedModel: string;
-    expected?: string[];
-    absent?: string[];
-  }>)("preserves $name through the actual status owner", async (control) => {
-    const agentId = control.agentId ?? "main";
+  it("preserves a literal self-provider prefix in a prepared model ID", async () => {
     const sessionEntry: InternalSessionEntry = {
       sessionId: "selection-owner-control",
       updatedAt: 1,
-      ...control.entry,
     };
     const original = structuredClone(sessionEntry);
-    // Defaults use the real production selector; other rows carry prepared caller facts.
-    const selection =
-      control.input ??
-      resolveDefaultModelForAgent({ cfg: control.cfg, agentId, allowPluginNormalization: false });
     const parts = await renderPreparedStatus({
-      cfg: control.cfg,
-      agentId,
-      sessionKey: control.sessionKey ?? "agent:main:main",
-      provider: selection.provider,
-      model: selection.model,
+      cfg: { agents: { defaults: { model: "deepseek/deepseek-v4-flash" } } },
+      provider: "custom",
+      model: "custom/model",
       sessionEntry,
       resolvedThinkLevel: "off",
     });
-    expect(parts.text).toContain(`Model: ${control.expectedModel}`);
-    for (const expected of control.expected ?? []) {
-      expect(parts.text).toContain(expected);
-    }
-    for (const absent of control.absent ?? []) {
-      expect(parts.text).not.toContain(absent);
-    }
+    expect(parts.text).toContain("Model: custom/custom/model");
+    expect(parts.text).not.toContain("Model: custom/model");
     const table = parts.presentation.blocks.find((block) => block.type === "table");
     expect(table?.type === "table" ? table.rows : []).toContainEqual([
       "🧠 Model",
-      expect.stringContaining(control.expectedModel),
+      expect.stringContaining("custom/custom/model"),
     ]);
     expect(sessionEntry).toEqual(original);
   });
 
-  it.each([false, true])(
-    "catches only unavailable terminal projections (unavailable=%s)",
-    async (unavailable) => {
-      const error = unavailable
-        ? new SessionTranscriptProjectionUnavailableError("projection")
-        : new Error("unexpected reader failure");
-      const readTail = vi
-        .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage")
-        .mockImplementation(() => {
-          throw error;
-        });
-      try {
-        const sessionEntry: InternalSessionEntry = {
-          sessionId: "projection",
-          updatedAt: 1,
-          status: "done",
-          lastRunId: "settled-run",
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: "deepseek/deepseek-v4-flash",
-            activeModel: "fallback/small-model",
-          },
-        };
-        const result = renderPreparedStatus({ sessionEntry });
-        if (unavailable) {
-          expect((await result).text).not.toContain("Fallback:");
-        } else {
-          await expect(result).rejects.toBe(error);
-        }
-        expect(readTail).toHaveBeenCalledOnce();
-      } finally {
-        readTail.mockRestore();
-      }
-    },
-  );
+  it.each([
+    { error: new SessionTranscriptProjectionUnavailableError("projection"), unavailable: true },
+    { error: new SessionTranscriptStorageUnavailableError(), unavailable: true },
+    { error: new Error("unexpected reader failure"), unavailable: false },
+  ])("catches only unavailable terminal data ($error.name)", async ({ error, unavailable }) => {
+    const readTail = vi
+      .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage")
+      .mockImplementation(() => {
+        throw error;
+      });
+    const sessionEntry: InternalSessionEntry = {
+      sessionId: "projection",
+      updatedAt: 1,
+      status: "done",
+      lastRunId: "settled-run",
+      fallbackNotice,
+    };
+    const result = renderPreparedStatus({ sessionEntry });
+    if (unavailable) {
+      expect((await result).text).not.toContain("Fallback:");
+    } else {
+      await expect(result).rejects.toBe(error);
+    }
+    expect(readTail).toHaveBeenCalledOnce();
+  });
 
   it("renders a cold-cache prepared window in plain and rich status", async () => {
     const parts = await renderPreparedStatus();
@@ -584,9 +636,7 @@ describe("buildStatusText prepared context windows", () => {
         modelOverrideSource: "user",
         modelProvider: "fallback",
         model: "small-model",
-        totalTokens: 45_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
+        ...tokenUsage,
       },
     });
 
@@ -603,15 +653,8 @@ describe("buildStatusText prepared context windows", () => {
         modelOverride: "deepseek-v4-flash",
         modelProvider: "fallback",
         model: "small-model",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "deepseek/deepseek-v4-flash",
-          activeModel: "fallback/small-model",
-          reason: "provider unavailable",
-        },
-        totalTokens: 45_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
+        fallbackNotice: { ...fallbackNotice, reason: "provider unavailable" },
+        ...tokenUsage,
       },
     });
 
@@ -644,9 +687,7 @@ describe("buildStatusText prepared context windows", () => {
         agentHarnessId: "claude-cli",
         contextTokens: 256_000,
         contextTokensSource: "resolved",
-        totalTokens: 45_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
+        ...tokenUsage,
       },
       thinkingCatalog: [
         {

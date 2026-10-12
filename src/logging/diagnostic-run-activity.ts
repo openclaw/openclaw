@@ -1,4 +1,3 @@
-// Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
   getInternalDiagnosticEventSequence,
   onInternalDiagnosticEvent,
@@ -10,7 +9,15 @@ import type {
   DiagnosticEmbeddedRunOwner,
 } from "../infra/diagnostic-model-request-provenance.js";
 import { resolveCoreModelRequestLifecycleDiagnosticMetadata } from "../infra/diagnostic-model-request.js";
-import { isCoreSemanticRunProgressDiagnosticMetadata } from "../infra/diagnostic-semantic-run-progress.js";
+import type { CoreSemanticRunProgressProvenance } from "../infra/diagnostic-semantic-run-progress-provenance.js";
+import {
+  emitCoreSemanticRunProgressDiagnosticEvent,
+  resolveCoreSemanticRunProgressDiagnosticMetadata,
+} from "../infra/diagnostic-semantic-run-progress.js";
+import {
+  resolveToolExecutionLivenessDiagnosticMetadata,
+  type DiagnosticToolExecutionLiveness,
+} from "../infra/diagnostic-tool-execution-liveness.js";
 import {
   applyArgumentChurnObservation,
   clearArgumentChurnActivity,
@@ -37,6 +44,7 @@ import {
 } from "./diagnostic-run-activity-recovery.js";
 import {
   buildDiagnosticSessionActivitySnapshot,
+  resolveToolExecutionRecoveryDeadlineAtMs,
   type DiagnosticSessionActivitySnapshot,
 } from "./diagnostic-run-activity-snapshot.js";
 import {
@@ -106,7 +114,10 @@ function modelCallKey(event: { runId?: string; provider?: string; model?: string
   return `${event.runId ?? "unknown"}:${event.provider ?? "provider"}:${event.model ?? "model"}`;
 }
 
-function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
+function recordToolStarted(
+  event: DiagnosticToolStartedActivityEvent,
+  liveness?: DiagnosticToolExecutionLiveness,
+): void {
   const activity = resolveSessionActivity({ ...event, create: true });
   if (!activity || shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
     return;
@@ -120,8 +131,10 @@ function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
     toolName: event.toolName,
     toolCallId: event.toolCallId,
     startedAt: now,
-    lastProgressAt: now,
-    deadlineAtMs: event.deadlineAtMs,
+    // Start delivery is asynchronous; retain the owner's live reference across preparation.
+    get deadlineAtMs() {
+      return resolveToolExecutionRecoveryDeadlineAtMs(liveness?.deadlineAtMs) ?? event.deadlineAtMs;
+    },
   });
   touchSessionActivity(activity, `tool:${event.toolName}:started`, now);
 }
@@ -133,6 +146,38 @@ function recordToolEnded(event: DiagnosticToolStartedActivityEvent): void {
   }
   activity.activeTools.delete(toolKey(event));
   touchSessionActivity(activity, `tool:${event.toolName}:ended`);
+}
+
+/** Capture at source execution, before a tool can outlive its attempt. */
+export function captureDiagnosticToolProgress(event: DiagnosticToolStartedActivityEvent) {
+  const runId = event.runId;
+  const activity = runId ? activityByRunId.get(runId) : undefined;
+  const generation = event.sessionId
+    ? activity?.activeEmbeddedRuns.get(event.sessionId)?.generation
+    : undefined;
+  const owner = generation ? activeDiagnosticOwners.get(generation)?.owner : undefined;
+  if (
+    !runId ||
+    !owner ||
+    owner.runId !== runId ||
+    owner.sessionKey !== event.sessionKey ||
+    !resolveCurrentDiagnosticOwner(owner)
+  ) {
+    return undefined;
+  }
+  return () => {
+    if (resolveCurrentDiagnosticOwner(owner)) {
+      emitCoreSemanticRunProgressDiagnosticEvent(
+        {
+          runId,
+          sessionId: owner.sessionId,
+          sessionKey: owner.sessionKey,
+          reason: `tool:${event.toolName}:completed`,
+        },
+        owner,
+      );
+    }
+  };
 }
 
 export function markDiagnosticOwnedToolActivity(
@@ -264,12 +309,50 @@ export function markDiagnosticArgumentChurnObservation(
   }
 }
 
-export const markDiagnosticRunProgress: (params: RunProgressEvent) => void = applyRunProgress;
+export function markDiagnosticRunProgress(
+  params: RunProgressEvent & { onlyIfActive?: boolean },
+): void {
+  if (!params.onlyIfActive) {
+    applyRunProgress(params);
+    return;
+  }
+  const runId = params.runId?.trim();
+  const refs = sessionRefs(params);
+  const activity = runId
+    ? activityByRunId.get(runId)
+    : refs.map((ref) => activityByRef.get(ref)).find((candidate) => candidate !== undefined);
+  if (
+    !activity ||
+    (params.sessionId?.trim() &&
+      activity.sessionId &&
+      params.sessionId.trim() !== activity.sessionId.trim()) ||
+    (params.sessionKey?.trim() &&
+      activity.sessionKey &&
+      params.sessionKey.trim() !== activity.sessionKey.trim()) ||
+    refs.some((ref) => {
+      const current = activityByRef.get(ref);
+      return current !== undefined && current !== activity;
+    })
+  ) {
+    return;
+  }
+  // Observers may touch an existing activity, never create or merge session/run owners.
+  touchSessionActivity(activity, params.reason);
+}
 
 function applyRunProgress(
   params: RunProgressEvent,
-  provenance: "direct" | "semantic" | "unbound" = "direct",
+  provenance: "direct" | "unbound" | CoreSemanticRunProgressProvenance = "direct",
 ): void {
+  if (typeof provenance === "object") {
+    const registration = resolveCurrentDiagnosticOwner(provenance);
+    if (registration) {
+      touchSemanticSessionActivity(registration.activity, params.reason, {
+        runId: provenance.runId,
+      });
+    }
+    return;
+  }
   const runId = params.runId?.trim() || undefined;
   // Exact owners record transport progress synchronously. Delayed public events
   // must neither merge their session refs nor refresh a replacement or tool phase.
@@ -281,7 +364,7 @@ function applyRunProgress(
     return;
   }
   // Only an explicit fact from the current owner may clear its recovery evidence.
-  if (provenance !== "semantic" || !runId) {
+  if (provenance !== true || !runId) {
     touchSessionActivity(activity, params.reason);
     return;
   }
@@ -322,7 +405,7 @@ export function createDiagnosticEmbeddedRunOwner(params: {
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.runId ? { runId: params.runId } : {}),
-    workKey: resolveEmbeddedRunWorkKey(params),
+    workKey: params.workKey ?? params.sessionId,
   });
 }
 
@@ -346,7 +429,7 @@ export function markDiagnosticEmbeddedRunStarted(params: {
     clearArgumentChurnActivity(activity, { runId: ownerRunId });
   }
   clearArgumentChurnPolicyWaits(activity);
-  const workKey = resolveEmbeddedRunWorkKey(params);
+  const workKey = params.workKey ?? params.sessionId;
   const existing = activity.activeEmbeddedRuns.get(workKey);
   if (existing && existing.runId !== ownerRunId) {
     embeddedRunIndex.remove(activity, workKey);
@@ -405,27 +488,20 @@ export function markDiagnosticEmbeddedRunEnded(params: {
   sessionId: string;
   sessionKey?: string;
   workKey?: string;
-  clearRunActivity?: boolean;
 }): void {
   const activity = resolveSessionActivity(params);
   if (!activity) {
     return;
   }
-  embeddedRunIndex.remove(activity, resolveEmbeddedRunWorkKey(params));
-  if (params.clearRunActivity !== false) {
-    activity.activeTools.clear();
-    activity.activeModelCalls.clear();
-    activity.activeCoreModelCalls.clear();
-  }
+  embeddedRunIndex.remove(activity, params.workKey ?? params.sessionId);
+  activity.activeTools.clear();
+  activity.activeModelCalls.clear();
+  activity.activeCoreModelCalls.clear();
   if (activity.activeEmbeddedRuns.size === 0) {
     clearArgumentChurnActivity(activity);
     clearArgumentChurnPolicyWaits(activity);
   }
   touchSessionActivity(activity, "embedded_run:ended"); // Retained retry evidence is inert here.
-}
-
-function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string }): string {
-  return params.workKey ?? params.sessionId;
 }
 
 // Reconciles a session's terminal embedded-run activity at once. Used when an
@@ -526,41 +602,31 @@ export function getDiagnosticSessionActivitySnapshot(
     return {};
   }
 
-  let activeBackendLivenessDeadlineAtMs: number | undefined;
-  let activeRetryWaitDeadlineAtMs: number | undefined;
+  const deadlines: Pick<
+    DiagnosticSessionActivitySnapshot,
+    "activeBackendLivenessDeadlineAtMs" | "activeRetryWaitDeadlineAtMs"
+  > = {};
   for (const embeddedRun of activity.activeEmbeddedRuns.values()) {
     const registration = embeddedRun.generation
       ? activeDiagnosticOwners.get(embeddedRun.generation)
       : undefined;
-    const retryWait = registration?.retryWait;
-    if (
-      registration &&
-      retryWait &&
-      resolveCurrentDiagnosticOwner(registration.owner, retryWait.assertCurrent) === registration &&
-      registration.activity === activity &&
-      registration.retryWait === retryWait
-    ) {
-      activeRetryWaitDeadlineAtMs = Math.max(
-        activeRetryWaitDeadlineAtMs ?? retryWait.deadlineAtMs,
-        retryWait.deadlineAtMs,
-      );
+    for (const [kind, field] of [
+      ["retryWait", "activeRetryWaitDeadlineAtMs"],
+      ["backendActivity", "activeBackendLivenessDeadlineAtMs"],
+    ] as const) {
+      const owned = registration?.[kind];
+      if (
+        registration &&
+        owned &&
+        resolveCurrentDiagnosticOwner(registration.owner, owned.assertCurrent) === registration &&
+        registration.activity === activity &&
+        registration[kind] === owned
+      ) {
+        deadlines[field] = Math.max(deadlines[field] ?? owned.deadlineAtMs, owned.deadlineAtMs);
+      }
     }
-    const backendActivity = registration?.backendActivity;
-    if (
-      !registration ||
-      !backendActivity ||
-      resolveCurrentDiagnosticOwner(registration.owner, backendActivity.assertCurrent) !==
-        registration ||
-      registration.activity !== activity ||
-      registration.backendActivity !== backendActivity
-    ) {
-      continue;
-    }
-    activeBackendLivenessDeadlineAtMs = Math.max(
-      activeBackendLivenessDeadlineAtMs ?? backendActivity.deadlineAtMs,
-      backendActivity.deadlineAtMs,
-    );
   }
+  const { activeBackendLivenessDeadlineAtMs, activeRetryWaitDeadlineAtMs } = deadlines;
   return {
     ...buildDiagnosticSessionActivitySnapshot(activity, now),
     ...(activeBackendLivenessDeadlineAtMs !== undefined
@@ -608,7 +674,7 @@ export function startDiagnosticRunActivityTracking(): void {
       }
       switch (event.type) {
         case "tool.execution.started":
-          return recordToolStarted(event);
+          return recordToolStarted(event, resolveToolExecutionLivenessDiagnosticMetadata(metadata));
         case "tool.execution.completed":
         case "tool.execution.error":
         case "tool.execution.blocked":
@@ -623,7 +689,7 @@ export function startDiagnosticRunActivityTracking(): void {
         case "run.progress":
           return applyRunProgress(
             event,
-            isCoreSemanticRunProgressDiagnosticMetadata(metadata) ? "semantic" : "unbound",
+            resolveCoreSemanticRunProgressDiagnosticMetadata(metadata) ?? "unbound",
           );
         case "run.completed":
           return recordRunCompleted(event);

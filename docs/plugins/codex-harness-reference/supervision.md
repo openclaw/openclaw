@@ -61,10 +61,14 @@ outside OpenClaw:
 Configured stores appear in the sidebar alongside automatically discovered
 ones, labeled `Local Codex · <label>` and grouped by each session's working
 directory. String entries and objects without `label` use the basename of the
-canonicalized home directory; an explicit `label` overrides that default.
+resolved home directory; an explicit `label` overrides that default.
 Sessions in these stores support the same view, continue, and archive actions,
 and the selected OpenClaw agent still owns the resulting connection; `homes`
 only adds catalog sources.
+
+Discovery caches native pages for 32 seconds separately for each agent and
+Codex home, so listing one store does not evict another store's pages. Expired
+pages remain visible during background refresh.
 
 Fresh native terminal sessions use the primary local profile, shown as
 `Local Codex`, or an eligible paired node. Additional local homes are session
@@ -72,7 +76,7 @@ discovery and resume sources, not separate fresh-start destinations. The selecte
 working directory controls Codex's project configuration without changing its home
 or login. See [Native CLI starts](/web/control-ui/sessions-and-sidebar#start-a-native-coding-cli).
 
-Only existing directories are included. Equivalent paths are canonicalized and
+Only existing directories are included. Equivalent paths are resolved and
 deduplicated against the automatic homes, and automatic homes keep priority
 under the 100-source catalog cap. Config changes refresh the catalog homes in
 the default hybrid reload mode; no Gateway restart is needed.
@@ -107,14 +111,14 @@ only non-archived sessions. Without explicit `appServer` connection settings,
 that connection is managed user-home stdio. Stored or idle local rows can create
 a model-locked Chat with bounded user and assistant history through the last
 terminal persisted source turn. Its private binding keeps the snapshot fork,
-canonical `appServer`-source branch, history injection, and later turns on that
-connection. The first canonical start uses the pair returned by the fork. Later
+primary `appServer`-source branch, history injection, and later turns on that
+connection. The first primary-thread start uses the pair returned by the fork. Later
 resumes omit OpenClaw model and provider overrides so Codex restores the
-canonical thread's persisted pair; a separate native change can update that
+primary thread's persisted pair; a separate native change can update that
 pair, but the outer model and fallback chain never replace it. Stored and idle
 rows can be archived after no-other-runner confirmation, unless another active
 OpenClaw binding owns the exact target or one of its non-archived spawned
-descendants. OpenClaw follows Codex's descendant pagination and fails closed on
+descendants. OpenClaw follows Codex's descendant pagination and refuses archival on
 enumeration errors, cycles, or safety-limit exhaustion. Confirmation still
 covers unknown native clients and the status-to-archive race. A supervised
 model-locked Chat cannot be deleted while it protects the native binding.
@@ -133,11 +137,11 @@ not change the harness default. Instead, the separate supervision connection
 defaults to managed user-home stdio when no explicit `appServer`
 connection settings exist. Explicit settings are honored for that connection.
 Pending and committed supervised bindings retain that connection for every turn;
-disabled supervision or connection/lifecycle drift fails closed instead of
+disabled supervision or connection/lifecycle drift blocks execution instead of
 falling back to the agent-home harness. The default connection shares stored
 sessions with native Codex clients, not their process-local activity state.
 
 Legacy `plugins.entries.codex-supervisor` settings are retired. Run
 `openclaw doctor --fix` to migrate the old entry, endpoint definitions, policy
-flags, and plugin allow/deny references into this block. Explicit canonical
+flags, and plugin allow/deny references into this block. Explicit current
 `codex.config.supervision` values win conflicts.

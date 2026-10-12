@@ -3,11 +3,17 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
   expectRequestCountStable,
   installMockGateway,
+  requireRecord,
 } from "./chat-flow.test-support.ts";
+import { outboxPayloadFile, stageOutboxAttachment } from "./chat-outbox-payloads.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -41,6 +47,105 @@ function storedQueueOrder(page: Page) {
 }
 
 suite.define(() => {
+  it("delivers the reordered head after a reconnect attachment read settles", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        historyMessages: [{ role: "assistant", content: "Synthetic queue ordering proof." }],
+        sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForControlUiGatewayReady(page);
+      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      await page.getByText("Synthetic queue ordering proof.", { exact: true }).waitFor();
+      await gateway.setOnline(false);
+      await gateway.closeLatest();
+      await waitForControlUiGatewayReconnecting(page);
+      await stageOutboxAttachment(page, "A: review the attached itinerary");
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.press("Enter");
+      await page.locator(".chat-queue__item", { hasText: "A: review" }).waitFor();
+      await composer.fill("B: read this instruction first");
+      await composer.press("Enter");
+      await page.locator(".chat-queue__item", { hasText: "B: read" }).waitFor();
+      // Hold the browser's real Blob decoder after offline admission has stored every byte.
+      await page.evaluate(() => {
+        const NativeFileReader = FileReader;
+        const pending: Array<() => void> = [];
+        globalThis.FileReader = class extends NativeFileReader {
+          override readAsDataURL(blob: Blob): void {
+            pending.push(() => super.readAsDataURL(blob));
+          }
+        };
+        Object.assign(window, {
+          queuedAttachmentRead: {
+            count: () => pending.length,
+            release: () => {
+              globalThis.FileReader = NativeFileReader;
+              pending.splice(0).forEach((resume) => resume());
+            },
+          },
+        });
+      });
+      await gateway.deferNext("chat.send");
+      await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            (
+              window as unknown as { queuedAttachmentRead: { count(): number } }
+            ).queuedAttachmentRead.count(),
+          ),
+        )
+        .toBeGreaterThan(0);
+      await page
+        .locator(".chat-queue__item", { hasText: "B: read" })
+        .locator(".chat-queue__grip")
+        .focus();
+      await page.keyboard.press("ArrowUp");
+      const expected = ["B: read this instruction first", "A: review the attached itinerary"];
+      await expect.poll(() => storedQueueOrder(page)).toEqual(expected);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "hydration-reordered.png"),
+        animations: "disabled",
+      });
+      await page.evaluate(() =>
+        (
+          window as unknown as { queuedAttachmentRead: { release(): void } }
+        ).queuedAttachmentRead.release(),
+      );
+      const first = requireRecord((await gateway.waitForRequest("chat.send")).params);
+      await page.locator(".chat-group.user", { hasText: String(first.message) }).waitFor();
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "hydration-first-delivery.png"),
+        animations: "disabled",
+      });
+      expect(first.message).toBe(expected[0]);
+      await gateway.resolveDeferred("chat.send", {
+        runId: first.idempotencyKey,
+        status: "ok",
+        messageSeq: 1,
+      });
+      const second = requireRecord(
+        (await gateway.waitForRequest("chat.send", { after: 1 })).params,
+      );
+      expect(second.message).toBe(expected[1]);
+      expect(second.attachments).toEqual([
+        {
+          type: "file",
+          mimeType: outboxPayloadFile.mimeType,
+          fileName: outboxPayloadFile.name,
+          origin: "file",
+          content: outboxPayloadFile.buffer.toString("base64"),
+        },
+      ]);
+      expect(
+        (await gateway.getRequests("chat.send")).map(({ params }) => requireRecord(params).message),
+      ).toEqual(expected);
+    });
+  });
+
   it("reorders offline queued messages from the keyboard-focused handle", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();

@@ -2,9 +2,10 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { appendRegularFile, appendRegularFileSync } from "../infra/regular-file.js";
+import { appendRegularFile, appendRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { formatConsoleDiagnosticLine } from "./json-console-line.js";
-import { redactLogRecordForTransport, redactSensitiveText } from "./redact.js";
+import { redactSensitiveText, serializeRedactedFileLogRecord } from "./redact.js";
 import { formatTimestamp } from "./timestamps.js";
 
 // Keep burst memory bounded while one equally bounded batch is in flight.
@@ -103,7 +104,7 @@ function buildDroppedMarker(target: FileLogQueueEntry, count: number): FileLogQu
   };
   return {
     ...target,
-    payload: `${JSON.stringify(redactLogRecordForTransport(record))}\n`,
+    payload: `${serializeRedactedFileLogRecord(record)}\n`,
   };
 }
 
@@ -352,12 +353,6 @@ function removeProcessHooks(): void {
   processHooksInstalled = false;
 }
 
-// Production installs eagerly so logs emitted by another exit listener are still rescued.
-// Vitest shared workers reload modules, so defer there until file logging is actually used.
-if (process.env.VITEST !== "true") {
-  installProcessHooks();
-}
-
 /** Enqueues one serialized record without waiting for filesystem I/O. */
 function enqueueFileLog(entry: FileLogQueueEntry): void {
   if (processExiting) {
@@ -435,11 +430,21 @@ function resetFileLogTransportForTests(): void {
   appendFailureTrackingSaturated = false;
 }
 
-export const fileLogTransport = {
-  drainSync: drainFileLogQueueSync,
-  enqueue: enqueueFileLog,
-  flush: flushFileLogQueue,
-  resetForTests: resetFileLogTransportForTests,
-  setAppenderForTests: setFileLogAppenderForTests,
-  setMaxQueuedRecordsForTests: setFileLogQueueMaxRecordsForTests,
-};
+// Source backends and compiled worker carriers must enqueue and flush through one owner.
+export const fileLogTransport = resolveGlobalSingleton(
+  Symbol.for("openclaw.fileLogTransport"),
+  () => {
+    // Production rescues logs from other exit listeners; tests install hooks when logging starts.
+    if (process.env.VITEST !== "true") {
+      installProcessHooks();
+    }
+    return {
+      drainSync: drainFileLogQueueSync,
+      enqueue: enqueueFileLog,
+      flush: flushFileLogQueue,
+      resetForTests: resetFileLogTransportForTests,
+      setAppenderForTests: setFileLogAppenderForTests,
+      setMaxQueuedRecordsForTests: setFileLogQueueMaxRecordsForTests,
+    };
+  },
+);

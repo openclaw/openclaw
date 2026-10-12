@@ -97,90 +97,86 @@ describe("managed Completions cache markers", () => {
     expect(markers(first)).toHaveLength(3);
   });
 
-  it("advances from a user turn to a tool result to a new turn while skipping runtime carriers", () => {
-    const toolLoop: Context["messages"] = [
-      ...context.messages,
-      {
-        role: "assistant",
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        content: [{ type: "toolCall", id: "call_1", name: "alpha", arguments: {} }],
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "toolUse",
-        timestamp: 2,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "alpha",
-        isError: false,
-        content: [{ type: "text", text: "Result" }],
-        timestamp: 3,
-      },
-    ];
-    for (const [messages, anchor] of [
-      [context.messages, "Question"],
-      [toolLoop, "Result"],
-      [[...toolLoop, { role: "user", content: "Next", timestamp: 4 }], "Next"],
-    ] satisfies Array<[Context["messages"], string]>) {
-      const payload = buildOpenAICompletionsParams(
-        model,
+  it.each([true, false])(
+    "skips runtime carriers after tool replay (supportsTools=%s)",
+    (supportsTools) => {
+      const route = { ...model, compat: { ...model.compat, supportsTools } };
+      const toolLoop: Context["messages"] = [
+        ...context.messages,
         {
-          ...context,
-          messages: [
-            ...messages,
-            { role: "user", content: "Runtime facts", runtimeContextCarrier: true, timestamp: 5 },
-          ],
+          role: "assistant",
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          content: [{ type: "toolCall", id: "call_1", name: "alpha", arguments: {} }],
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse",
+          timestamp: 2,
         },
-        undefined,
-      );
-      const wire = JSON.stringify(payload.messages);
-      expect(wire).toContain(JSON.stringify(marked(anchor)));
-      expect(wire).toContain('"content":"Runtime facts"');
-      expect(markers(payload)).toHaveLength(3);
-    }
-  });
-
-  it.each([
-    { provider: "openrouter", baseUrl: "", count: 3, longTtl: true },
-    { provider: "custom", baseUrl: "https://openrouter.ai/api/v1", count: 3, longTtl: true },
-    {
-      provider: "deepinfra",
-      baseUrl: "https://api.deepinfra.com/v1/openai",
-      count: 3,
-      longTtl: false,
-    },
-    { provider: "dashscope", baseUrl: "", count: 2, longTtl: false },
-    {
-      provider: "custom",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      count: 2,
-      longTtl: false,
-    },
-    { provider: "openrouter", baseUrl: "https://proxy.example/v1", count: 0, longTtl: false },
-    { provider: "custom", baseUrl: "https://proxy.example/v1", count: 0, longTtl: false },
-  ])(
-    "honors retention and route contracts for $provider at $baseUrl",
-    ({ provider, baseUrl, count, longTtl }) => {
-      const route = { ...model, provider, baseUrl };
-      for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
-        const payload = buildOpenAICompletionsParams(route, context, { cacheRetention });
-        expect(markers(payload)).toHaveLength(cacheRetention === "none" ? 0 : count);
-        expect(JSON.stringify(payload).includes('"ttl":"1h"')).toBe(
-          longTtl && cacheRetention === "long",
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "alpha",
+          isError: false,
+          content: [{ type: "text", text: "Result" }],
+          timestamp: 3,
+        },
+      ];
+      for (const [messages, anchor] of [
+        [context.messages, "Question"],
+        [toolLoop, supportsTools ? "Result" : "Question"],
+        [[...toolLoop, { role: "user", content: "Next", timestamp: 4 }], "Next"],
+      ] satisfies Array<[Context["messages"], string]>) {
+        const payload = buildOpenAICompletionsParams(
+          route,
+          {
+            ...context,
+            messages: [
+              ...messages,
+              {
+                role: "user",
+                content: "OpenClaw runtime context:\nRuntime facts",
+                timestamp: 5,
+                runtimeContext: {},
+              },
+            ],
+          },
+          undefined,
         );
-        expect(JSON.stringify(payload)).not.toContain(
-          JSON.stringify(SYSTEM_PROMPT_CACHE_BOUNDARY).slice(1, -1),
-        );
+        const wire = JSON.stringify(payload.messages);
+        expect(wire).toContain(JSON.stringify(marked(anchor)));
+        expect(wire).toContain('"content":"OpenClaw runtime context:\\nRuntime facts"');
+        expect(markers(payload)).toHaveLength(supportsTools ? 3 : 2);
       }
     },
   );
+
+  it.each([
+    ["openrouter", "", 3, true],
+    ["custom", "https://openrouter.ai/api/v1", 3, true],
+    ["deepinfra", "https://api.deepinfra.com/v1/openai", 3, false],
+    ["dashscope", "", 2, false],
+    ["custom", "https://dashscope.aliyuncs.com/compatible-mode/v1", 2, false],
+    ["openrouter", "https://proxy.example/v1", 0, false],
+    ["custom", "https://proxy.example/v1", 0, false],
+  ])("honors retention and route contracts for %s at %s", (provider, baseUrl, count, longTtl) => {
+    const route = { ...model, provider, baseUrl };
+    for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
+      const payload = buildOpenAICompletionsParams(route, context, { cacheRetention });
+      expect(markers(payload)).toHaveLength(cacheRetention === "none" ? 0 : count);
+      expect(JSON.stringify(payload).includes('"ttl":"1h"')).toBe(
+        longTtl && cacheRetention === "long",
+      );
+      expect(JSON.stringify(payload)).not.toContain(
+        JSON.stringify(SYSTEM_PROMPT_CACHE_BOUNDARY).slice(1, -1),
+      );
+    }
+  });
 });

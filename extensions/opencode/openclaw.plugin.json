@@ -211,6 +211,14 @@
       "defaultModels": { "image": "gpt-5-nano" }
     }
   },
+  "configGroups": [
+    {
+      "id": "native-sessions",
+      "title": "Native sessions",
+      "order": 10,
+      "properties": ["sessionCatalog"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -1,6 +1,6 @@
-// Qa Lab Matrix module records redacted Matrix protocol behavior.
 import { createHash } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
+import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   startMatrixQaFaultProxy,
   type MatrixQaFaultProxyExchange,
@@ -271,20 +271,15 @@ function collectStateFieldMarkers(value: unknown, depth = 0): string[] {
   return [...markers];
 }
 
-function extractStateFieldMarkers(body: Buffer, headers: Headers | IncomingHttpHeaders) {
-  const parsed = parseJsonBody(body, headers);
-  return parsed === undefined ? [] : collectStateFieldMarkers(parsed);
-}
-
 function buildBodyShape(
   body: Buffer,
   headers: Headers | IncomingHttpHeaders,
   route: string,
+  parsed: unknown,
 ): MatrixQaBodyShape {
   if (body.byteLength === 0) {
     return { kind: "empty" };
   }
-  const parsed = parseJsonBody(body, headers);
   if (parsed !== undefined) {
     return { kind: "json", fields: collectJsonFields(parsed, route) };
   }
@@ -309,6 +304,29 @@ function buildRedactedQuery(search: string, syncTokens: Map<string, string>) {
   return result;
 }
 
+const MATRIX_QA_STATE_FAMILIES: Array<[MatrixQaStateFamily, string[], string[]]> = [
+  ["sync-token", ["/sync"], []],
+  ["backup", ["/room_keys/", "/account_data/m.megolm_backup."], ["backup"]],
+  [
+    "key",
+    [
+      "/keys/",
+      "/sendtodevice/",
+      "/account_data/m.cross_signing.",
+      "/account_data/m.secret_storage.",
+    ],
+    [
+      "one_time_key",
+      "device_one_time_keys_count",
+      "device_unused_fallback_key_types",
+      "device_keys",
+      "session_data",
+    ],
+  ],
+  ["device", ["/devices"], ["device_id", "device_lists"]],
+  ["media", ["/media/"], ["content_uri", "mimetype"]],
+];
+
 function resolveStateFamilies(params: {
   requestFields: string[];
   responseFields: string[];
@@ -316,40 +334,13 @@ function resolveStateFamilies(params: {
 }) {
   const fields = [...params.requestFields, ...params.responseFields].join(" ").toLowerCase();
   const route = params.route.toLowerCase();
-  const families = new Set<MatrixQaStateFamily>();
-  if (route.includes("/sync")) {
-    families.add("sync-token");
-  }
-  if (route.includes("/room_keys/") || fields.includes("backup")) {
-    families.add("backup");
-  }
-  if (route.includes("/account_data/m.megolm_backup.")) {
-    families.add("backup");
-  }
-  if (
-    route.includes("/keys/") ||
-    route.includes("/sendtodevice/") ||
-    route.includes("/account_data/m.cross_signing.") ||
-    route.includes("/account_data/m.secret_storage.") ||
-    fields.includes("one_time_key") ||
-    fields.includes("device_one_time_keys_count") ||
-    fields.includes("device_unused_fallback_key_types") ||
-    fields.includes("device_keys") ||
-    fields.includes("session_data")
-  ) {
-    families.add("key");
-  }
-  if (
-    route.includes("/devices") ||
-    fields.includes("device_id") ||
-    fields.includes("device_lists")
-  ) {
-    families.add("device");
-  }
-  if (route.includes("/media/") || fields.includes("content_uri") || fields.includes("mimetype")) {
-    families.add("media");
-  }
-  return [...families].toSorted();
+  return MATRIX_QA_STATE_FAMILIES.filter(
+    ([, routes, markers]) =>
+      routes.some((marker) => route.includes(marker)) ||
+      markers.some((marker) => fields.includes(marker)),
+  )
+    .map(([family]) => family)
+    .toSorted();
 }
 
 function buildExpectation(
@@ -410,32 +401,24 @@ function buildExpectation(
     `${left.method} ${left.route}`.localeCompare(`${right.method} ${right.route}`),
   );
   const retries: MatrixQaScenarioRouteStateExpectation["retries"] = [];
-  const adjacentOperationRuns: MatrixQaInternalRecordedExchange[][] = [];
-  for (const record of orderedRecords) {
-    const currentRun = adjacentOperationRuns.at(-1);
-    if (currentRun?.[0]?.operationFingerprint === record.operationFingerprint) {
-      currentRun.push(record);
-    } else {
-      adjacentOperationRuns.push([record]);
-    }
-  }
-  for (const attempts of adjacentOperationRuns) {
-    if (attempts[0]?.request.route.endsWith("/sync")) {
+  for (let index = 0; index < orderedRecords.length; index += 1) {
+    const first = orderedRecords[index];
+    if (!first || first.response.status < 400 || first.request.route.endsWith("/sync")) {
       continue;
     }
-    for (let index = 0; index < attempts.length; index += 1) {
-      const first = attempts[index];
-      if (!first || first.response.status < 400) {
-        continue;
+    let retryEndIndex = index + 1;
+    while (retryEndIndex < orderedRecords.length) {
+      const attempt = orderedRecords[retryEndIndex];
+      if (attempt?.operationFingerprint !== first.operationFingerprint) {
+        break;
       }
-      const recoveryOffset = attempts
-        .slice(index + 1)
-        .findIndex((attempt) => attempt.response.status < 400);
-      const retryEndIndex = recoveryOffset < 0 ? attempts.length : index + recoveryOffset + 2;
-      const retryAttempts = attempts.slice(index, retryEndIndex);
-      if (retryAttempts.length < 2) {
-        continue;
+      retryEndIndex += 1;
+      if (attempt.response.status < 400) {
+        break;
       }
+    }
+    const retryAttempts = orderedRecords.slice(index, retryEndIndex);
+    if (retryAttempts.length > 1) {
       retries.push({
         attempts: retryAttempts.length,
         kind: "retry",
@@ -443,8 +426,8 @@ function buildExpectation(
         route: first.request.route,
         statuses: retryAttempts.map((attempt) => attempt.response.status),
       });
-      index = retryEndIndex - 1;
     }
+    index = retryEndIndex - 1;
   }
   const incrementalSyncRecords = orderedRecords.filter(
     (record) => record.sync?.since !== undefined,
@@ -483,24 +466,6 @@ function buildExpectation(
   };
 }
 
-function extractErrcode(body: Buffer, headers: Headers) {
-  const parsed = parseJsonBody(body, headers);
-  if (typeof parsed !== "object" || parsed === null) {
-    return undefined;
-  }
-  const errcode = (parsed as { errcode?: unknown }).errcode;
-  return typeof errcode === "string" ? errcode : undefined;
-}
-
-function extractNextBatch(body: Buffer, headers: Headers) {
-  const parsed = parseJsonBody(body, headers);
-  if (typeof parsed !== "object" || parsed === null) {
-    return undefined;
-  }
-  const nextBatch = (parsed as { next_batch?: unknown }).next_batch;
-  return typeof nextBatch === "string" ? nextBatch : undefined;
-}
-
 export async function startMatrixQaRecordingProxy(params: {
   targetBaseUrl: string;
 }): Promise<MatrixQaRecordingProxy> {
@@ -508,17 +473,8 @@ export async function startMatrixQaRecordingProxy(params: {
   let sequence = 0;
   const records: MatrixQaInternalRecordedExchange[] = [];
   const syncTokensByPrincipal = new Map<string, Map<string, string>>();
-  const observer: Required<MatrixQaFaultProxyObserver> = {
-    createExchangeContext: () => ({ scenarioId, sequence: ++sequence }),
-    onExchange(exchange: MatrixQaFaultProxyExchange) {
-      recordExchange(exchange);
-    },
-  };
   const recordExchange = (exchange: MatrixQaFaultProxyExchange) => {
-    const context =
-      typeof exchange.context === "object" && exchange.context !== null
-        ? (exchange.context as { scenarioId?: unknown; sequence?: unknown })
-        : undefined;
+    const context = asOptionalObjectRecord(exchange.context);
     const exchangeSequence = typeof context?.sequence === "number" ? context.sequence : ++sequence;
     const route = normalizeMatrixQaRoute(exchange.request.path);
     const exchangeScenarioId = route.endsWith("/sync")
@@ -526,25 +482,23 @@ export async function startMatrixQaRecordingProxy(params: {
       : typeof context?.scenarioId === "string"
         ? context.scenarioId
         : "unattributed";
-    const requestBody = buildBodyShape(exchange.request.body, exchange.request.headers, route);
-    const responseBody = buildBodyShape(exchange.response.body, exchange.response.headers, route);
-    const requestFields = extractStateFieldMarkers(exchange.request.body, exchange.request.headers);
-    const responseFields = extractStateFieldMarkers(
-      exchange.response.body,
-      exchange.response.headers,
-    );
+    const requestJson = parseJsonBody(exchange.request.body, exchange.request.headers);
+    const responseJson = parseJsonBody(exchange.response.body, exchange.response.headers);
+    const responseMetadata = asOptionalObjectRecord(responseJson);
+    const requestFields = collectStateFieldMarkers(requestJson);
+    const responseFields = collectStateFieldMarkers(responseJson);
     const syncPrincipal = exchange.request.bearerToken ?? "anonymous";
     const syncTokens = syncTokensByPrincipal.get(syncPrincipal) ?? new Map<string, string>();
     syncTokensByPrincipal.set(syncPrincipal, syncTokens);
     const sinceRaw = new URLSearchParams(exchange.request.search).get("since") ?? undefined;
     const since = sinceRaw ? (syncTokens.get(sinceRaw) ?? "sync-unknown") : undefined;
     const requestQuery = buildRedactedQuery(exchange.request.search, syncTokens);
-    const nextBatch = extractNextBatch(exchange.response.body, exchange.response.headers);
+    const nextBatch = readStringField(responseMetadata, "next_batch");
     if (nextBatch && !syncTokens.has(nextBatch)) {
       syncTokens.set(nextBatch, `sync-${syncTokens.size + 1}`);
     }
     const nextBatchAlias = nextBatch ? syncTokens.get(nextBatch) : undefined;
-    const responseErrcode = extractErrcode(exchange.response.body, exchange.response.headers);
+    const responseErrcode = readStringField(responseMetadata, "errcode");
     const operationFingerprint = createHash("sha256")
       .update(exchange.request.method)
       .update("\0")
@@ -559,13 +513,18 @@ export async function startMatrixQaRecordingProxy(params: {
     records.push({
       categories: resolveStateFamilies({ requestFields, responseFields, route }),
       request: {
-        body: requestBody,
+        body: buildBodyShape(exchange.request.body, exchange.request.headers, route, requestJson),
         method: exchange.request.method,
         query: requestQuery,
         route,
       },
       response: {
-        body: responseBody,
+        body: buildBodyShape(
+          exchange.response.body,
+          exchange.response.headers,
+          route,
+          responseJson,
+        ),
         ...(responseErrcode ? { errcode: responseErrcode } : {}),
         status: exchange.response.status,
       },
@@ -582,6 +541,10 @@ export async function startMatrixQaRecordingProxy(params: {
           }
         : {}),
     });
+  };
+  const observer: Required<MatrixQaFaultProxyObserver> = {
+    createExchangeContext: () => ({ scenarioId, sequence: ++sequence }),
+    onExchange: recordExchange,
   };
   const proxy = await startMatrixQaFaultProxy({
     targetBaseUrl: params.targetBaseUrl,
@@ -621,7 +584,7 @@ export async function startMatrixQaRecordingProxy(params: {
         substrate,
       };
     },
-    installFaultRule: (rule) => proxy.installRule(rule),
+    installFaultRule: proxy.installRule.bind(proxy),
     records: () =>
       structuredClone(
         records
@@ -631,7 +594,7 @@ export async function startMatrixQaRecordingProxy(params: {
     setScenarioId(nextScenarioId) {
       scenarioId = nextScenarioId;
     },
-    setTargetBaseUrl: (targetBaseUrl) => proxy.setTargetBaseUrl(targetBaseUrl),
-    stop: () => proxy.stop(),
+    setTargetBaseUrl: proxy.setTargetBaseUrl.bind(proxy),
+    stop: proxy.stop.bind(proxy),
   };
 }

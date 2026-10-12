@@ -1,6 +1,10 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { createSubscribedSessionHarness } from "../../agents/embedded-agent-subscribe.e2e-harness.js";
 import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { resetPendingAskUserQuestionsForTest } from "../../agents/tools/ask-user-tool.test-support.js";
@@ -15,7 +19,7 @@ import {
   installThreadingTestPlugin,
   requireToolResultHandler,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -35,67 +39,25 @@ beforeEach(async () => {
 afterEach(() => resetPendingAskUserQuestionsForTest());
 
 describe("credential prompt dispatch boundary", () => {
-  it.each([
-    {
-      name: "quiet group link",
-      link: true,
-      route: false,
-      failure: false,
-      terminal: false,
-      deny: false,
-    },
-    {
-      name: "quiet group blocker",
-      link: false,
-      route: false,
-      failure: false,
-      terminal: false,
-      deny: false,
-    },
-    { name: "routed link", link: true, route: true, failure: false, terminal: false, deny: false },
-    {
-      name: "routed blocker",
-      link: false,
-      route: true,
-      failure: false,
-      terminal: false,
-      deny: false,
-    },
-    {
-      name: "queued transport failure",
-      link: true,
-      route: false,
-      failure: true,
-      terminal: false,
-      deny: false,
-    },
-    {
-      name: "routed transport failure",
-      link: true,
-      route: true,
-      failure: true,
-      terminal: false,
-      deny: false,
-    },
-    {
-      name: "terminal before delivery",
-      link: true,
-      route: false,
-      failure: false,
-      terminal: true,
-      deny: false,
-    },
-    {
-      name: "explicit send-policy denial",
-      link: true,
-      route: false,
-      failure: false,
-      terminal: false,
-      deny: true,
-    },
+  it.for<
+    [
+      name: string,
+      link: boolean,
+      route: boolean,
+      failure: boolean,
+      terminal: boolean,
+      deny: boolean,
+    ]
+  >([
+    ["quiet group link", true, false, false, false, false],
+    ["quiet group blocker", false, false, false, false, false],
+    ["queued transport failure", true, false, true, false, false],
+    ["routed transport failure", true, true, true, false, false],
+    ["terminal before delivery", true, false, false, true, false],
+    ["explicit send-policy denial", true, false, false, false, true],
   ])(
-    "settles the producer's $name without plaintext controls",
-    async ({ link, route, failure, terminal, deny }) => {
+    "settles the producer's %s without plaintext controls",
+    async ([_name, link, route, failure, terminal, deny], { signal }) => {
       setNoAbort();
       hookMocks.runner.hasHooks.mockReturnValue(false);
       installThreadingTestPlugin({ id: "telegram" });
@@ -152,7 +114,7 @@ describe("credential prompt dispatch boundary", () => {
       const progress = vi.fn();
       let toolOutcome: Promise<unknown> | undefined;
       let unsubscribe: (() => void) | undefined;
-      let producerPayload: ReplyPayload | undefined;
+      const producerCalled = createDeferred();
       const callbackFinished = createDeferred();
       const dispatch = dispatchReplyFromConfig({
         ctx: buildTestCtx({
@@ -185,7 +147,7 @@ describe("credential prompt dispatch boundary", () => {
             messageChannel: "telegram",
             config: cfg,
             onToolResult: async (payload) => {
-              producerPayload = payload;
+              producerCalled.resolve();
               if (terminal) {
                 questionStatus = "cancelled";
               }
@@ -217,7 +179,14 @@ describe("credential prompt dispatch boundary", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await vi.waitFor(() => expect(producerPayload).toBeDefined());
+        await withinTest(
+          awaitGateBeforeSettlement(
+            producerCalled.promise,
+            dispatch,
+            "dispatch settled before the producer ran",
+          ),
+          signal,
+        );
         if (terminal || deny) {
           transport.resolve();
           await callbackFinished.promise;
@@ -225,8 +194,17 @@ describe("credential prompt dispatch boundary", () => {
           expect(mocks.routeReply).not.toHaveBeenCalled();
           answer.resolve({ status: "cancelled" });
         } else {
-          await vi.waitFor(() => expect(route ? mocks.routeReply : deliver).toHaveBeenCalledOnce());
-          const payload = asNullableRecord(await received.promise);
+          const payload = asNullableRecord(
+            await withinTest(
+              awaitGateBeforeSettlement(
+                received.promise,
+                dispatch,
+                "dispatch settled before delivery",
+              ),
+              signal,
+            ),
+          );
+          expect(route ? mocks.routeReply : deliver).toHaveBeenCalledOnce();
           expect(payload?.channelData).toEqual({ askUser: { questionId } });
           expect(payload).not.toHaveProperty("presentation");
           expect(payload).not.toHaveProperty("interactive");
@@ -257,7 +235,6 @@ describe("credential prompt dispatch boundary", () => {
             expect(questionStatus).toBe("cancelled");
           }
         }
-        expect(producerPayload).toBeDefined();
         expect(progress).not.toHaveBeenCalled();
         await expect(dispatch).resolves.toHaveProperty("result");
       } finally {

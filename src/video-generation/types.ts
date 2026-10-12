@@ -1,4 +1,3 @@
-// Shared video-generation request, provider, capability, and normalization contracts.
 import type { MediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -59,14 +58,10 @@ export type VideoGenerationProviderConfiguredContext = {
 };
 
 /** Context passed when resolving model-specific video generation capabilities. */
-export type VideoGenerationModelCapabilitiesContext = {
-  provider: string;
-  model: string;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  timeoutMs?: number;
-};
+export type VideoGenerationModelCapabilitiesContext = Pick<
+  VideoGenerationRequest,
+  "provider" | "model" | "cfg" | "agentDir" | "authStore" | "timeoutMs"
+>;
 
 /** Normalized request object passed to a selected video generation provider. */
 export type VideoGenerationRequest = {
@@ -168,7 +163,9 @@ export type VideoGenerationProvider = {
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   catalogByModel?: Readonly<Record<string, VideoGenerationCatalogModelEntry>>;
+  /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. */
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
+  isConfiguredAsync?: (ctx: VideoGenerationProviderConfiguredContext) => Promise<boolean>;
   resolveModelCapabilities?: (
     ctx: VideoGenerationModelCapabilitiesContext,
   ) =>

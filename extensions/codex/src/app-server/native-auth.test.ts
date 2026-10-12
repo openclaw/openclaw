@@ -10,15 +10,25 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
 }));
 
 const config: OpenClawConfig = {
-  plugins: { entries: { codex: { config: { appServer: { command: "native-codex-fixture" } } } } },
+  plugins: {
+    entries: {
+      codex: { config: { appServer: { command: "native-codex-fixture", homeScope: "user" } } },
+    },
+  },
 };
 
 describe("Codex native login discovery", () => {
-  beforeEach(() => run.mockReset());
+  beforeEach(() => {
+    run.mockReset().mockResolvedValue({
+      termination: "exit",
+      code: 0,
+      stdout: "",
+      stderr: "Logged in using ChatGPT",
+    });
+  });
 
   it.each([
     ["Logged in using an API key - sk-synthetic***11111", "api-key"],
-    ["Logged in using ChatGPT", "oauth"],
     ["Logged in using access token", "token"],
   ])("projects %s as a native-only fact", async (line, mode) => {
     run.mockResolvedValue({ termination: "exit", code: 0, stdout: "", stderr: line });
@@ -31,7 +41,6 @@ describe("Codex native login discovery", () => {
 
   it.each([
     [0, "Logged in using Amazon Bedrock"],
-    [0, "Logged in using workload identity"],
     [1, "Not logged in"],
     [0, "unexpected response"],
   ])("does not authorize OpenAI from exit %s and %s", async (code, stderr) => {
@@ -43,12 +52,6 @@ describe("Codex native login discovery", () => {
   it.each(["config", "env"] as const)(
     "uses the effective %s arguments and environment",
     async (source) => {
-      run.mockResolvedValue({
-        termination: "exit",
-        code: 0,
-        stdout: "",
-        stderr: "Logged in using ChatGPT",
-      });
       const args = [
         "-c",
         'cli_auth_credentials_store="keyring"',
@@ -74,6 +77,7 @@ describe("Codex native login discovery", () => {
           pluginConfig: {
             appServer: {
               command: "native-codex-fixture",
+              homeScope: "user",
               mode: "yolo",
               clearEnv: ["CODEX_API_KEY"],
               ...(source === "config" ? { args } : {}),
@@ -102,32 +106,30 @@ describe("Codex native login discovery", () => {
     },
   );
 
-  it("does not borrow the user login for an explicitly isolated home", async () => {
-    expect(
-      await probeCodexNativeAuth({
-        config: {
-          plugins: { entries: { codex: { config: { appServer: { homeScope: "agent" } } } } },
-        },
-      }),
-    ).toBeUndefined();
-    expect(run).not.toHaveBeenCalled();
-  });
+  it.each([undefined, "agent"] as const)(
+    "does not borrow the user login for homeScope=%s",
+    async (homeScope) => {
+      expect(
+        await probeCodexNativeAuth({
+          config: {
+            plugins: { entries: { codex: { config: { appServer: { homeScope } } } } },
+          },
+        }),
+      ).toBeUndefined();
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves the official Node launcher and native config when probing login", async () => {
     const launcher = createRequire(new URL("../../package.json", import.meta.url)).resolve(
       "@openai/codex/bin/codex.js",
     );
-    run.mockResolvedValue({
-      termination: "exit",
-      code: 0,
-      stdout: "",
-      stderr: "Logged in using ChatGPT",
-    });
     expect(
       await probeCodexNativeAuth({
         pluginConfig: {
           appServer: {
             command: process.execPath,
+            homeScope: "user",
             args: [
               launcher,
               "-c",
@@ -159,34 +161,15 @@ describe("Codex native login discovery", () => {
     );
   });
 
-  it.each(["config", "env"] as const)(
-    "does not borrow the local login for a proxy selected through %s arguments",
-    async (source) => {
-      run.mockResolvedValue({
-        termination: "exit",
-        code: 0,
-        stdout: "",
-        stderr: "Logged in using ChatGPT",
-      });
-      expect(
-        await probeCodexNativeAuth({
-          pluginConfig: {
-            appServer: {
-              command: "native-codex-fixture",
-              ...(source === "config"
-                ? { args: ["app-server", "proxy", "--sock", "/fixture/server.sock"] }
-                : {}),
-            },
-          },
-          env:
-            source === "env"
-              ? { OPENCLAW_CODEX_APP_SERVER_ARGS: "app-server proxy --sock /fixture/server.sock" }
-              : {},
-        }),
-      ).toBeUndefined();
-      expect(run).not.toHaveBeenCalled();
-    },
-  );
+  it("does not borrow the local login for a proxy selected through environment arguments", async () => {
+    expect(
+      await probeCodexNativeAuth({
+        config,
+        env: { OPENCLAW_CODEX_APP_SERVER_ARGS: "app-server proxy --sock /fixture/server.sock" },
+      }),
+    ).toBeUndefined();
+    expect(run).not.toHaveBeenCalled();
+  });
 
   it("does not publish a result after its capture is cancelled", async () => {
     const owner = new AbortController();

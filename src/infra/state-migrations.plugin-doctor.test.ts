@@ -1,11 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createOpenClawStateLeaseLostError } from "../state/openclaw-state-lease-error.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { runPostSessionPluginDoctorStateRepairs } from "./state-migrations.plugin-doctor.js";
+import {
+  autoMigrateLegacyPluginDoctorState,
+  runPostSessionPluginDoctorStateRepairs,
+} from "./state-migrations.plugin-doctor.js";
+import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 
 const controls = vi.hoisted(() => ({
   entries: [] as ReturnType<typeof listPluginDoctorStateMigrationEntries>,
@@ -27,7 +33,16 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => {
         // The lease owner validates again after the callback returns. Model a lost
         // lease at that boundary, after migrations have already committed.
         if (controls.failSettlement) {
-          throw new Error("lease settlement failed");
+          throw createOpenClawStateLeaseLostError(
+            {
+              scope: "core:agent-database-maintenance",
+              key: "global",
+              leaseLabel: "agent database maintenance lease",
+            },
+            new Error(
+              "state lease heartbeat exited: lease expired or ownership lost (exitCode=0, acquiredAt=1800000000000, lastRenewedAt=1800000020000)",
+            ),
+          );
         }
         return result;
       })) satisfies typeof actual.withPluginLifecycleLease,
@@ -39,12 +54,84 @@ const tempDirs = createTrackedTempDirs();
 afterEach(async () => {
   controls.entries = [];
   controls.failSettlement = false;
+  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
 });
 
-describe("plugin Doctor migration settlement", () => {
+describe("plugin Doctor migrations", () => {
+  it("refuses pre-July shared schema before plugin migrations", async () => {
+    const root = await tempDirs.make("openclaw-plugin-doctor-shared-schema-");
+    const stateDir = path.join(root, ".openclaw");
+    const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: stateDir };
+    const cfg = {};
+    const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(stateDbPath), { recursive: true });
+    const db = new DatabaseSync(stateDbPath);
+    try {
+      db.exec(`
+        CREATE TABLE agent_databases (
+          agent_id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          schema_version INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL,
+          size_bytes INTEGER
+        );
+        INSERT INTO agent_databases VALUES ('main', 'agent.sqlite', 1, 10, 20);
+      `);
+    } finally {
+      db.close();
+    }
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["plugin state migrated"],
+      warnings: [],
+    }));
+    controls.entries = [
+      {
+        pluginId: "memory-core",
+        channelIds: [],
+        migration: {
+          id: "memory-core-test",
+          label: "Memory Core test migration",
+          detectLegacyState: () => ({ preview: ["plugin state"] }),
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    await expect(
+      autoMigrateLegacyPluginDoctorState({ config: cfg, env, homedir: () => root }),
+    ).rejects.toThrow("unsupported agent database registry schema");
+    expect(migrateLegacyState).not.toHaveBeenCalled();
+    const preserved = new DatabaseSync(stateDbPath, { readOnly: true });
+    try {
+      expect(preserved.prepare("SELECT * FROM agent_databases").all()).toEqual([
+        {
+          agent_id: "main",
+          path: "agent.sqlite",
+          schema_version: 1,
+          last_seen_at: 10,
+          size_bytes: 20,
+        },
+      ]);
+    } finally {
+      preserved.close();
+    }
+
+    const result = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.warnings).toEqual([
+      expect.stringContaining("unsupported agent database registry schema"),
+    ]);
+    expect(result.changes).toEqual([]);
+    expect(migrateLegacyState).not.toHaveBeenCalled();
+  });
   it.each([
     {
       name: "reordered",
@@ -104,7 +191,10 @@ describe("plugin Doctor migration settlement", () => {
       }),
     ).resolves.toEqual({
       changes: [],
+      completedPluginIds: undefined,
+      requiredPluginIds: ["owner"],
       warnings: [expect.stringContaining("immutable action order")],
+      warningDisposition: undefined,
     });
     expect(observed).toEqual([]);
   });
@@ -156,10 +246,14 @@ describe("plugin Doctor migration settlement", () => {
           pluginId,
           id: migration.id,
         })),
+        // Replay certification needs a consumer; model the session owner's settlement hook.
+        beforeCompletion: async () => {},
       };
 
       const first = await runPostSessionPluginDoctorStateRepairs(params);
 
+      expect(first.requiredPluginIds).toEqual(["settlement-owner"]);
+      expect(first.completedPluginIds).toBeUndefined();
       expect(fs.readFileSync(markers[0], "utf8")).toBe("committed");
       expect(fs.existsSync(markers[1])).toBe(!["later-action", "detector"].includes(failure));
       expect(first.changes).toEqual(
@@ -179,13 +273,63 @@ describe("plugin Doctor migration settlement", () => {
               ? "refusal"
               : failure === "detector"
                 ? "second detector failed"
-                : "lease settlement failed",
+                : "lease expired or ownership lost (exitCode=0, acquiredAt=1800000000000, lastRenewedAt=1800000020000)",
         );
       }
 
       const replay = await runPostSessionPluginDoctorStateRepairs(params);
+      expect(replay.requiredPluginIds).toEqual(["settlement-owner"]);
+      expect(replay.completedPluginIds).toEqual(
+        failure === "none" || failure === "later-warning" ? ["settlement-owner"] : undefined,
+      );
       expect(replay.changes).toEqual([]);
       expect(fs.readFileSync(markers[0], "utf8")).toBe("committed");
     },
   );
+
+  it("runs default-phase detectors only when completion certification has a consumer", async () => {
+    const root = await tempDirs.make("openclaw-plugin-doctor-certification-");
+    const env = {
+      ...process.env,
+      HOME: root,
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      OPENCLAW_STATE_DIR: root,
+    };
+    const detected: string[] = [];
+    controls.entries = (["default", "after-session-repair"] as const).map((phase) => ({
+      pluginId: "owner",
+      channelIds: [],
+      trustedForDurableStores: false,
+      migration: {
+        id: `${phase}-action`,
+        label: `${phase} action`,
+        ...(phase === "after-session-repair" ? { phase } : {}),
+        detectLegacyState: () => {
+          detected.push(phase);
+          return null;
+        },
+        migrateLegacyState: () => ({ changes: [], warnings: [] }),
+      },
+    }));
+    const params = { config: {}, env, maintenanceAuthority: { assertCurrent() {} } };
+
+    // Nothing deferred and no retained sources: the fresh-install shape.
+    const uncertified = await runPostSessionPluginDoctorStateRepairs(params);
+
+    expect(detected).toEqual(["after-session-repair"]);
+    expect(uncertified).toEqual({
+      changes: [],
+      completedPluginIds: undefined,
+      requiredPluginIds: ["owner"],
+      warnings: [],
+    });
+
+    const certified = await runPostSessionPluginDoctorStateRepairs({
+      ...params,
+      beforeCompletion: async () => {},
+    });
+
+    expect(detected).toEqual(["after-session-repair", "after-session-repair", "default"]);
+    expect(certified.completedPluginIds).toEqual(["owner"]);
+  });
 });

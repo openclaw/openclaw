@@ -79,6 +79,9 @@ describeLive("Gateway visible worktree spawn (live)", () => {
           "-m",
           "Initialize fixture",
         ]);
+        const remote = instance.state.path("registered-project.git");
+        await git(["clone", "--bare", repository, remote]);
+        await git(["remote", "add", "origin", remote]);
         const config: OpenClawConfig = {
           gateway: {
             mode: "local",
@@ -122,7 +125,8 @@ describeLive("Gateway visible worktree spawn (live)", () => {
               subagents: { model: modelRef, maxSpawnDepth: 1 },
             },
           },
-          tools: { codeMode: false, allow: ["read", "sessions_spawn"] },
+          // Keep sessions_spawn direct so its receipt is the sessions_spawn tool result.
+          tools: { codeMode: false, toolSearch: false, allow: ["read", "sessions_spawn"] },
         };
         await instance.state.writeConfig(config);
         await instance.startGateway();

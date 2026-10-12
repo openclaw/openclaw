@@ -1,31 +1,42 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
+import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 
-export class UpdateCommandRecoveryPendingError extends Error {
-  override name = "UpdateCommandRecoveryPendingError";
+export function readOriginalUpdateRecovery(
+  params: Pick<MutableUpdateExecutionParams, "installKind" | "root">,
+  timeoutMs: number,
+) {
+  return params.installKind === "git"
+    ? readCurrentGitUpdateRecovery(params.root, timeoutMs)
+    : verifyPackageUpdateRecovery(params.root);
 }
 
 /** Refuse retained recovery before any package-only effects or diagnostic writes. */
 export function assertUpdateCommandRecovery(opts: UpdateCommandOptions): void {
   opts.run?.executorFence?.assertCurrent();
+  assertUpdateCommandRecoveryState(opts);
+}
+
+export function assertUpdateCommandRecoveryState(opts: UpdateCommandOptions): void {
   if (opts.recovery) {
     throw new UpdateCommandRecoveryPendingError(
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
     );
   }
-  if (opts.run) {
-    const current = loadUpdateRecovery(opts.run.runId, { env: opts.run.env });
-    if (current) {
-      throw new UpdateRecoveryRequiredError(current);
-    }
+  const current = opts.run && loadUpdateRecovery(opts.run.runId, { env: opts.run.env });
+  if (current) {
+    throw new UpdateRecoveryRequiredError(current);
   }
 }
 
@@ -35,14 +46,7 @@ export async function assertUpdateCommandPackageFinalization(
 ): Promise<void> {
   const run = params.opts.run;
   const executor = run?.executorFence;
-  const assertCurrent = () => {
-    if (params.opts.run !== run || run?.executorFence !== executor) {
-      throw new UpdateCommandRecoveryPendingError(
-        "Package finalization lost its original executor.",
-      );
-    }
-    executor?.assertCurrent();
-  };
+  const assertCurrent = () => executor?.assertCurrent();
   try {
     assertCurrent();
     if (params.opts.recovery) {
@@ -72,11 +76,8 @@ export function createUpdateCommandFinalizationFence(
 ): () => void {
   const originalRun = params.opts.run;
   const executor = originalRun?.executorFence;
-  const assertCurrent = () => {
+  return () => {
     try {
-      if (params.opts.run !== originalRun || originalRun?.executorFence !== executor) {
-        throw new Error("Package finalization lost its original executor.");
-      }
       executor?.assertCurrent();
     } catch (cause) {
       throw new UpdateCommandPendingRecoveryFailure(params.result, formatErrorMessage(cause), {
@@ -84,5 +85,4 @@ export function createUpdateCommandFinalizationFence(
       });
     }
   };
-  return assertCurrent;
 }

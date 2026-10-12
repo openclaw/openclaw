@@ -2,12 +2,26 @@
 // gateway clients and clamps timeout values.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
+
+// Direct sends and option normalization must not load the Gateway runtime.
+export const loadMessageGatewayRuntime = createLazyRuntimeModule(
+  () => import("./message.gateway.runtime.js"),
+);
+
+export async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<string> {
+  if (idempotencyKey) {
+    return idempotencyKey;
+  }
+  const { randomIdempotencyKey } = await loadMessageGatewayRuntime();
+  return randomIdempotencyKey();
+}
 
 export type OutboundGatewayRequest = Pick<
   CallGatewayOptions,

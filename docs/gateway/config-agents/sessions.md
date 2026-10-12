@@ -9,6 +9,40 @@ title: "Configuration — agent sessions"
 
 `session.*` keys: how conversations map to sessions, when a session resets, and who can see or join one.
 
+## Communication defaults
+
+Configure whether sessions may initiate or accept messages from other sessions:
+
+```json5
+{
+  session: {
+    communication: {
+      send: "always",
+      receive: "ask",
+    },
+  },
+}
+```
+
+Both directions accept `always`, `ask`, or `never`; omitted values default to
+`always`. `ask` requires a human decision before sending or admitting the message
+as new peer input. Existing access restrictions still apply to `always`.
+
+The Control UI session menu’s **Advanced** submenu can override either direction. **Reset** removes the
+override, so later configuration changes apply again. Existing explicit overrides
+are not overwritten when defaults change. Resets preserve the session settings,
+new explicit children and forks inherit them, and delegated work remains subject
+to its parent restrictions. Adopting an existing session never replaces its settings.
+Changes apply to new admissions, not already accepted messages.
+
+These preferences do not replace `tools.sessions.visibility`, human sharing, or
+the channel-oriented `sendPolicy`. Requested replies and authorized task results
+retain their existing completion authority. See [Session tools](/concepts/session-tool#communication-preferences).
+
+Older versions do not enforce these preferences. Before downgrading, remove the
+new configuration keys and restore any restrictions through the older version
+of tool and session policy.
+
 ## Session
 
 ```json5
@@ -17,6 +51,7 @@ title: "Configuration — agent sessions"
     scope: "per-sender",
     dmScope: "main", // main | per-peer | per-channel-peer | per-account-channel-peer
     groupScope: "per-group", // main | per-group
+    notifyOnCreate: true, // notify Home about new sessions (default)
     identityLinks: {
       alice: ["telegram:123456789", "discord:987654321012345678"],
     },
@@ -80,7 +115,9 @@ title: "Configuration — agent sessions"
 - **`groupScope`**: how groups, rooms, and channels are grouped.
   - `per-group` (default): keep each non-direct peer in its channel-scoped session.
   - `main`: route non-direct peers into the agent main session. Prefer a narrow `bindings[].session.groupScope` override when only selected trusted rooms should share main context.
+- **`notifyOnCreate`**: queue new-session awareness in the owning agent's Home conversation (default: `true`). Pending creations share one bounded summary with available title, creator, and creation source, without copying messages. Older entries are omitted when the summary is full, leaving queue capacity for reminders and other events. Home consumes it on the next turn or scheduled heartbeat. Set `false` to disable. Drafts, incognito sessions, Home itself, hidden internal sessions, and scheduled cron runs are excluded; reopening or resetting an existing session does not notify again. The summary is in memory and does not survive a Gateway restart. See [The main session](/concepts/main-session#what-flows-into-the-main-session).
 - **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing.
+- **`resetTriggers`**: explicit commands or phrases that reset the session. Matching is case-insensitive; list each desired spelling because command aliases are not added automatically. For example, `["/tell"]` resets `/tell` messages, while `/steer` keeps its normal steering behavior. Follow-up text after a matching trigger is preserved, including later lines.
 - **`reset`**: primary reset policy. `none` disables automatic reset and is the default; compaction bounds active context instead. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins. `/new` and `/reset` remain available in every mode. Daily reset freshness uses the session row's `sessionStartedAt`; idle reset freshness uses `lastInteractionAt`. Background/system-event writes such as heartbeat, cron wakeups, exec notifications, and gateway bookkeeping can update `updatedAt`, but they do not keep daily/idle sessions fresh.
   - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Doctor migrates legacy `dm` entries to `direct`; the schema rejects `dm`.
 - **`resetByChannel`**: per-channel reset overrides keyed by provider/channel id. When the session's channel has a matching entry, it wins outright over `resetByType`/`reset` for that session. Use only when one channel needs reset behavior different from the type-level policy.
@@ -92,7 +129,7 @@ title: "Configuration — agent sessions"
   - `archiveDashboardAfter`: inactivity cutoff for archiving visible dashboard sessions (default `7d`); `false` or `0` disables only this dashboard trigger. Eligible sessions can still be archived by `pruneAfter` or `maxEntries`.
   - `maxEntries`: maximum number of unarchived SQLite session entries (default `5000`). Archived rows do not consume the cap. Cleanup archives the oldest eligible ordinary sessions, while synthetic runtime sessions remain disposable and may be removed. Pinned sessions, active or admitted work, model-locked sessions, and durable external conversation pointers remain protected; if protection prevents reaching the cap, the unarchived store remains above it. Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately but does not unprotect rows.
   - `preserveRecent`: optional inactivity window that protects recently active interactive sessions and all of their SQLite history generations from automatic age, count, and disk-budget history eviction (for example `"7d"`). Unset or `false` disables this protection. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent sessions remain eligible for bounded cleanup. Protection can temporarily keep the store above configured entry or disk targets and does not archive sessions.
-  - Short-lived gateway model-run probe sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run probe rows when session-entry maintenance/cap pressure is reached. Only strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
+  - Short-lived gateway model-run check sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run check rows when session-entry maintenance/cap pressure is reached. Only strict explicit check keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
   - Legacy `rotateBytes` is rejected by the current schema; `openclaw doctor --fix` removes it from older configs.
   - `resetArchiveRetention`: age-based retention for reset/deleted transcript archives. By default, archives remain until disk-budget eviction; set a duration to opt into wall-clock deletion, or `false` to disable it explicitly.
   - `maxDiskBytes`: per-agent physical disk budget (default `10gb`), counting the SQLite main file, its `-wal` file, and counted files in the agent sessions directory. In `warn` mode it logs warnings. In `enforce` mode it first reclaims checkpointable database space, then removes old reset/delete artifacts, unreferenced historical generations, and finally the oldest sessions explicitly marked as archived by the active-session cap. Manual, legacy, age-retention, stale-dashboard, and recovery archives remain protected. Protected history and database pages that cannot yet be reclaimed can keep usage above the cleanup target; this is not a guaranteed physical ceiling. Set `false`, `0`, or `"0"` to disable the budget entirely.
@@ -103,7 +140,7 @@ title: "Configuration — agent sessions"
   - `enabled`: master switch for supported channel thread bindings
   - `idleHours`: default inactivity auto-unbind in hours (`0` disables; providers can override)
   - `maxAgeHours`: default hard max age in hours (`0` disables; providers can override)
-  - `spawnSessions`: default gate for creating thread-bound work sessions from `sessions_spawn` and ACP thread spawns. Defaults to `true` when thread bindings are enabled; providers/accounts can override.
+  - `spawnSessions`: default gate for creating thread-bound work sessions from `sessions_spawn` and ACP thread spawns. Agent spawns always open a new child thread and never bind the current conversation. Defaults to `true` when thread bindings are enabled; providers/accounts can override.
   - `defaultSpawnContext`: default native subagent context for thread-bound spawns (`"fork"` or `"isolated"`). Defaults to `"fork"`.
 - **`sharing`**: controls which per-session collaboration modes owners and `operator.admin` connections may select. Every flag defaults to `true`; setting one to `false` removes that choice from the Control UI and makes create-time visibility or `session.visibility.set` reject it. New sessions start `shared` unless the Control UI starts one as a draft.
   - `readOnly`: allow `read-only`, where non-members can watch but cannot send, steer, abort, approve, or mutate session state.

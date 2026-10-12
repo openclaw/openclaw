@@ -1,4 +1,3 @@
-/** Node-host command dispatcher for system commands, approvals, env policy, and plugin commands. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -7,51 +6,48 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { validateSystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
 import {
   analyzeArgvCommand,
   createExecApprovalPolicySnapshot,
   ensureExecApprovalsSnapshot,
-  mergeExecApprovalsSocketDefaults,
   minSecurity,
   maxAsk,
   normalizeExecApprovals,
-  readExecApprovalsSnapshot,
+  readExecApprovalsSnapshotAsync,
   redactExecApprovals,
   resolveAllowAlwaysPatternCoverage,
   resolveExecApprovalsFromFile,
   updateExecApprovals,
   type ExecAsk,
+  type ExecCommandSegment,
   type ExecApprovalsFile,
-  type ExecApprovalsResolved,
+  type ExecApprovalsSnapshot,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
-import {
-  requestExecHostViaSocket,
-  type ExecHostRequest,
-  type ExecHostResponse,
-} from "../infra/exec-host.js";
-import {
-  extractShellWrapperCommand,
-  isShellWrapperInvocation,
-} from "../infra/exec-wrapper-resolution.js";
-import {
-  inspectHostExecEnvOverrides,
-  sanitizeHostExecEnv,
-  sanitizeSystemRunEnvOverrides,
-} from "../infra/host-env-security.js";
+import { extractShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
+import { listHostDirectories } from "../infra/host-directory-listing.js";
+import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_DEVICE_APPS_COMMAND,
+  NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_TERMINAL_UPLOAD_COMMAND,
   NODE_WORKER_DESKTOP_COMPUTER_COMMAND,
 } from "../infra/node-commands.js";
+import { stageTerminalUpload } from "../infra/terminal-file-upload.js";
 import { logWarn } from "../logger.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
-import type { NodeHostClient } from "./client.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import {
+  createNodeInvokeResponder,
+  type NodeHostClient,
+  type NodeInvokeResponder,
+} from "./client.js";
 import { invokeNodeWorkerComputerCommand, type NodeWorkerComputer } from "./computer-command.js";
 import { invokeNodeDesktopStream } from "./desktop-stream-command.js";
 import {
@@ -59,18 +55,17 @@ import {
   type NodeHostInvokeRuntime,
 } from "./invoke-agent-cli-claude-handler.js";
 import { invokeDeviceApps } from "./invoke-device-apps.js";
-import { invokeNodeFileCommand } from "./invoke-file-commands.js";
 import { boundMcpToolResultPayload } from "./invoke-mcp-result.js";
+import { decodeNodeInvokeParams as decodeParams } from "./invoke-payload.js";
+import { withNodeHostPluginInvocation } from "./invoke-plugin-context.js";
+import { runCommand } from "./invoke-run-command.js";
 import {
   buildSystemRunApprovalPlan,
-  handleSystemRunInvoke,
-  resolveEffectiveSystemRunExecPolicy,
-} from "./invoke-system-run.js";
+  buildSystemRunPrepareCoverageEnv,
+} from "./invoke-system-run-plan.js";
+import { handleSystemRunInvoke, resolveEffectiveSystemRunExecPolicy } from "./invoke-system-run.js";
 import type {
-  ExecEventPayload,
-  ExecFinishedEventParams,
   NodeInvokeRequestPayload,
-  RunResult,
   SkillBinsProvider,
   SystemRunParams,
 } from "./invoke-types.js";
@@ -81,13 +76,11 @@ import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-comm
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
+import { preferMacAppExecHost } from "./runtime-manifest.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
-
-const OUTPUT_CAP = 200_000;
 
 const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
 
-const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
@@ -99,48 +92,20 @@ type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
   workerComputer?: NodeWorkerComputer;
 };
 
-const execHostEnforced =
-  normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_HOST ?? "") === "app";
-const execHostFallbackAllowed =
-  normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_FALLBACK ?? "") !== "0";
-const preferMacAppExecHost = process.platform === "darwin" && execHostEnforced;
-
-type SystemWhichParams = {
-  bins: string[];
-};
-
-type McpToolsCallParams = {
-  server: string;
-  tool: string;
-  arguments?: Record<string, unknown>;
-};
+type McpToolsCallParams = ReturnType<typeof decodeMcpToolsCallParams>;
 
 type SystemExecApprovalsSetParams = {
   file: ExecApprovalsFile;
   baseHash?: string | null;
 };
 
-type SystemRunPrepareParams = {
+type SystemRunPrepareParams = Parameters<typeof buildSystemRunApprovalPlan>[0] & {
   security?: ExecSecurity;
   ask?: ExecAsk;
-  command?: unknown;
-  rawCommand?: unknown;
-  cwd?: unknown;
   env?: Record<string, string> | null;
-  agentId?: unknown;
-  sessionKey?: unknown;
+  executionContext?: unknown;
   strictInlineEval?: unknown;
 };
-
-type SystemRunPrepareEnv =
-  | {
-      ok: true;
-      env: Record<string, string>;
-    }
-  | {
-      ok: false;
-      message: string;
-    };
 
 function resolveNodeSkillCwdParam<T extends { cwd?: unknown }>(params: T, nodeId: string): T {
   if (typeof params.cwd !== "string") {
@@ -152,51 +117,6 @@ function resolveNodeSkillCwdParam<T extends { cwd?: unknown }>(params: T, nodeId
   return resolved ? { ...params, cwd: resolved } : params;
 }
 
-function buildEnvOverrideRejectionMessage(params: {
-  rejectedOverrideBlockedKeys: string[];
-  rejectedOverrideInvalidKeys: string[];
-}): string {
-  const details: string[] = [];
-  if (params.rejectedOverrideBlockedKeys.length > 0) {
-    details.push(`blocked override keys: ${params.rejectedOverrideBlockedKeys.join(", ")}`);
-  }
-  if (params.rejectedOverrideInvalidKeys.length > 0) {
-    details.push(
-      `invalid non-portable override keys: ${params.rejectedOverrideInvalidKeys.join(", ")}`,
-    );
-  }
-  return `SYSTEM_RUN_DENIED: environment override rejected (${details.join("; ")})`;
-}
-
-function buildSystemRunPrepareCoverageEnv(params: {
-  argv: string[];
-  env?: Record<string, string> | null;
-}): SystemRunPrepareEnv {
-  const diagnostics = inspectHostExecEnvOverrides({
-    overrides: params.env ?? undefined,
-    blockPathOverrides: true,
-  });
-  if (
-    diagnostics.rejectedOverrideBlockedKeys.length > 0 ||
-    diagnostics.rejectedOverrideInvalidKeys.length > 0
-  ) {
-    return {
-      ok: false,
-      message: buildEnvOverrideRejectionMessage(diagnostics),
-    };
-  }
-  const envOverrides = sanitizeSystemRunEnvOverrides({
-    overrides: params.env ?? undefined,
-    shellWrapper: isShellWrapperInvocation(params.argv),
-  });
-  return {
-    ok: true,
-    // Prepared coverage is durable approval evidence, so keep this in parity
-    // with the env passed to `system.run` policy and execution.
-    env: sanitizeEnv(envOverrides),
-  };
-}
-
 async function buildSystemRunAllowAlwaysCoverage(params: {
   argv: string[];
   rawCommand?: string | null;
@@ -206,6 +126,8 @@ async function buildSystemRunAllowAlwaysCoverage(params: {
 }) {
   const cwd = params.cwd ?? undefined;
   const shellWrapper = extractShellWrapperCommand(params.argv, params.rawCommand);
+  let segments: ExecCommandSegment[];
+  let complete = true;
   if (shellWrapper.isWrapper) {
     if (!shellWrapper.command) {
       return { complete: false, patterns: [] };
@@ -220,40 +142,26 @@ async function buildSystemRunAllowAlwaysCoverage(params: {
       return { complete: false, patterns: [] };
     }
     const candidates = authorizationPlan.groups.flatMap((group) => group.candidates);
-    const reusableSegments = candidates
+    segments = candidates
       .filter((candidate) => candidate.allowAlways)
       .map((candidate) => candidate.sourceSegment);
-    const coverage = resolveAllowAlwaysPatternCoverage({
-      segments: reusableSegments,
-      cwd,
-      env: params.env,
-      platform: process.platform,
-      strictInlineEval: params.strictInlineEval,
-    });
-    return {
-      ...coverage,
-      complete: coverage.complete && reusableSegments.length === candidates.length,
-    };
+    complete = segments.length === candidates.length;
+  } else {
+    const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
+    if (!analysis.ok) {
+      return { complete: false, patterns: [] };
+    }
+    segments = analysis.segments;
   }
-  const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
-  if (!analysis.ok) {
-    return { complete: false, patterns: [] };
-  }
-  return resolveAllowAlwaysPatternCoverage({
-    segments: analysis.segments,
+  const coverage = resolveAllowAlwaysPatternCoverage({
+    segments,
     cwd,
     env: params.env,
     platform: process.platform,
     strictInlineEval: params.strictInlineEval,
   });
+  return { ...coverage, complete: coverage.complete && complete };
 }
-
-type ExecApprovalsSnapshot = {
-  path: string;
-  exists: boolean;
-  hash: string;
-  file: ExecApprovalsFile;
-};
 
 export type { NodeInvokeRequestPayload, SkillBinsProvider } from "./invoke-types.js";
 
@@ -261,29 +169,8 @@ function resolveExecSecurity(value?: string): ExecSecurity {
   return value === "deny" || value === "allowlist" || value === "full" ? value : DEFAULT_SECURITY;
 }
 
-function isCmdExeInvocation(argv: string[]): boolean {
-  const token = argv[0]?.trim();
-  if (!token) {
-    return false;
-  }
-  const base = normalizeLowercaseStringOrEmpty(path.win32.basename(token));
-  return base === "cmd.exe" || base === "cmd";
-}
-
 function resolveExecAsk(value?: string): ExecAsk {
   return value === "off" || value === "on-miss" || value === "always" ? value : DEFAULT_ASK;
-}
-
-/** Builds a sanitized execution environment with controlled PATH and approved overrides. */
-function sanitizeEnv(overrides?: Record<string, string> | null): Record<string, string> {
-  return sanitizeHostExecEnv({ overrides, blockPathOverrides: true });
-}
-
-function truncateOutput(raw: string, maxChars: number): { text: string; truncated: boolean } {
-  if (raw.length <= maxChars) {
-    return { text: raw, truncated: false };
-  }
-  return { text: `... (truncated) ${sliceUtf16Safe(raw, raw.length - maxChars)}`, truncated: true };
 }
 
 function requireExecApprovalsBaseHash(
@@ -308,98 +195,7 @@ function requireExecApprovalsBaseHash(
   }
 }
 
-// libuv reports a failed pre-exec `chdir(cwd)` as `spawn <argv0> ENOENT`, which
-// blames the shell/command instead of the missing working directory (#85202).
-// When the spawn cwd is set but is not a usable directory, name the real cause.
-// Diagnostic only: the run still fails closed — the cwd is never dropped to fall
-// back to the node's default directory.
-function clarifyNodeExecCwdSpawnError(
-  error: NodeJS.ErrnoException,
-  cwd: string | undefined,
-): string {
-  const message = error.message;
-  if (!cwd || (error.code && error.code !== "ENOENT" && error.code !== "ENOTDIR")) {
-    return message;
-  }
-  let reason: "does not exist" | "is not a directory";
-  try {
-    const stats = fs.statSync(cwd);
-    // An existing directory means the cwd is fine and the ENOENT is about the
-    // executable itself; leave the original message untouched.
-    if (stats.isDirectory()) {
-      return message;
-    }
-    reason = "is not a directory";
-  } catch (statError) {
-    const statCode = (statError as NodeJS.ErrnoException).code;
-    if (statCode !== "ENOENT" && statCode !== "ENOTDIR") {
-      return message;
-    }
-    reason =
-      statCode === "ENOTDIR" || error.code === "ENOTDIR" ? "is not a directory" : "does not exist";
-  }
-  return `node exec working directory ${reason} on the node host: ${cwd} (os reported: ${message})`;
-}
-
-async function runCommand(
-  argv: string[],
-  cwd: string | undefined,
-  env: Record<string, string> | undefined,
-  timeoutMs: number | undefined,
-  signal?: AbortSignal,
-  assertCurrent?: () => void,
-): Promise<RunResult> {
-  assertCurrent?.();
-  try {
-    const result = await runCommandWithTimeout(argv, {
-      baseEnv: env,
-      cwd,
-      killProcessTree: true,
-      maxCombinedOutputBytes: OUTPUT_CAP,
-      maxOutputBytes: OUTPUT_CAP,
-      outputCapture: "head",
-      input: Buffer.alloc(0),
-      signal,
-      timeoutMs: timeoutMs && timeoutMs > 0 ? timeoutMs : undefined,
-    });
-    const timedOut = result.termination === "timeout";
-    const exitCode = result.code ?? undefined;
-    return {
-      exitCode,
-      timedOut,
-      success: exitCode === 0 && !timedOut,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      error: null,
-      truncated: Boolean(result.stdoutTruncatedBytes || result.stderrTruncatedBytes),
-    };
-  } catch (err) {
-    return {
-      exitCode: undefined,
-      timedOut: false,
-      success: false,
-      stdout: "",
-      stderr: "",
-      error: clarifyNodeExecCwdSpawnError(err as NodeJS.ErrnoException, cwd),
-      truncated: false,
-    };
-  }
-}
-
-function resolveEnvPath(env?: Record<string, string>): string[] {
-  const raw =
-    env?.PATH ??
-    (env as Record<string, string>)?.Path ??
-    process.env.PATH ??
-    process.env.Path ??
-    DEFAULT_NODE_PATH;
-  return raw.split(path.delimiter).filter(Boolean);
-}
-
-function resolveExecutable(bin: string, env?: Record<string, string>) {
-  if (bin.includes("/") || bin.includes("\\")) {
-    return null;
-  }
+async function handleSystemWhich(rawBins: unknown[], env?: Record<string, string>) {
   const extensions =
     process.platform === "win32"
       ? (
@@ -413,142 +209,30 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
           .split(";")
           .map((ext) => normalizeLowercaseStringOrEmpty(ext))
       : [""];
-  for (const dir of resolveEnvPath(env)) {
-    for (const ext of extensions) {
-      const candidate = path.join(dir, bin + ext);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return null;
-}
-
-async function handleSystemWhich(params: SystemWhichParams, env?: Record<string, string>) {
-  const bins = normalizeStringEntries(params.bins);
+  const envPath =
+    env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? DEFAULT_NODE_PATH;
+  const directories = envPath.split(path.delimiter).filter(Boolean);
   const found: Record<string, string> = {};
-  for (const bin of bins) {
-    const pathLocal = resolveExecutable(bin, env);
-    if (pathLocal) {
-      found[bin] = pathLocal;
+  bins: for (const bin of normalizeStringEntries(rawBins)) {
+    if (bin.includes("/") || bin.includes("\\")) {
+      continue;
+    }
+    for (const dir of directories) {
+      for (const ext of extensions) {
+        const candidate = path.join(dir, bin + ext);
+        if (fs.existsSync(candidate)) {
+          found[bin] = candidate;
+          continue bins;
+        }
+      }
     }
   }
   return { bins: found };
 }
 
-function buildExecEventPayload(payload: ExecEventPayload): ExecEventPayload {
-  if (!payload.output) {
-    return payload;
-  }
-  const trimmed = payload.output.trim();
-  if (!trimmed) {
-    return payload;
-  }
-  const { text } = truncateOutput(trimmed, OUTPUT_EVENT_TAIL);
-  return { ...payload, output: text };
-}
-
-async function sendExecFinishedEvent(
-  params: ExecFinishedEventParams & {
-    client: NodeHostClient;
-  },
-) {
-  const combined = [params.result.stdout, params.result.stderr, params.result.error]
-    .filter(Boolean)
-    .join("\n");
-  await sendNodeEvent(
-    params.client,
-    "exec.finished",
-    buildExecEventPayload({
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      host: "node",
-      command: params.commandText,
-      exitCode: params.result.exitCode ?? undefined,
-      timedOut: params.result.timedOut,
-      success: params.result.success,
-      output: combined,
-      suppressNotifyOnExit: params.suppressNotifyOnExit,
-    }),
-  );
-}
-
-async function runViaMacAppExecHost(params: {
-  approvals: ExecApprovalsResolved;
-  request: ExecHostRequest;
-  signal?: AbortSignal;
-}): Promise<ExecHostResponse | null> {
-  const { approvals, request } = params;
-  return await requestExecHostViaSocket({
-    socketPath: approvals.socketPath,
-    token: approvals.token,
-    request,
-    signal: params.signal,
-  });
-}
-
-async function sendJsonPayloadResult(
-  client: NodeHostClient,
-  frame: NodeInvokeRequestPayload,
-  payload: unknown,
-) {
-  await sendInvokeResult(client, frame, {
-    ok: true,
-    payloadJSON: JSON.stringify(payload),
-  });
-}
-
-async function sendMcpPayloadResult(
-  client: NodeHostClient,
-  frame: NodeInvokeRequestPayload,
-  payload: unknown,
-) {
-  await sendInvokeResult(client, frame, { ok: true, payload });
-}
-
-async function sendRawPayloadResult(
-  client: NodeHostClient,
-  frame: NodeInvokeRequestPayload,
-  payloadJSON: string,
-) {
-  await sendInvokeResult(client, frame, {
-    ok: true,
-    payloadJSON,
-  });
-}
-
-async function sendErrorResult(
-  client: NodeHostClient,
-  frame: NodeInvokeRequestPayload,
-  code: string,
-  message: string,
-) {
-  await sendInvokeResult(client, frame, {
-    ok: false,
-    error: { code, message },
-  });
-}
-
-async function sendInvalidRequestResult(
-  client: NodeHostClient,
-  frame: NodeInvokeRequestPayload,
-  err: unknown,
-) {
-  await sendErrorResult(client, frame, "INVALID_REQUEST", String(err));
-}
-
 function classifyExecApprovalsStorageError(err: unknown): "TIMEOUT" | "UNAVAILABLE" {
-  const errorCode =
-    err && typeof err === "object" && "code" in err ? (err as { code?: unknown }).code : null;
+  const errorCode = err && typeof err === "object" && "code" in err ? err.code : null;
   return errorCode === "file_lock_timeout" ? "TIMEOUT" : "UNAVAILABLE";
-}
-
-async function sendExecApprovalsStorageErrorResult(
-  client: NodeHostClient,
-  frame: NodeInvokeRequestPayload,
-  err: unknown,
-) {
-  await sendErrorResult(client, frame, classifyExecApprovalsStorageError(err), String(err));
 }
 
 function createNodeHostInvocationClient(
@@ -581,7 +265,6 @@ function createNodeHostInvocationClient(
   };
 }
 
-/** Handles one node-host command invocation payload and returns serialized results. */
 export async function handleInvoke(
   frame: NodeInvokeRequestPayload,
   client: NodeHostClient,
@@ -599,7 +282,10 @@ export async function handleInvoke(
       `node host invoke failed (command=${frame.command ?? "unknown"}, id=${frame.id}): ${String(err)}`,
     );
     try {
-      await sendErrorResult(invocationClient, frame, "UNAVAILABLE", "node invocation failed");
+      await createNodeInvokeResponder(invocationClient, frame).error(
+        "UNAVAILABLE",
+        "node invocation failed",
+      );
     } catch (sendErr) {
       // The caller intentionally detaches this promise. A failed result send is
       // terminal for this request and must not surface as an unhandled rejection.
@@ -619,16 +305,12 @@ async function dispatchInvoke(
   runtime: NodeHostPrivateInvokeRuntime = {},
 ) {
   const command = frame.command ?? "";
+  const response = createNodeInvokeResponder(client, frame);
   if (
     (command === NODE_WORKER_DESKTOP_COMPUTER_COMMAND && !runtime.workerComputer) ||
     (runtime.workerComputer && (command === "screen.snapshot" || command === "computer.act"))
   ) {
-    await sendErrorResult(
-      client,
-      frame,
-      "UNAVAILABLE",
-      "computer command is unavailable on this node transport",
-    );
+    await response.error("UNAVAILABLE", "computer command is unavailable on this node transport");
     return;
   }
   const workerSupervisorResult = await invokeNodeWorkerSupervisorCommand({
@@ -642,30 +324,21 @@ async function dispatchInvoke(
     gatewayCloudflareAccess: runtime.gatewayCloudflareAccess,
     signal: runtime.signal,
   });
-  if (workerSupervisorResult.handled) {
-    if (workerSupervisorResult.ok) {
-      await sendJsonPayloadResult(client, frame, workerSupervisorResult.payload);
-    } else {
-      await sendErrorResult(
-        client,
-        frame,
-        workerSupervisorResult.code,
-        workerSupervisorResult.message,
-      );
-    }
-    return;
-  }
-  if (command === NODE_DEVICE_APPS_COMMAND) {
-    const result = await invokeDeviceApps({
-      paramsJSON: frame.paramsJSON,
-      sharingEnabled: runtime.installedAppsSharingEnabled === true,
-      ...(runtime.installedAppsPlatform ? { platform: runtime.installedAppsPlatform } : {}),
-      ...(runtime.scanInstalledApps ? { scan: runtime.scanInstalledApps } : {}),
-    });
+  const result = workerSupervisorResult.handled
+    ? workerSupervisorResult
+    : command === NODE_DEVICE_APPS_COMMAND
+      ? await invokeDeviceApps({
+          paramsJSON: frame.paramsJSON,
+          sharingEnabled: runtime.installedAppsSharingEnabled === true,
+          ...(runtime.installedAppsPlatform ? { platform: runtime.installedAppsPlatform } : {}),
+          ...(runtime.scanInstalledApps ? { scan: runtime.scanInstalledApps } : {}),
+        })
+      : undefined;
+  if (result) {
     if (result.ok) {
-      await sendJsonPayloadResult(client, frame, result.payload);
+      await response.json(result.payload);
     } else {
-      await sendErrorResult(client, frame, result.code, result.message);
+      await response.error(result.code, result.message);
     }
     return;
   }
@@ -680,11 +353,9 @@ async function dispatchInvoke(
         signal: runtime.signal,
         emitStatus: runtime.emitProgress,
       });
-      await sendJsonPayloadResult(client, frame, { status: "closed" });
+      await response.json({ status: "closed" });
     } catch (error) {
-      await sendErrorResult(
-        client,
-        frame,
+      await response.error(
         "UNAVAILABLE",
         error instanceof Error ? error.message : "desktop stream unavailable",
       );
@@ -706,25 +377,26 @@ async function dispatchInvoke(
         includeResolvedDefaults = params.includeResolvedDefaults === true;
       }
     } catch (err) {
-      await sendInvalidRequestResult(client, frame, err);
+      await response.invalid(err);
       return;
     }
     try {
-      const snapshot = await ensureExecApprovalsSnapshot();
+      const snapshot = await ensureExecApprovalsSnapshot(() => runtime.signal?.throwIfAborted());
       const payload = {
         ...redactExecApprovals(snapshot),
         ...(includeResolvedDefaults
           ? { resolvedDefaults: resolveExecApprovalsFromFile({ file: snapshot.file }).defaults }
           : {}),
       };
-      await sendJsonPayloadResult(client, frame, payload);
+      await response.json(payload);
     } catch (err) {
-      await sendExecApprovalsStorageErrorResult(client, frame, err);
+      await response.error(classifyExecApprovalsStorageError(err), String(err));
     }
     return;
   }
 
   if (command === "system.execApprovals.set") {
+    const assertCurrent = () => runtime.signal?.throwIfAborted();
     let params: SystemExecApprovalsSetParams;
     let normalized: ExecApprovalsFile;
     try {
@@ -734,79 +406,93 @@ async function dispatchInvoke(
       }
       normalized = normalizeExecApprovals(params.file);
     } catch (err) {
-      await sendInvalidRequestResult(client, frame, err);
+      await response.invalid(err);
       return;
     }
 
     let snapshot: ExecApprovalsSnapshot;
+    let context: ReturnType<typeof captureOpenClawStateWorkerContext>;
     try {
       // A stale save must not initialize state before its base hash is checked.
-      snapshot = readExecApprovalsSnapshot();
+      context = captureOpenClawStateWorkerContext();
+      snapshot = await readExecApprovalsSnapshotAsync(context);
+      assertCurrent();
     } catch (err) {
-      await sendExecApprovalsStorageErrorResult(client, frame, err);
+      await response.error(classifyExecApprovalsStorageError(err), String(err));
       return;
     }
 
     try {
       requireExecApprovalsBaseHash(params, snapshot);
     } catch (err) {
-      await sendInvalidRequestResult(client, frame, err);
+      await response.invalid(err);
       return;
     }
 
     let nextSnapshot: ExecApprovalsSnapshot | null;
     try {
-      nextSnapshot = await updateExecApprovals({
-        baseHash: snapshot.hash,
-        update: (current) => mergeExecApprovalsSocketDefaults({ normalized, current }),
-      });
+      nextSnapshot = await updateExecApprovals(
+        {
+          baseHash: snapshot.hash,
+          assertCurrent,
+          update: { kind: "replace", file: normalized, preserveSocket: true },
+        },
+        context,
+      );
     } catch (err) {
-      await sendExecApprovalsStorageErrorResult(client, frame, err);
+      await response.error(classifyExecApprovalsStorageError(err), String(err));
       return;
     }
 
     if (!nextSnapshot) {
-      await sendErrorResult(
-        client,
-        frame,
+      await response.error(
         "INVALID_REQUEST",
         "INVALID_REQUEST: exec approvals changed; reload and retry",
       );
       return;
     }
 
-    const payload: ExecApprovalsSnapshot = redactExecApprovals(nextSnapshot);
-    await sendJsonPayloadResult(client, frame, payload);
+    context.admission.assertCurrent();
+    assertCurrent();
+    await response.json(redactExecApprovals(nextSnapshot));
     return;
   }
 
-  if (command === "system.which") {
+  if (
+    command === "system.which" ||
+    command === NODE_FS_LIST_DIR_COMMAND ||
+    command === NODE_TERMINAL_UPLOAD_COMMAND
+  ) {
     try {
-      const params = decodeParams<SystemWhichParams>(frame.paramsJSON);
-      if (!Array.isArray(params.bins)) {
-        throw new Error("INVALID_REQUEST: bins required");
+      const params = decodeParams<Record<string, unknown>>(frame.paramsJSON);
+      if (command === "system.which") {
+        if (!Array.isArray(params.bins)) {
+          throw new Error("INVALID_REQUEST: bins required");
+        }
+        const env = sanitizeHostExecEnv({ blockPathOverrides: true });
+        const payload = await handleSystemWhich(params.bins, env);
+        await response.json(payload);
+      } else if (command === NODE_FS_LIST_DIR_COMMAND) {
+        if (params.path !== undefined && typeof params.path !== "string") {
+          throw new Error("INVALID_REQUEST: path must be a string");
+        }
+        await response.json(await listHostDirectories(params.path));
+      } else {
+        if (typeof params.name !== "string" || typeof params.contentBase64 !== "string") {
+          throw new Error("INVALID_REQUEST: terminal upload name and content are required");
+        }
+        await response.json(
+          await stageTerminalUpload({ name: params.name, contentBase64: params.contentBase64 }),
+        );
       }
-      const env = sanitizeEnv(undefined);
-      const payload = await handleSystemWhich(params, env);
-      await sendJsonPayloadResult(client, frame, payload);
-    } catch (err) {
-      await sendInvalidRequestResult(client, frame, err);
-    }
-    return;
-  }
-
-  const fileCommand = await invokeNodeFileCommand(command, frame.paramsJSON);
-  if (fileCommand) {
-    if ("error" in fileCommand) {
-      await sendInvalidRequestResult(client, frame, fileCommand.error);
-    } else {
-      await sendJsonPayloadResult(client, frame, fileCommand.payload);
+    } catch (error) {
+      await response.invalid(error);
     }
     return;
   }
 
   if (command === NODE_MCP_TOOLS_CALL_COMMAND) {
-    await handleMcpToolsCall(frame, client, mcpManager, runtime.signal);
+    await handleMcpToolsCall(frame, response, mcpManager, runtime.signal);
     return;
   }
 
@@ -814,54 +500,17 @@ async function dispatchInvoke(
     await handleClaudeCliNodeInvoke({
       frame,
       client,
+      response,
       skillBins,
       runtime,
-      deps: {
-        sendErrorResult,
-        sendInvalidRequestResult,
-        sendInvokeResult,
-        resolveExecSecurity,
-        resolveExecAsk,
-        isCmdExeInvocation,
-        sanitizeEnv,
-        runViaMacAppExecHost,
-        buildExecEventPayload,
-      },
     });
     return;
   }
   try {
     const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
-    const acquireManagedWorkspace = context?.acquireManagedWorkspace;
-    let pluginInvocationActive = true;
-    const invokeContext =
-      context && (frame.sessionKey || runtime.signal || acquireManagedWorkspace)
-        ? {
-            ...context,
-            ...(frame.sessionKey ? { sessionKey: frame.sessionKey } : {}),
-            ...(runtime.signal ? { signal: runtime.signal } : {}),
-            ...(acquireManagedWorkspace
-              ? {
-                  acquireManagedWorkspace: (
-                    request: Parameters<typeof acquireManagedWorkspace>[0],
-                  ) => {
-                    if (
-                      !pluginInvocationActive ||
-                      runtime.signal?.aborted ||
-                      !frame.sessionKey ||
-                      request.sessionKey !== frame.sessionKey
-                    ) {
-                      throw new Error("node placement workspace invocation authority is closed");
-                    }
-                    return acquireManagedWorkspace(request);
-                  },
-                }
-              : {}),
-          }
-        : context;
-    let pluginResult: string | null;
-    try {
-      pluginResult =
+    const pluginResult = await withNodeHostPluginInvocation(
+      { context, sessionKey: frame.sessionKey, signal: runtime.signal },
+      async (invokeContext) =>
         command === NODE_WORKER_DESKTOP_COMPUTER_COMMAND
           ? await invokeNodeWorkerComputerCommand({
               paramsJSON: frame.paramsJSON,
@@ -869,19 +518,19 @@ async function dispatchInvoke(
               invoke: (innerCommand, paramsJSON) =>
                 invokePlugin(innerCommand, paramsJSON, undefined, invokeContext),
             })
-          : await invokePlugin(command, frame.paramsJSON, io, invokeContext);
-    } finally {
-      pluginInvocationActive = false;
-    }
+          : await invokePlugin(command, frame.paramsJSON, io, invokeContext),
+    );
     if (pluginResult !== null) {
       await runtime.flushPluginCommandIo?.();
-      await sendRawPayloadResult(client, frame, pluginResult);
+      await response.send({ ok: true, payloadJSON: pluginResult });
       return;
     }
   } catch (err) {
     // Only the exact current owner's exact framed failure may bypass its aborted-client fence.
-    const failureClient = runtime.canReportAbortedFailure?.(err) ? abortedFailureClient : client;
-    await sendInvalidRequestResult(failureClient, frame, err);
+    const failureResponse = runtime.canReportAbortedFailure?.(err)
+      ? createNodeInvokeResponder(abortedFailureClient, frame)
+      : response;
+    await failureResponse.invalid(err);
     return;
   }
 
@@ -891,12 +540,16 @@ async function dispatchInvoke(
         decodeParams<SystemRunPrepareParams>(frame.paramsJSON),
         frame.nodeId,
       );
+      if (
+        params.executionContext !== undefined &&
+        (preferMacAppExecHost || !validateSystemRunExecutionContext(params.executionContext))
+      ) {
+        throw new Error("executionContext invalid or unsupported");
+      }
       const { getRuntimeConfig } = await import("../config/config.js");
       const execPolicy = await resolveEffectiveSystemRunExecPolicy({
         cfg: getRuntimeConfig(),
         agentId: normalizeOptionalString(params.agentId),
-        defaultSecurity: resolveExecSecurity(undefined),
-        defaultAsk: resolveExecAsk(undefined),
         requireSocket: preferMacAppExecHost,
       });
       // Omitted caller policy retains the approval-preparation contract. A caller can
@@ -911,7 +564,12 @@ async function dispatchInvoke(
         execPolicy.globalExec?.strictInlineEval === true;
       const prepared = buildSystemRunApprovalPlan(params, bindApproval);
       if (!prepared.ok) {
-        await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
+        await response.error(
+          "INVALID_REQUEST",
+          prepared.reason === "unsupported-command-shape"
+            ? `${prepared.message}\nNo approval request was created for this attempt; this is not a user denial. Retry a supported single executable with an absolute path through the normal approval flow. This node approval path cannot bind script/interpreter payloads nested in its shell wrapper.`
+            : prepared.message,
+        );
         return;
       }
       const prepareEnv = buildSystemRunPrepareCoverageEnv({
@@ -919,7 +577,7 @@ async function dispatchInvoke(
         env: params.env ?? undefined,
       });
       if (!prepareEnv.ok) {
-        await sendErrorResult(client, frame, "INVALID_REQUEST", prepareEnv.message);
+        await response.error("INVALID_REQUEST", prepareEnv.message);
         return;
       }
       const plan = {
@@ -929,7 +587,7 @@ async function dispatchInvoke(
           agentId: prepared.plan.agentId ?? undefined,
         }),
       };
-      await sendJsonPayloadResult(client, frame, {
+      await response.json({
         plan,
         execPolicy: {
           security: execPolicy.security,
@@ -946,13 +604,13 @@ async function dispatchInvoke(
           : { complete: false, patterns: [] },
       });
     } catch (err) {
-      await sendInvalidRequestResult(client, frame, err);
+      await response.invalid(err);
     }
     return;
   }
 
   if (command !== "system.run") {
-    await sendErrorResult(client, frame, "UNAVAILABLE", "command not supported");
+    await response.error("UNAVAILABLE", "command not supported");
     return;
   }
 
@@ -963,41 +621,27 @@ async function dispatchInvoke(
       frame.nodeId,
     );
   } catch (err) {
-    await sendInvalidRequestResult(client, frame, err);
+    await response.invalid(err);
     return;
   }
 
   if (!Array.isArray(params.command) || params.command.length === 0) {
-    await sendErrorResult(client, frame, "INVALID_REQUEST", "command required");
+    await response.error("INVALID_REQUEST", "command required");
     return;
   }
 
   await handleSystemRunInvoke({
-    client,
     params,
     skillBins,
     signal: runtime.signal,
-    execHostEnforced,
-    execHostFallbackAllowed,
-    resolveExecSecurity,
-    resolveExecAsk,
-    isCmdExeInvocation,
-    sanitizeEnv,
     runCommand,
-    runViaMacAppExecHost,
-    sendNodeEvent,
-    buildExecEventPayload,
-    sendInvokeResult: async (result) => {
-      await sendInvokeResult(client, frame, result);
-    },
-    sendExecFinishedEvent: async (event) => {
-      await sendExecFinishedEvent({ ...event, client });
-    },
+    sendNodeEvent: (event, payload) => sendNodeEvent(client, event, payload),
+    sendInvokeResult: response.send,
     preferMacAppExecHost,
   });
 }
 
-function decodeMcpToolsCallParams(raw?: string | null): McpToolsCallParams {
+function decodeMcpToolsCallParams(raw?: string | null) {
   const value = decodeParams<unknown>(raw);
   if (!isRecord(value)) {
     throw new Error("INVALID_REQUEST: MCP tool params must be an object");
@@ -1019,19 +663,19 @@ function decodeMcpToolsCallParams(raw?: string | null): McpToolsCallParams {
 
 async function handleMcpToolsCall(
   frame: NodeInvokeRequestPayload,
-  client: NodeHostClient,
+  response: NodeInvokeResponder,
   mcpManager: NodeHostMcpManager | undefined,
   signal?: AbortSignal,
 ): Promise<void> {
   if (!mcpManager) {
-    await sendErrorResult(client, frame, "MCP_SERVER_UNAVAILABLE", "node host MCP is unavailable");
+    await response.error("MCP_SERVER_UNAVAILABLE", "node host MCP is unavailable");
     return;
   }
   let params: McpToolsCallParams;
   try {
     params = decodeMcpToolsCallParams(frame.paramsJSON);
   } catch (error) {
-    await sendInvalidRequestResult(client, frame, error);
+    await response.invalid(error);
     return;
   }
   try {
@@ -1040,76 +684,17 @@ async function handleMcpToolsCall(
       timeoutMs: frame.timeoutMs ?? undefined,
       ...(signal ? { signal } : {}),
     });
-    await sendMcpPayloadResult(client, frame, boundMcpToolResultPayload(result));
+    await response.send({ ok: true, payload: boundMcpToolResultPayload(result) });
   } catch (error) {
     if (error instanceof NodeHostMcpError) {
-      await sendErrorResult(client, frame, error.code, error.message);
+      await response.error(error.code, error.message);
       return;
     }
-    await sendErrorResult(
-      client,
-      frame,
+    await response.error(
       "MCP_TOOL_ERROR",
       truncateUtf16Safe(String(error), MCP_ERROR_MESSAGE_MAX_CHARS),
     );
   }
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
-function decodeParams<T>(raw?: string | null): T {
-  if (!raw) {
-    throw new Error("INVALID_REQUEST: paramsJSON required");
-  }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
-  }
-}
-
-async function sendInvokeResult(
-  client: NodeHostClient,
-  frame: NodeInvokeRequestPayload,
-  result: Parameters<typeof buildNodeInvokeResultParams>[1],
-) {
-  try {
-    await client.request("node.invoke.result", buildNodeInvokeResultParams(frame, result));
-  } catch {
-    // ignore: node invoke responses are best-effort
-  }
-}
-
-function buildNodeInvokeResultParams(
-  frame: NodeInvokeRequestPayload,
-  result: {
-    ok: boolean;
-    payload?: unknown;
-    payloadJSON?: string | null;
-    error?: { code?: string; message?: string } | null;
-  },
-): {
-  id: string;
-  nodeId: string;
-  ok: boolean;
-  payload?: unknown;
-  payloadJSON?: string;
-  error?: { code?: string; message?: string };
-} {
-  const params: ReturnType<typeof buildNodeInvokeResultParams> = {
-    id: frame.id,
-    nodeId: frame.nodeId,
-    ok: result.ok,
-  };
-  if (result.payload !== undefined) {
-    params.payload = result.payload;
-  }
-  if (typeof result.payloadJSON === "string") {
-    params.payloadJSON = result.payloadJSON;
-  }
-  if (result.error) {
-    params.error = result.error;
-  }
-  return params;
 }
 
 async function sendNodeEvent(client: NodeHostClient, event: string, payload: unknown) {
@@ -1119,14 +704,3 @@ async function sendNodeEvent(client: NodeHostClient, event: string, payload: unk
     // ignore: node events are best-effort
   }
 }
-
-const testing = {
-  clarifyNodeExecCwdSpawnError,
-  runCommand,
-} as const;
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.nodeHostInvokeTestApi")] =
-    testing;
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

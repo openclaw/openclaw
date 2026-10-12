@@ -102,7 +102,6 @@ it("transcribes audio beyond twenty minutes while another transcription complete
     releaseTranscript.resolve();
     expect((await long).text).toBe("late marker");
     const received = Buffer.concat(frames);
-    expect(received.length).toBe(pcm.length);
     expect(received.equals(pcm)).toBe(true);
   } finally {
     releaseTranscript.resolve();

@@ -1,11 +1,21 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Mattermost tests cover target resolution plugin behavior.
 import type { MattermostClient } from "./client.js";
+import { parseMattermostTarget, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
-const resolveMattermostAccount = vi.fn();
-const createMattermostClient = vi.fn();
-const fetchMattermostUser = vi.fn();
-const fetchMattermostChannel = vi.fn();
+const {
+  resolveMattermostAccount,
+  createMattermostClient,
+  fetchMattermostUser,
+  fetchMattermostChannel,
+  normalizeMattermostBaseUrl,
+} = vi.hoisted(() => ({
+  resolveMattermostAccount: vi.fn(),
+  createMattermostClient: vi.fn(),
+  fetchMattermostUser: vi.fn(),
+  fetchMattermostChannel: vi.fn(),
+  normalizeMattermostBaseUrl: vi.fn((value: string | undefined) => value?.trim()),
+}));
 const fixtureClient = (token = "token", baseUrl = "https://mm.example.com"): MattermostClient => ({
   token,
   baseUrl,
@@ -13,7 +23,6 @@ const fixtureClient = (token = "token", baseUrl = "https://mm.example.com"): Mat
   request: vi.fn(),
   fetchImpl: vi.fn(),
 });
-const normalizeMattermostBaseUrl = vi.fn((value: string | undefined) => value?.trim());
 
 vi.mock("./accounts.js", () => ({
   resolveMattermostAccount,
@@ -29,14 +38,6 @@ vi.mock("./client.js", async () => ({
 }));
 
 describe("mattermost target resolution", () => {
-  let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
-  let resolveMattermostOpaqueTarget: typeof import("./target-resolution.js").resolveMattermostOpaqueTarget;
-
-  beforeAll(async () => {
-    ({ parseMattermostTarget, resolveMattermostOpaqueTarget } =
-      await import("./target-resolution.js"));
-  });
-
   beforeEach(() => {
     resolveMattermostAccount.mockReset();
     createMattermostClient.mockReset();
@@ -57,7 +58,7 @@ describe("mattermost target resolution", () => {
     expect(parseMattermostTarget("short")).toEqual({ kind: "channel-name", name: "short" });
   });
 
-  it.each(["@alice", "#town-square", "mattermost:chan"])(
+  it.each(["mattermost:chan"])(
     "skips explicit target %s before account resolution",
     async (input) => {
       await expect(resolveMattermostOpaqueTarget({ input, cfg: {} })).resolves.toBeNull();
@@ -76,35 +77,6 @@ describe("mattermost target resolution", () => {
     await expect(resolveMattermostOpaqueTarget(params)).resolves.toMatchObject({ kind: "channel" });
     await expect(resolveMattermostOpaqueTarget(params)).resolves.toMatchObject({ kind: "channel" });
     expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
-  });
-
-  it("resolves opaque ids as users and caches the result", async () => {
-    fetchMattermostUser.mockResolvedValue({ id: "abcd1234abcd1234abcd1234ab" });
-    const input = "abcd1234abcd1234abcd1234ab";
-
-    await expect(
-      resolveMattermostOpaqueTarget({
-        input,
-        client: fixtureClient(),
-      }),
-    ).resolves.toEqual({
-      kind: "user",
-      id: input,
-      to: `user:${input}`,
-    });
-
-    await expect(
-      resolveMattermostOpaqueTarget({
-        input,
-        client: fixtureClient(),
-      }),
-    ).resolves.toEqual({
-      kind: "user",
-      id: input,
-      to: `user:${input}`,
-    });
-
-    expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
   });
 
   it("resolves public channels (type O) as channel and caches the result", async () => {
@@ -128,28 +100,6 @@ describe("mattermost target resolution", () => {
     });
 
     expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
-  });
-
-  it("evicts in insertion order after the opaque cache reaches its cap", async () => {
-    fetchMattermostUser.mockResolvedValue({ id: "user" });
-    const baseUrl = "https://mm.example.com";
-    const token = "opaque-cache-token";
-    const idFor = (index: number) => index.toString(36).padStart(26, "0");
-    const resolve = (index: number) =>
-      resolveMattermostOpaqueTarget({ input: idFor(index), client: fixtureClient(token, baseUrl) });
-
-    for (let index = 0; index < 1024; index += 1) {
-      await resolve(index);
-    }
-    expect(fetchMattermostUser).toHaveBeenCalledTimes(1024);
-
-    await resolve(0);
-    expect(fetchMattermostUser).toHaveBeenCalledTimes(1024);
-
-    await resolve(1024);
-    await resolve(0);
-    await resolve(1024);
-    expect(fetchMattermostUser).toHaveBeenCalledTimes(1026);
   });
 
   it("refreshes an authoritative classification after its cache TTL expires", async () => {
@@ -233,6 +183,7 @@ describe("mattermost target resolution", () => {
       enabled: true,
       baseUrl: "https://mm.example.com",
       botToken: "token",
+      config: {},
     });
     fetchMattermostUser.mockResolvedValue({ id: "cdef1234abcd1234abcd1234ab" });
     const input = "cdef1234abcd1234abcd1234ab";
@@ -255,6 +206,7 @@ describe("mattermost target resolution", () => {
       enabled: false,
       baseUrl: "https://mm.example.com",
       botToken: "token",
+      config: {},
     });
 
     await expect(

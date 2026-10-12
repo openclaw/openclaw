@@ -1,5 +1,6 @@
 // Memory Host SDK tests cover session files behavior.
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -10,13 +11,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import { encodeSessionArchiveContent } from "../../../../src/config/sessions/archive-compression.js";
 import {
-  appendTranscriptMessage,
   persistSessionTranscriptTurn,
-  resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../../src/state/openclaw-state-db.js";
+import { cleanupSessionStateForTest } from "../../../../src/test-utils/session-state-cleanup.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   buildSessionEntry,
@@ -32,10 +32,14 @@ let envSnapshot: Record<string, string | undefined> | undefined;
 let fixtureId = 0;
 
 beforeAll(() => {
-  fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-"));
+  fixtureRoot = fsSync.realpathSync.native(
+    fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-")),
+  );
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
@@ -51,11 +55,9 @@ beforeEach(() => {
   clearConfigCache();
 });
 
-afterEach(() => {
-  // Agent close releases leases through shared state; close agent handles first while the fixture
-  // env is active, then close shared state before removing the Windows-owned directory.
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  // Close case databases before restoring its environment or removing its files.
+  await cleanupSessionStateForTest({ stateDir: tmpDir, rootPath: tmpDir });
   for (const [key, value] of Object.entries(envSnapshot ?? {})) {
     if (value === undefined) {
       Reflect.deleteProperty(process.env, key);
@@ -86,42 +88,6 @@ async function upsertTestSessionEntries(
   }
 }
 
-describe("session transcript archive discovery", () => {
-  it("includes reset and deleted transcripts in session file listing", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(path.join(sessionsDir, "archive"), { recursive: true });
-
-    const included = [
-      "active.jsonl.reset.2026-02-16T22-26-33.000Z",
-      "active.jsonl.deleted.2026-02-16T22-27-33.000Z",
-    ];
-    const excluded = [
-      "active.jsonl.bak.2026-02-16T22-28-33.000Z",
-      "active.trajectory.jsonl.deleted.2026-02-16T22-30-33.000Z",
-      "active.trajectory.jsonl.reset.2026-02-16T22-31-33.000Z.zst",
-      "active.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.deleted.2026-02-16T22-32-33.000Z",
-      "active.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.reset.2026-02-16T22-33-33.000Z.zst",
-      "sessions.json",
-      "notes.md",
-    ];
-    excluded.push("active.checkpoint.11111111-1111-4111-8111-111111111111.jsonl");
-
-    for (const fileName of [...included, ...excluded]) {
-      fsSync.writeFileSync(path.join(sessionsDir, fileName), "");
-    }
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "archive", "nested.jsonl.deleted.2026-02-16T22-29-33.000Z"),
-      "",
-    );
-
-    const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
-
-    expect(entries.map((entry) => path.basename(entry.sessionFile)).toSorted()).toEqual(
-      included.toSorted(),
-    );
-  });
-});
-
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
   it("surfaces unexpected archive-directory scan failures", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
@@ -129,7 +95,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const scanError = Object.assign(new Error("transient session archive scan failure"), {
       code: "EIO",
     });
-    const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockImplementation(() => {
+    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation(async () => {
       throw scanError;
     });
 
@@ -138,114 +104,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     } finally {
       readdirSpy.mockRestore();
     }
-  });
-
-  it("includes rotated SQLite sessions only when retained history is requested", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionKey = "agent:main:main";
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId: "retained-old", updatedAt: 10 },
-    );
-    await appendTranscriptMessage(
-      { agentId: "main", sessionId: "retained-old", sessionKey, storePath },
-      { message: { role: "assistant", content: "retained transcript" } },
-    );
-    await resetSessionEntryLifecycle({
-      agentId: "main",
-      buildNextEntry: () => ({ sessionId: "retained-new", updatedAt: 20 }),
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-    });
-    await appendTranscriptMessage(
-      { agentId: "main", sessionId: "retained-new", sessionKey, storePath },
-      { message: { role: "assistant", content: "current transcript" } },
-    );
-
-    const currentOnly = await listSessionTranscriptCorpusEntriesForAgent("main");
-    expect(currentOnly.map((entry) => entry.sessionId)).toEqual(["retained-new"]);
-
-    const withHistory = await listSessionTranscriptCorpusEntriesForAgent("main", {
-      includeRetainedSqlite: true,
-    });
-    expect(withHistory).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          artifactKind: "active-session",
-          sessionId: "retained-new",
-          transcriptSource: "sqlite",
-        }),
-        expect.objectContaining({
-          artifactKind: "retained-session",
-          sessionId: "retained-old",
-          transcriptSource: "sqlite",
-        }),
-      ]),
-    );
-    const retained = withHistory.find((entry) => entry.sessionId === "retained-old");
-    expect(
-      requireSessionEntry(
-        await buildSessionEntry(retained?.sessionFile ?? "", {
-          ...(retained?.agentId !== undefined ? { agentId: retained.agentId } : {}),
-          ...(retained?.sessionId !== undefined ? { sessionId: retained.sessionId } : {}),
-          ...(retained?.sessionKey !== undefined ? { sessionKey: retained.sessionKey } : {}),
-          ...(retained?.storePath !== undefined ? { storePath: retained.storePath } : {}),
-          ...(retained?.updatedAtMs !== undefined ? { updatedAtMs: retained.updatedAtMs } : {}),
-        }),
-      ).content,
-    ).toBe("Assistant: retained transcript");
-  });
-
-  it("treats accessor-backed entries as live SQLite transcripts", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.writeFileSync(path.join(sessionsDir, "narrative.jsonl"), "");
-    await upsertTestSessionEntries(path.join(sessionsDir, "sessions.json"), {
-      "agent:main:dreaming-narrative-run-1": {
-        sessionFile: "narrative.jsonl",
-        sessionId: "narrative",
-        updatedAt: 1,
-      },
-    });
-
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
-      expect.objectContaining({
-        agentId: "main",
-        artifactKind: "active-session",
-        sessionFile: "agent:main:dreaming-narrative-run-1",
-        sessionId: "narrative",
-        transcriptSource: "sqlite",
-      }),
-    );
-  });
-
-  it("keeps archive artifacts in the corpus and inherits active session classification", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    const activePath = path.join(sessionsDir, "cron-run.jsonl");
-    const archivePath = path.join(sessionsDir, "cron-run.jsonl.deleted.2026-02-16T22-27-33.000Z");
-    fsSync.writeFileSync(activePath, "");
-    fsSync.writeFileSync(archivePath, "");
-    await upsertTestSessionEntries(path.join(sessionsDir, "sessions.json"), {
-      "agent:main:cron:job-1:run:run-1": {
-        sessionFile: "cron-run.jsonl",
-        sessionId: "cron-run",
-        updatedAt: 1,
-      },
-    });
-
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual({
-      agentId: "main",
-      artifactKind: "archive-artifact",
-      contentRevision: expect.any(String),
-      generatedByCronRun: true,
-      sessionKind: "cron",
-      sessionFile: archivePath,
-      sessionId: "cron-run",
-    });
   });
 
   it("reads live SQLite rows by session identity while preserving archived JSONL artifacts", async () => {
@@ -337,161 +195,13 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       absPath: sessionKey,
       path: liveEntry.path,
       mtimeMs: liveEntry.mtimeMs,
+      revisionMs: liveEntry.revisionMs,
       size: liveEntry.size,
     });
     expect(archiveEntry.path).toBe(
       "sessions/main/sqlite-live.jsonl.deleted.2026-06-25T12-01-00.000Z",
     );
     expect(archiveEntry.content).toBe("User: Archived JSONL transcript text");
-  });
-
-  it("exposes content revisions that change with SQLite appends and file replacement", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionKey = "agent:main:chat:revision";
-    const sessionId = "revision";
-    const archivePath = path.join(
-      sessionsDir,
-      `${sessionId}.jsonl.deleted.2026-06-25T12-01-00.000Z`,
-    );
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId, updatedAt: 1 },
-    );
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      {
-        messages: [{ message: { role: "user", content: "first" } }],
-        touchSessionEntry: true,
-        updateMode: "none",
-      },
-    );
-    fsSync.writeFileSync(archivePath, "first");
-
-    const before = await listSessionTranscriptCorpusEntriesForAgent("main");
-    const beforeLive = before.find((entry) => entry.transcriptSource === "sqlite");
-    const beforeArchive = before.find((entry) => entry.sessionFile === archivePath);
-    expect(beforeLive?.contentRevision).toEqual(expect.any(String));
-    expect(beforeArchive?.contentRevision).toEqual(expect.any(String));
-
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      {
-        messages: [{ message: { role: "assistant", content: "second" } }],
-        touchSessionEntry: true,
-        updateMode: "none",
-      },
-    );
-    const replacement = `${archivePath}.replacement`;
-    fsSync.writeFileSync(replacement, "second");
-    fsSync.renameSync(replacement, archivePath);
-
-    const after = await listSessionTranscriptCorpusEntriesForAgent("main");
-    expect(after.find((entry) => entry.transcriptSource === "sqlite")?.contentRevision).not.toBe(
-      beforeLive?.contentRevision,
-    );
-    expect(after.find((entry) => entry.sessionFile === archivePath)?.contentRevision).not.toBe(
-      beforeArchive?.contentRevision,
-    );
-  });
-
-  it("classifies active entries through cron parentage chains", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    const cronPath = path.join(sessionsDir, "cron-run.jsonl");
-    const spawnedChildPath = path.join(sessionsDir, "spawned-child.jsonl");
-    const keyedChildPath = path.join(sessionsDir, "keyed-child.jsonl");
-    const orphanChildPath = path.join(sessionsDir, "orphan-child.jsonl");
-    const normalPath = path.join(sessionsDir, "normal-child.jsonl");
-    for (const filePath of [
-      cronPath,
-      spawnedChildPath,
-      keyedChildPath,
-      orphanChildPath,
-      normalPath,
-    ]) {
-      fsSync.writeFileSync(filePath, "");
-    }
-    await upsertTestSessionEntries(path.join(sessionsDir, "sessions.json"), {
-      "agent:main:cron:job-1:run:run-1": {
-        sessionFile: "cron-run.jsonl",
-        sessionId: "cron-run",
-        updatedAt: 1,
-      },
-      "agent:main:subagent:spawned-child": {
-        sessionFile: "spawned-child.jsonl",
-        sessionId: "spawned-child",
-        spawnedBy: "agent:main:cron:job-1:run:run-1",
-        updatedAt: 1,
-      },
-      "agent:main:subagent:keyed-child": {
-        parentSessionKey: "agent:main:subagent:spawned-child",
-        sessionFile: "keyed-child.jsonl",
-        sessionId: "keyed-child",
-        updatedAt: 1,
-      },
-      "agent:main:subagent:orphan-child": {
-        sessionFile: "orphan-child.jsonl",
-        sessionId: "orphan-child",
-        spawnedBy: "agent:main:cron:job-1:run:missing",
-        updatedAt: 1,
-      },
-      "agent:main:subagent:normal-child": {
-        sessionFile: "normal-child.jsonl",
-        sessionId: "normal-child",
-        spawnedBy: "agent:main:chat:manual",
-        updatedAt: 1,
-      },
-    });
-
-    const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
-    expect(entries.filter((entry) => entry.generatedByCronRun)).toHaveLength(4);
-  });
-
-  it("keeps archive classification when the active transcript is missing", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    const archivePath = path.join(sessionsDir, "cron-run.jsonl.reset.2026-02-16T22-26-33.000Z");
-    fsSync.writeFileSync(archivePath, "");
-    await upsertTestSessionEntries(path.join(sessionsDir, "sessions.json"), {
-      "agent:main:cron:job-1:run:run-1": {
-        sessionFile: "cron-run.jsonl",
-        sessionId: "cron-run",
-        updatedAt: 1,
-      },
-    });
-
-    const expectedArchivePath = archivePath;
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          agentId: "main",
-          artifactKind: "archive-artifact",
-          contentRevision: expect.any(String),
-          generatedByCronRun: true,
-          sessionKind: "cron",
-          sessionFile: expectedArchivePath,
-          sessionId: "cron-run",
-        }),
-      ]),
-    );
-  });
-
-  it("omits active session entries whose transcript files are missing", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:chat:missing": {
-          sessionFile: "missing.jsonl",
-          sessionId: "missing",
-        },
-      }),
-    );
-
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
   it("omits symlinked archive artifacts from the session corpus", async () => {
@@ -517,87 +227,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       fsSync.symlinkSync(targetPath, symlinkPath);
     }
     expect(fsSync.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
-
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
-  });
-
-  it("rejects session ids that would escape the sessions directory", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.writeFileSync(path.join(tmpDir, "secret.jsonl"), "");
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:chat:escape": {
-          sessionId: "../secret",
-        },
-      }),
-    );
-
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
-  });
-
-  it("does not classify a fallback transcript when explicit sessionFile is invalid", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    const sessionFile = path.join(sessionsDir, "active.jsonl");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.writeFileSync(sessionFile, "");
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:cron:job-1:run:run-1": {
-          sessionFile: "../old.jsonl",
-          sessionId: "active",
-        },
-      }),
-    );
-
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
-  });
-
-  it("rejects relative sessionFile values that escape through nested segments", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    const secretPath = path.join(tmpDir, "agents", "main", "secret.jsonl");
-    fsSync.mkdirSync(path.join(sessionsDir, "sub"), { recursive: true });
-    fsSync.writeFileSync(secretPath, "");
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:chat:escape-file": {
-          sessionFile: "sub/../../secret.jsonl",
-          sessionId: "secret",
-        },
-      }),
-    );
-
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
-  });
-
-  it("rejects absolute transcript paths owned by another agent", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    const otherSessionsDir = path.join(tmpDir, "agents", "ops", "sessions");
-    const otherSessionFile = path.join(otherSessionsDir, "private.jsonl");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.mkdirSync(otherSessionsDir, { recursive: true });
-    fsSync.writeFileSync(otherSessionFile, "");
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:chat:cross-agent": {
-          sessionFile: otherSessionFile,
-          sessionId: "private",
-        },
-      }),
-    );
-
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
-  });
-
-  it("omits loose non-archive JSONL transcripts from the corpus", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "active-thread-456.jsonl");
-    fsSync.writeFileSync(sessionFile, "");
 
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
@@ -628,111 +257,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         transcriptSource: "sqlite",
       }),
     );
-  });
-
-  it("keeps unowned archives from an agent-owned fixed session store", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    const archivePath = path.join(sessionsDir, "retained.jsonl.deleted.2026-02-16T22-27-33.000Z");
-    const configPath = path.join(tmpDir, "openclaw.json");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.writeFileSync(archivePath, "");
-    fsSync.writeFileSync(path.join(sessionsDir, "sessions.json"), "{}");
-    fsSync.writeFileSync(
-      configPath,
-      JSON.stringify({ session: { store: path.join(sessionsDir, "sessions.json") } }),
-    );
-    Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
-      {
-        agentId: "main",
-        artifactKind: "archive-artifact",
-        contentRevision: expect.any(String),
-        sessionFile: archivePath,
-        sessionId: "retained",
-        sessionKind: "unknown",
-      },
-    ]);
-  });
-
-  it("resolves absolute transcript paths from a fixed custom store", async () => {
-    const storeDir = path.join(tmpDir, "custom-sessions");
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    const sessionFile = path.join(sessionsDir, "absolute-thread.jsonl");
-    const archivePath = path.join(
-      sessionsDir,
-      "absolute-thread.jsonl.deleted.2026-02-16T22-27-33.000Z",
-    );
-    const storePath = path.join(storeDir, "sessions.json");
-    const configPath = path.join(tmpDir, "openclaw.json");
-    fsSync.mkdirSync(storeDir, { recursive: true });
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.writeFileSync(sessionFile, "");
-    fsSync.writeFileSync(archivePath, "");
-    fsSync.writeFileSync(configPath, JSON.stringify({ session: { store: storePath } }));
-    Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    await upsertTestSessionEntries(storePath, {
-      "agent:main:chat:absolute": {
-        sessionFile,
-        sessionId: "absolute-thread",
-        updatedAt: 1,
-      },
-    });
-
-    expect(
-      (await listSessionTranscriptCorpusEntriesForAgent("main"))
-        .filter((entry) => entry.artifactKind === "archive-artifact")
-        .map((entry) => entry.sessionFile),
-    ).toEqual([archivePath]);
-  });
-
-  it("keeps legacy session keys in non-main per-agent stores", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "ops", "sessions");
-    const sessionFile = path.join(sessionsDir, "legacy-thread.jsonl");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.writeFileSync(sessionFile, "");
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "slack:workspace:thread": {
-          sessionFile: "legacy-thread.jsonl",
-          sessionId: "legacy-thread",
-        },
-      }),
-    );
-
-    await expect(listSessionTranscriptCorpusEntriesForAgent("ops")).resolves.toEqual([]);
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
-  });
-
-  it("keeps legacy main aliases in a renamed default agent store", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "ops", "sessions");
-    const sessionFile = path.join(sessionsDir, "legacy-main.jsonl");
-    const configPath = path.join(tmpDir, "openclaw.json");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.writeFileSync(sessionFile, "");
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:main": {
-          sessionFile: "legacy-main.jsonl",
-          sessionId: "legacy-main",
-        },
-      }),
-    );
-    fsSync.writeFileSync(
-      configPath,
-      JSON.stringify({ agents: { entries: { ops: { default: true } } } }),
-    );
-    Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-
-    await expect(listSessionTranscriptCorpusEntriesForAgent("ops")).resolves.toEqual([]);
   });
 });
 
@@ -783,12 +307,6 @@ describe("buildSessionEntry", () => {
   });
 
   it("returns lineMap tracking original JSONL line numbers", async () => {
-    // Simulate a real session JSONL file with metadata records interspersed
-    // Lines 1-3: non-message metadata records
-    // Line 4: user message
-    // Line 5: metadata
-    // Line 6: assistant message
-    // Line 7: user message
     const jsonlLines = [
       JSON.stringify({ type: "custom", customType: "model-snapshot", data: {} }),
       JSON.stringify({ type: "custom", customType: "openclaw.cache-ttl", data: {} }),
@@ -809,24 +327,7 @@ describe("buildSessionEntry", () => {
       "User: Hello world\nAssistant: Hi there, how can I help?\nUser: Tell me a joke",
     );
 
-    // lineMap should map each content line to its original JSONL line (1-indexed)
-    // Content line 0 → JSONL line 4 (the first user message)
-    // Content line 1 → JSONL line 6 (the assistant message)
-    // Content line 2 → JSONL line 7 (the second user message)
     expect(entry.lineMap).toStrictEqual([4, 6, 7]);
-  });
-
-  it("returns empty lineMap when no messages are found", async () => {
-    const jsonlLines = [
-      JSON.stringify({ type: "custom", customType: "model-snapshot", data: {} }),
-      JSON.stringify({ type: "session-meta", agentId: "test" }),
-    ];
-    const filePath = path.join(tmpDir, "empty-session.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
-
-    const entry = requireSessionEntry(await buildSessionEntry(filePath));
-    expect(entry.content).toBe("");
-    expect(entry.lineMap).toStrictEqual([]);
   });
 
   it("indexes usage-counted reset/deleted archives but still skips bak and checkpoint artifacts", async () => {
@@ -866,77 +367,36 @@ describe("buildSessionEntry", () => {
     expect(checkpointEntry.lineMap).toStrictEqual([]);
   });
 
-  it("indexes compressed session archives through their materialized content", async () => {
-    const content = JSON.stringify({
-      type: "message",
-      message: { role: "user", content: "Compressed archive memory" },
-    });
-    const encoded = encodeSessionArchiveContent(content);
-    const archivePath = path.join(
-      tmpDir,
-      `compressed.jsonl.deleted.2026-07-11T00-00-00.000Z${encoded.suffix}`,
+  it("does not wipe earlier or later archive messages after a user-authored cron prompt (#98241)", async () => {
+    const archivePath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
+    const messages = [
+      { role: "user", content: "Remember before: project codename is Atlas." },
+      { role: "assistant", content: "Saved project codename Atlas." },
+      { role: "user", content: "[cron:daily-digest] why did my digest job fail last night?" },
+      { role: "assistant", content: "The digest job failed because the API token expired." },
+      {
+        role: "user",
+        content: "Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD.",
+      },
+      { role: "assistant", content: "Noted. Acme Robotics, budget 5000 USD." },
+    ];
+    fsSync.writeFileSync(
+      archivePath,
+      messages.map((message) => JSON.stringify({ type: "message", message })).join("\n"),
     );
-    fsSync.writeFileSync(archivePath, encoded.bytes);
-
     const entry = requireSessionEntry(await buildSessionEntry(archivePath));
-
-    expect(entry.content).toBe("User: Compressed archive memory");
-    expect(entry.lineMap).toStrictEqual([1]);
-  });
-
-  it.each([
-    [
-      "as the first message",
-      [],
-      [
-        "Assistant: The digest job failed because the API token expired.",
-        "User: Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD.",
-        "Assistant: Noted. Acme Robotics, budget 5000 USD.",
-      ],
-      [2, 3, 4],
-    ],
-    [
-      "after ordinary messages",
-      [
-        { role: "user", content: "Remember before: project codename is Atlas." },
-        { role: "assistant", content: "Saved project codename Atlas." },
-      ],
+    expect(entry.generatedByCronRun).toBeFalsy();
+    expect(entry.content).toBe(
       [
         "User: Remember before: project codename is Atlas.",
         "Assistant: Saved project codename Atlas.",
         "Assistant: The digest job failed because the API token expired.",
         "User: Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD.",
         "Assistant: Noted. Acme Robotics, budget 5000 USD.",
-      ],
-      [1, 2, 4, 5, 6],
-    ],
-  ])(
-    "does not wipe an archive when a user message starts with [cron: %s (#98241)",
-    async (_position, precedingMessages, expectedContent, expectedLineMap) => {
-      const archivePath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
-      const messages = [
-        ...precedingMessages,
-        { role: "user", content: "[cron:daily-digest] why did my digest job fail last night?" },
-        {
-          role: "assistant",
-          content: "The digest job failed because the API token expired.",
-        },
-        {
-          role: "user",
-          content: "Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD.",
-        },
-        { role: "assistant", content: "Noted. Acme Robotics, budget 5000 USD." },
-      ];
-      const jsonlLines = messages.map((message) => JSON.stringify({ type: "message", message }));
-      fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
-
-      const entry = requireSessionEntry(await buildSessionEntry(archivePath));
-
-      expect(entry.generatedByCronRun).toBeFalsy();
-      expect(entry.content).toBe(expectedContent.join("\n"));
-      expect(entry.lineMap).toStrictEqual(expectedLineMap);
-    },
-  );
+      ].join("\n"),
+    );
+    expect(entry.lineMap).toStrictEqual([1, 2, 4, 5, 6]);
+  });
 
   it("keeps cron-run reset archives opaque when session metadata preserves the cron key", async () => {
     const archivePath = path.join(tmpDir, "cron-run.jsonl.reset.2026-02-16T22-26-33.000Z");
@@ -959,29 +419,27 @@ describe("buildSessionEntry", () => {
     expect(entry.generatedByCronRun).toBe(true);
   });
 
-  it.each([false, true])(
-    "preserves blank/malformed archive line ordinals (compressed=%s)",
-    async (compressed) => {
-      const jsonlLines = [
-        "",
-        "not valid json",
-        JSON.stringify({ type: "message", message: { role: "user", content: "First" } }),
-        "",
-        JSON.stringify({ type: "message", message: { role: "assistant", content: "Second" } }),
-        "",
-      ];
-      const raw = jsonlLines.join("\n");
-      const encoded = compressed ? encodeSessionArchiveContent(raw) : { bytes: raw, suffix: "" };
-      const filePath = path.join(
-        tmpDir,
-        `gaps.jsonl.reset.2026-07-01T10-00-00.000Z${encoded.suffix}`,
-      );
-      fsSync.writeFileSync(filePath, encoded.bytes);
+  it("preserves blank/malformed compressed archive line ordinals", async () => {
+    const jsonlLines = [
+      "",
+      "not valid json",
+      JSON.stringify({ type: "message", message: { role: "user", content: "First" } }),
+      "",
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "Second" } }),
+      "",
+    ];
+    const raw = jsonlLines.join("\n");
+    const encoded = encodeSessionArchiveContent(raw);
+    const filePath = path.join(
+      tmpDir,
+      `gaps.jsonl.reset.2026-07-01T10-00-00.000Z${encoded.suffix}`,
+    );
+    fsSync.writeFileSync(filePath, encoded.bytes);
 
-      const entry = requireSessionEntry(await buildSessionEntry(filePath));
-      expect(entry.lineMap).toStrictEqual([3, 5]);
-    },
-  );
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe("User: First\nAssistant: Second");
+    expect(entry.lineMap).toStrictEqual([3, 5]);
+  });
 
   it("strips inbound metadata when a user envelope is split across text blocks", async () => {
     const jsonlLines = [

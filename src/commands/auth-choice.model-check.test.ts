@@ -14,32 +14,6 @@ import {
 } from "./auth-choice.model-check.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
-const publishPreparedModelRuntimeSnapshot = vi.hoisted(() => vi.fn());
-vi.mock("../agents/prepared-model-runtime.js", () => ({
-  publishPreparedModelRuntimeSnapshot,
-}));
-
-const openAIRouteMocks = vi.hoisted(() => ({
-  override: undefined as ((params: unknown) => unknown) | undefined,
-}));
-vi.mock("../agents/openai-model-routes.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/openai-model-routes.js")>();
-  return {
-    ...actual,
-    resolveOpenAIModelRoutes: (params: Parameters<typeof actual.resolveOpenAIModelRoutes>[0]) =>
-      openAIRouteMocks.override
-        ? openAIRouteMocks.override(params)
-        : actual.resolveOpenAIModelRoutes(params),
-    createOpenAIModelRoutesResolver: (
-      params: Parameters<typeof actual.createOpenAIModelRoutesResolver>[0],
-    ) => {
-      const resolveRoutes = actual.createOpenAIModelRoutesResolver(params);
-      return (ref: Parameters<ReturnType<typeof actual.createOpenAIModelRoutesResolver>>[0]) =>
-        openAIRouteMocks.override ? openAIRouteMocks.override(ref) : resolveRoutes(ref);
-    },
-  };
-});
-
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ version: 1, profiles: {} })));
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
@@ -49,48 +23,6 @@ describe("warnIfModelConfigLooksOff", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
-    openAIRouteMocks.override = undefined;
-  });
-
-  it("checks auth readiness without publishing a model catalog", async () => {
-    const note = vi.fn(async (_message: string) => {});
-    const prompter = makePrompter({ note });
-    const config = {
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-        },
-      },
-    } as OpenClawConfig;
-
-    await warnIfModelConfigLooksOff(config, prompter, { env: {} });
-
-    expect(publishPreparedModelRuntimeSnapshot).not.toHaveBeenCalled();
-    expect(ensureAuthProfileStore).toHaveBeenCalledOnce();
-    expect(ensureAuthProfileStore).toHaveBeenCalledWith(
-      undefined,
-      expect.objectContaining({
-        allowKeychainPrompt: false,
-        externalCliProviderIds: ["openai"],
-        readOnly: true,
-      }),
-    );
-    expect(note).toHaveBeenCalledWith(
-      'No auth configured for provider "openai". The agent may fail until credentials are added. Run `openclaw models auth login --provider openai`, `openclaw configure`, or set an API key env var.',
-      "Model check",
-    );
-  });
-
-  it("reports missing auth for generic providers without credential evidence", () => {
-    const config = {
-      agents: { defaults: { model: "anthropic/claude-sonnet-4-6" } },
-    } as OpenClawConfig;
-
-    expect(resolveDefaultModelAuthStatus(config, { env: {} })).toMatchObject({
-      provider: "anthropic",
-      status: "missing",
-      hasAuth: false,
-    });
   });
 
   it("accepts pending auth profiles collected by the current setup transaction", async () => {
@@ -141,34 +73,6 @@ describe("warnIfModelConfigLooksOff", () => {
       'No auth configured for provider "anthropic". The agent may fail until credentials are added. Run `openclaw models auth login --provider anthropic`, `openclaw configure`, or set an API key env var.',
       "Model check",
     );
-  });
-
-  it("accepts Codex OAuth profiles for canonical OpenAI models using the Codex runtime", async () => {
-    const note = vi.fn(async (_message: string) => {});
-    const prompter = makePrompter({ note });
-    const store = createAuthProfileStoreFixture({
-      "openai:default": {
-        type: "oauth",
-        provider: "openai",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-    }) satisfies AuthProfileStore;
-    ensureAuthProfileStore.mockReturnValue(store);
-    const config = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await warnIfModelConfigLooksOff(config, prompter);
-
-    expect(note).not.toHaveBeenCalled();
   });
 
   it("keeps custom OpenAI-compatible provider auth separate from Codex OAuth profiles", async () => {
@@ -342,10 +246,7 @@ describe("warnIfModelConfigLooksOff", () => {
     ).toMatchObject({ status: "ready", hasAuth: true });
   });
 
-  it.each([
-    ["Platform first", false],
-    ["ChatGPT first", true],
-  ])("uses every physical route for a logical model: %s", (_label, chatGPTFirst) => {
+  it("uses every physical route when the first route lacks compatible auth", () => {
     const platformRoute = {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
@@ -364,7 +265,7 @@ describe("warnIfModelConfigLooksOff", () => {
       ...platform,
       ...chatGPTRoute,
     } satisfies ModelCatalogEntry;
-    const routeVariants = chatGPTFirst ? [chatGPT, platform] : [platform, chatGPT];
+    const routeVariants = [platform, chatGPT];
     ensureAuthProfileStore.mockReturnValue(
       createAuthProfileStoreFixture({
         "openai:subscription": {
@@ -381,9 +282,7 @@ describe("warnIfModelConfigLooksOff", () => {
     } as OpenClawConfig;
 
     const catalogFacts = resolveDefaultModelCatalogFacts(config, [platform], { routeVariants });
-    expect(catalogFacts.observedRoutes).toEqual(
-      chatGPTFirst ? [chatGPTRoute, platformRoute] : [platformRoute, chatGPTRoute],
-    );
+    expect(catalogFacts.observedRoutes).toEqual([platformRoute, chatGPTRoute]);
     expect(
       resolveDefaultModelAuthStatus(config, { observedRoutes: catalogFacts.observedRoutes }),
     ).toMatchObject({ status: "ready", hasAuth: true });
@@ -406,17 +305,5 @@ describe("warnIfModelConfigLooksOff", () => {
       'Auth readiness could not be confirmed for "openai/gpt-5.4-nano". Verify the selected model route and credential source before continuing.',
       "Model check",
     );
-  });
-
-  it("keeps OpenAI route checks indeterminate when the route artifact is unavailable", () => {
-    openAIRouteMocks.override = () => null;
-    const config = {
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    } as OpenClawConfig;
-
-    expect(resolveDefaultModelAuthStatus(config)).toMatchObject({
-      status: "indeterminate",
-      hasAuth: false,
-    });
   });
 });

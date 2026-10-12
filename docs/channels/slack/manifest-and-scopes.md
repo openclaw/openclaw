@@ -161,7 +161,7 @@ Existing apps that already use `features.assistant_view` can keep that feature s
 <AccordionGroup>
   <Accordion title="Optional native slash commands">
 
-    Multiple [native slash commands](/channels/slack/messaging#commands-and-slash-behavior) can be used instead of a single configured command with nuance:
+    Multiple [native slash commands](/channels/slack/messaging#commands-and-slash-behavior) can be used instead of a single configured command, with these differences:
 
     - Use `/agentstatus` instead of `/status` because the `/status` command is reserved.
     - No more than 25 slash commands can be registered on a Slack app at once (Slack platform limit).
@@ -260,10 +260,6 @@ Existing apps that already use `features.assistant_view` can keep that feature s
     {
       "command": "/agentstatus",
       "description": "Show runtime status, including provider usage/quota when available"
-    },
-    {
-      "command": "/tasks",
-      "description": "List active/recent background tasks for the current session"
     },
     {
       "command": "/context",

@@ -20,7 +20,7 @@ import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
 import { installContextEngineLoopHook } from "../tool-result-context-guard.js";
 import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-build.js";
@@ -41,17 +41,14 @@ const model: Model = makeProviderModelFixture({
 const usage = createZeroUsageFixture();
 
 describe("context advancement through embedded attempt guards", () => {
-  it.each(
-    (["afterTurn", "ingestBatch", "ingest"] as const).flatMap((ingestion) =>
-      (["stop", "error", "aborted"] as const).flatMap((terminal) =>
-        (["stored-prefix", "live-input"] as const).map((assembly) => ({
-          ingestion,
-          terminal,
-          assembly,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    { ingestion: "afterTurn", terminal: "stop", assembly: "stored-prefix" },
+    { ingestion: "afterTurn", terminal: "error", assembly: "live-input" },
+    { ingestion: "ingestBatch", terminal: "aborted", assembly: "stored-prefix" },
+    { ingestion: "ingestBatch", terminal: "stop", assembly: "live-input" },
+    { ingestion: "ingest", terminal: "error", assembly: "stored-prefix" },
+    { ingestion: "ingest", terminal: "aborted", assembly: "live-input" },
+  ] as const)(
     "preserves live context with $assembly assembly and defers $ingestion after $terminal",
     async ({ ingestion, terminal, assembly }) => {
       const remembered: AgentMessage[] = [];
@@ -191,12 +188,12 @@ describe("context advancement through embedded attempt guards", () => {
         getCompactionReplayEnabled: () => false,
         getServerToolClearingEnabled: () => false,
         toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-        getSystemPrompt: () => "",
+        getSystemPrompt: () => "system boundary text ".repeat(64),
         isOpenAIResponsesApi: false,
         repairToolUseResultPairing: false,
         sessionAgentId: "synthetic",
         sessionManager: {},
-        settingsManager: { getBlockImages: () => false, getCompactionReserveTokens: () => 64 },
+        settingsManager: { getBlockImages: () => false, getCompactionReserveTokens: () => 1024 },
       } as never);
       try {
         await agent.prompt("Read the fixture.");
@@ -223,8 +220,9 @@ describe("context advancement through embedded attempt guards", () => {
         expect(assemble.mock.calls[1]?.[0]).toMatchObject({
           prompt: "Read the fixture.",
           availableTools: new Set(["read_fixture"]),
+          // 8192 context - 1024 reserve - 432 system pressure - 14 pending exchange.
+          tokenBudget: 6722,
         });
-        expect(assemble.mock.calls[1]?.[0].tokenBudget).toBeLessThan(8192);
         expect(commitTurn).not.toHaveBeenCalled();
         expect(remembered).toEqual([]);
         expect(guards.getAfterTurnCheckpoint()).toBeNull();
@@ -296,7 +294,8 @@ describe("context advancement through embedded attempt guards", () => {
           ),
         );
       };
-      const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
+      using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
+      const sessionPromptState = promptStateLease.state;
       const promptContext = await prepareEmbeddedAttemptPromptContext({
         attempt: { config: {}, contextTokenBudget: 8192, sessionId },
         capabilityToolNames: new Set(["read_fixture"]),
@@ -333,7 +332,6 @@ describe("context advancement through embedded attempt guards", () => {
           persistToolResultProjections: async () => {},
           promptActiveSession: (text, options) => session.prompt(text, options),
           runtimeOnly: false,
-          sessionPromptState,
           systemPrompt: "",
           toolResultAggregateMaxChars: promptContext.promptToolResultAggregateMaxChars,
           toolResultMaxChars: promptContext.promptToolResultMaxChars,

@@ -39,7 +39,6 @@ describe("buildApiErrorObservationFields", () => {
     );
 
     expect(observed.rawErrorPreview).not.toContain(OBSERVATION_BEARER_TOKEN);
-    expect(observed.rawErrorPreview).toContain(OBSERVATION_BEARER_TOKEN.slice(0, 6));
     expect(observed.rawErrorHash).toMatch(/^sha256:/);
   });
 
@@ -51,6 +50,15 @@ describe("buildApiErrorObservationFields", () => {
     expect(observed.rawErrorPreview).not.toContain(OBSERVATION_COOKIE_VALUE);
     expect(observed.rawErrorPreview).toContain("x-api-key: ***");
     expect(observed.rawErrorPreview).toContain("Cookie: session=");
+  });
+
+  it("masks a bare pass: credential in the provider message preview", () => {
+    const observed = buildApiErrorObservationFields(
+      JSON.stringify({
+        error: { type: "invalid_request", message: "pass: opaque-pass-secret-1234567890 rejected" },
+      }),
+    );
+    expect(observed.providerErrorMessagePreview).toBe("pass: opaque…7890 rejected");
   });
 
   it("redacts provider error types as well as message previews", () => {

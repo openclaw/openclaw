@@ -236,7 +236,9 @@ suite.define(() => {
         assistant.getByAltText("Copy boundary image"),
         assistant.locator("video"),
       ]) {
-        await control.scrollIntoViewIfNeeded();
+        // The floating composer covers the viewport edge; forced clicks need
+        // the actual control centered above it, not merely inside the viewport.
+        await control.evaluate((element) => element.scrollIntoView({ block: "center" }));
         await control.evaluate((element) => {
           element.addEventListener(
             "contextmenu",

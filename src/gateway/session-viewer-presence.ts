@@ -4,34 +4,16 @@ import { upsertPresence } from "../infra/system-presence.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import { recordClientPresenceActivity } from "./server/client-presence.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
-import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 
-type SessionViewerPresenceDeclarationsDeps = Parameters<typeof broadcastPresenceSnapshot>[0] & {
+type SessionViewerPresenceDeclarationsDeps = {
   clients: GatewayClientRegistry;
+  publishPresence: () => void;
 };
-
-type SessionViewerPresenceDeclarations = {
-  replace: (connId: string, sessionKeys: readonly string[]) => readonly string[];
-  unsubscribe: (connId: string) => void;
-  stop: () => void;
-};
-
-function normalizedSessionKeys(sessionKeys: readonly string[]): string[] {
-  return [...new Set(sessionKeys.map((key) => key.trim()).filter(Boolean))].toSorted();
-}
-
-function sameKeys(left: readonly string[] | undefined, right: readonly string[]): boolean {
-  return (
-    left !== undefined &&
-    left.length === right.length &&
-    left.every((key, index) => key === right[index])
-  );
-}
 
 /** Owns one replace-set per websocket connection until empty declaration or disconnect. */
 export function createSessionViewerPresenceDeclarations(
   deps: SessionViewerPresenceDeclarationsDeps,
-): SessionViewerPresenceDeclarations {
+) {
   const declarations = new Map<string, readonly string[]>();
   let stopped = false;
 
@@ -44,9 +26,9 @@ export function createSessionViewerPresenceDeclarations(
     if (!client || client.invalidated || client.socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
       return [];
     }
-    const next = normalizedSessionKeys(sessionKeys);
-    const previous = declarations.get(normalizedConnId);
-    if (sameKeys(previous, next) || (previous === undefined && next.length === 0)) {
+    const next = [...new Set(sessionKeys.map((key) => key.trim()).filter(Boolean))].toSorted();
+    const previous = declarations.get(normalizedConnId) ?? [];
+    if (previous.length === next.length && previous.every((key, index) => key === next[index])) {
       return next;
     }
     if (next.length === 0) {
@@ -61,7 +43,7 @@ export function createSessionViewerPresenceDeclarations(
       if (next.length > 0) {
         recordClientPresenceActivity(deps.clients, client);
       }
-      broadcastPresenceSnapshot(deps);
+      deps.publishPresence();
     }
     return next;
   };

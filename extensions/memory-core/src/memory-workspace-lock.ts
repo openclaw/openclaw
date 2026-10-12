@@ -1,25 +1,23 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateCompareIntent,
+  PluginStateKeyedStore,
+  PluginStateObservation,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   getFileLockProcessStartTime,
   isPidDefinitelyDead,
 } from "openclaw/plugin-sdk/process-runtime";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
-  SHORT_TERM_LOCK_MAX_ENTRIES,
   SHORT_TERM_LOCK_NAMESPACE,
   memoryCoreStateReference,
   memoryCoreWorkspaceStateKey,
-  openMemoryCoreStateStore,
 } from "./dreaming-state.js";
 import type { ShortTermLockEntry } from "./short-term-promotion-types.js";
 
-const MEMORY_WORKSPACE_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
-const MEMORY_WORKSPACE_LOCK_RETRY_DELAY_MS = 40;
 const inProcessMemoryWorkspaceLocks = new KeyedAsyncQueue();
-const activeMemoryWorkspaceLockOwners = new Map<string, string>();
 
 type MemoryWorkspaceLease = { key: string; active: boolean };
 type MemoryWorkspaceLockScope = {
@@ -58,7 +56,7 @@ async function runWorkspaceLockScope<T>(
     return await memoryWorkspaceLockScopes.run(scope, task);
   } finally {
     // Closed async contexts must acquire a new lease. Already accepted children
-    // finish before the owner releases the cross-process lock.
+    // finish before the owner admits the next workspace writer.
     scope.active = false;
     await scope.childTail;
   }
@@ -74,11 +72,7 @@ function parseLockOwnerPid(raw: string): number | null {
   return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
-export function isShortTermLockStealable(
-  lockKey: string,
-  existing: ShortTermLockEntry,
-  nowMs: number,
-): boolean {
+export function isShortTermLockStealable(existing: ShortTermLockEntry, nowMs: number): boolean {
   if (nowMs - existing.acquiredAt <= SHORT_TERM_LOCK_STALE_MS) {
     return false;
   }
@@ -87,9 +81,8 @@ export function isShortTermLockStealable(
     return true;
   }
   if (ownerPid === process.pid) {
-    // The current process can own this row only through the tracked local lease.
-    // A same-PID row without that lease survived a prior process or failed cleanup.
-    return activeMemoryWorkspaceLockOwners.get(lockKey) !== existing.owner;
+    // Runtime coordination is process-local; these are legacy diagnostic rows.
+    return true;
   }
   if (isPidDefinitelyDead(ownerPid)) {
     return true;
@@ -106,14 +99,46 @@ export async function deleteShortTermLockEntryIfCurrent(
   lockStore: PluginStateKeyedStore<ShortTermLockEntry>,
   lockKey: string,
   expected: ShortTermLockEntry,
+  initialObservation?: PluginStateObservation<ShortTermLockEntry>,
 ): Promise<boolean> {
-  if (!lockStore.deleteIf) {
-    throw new Error("memory-core short-term lock store requires conditional deletion");
+  if (!lockStore.observe || !lockStore.compareAndApply) {
+    throw new Error("memory-core short-term lock store requires atomic comparisons");
   }
-  return await lockStore.deleteIf(
-    lockKey,
-    (current) => current.owner === expected.owner && current.acquiredAt === expected.acquiredAt,
-  );
+  const { owner, acquiredAt } = expected;
+  const decideDeletion = (
+    current: ShortTermLockEntry | undefined,
+  ): PluginStateCompareIntent<ShortTermLockEntry> => ({
+    operation: "delete",
+    action:
+      current !== undefined && current.owner === owner && current.acquiredAt === acquiredAt
+        ? "delete"
+        : "keep",
+  });
+  let observation = initialObservation ?? (await lockStore.observe(lockKey));
+  while (true) {
+    const result = await lockStore.compareAndApply(
+      lockKey,
+      observation.comparison,
+      decideDeletion(observation.value),
+    );
+    if (result.status !== "conflict") {
+      return result.status === "applied";
+    }
+    observation = result.current;
+  }
+}
+
+/** Captured input preparation shares local ordering without claiming a durable write lease. */
+export async function withMemoryWorkspacePreparation<T>(
+  workspaceDir: string,
+  prepare: () => Promise<T>,
+): Promise<T> {
+  const key = memoryCoreWorkspaceStateKey(workspaceDir);
+  if (findActiveWorkspaceLockScope(key)) {
+    return await withMemoryWorkspaceLock(workspaceDir, prepare);
+  }
+  // Keep existing FIFO and pending Worker input bounds; never mint a write scope.
+  return await inProcessMemoryWorkspaceLocks.enqueue(key, prepare);
 }
 
 export async function withMemoryWorkspaceLock<T>(
@@ -132,47 +157,12 @@ export async function withMemoryWorkspaceLock<T>(
     );
     return await child;
   }
-  const lockRef = resolveLockPath(workspaceDir);
-  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
-    namespace: SHORT_TERM_LOCK_NAMESPACE,
-    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-  });
   return await inProcessMemoryWorkspaceLocks.enqueue(lockKey, async () => {
-    const startedAt = Date.now();
-
-    while (true) {
-      const acquiredAt = Date.now();
-      const ownerStartTime = getFileLockProcessStartTime(process.pid);
-      const lockEntry: ShortTermLockEntry = {
-        owner: `${process.pid}:${acquiredAt}`,
-        acquiredAt,
-        ...(ownerStartTime === null ? {} : { ownerStartTime }),
-      };
-      const acquired = await lockStore.registerIfAbsent(lockKey, lockEntry);
-      if (acquired) {
-        const lease = { key: lockKey, active: true };
-        activeMemoryWorkspaceLockOwners.set(lockKey, lockEntry.owner);
-        try {
-          return await runWorkspaceLockScope(lease, task);
-        } finally {
-          lease.active = false;
-          activeMemoryWorkspaceLockOwners.delete(lockKey);
-          await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry).catch(() => false);
-        }
-      }
-
-      const existing = await lockStore.lookup(lockKey);
-      if (existing && isShortTermLockStealable(lockKey, existing, Date.now())) {
-        if (await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, existing)) {
-          continue;
-        }
-      }
-
-      if (Date.now() - startedAt >= MEMORY_WORKSPACE_LOCK_WAIT_TIMEOUT_MS) {
-        throw new Error(`Timed out waiting for memory workspace lock at ${lockRef}`);
-      }
-
-      await sleep(MEMORY_WORKSPACE_LOCK_RETRY_DELAY_MS);
+    const lease = { key: lockKey, active: true };
+    try {
+      return await runWorkspaceLockScope(lease, task);
+    } finally {
+      lease.active = false;
     }
   });
 }

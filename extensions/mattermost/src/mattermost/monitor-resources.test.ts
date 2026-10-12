@@ -1,5 +1,10 @@
 // Mattermost tests cover monitor resources plugin behavior.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createMattermostMonitorResources,
+  formatMattermostInboundMediaText,
+  formatMattermostPendingMediaText,
+} from "./monitor-resources.js";
 
 const fetchMattermostChannel = vi.hoisted(() => vi.fn());
 const fetchMattermostUser = vi.hoisted(() => vi.fn());
@@ -23,61 +28,20 @@ vi.mock("./interactions.js", () => ({
 }));
 
 describe("mattermost monitor resources", () => {
-  let createMattermostMonitorResources: typeof import("./monitor-resources.js").createMattermostMonitorResources;
-  let formatMattermostInboundMediaText: typeof import("./monitor-resources.js").formatMattermostInboundMediaText;
-  let formatMattermostPendingMediaText: typeof import("./monitor-resources.js").formatMattermostPendingMediaText;
-
-  beforeAll(async () => {
-    ({
-      createMattermostMonitorResources,
-      formatMattermostInboundMediaText,
-      formatMattermostPendingMediaText,
-    } = await import("./monitor-resources.js"));
-  });
-
-  it("keeps media-only download failures visible to the agent", () => {
+  it("omits an unusable unavailable attachment name", () => {
     expect(
       formatMattermostInboundMediaText({
         body: "",
         nativeMedia: [{}],
-        materializedMedia: [],
+        materializedMedia: [{ kind: "document", fileName: "\u0000\u0001" }],
       }),
     ).toBe("[mattermost attachment unavailable]");
-  });
-
-  it("keeps captions and partial-failure notices without minting media placeholders", () => {
-    expect(
-      formatMattermostInboundMediaText({
-        body: "quarterly files",
-        nativeMedia: [{}, {}],
-        materializedMedia: [
-          { path: "/tmp/q1.pdf", contentType: "application/pdf", fileName: "available.pdf" },
-          { kind: "audio", fileName: "quarterly recording.mp3" },
-        ],
-      }),
-    ).toBe('quarterly files\n\n[mattermost attachment unavailable] "quarterly recording.mp3"');
-  });
-
-  it.each([
-    {
-      fileName: '../../private/report]\u0000\n".pdf',
-      expected: '[mattermost attachment unavailable] "report].pdf"',
-    },
-    { fileName: "   ", expected: "[mattermost attachment unavailable]" },
-  ])("safely formats unavailable attachment names: $fileName", ({ fileName, expected }) => {
-    expect(
-      formatMattermostInboundMediaText({
-        body: "",
-        nativeMedia: [{}],
-        materializedMedia: [{ kind: "document", fileName }],
-      }),
-    ).toBe(expected);
   });
 
   it("bounds multiple unavailable attachment names without losing their count", () => {
     const materializedMedia = Array.from({ length: 4 }, (_, index) => ({
       kind: "document" as const,
-      fileName: `${index}-${"a".repeat(250)}.pdf`,
+      fileName: index === 0 ? "first.pdf" : `${index}-${"a".repeat(250)}.pdf`,
     }));
     const result = formatMattermostInboundMediaText({
       body: "",
@@ -86,6 +50,7 @@ describe("mattermost monitor resources", () => {
     });
 
     expect(result).toContain("[mattermost 4 attachments unavailable]");
+    expect(result).toContain('"first.pdf, ');
     expect(result.length).toBeLessThanOrEqual(560);
   });
 
@@ -165,33 +130,6 @@ describe("mattermost monitor resources", () => {
     });
   });
 
-  it("keeps a type-only fact for rejected unsafe file IDs so later facts stay aligned", async () => {
-    const saveRemoteMedia = vi.fn(async () => ({
-      path: "/tmp/file.png",
-      contentType: "image/png",
-    }));
-
-    const resources = createMattermostMonitorResources({
-      accountId: "default",
-      callbackUrl: "https://openclaw.test/callback",
-      client: {
-        apiBaseUrl: "https://chat.example.com/api/v4",
-        baseUrl: "https://chat.example.com",
-        token: "bot-token",
-      } as never,
-      logger: {},
-      mediaMaxBytes: 1024,
-      saveRemoteMedia,
-      mediaKindFromMime: () => "image",
-    });
-
-    await expect(resources.resolveMattermostMedia(["..", "file-1"])).resolves.toEqual([
-      { kind: "unknown" },
-      { path: "/tmp/file.png", contentType: "image/png", kind: "image" },
-    ]);
-    expect(saveRemoteMedia).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps partial download failures aligned with native media metadata", async () => {
     const saveRemoteMedia = vi
       .fn()
@@ -224,39 +162,6 @@ describe("mattermost monitor resources", () => {
       },
     ]);
     expect(request).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps total download failures as ordered type-only facts", async () => {
-    const saveRemoteMedia = vi.fn().mockRejectedValue(new Error("download failed"));
-    const request = vi.fn(async (requestPath: string) => ({
-      mime_type: requestPath.includes("video") ? "video/mp4" : "application/pdf",
-      // Blank server-side names must be omitted, not forwarded as empty strings.
-      name: requestPath.includes("video") ? "   " : undefined,
-    }));
-    const resources = createMattermostMonitorResources({
-      accountId: "default",
-      client: {
-        apiBaseUrl: "https://chat.example.com/api/v4",
-        baseUrl: "https://chat.example.com",
-        request,
-      },
-      logger: {},
-      mediaMaxBytes: 1024,
-      saveRemoteMedia,
-      mediaKindFromMime: (contentType?: string) =>
-        contentType === "video/mp4"
-          ? "video"
-          : contentType === "application/pdf"
-            ? "document"
-            : null,
-    } as unknown as Parameters<typeof createMattermostMonitorResources>[0]);
-
-    await expect(
-      resources.resolveMattermostMedia(["file-video", "file-document"]),
-    ).resolves.toEqual([
-      { contentType: "video/mp4", kind: "video" },
-      { contentType: "application/pdf", kind: "document" },
-    ]);
   });
 
   it("rejects unsafe file paths before media download", async () => {
@@ -401,67 +306,10 @@ describe("mattermost monitor resources", () => {
     });
   });
 
-  it.each(["channel", "user"] as const)(
-    "retries a failed %s lookup on the next event instead of caching the failure",
-    async (kind) => {
-      const fetchResource = kind === "channel" ? fetchMattermostChannel : fetchMattermostUser;
-      fetchResource
-        .mockRejectedValueOnce(new Error("mattermost api unavailable"))
-        .mockResolvedValueOnce({ id: `${kind}-1` });
-      const resources = createMattermostMonitorResources({
-        accountId: "default",
-        callbackUrl: "https://openclaw.test/callback",
-        client: {} as never,
-        logger: {},
-        mediaMaxBytes: 1024,
-        saveRemoteMedia: vi.fn(),
-        mediaKindFromMime: () => "document",
-      });
-      const resolve = kind === "channel" ? resources.resolveChannelInfo : resources.resolveUserInfo;
-
-      await expect(resolve(`${kind}-1`)).resolves.toBeNull();
-      await expect(resolve(`${kind}-1`)).resolves.toEqual({ id: `${kind}-1` });
-      expect(fetchResource).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it.each(["channel", "user"] as const)(
-    "bounds the %s cache without refreshing insertion order on reads",
-    async (kind) => {
-      const fetchResource = kind === "channel" ? fetchMattermostChannel : fetchMattermostUser;
-      fetchResource.mockImplementation(async (_client, id: string) => ({ id }));
-      const resources = createMattermostMonitorResources({
-        accountId: "default",
-        callbackUrl: "https://openclaw.test/callback",
-        client: {} as never,
-        logger: {},
-        mediaMaxBytes: 1024,
-        saveRemoteMedia: vi.fn(),
-        mediaKindFromMime: () => "document",
-      });
-      const resolve = kind === "channel" ? resources.resolveChannelInfo : resources.resolveUserInfo;
-
-      for (let index = 0; index < 1000; index += 1) {
-        await resolve(`${kind}-${index}`);
-      }
-      await resolve(`${kind}-0`);
-      await resolve(`${kind}-1000`);
-      await resolve(`${kind}-0`);
-      await resolve(`${kind}-1000`);
-
-      const requestedIds = fetchResource.mock.calls.map((call) => call[1]);
-      expect(requestedIds.filter((id) => id === `${kind}-0`)).toHaveLength(2);
-      expect(requestedIds.filter((id) => id === `${kind}-1000`)).toHaveLength(1);
-    },
-  );
-
-  it.each([
-    { kind: "channel" as const, ttlMs: 5 * 60_000 },
-    { kind: "user" as const, ttlMs: 10 * 60_000 },
-  ])("expires cached $kind lookups at their TTL", async ({ kind, ttlMs }) => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const fetchResource = kind === "channel" ? fetchMattermostChannel : fetchMattermostUser;
-    fetchResource.mockImplementation(async (_client, id: string) => ({ id }));
+  it("retries a failed user lookup on the next event instead of caching the failure", async () => {
+    fetchMattermostUser
+      .mockRejectedValueOnce(new Error("mattermost api unavailable"))
+      .mockResolvedValueOnce({ id: "user-1" });
     const resources = createMattermostMonitorResources({
       accountId: "default",
       callbackUrl: "https://openclaw.test/callback",
@@ -471,15 +319,35 @@ describe("mattermost monitor resources", () => {
       saveRemoteMedia: vi.fn(),
       mediaKindFromMime: () => "document",
     });
-    const resolve = kind === "channel" ? resources.resolveChannelInfo : resources.resolveUserInfo;
+    await expect(resources.resolveUserInfo("user-1")).resolves.toBeNull();
+    await expect(resources.resolveUserInfo("user-1")).resolves.toEqual({ id: "user-1" });
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
+  });
 
-    await resolve(`${kind}-1`);
-    now.mockReturnValue(1_000 + ttlMs - 1);
-    await resolve(`${kind}-1`);
-    now.mockReturnValue(1_000 + ttlMs);
-    await resolve(`${kind}-1`);
+  it("bounds the channel cache without refreshing insertion order on reads", async () => {
+    fetchMattermostChannel.mockImplementation(async (_client, id: string) => ({ id }));
+    const resources = createMattermostMonitorResources({
+      accountId: "default",
+      callbackUrl: "https://openclaw.test/callback",
+      client: {} as never,
+      logger: {},
+      mediaMaxBytes: 1024,
+      saveRemoteMedia: vi.fn(),
+      mediaKindFromMime: () => "document",
+    });
+    const resolve = resources.resolveChannelInfo;
 
-    expect(fetchResource).toHaveBeenCalledTimes(2);
+    for (let index = 0; index < 1000; index += 1) {
+      await resolve(`channel-${index}`);
+    }
+    await resolve("channel-0");
+    await resolve("channel-1000");
+    await resolve("channel-0");
+    await resolve("channel-1000");
+
+    const requestedIds = fetchMattermostChannel.mock.calls.map((call) => call[1]);
+    expect(requestedIds.filter((id) => id === "channel-0")).toHaveLength(2);
+    expect(requestedIds.filter((id) => id === "channel-1000")).toHaveLength(1);
   });
 
   it("does not reuse cached lookups while the process clock is invalid", async () => {

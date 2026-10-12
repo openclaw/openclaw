@@ -1,25 +1,28 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-/**
- * Session listing command.
- *
- * It loads one or more agent session stores, enriches rows with model/runtime
- * metadata, and emits JSON or terminal tables.
- */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type {
+  ModelChoice,
+  ModelRuntimeChoice,
+  ModelsListResult,
+} from "../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
-import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
-import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
+import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import {
   prepareCliProviderClassifier,
   type CliProviderClassifier,
 } from "../agents/model-selection.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
@@ -36,49 +39,44 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { classifySessionKind, type SessionKind } from "../sessions/classify-session-kind.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../utils/delivery-context.shared.js";
+} from "../utils/delivery-context.read.js";
+import { formatTokenCount } from "../utils/token-format.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
-import {
-  resolveSessionDisplayModelRef,
-  resolveSessionDisplayDefaults,
-} from "./sessions-display-model.js";
+import { resolveSessionDisplayModelRef } from "./sessions-display-model.js";
 import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
   formatSessionKeyCell,
   formatSessionModelCell,
-  type SessionDisplayRow,
   toSessionDisplayRow,
 } from "./sessions-table.js";
-
-type SessionRow = SessionDisplayRow & {
-  agentId: string;
-  kind: SessionKind;
-  agentRuntime: ReturnType<typeof resolveModelAgentRuntimeMetadata>;
-  runtimeLabel: string;
-  /** Carry the prepared identity into JSON/table emission without re-resolving plugin metadata. */
-  displayModelRef: { provider: string; model: string };
-  /**
-   * True only when the session has persisted ACP runtime metadata. Key-shape
-   * alone is not sufficient because ACP bridge sessions (translator.ts) may
-   * use ACP-shaped keys without ever writing `SessionAcpMeta` — those use the
-   * normal configured model and must not be overlaid with the acpx sentinel.
-   */
-  acpRuntime: boolean;
-};
 
 type SessionCandidate = { agentId: string; entry: SessionEntry; sessionKey: string };
 
 const DEFAULT_SESSIONS_LIMIT = 100;
-const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agents/context.js"));
 
-const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+function toSessionCatalogEntry(
+  model: ModelChoice,
+  runtime: ModelChoice | ModelRuntimeChoice = model,
+): ModelCatalogEntry {
+  return {
+    id: model.id,
+    name: model.name,
+    provider: model.provider,
+    contextWindow: runtime.contextWindow,
+    contextTokens: runtime.contextTokens,
+    contextWindows: runtime.contextWindows,
+    contextWindowDefault: runtime.contextWindowDefault,
+    ...(runtime.agentRuntime && !["auto", "openclaw"].includes(runtime.agentRuntime.id)
+      ? { nativeRuntime: runtime.agentRuntime.id }
+      : {}),
+  };
+}
 
 /** True ACP sessions use the child runtime's model, not the configured fallback. */
 function applyAcpModelOverlayIfNeeded(
@@ -138,7 +136,7 @@ const formatTokensCell = (
   contextTokens: number | null,
   rich: boolean,
 ) => {
-  const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
+  const ctxLabel = contextTokens ? formatTokenCount(contextTokens) : "?";
   if (total === undefined) {
     const label = `unknown/${ctxLabel} (?%)`;
     return rich ? theme.muted(label) : label;
@@ -147,30 +145,26 @@ const formatTokensCell = (
     contextTokens && freshTotal !== undefined
       ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
       : null;
-  const label = `${formatKTokens(total)}/${ctxLabel} (${pct ?? "?"}%)`;
+  const label = `${formatTokenCount(total)}/${ctxLabel} (${pct ?? "?"}%)`;
   return colorByPct(label, pct, rich);
 };
 
-const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
-  if (!rich) {
-    return kind;
-  }
-  if (kind === "group") {
-    return theme.accentBright(kind);
-  }
-  if (kind === "global") {
-    return theme.warn(kind);
-  }
-  if (kind === "direct") {
-    return theme.accent(kind);
-  }
-  return theme.muted(kind);
+const formatKindCell = (kind: SessionKind, rich: boolean) => {
+  const colors = {
+    group: theme.accentBright,
+    global: theme.warn,
+    direct: theme.accent,
+    cron: theme.muted,
+    "spawn-child": theme.muted,
+    unknown: theme.muted,
+  };
+  return colorize(rich, colors[kind], kind);
 };
 
 function resolveSessionRuntimeLabel(params: {
   cfg: OpenClawConfig;
   entry: SessionEntry;
-  agentRuntime: ReturnType<typeof resolveModelAgentRuntimeMetadata>;
+  agentRuntime: ReturnType<typeof resolveCurrentSessionAgentRuntimeMetadata>;
   modelProvider: string;
   classifyCliProvider: CliProviderClassifier;
 }): string {
@@ -189,13 +183,6 @@ function resolveSessionStoreDisplayPath(target: { agentId: string; storePath: st
   return resolveSqliteTargetFromSessionStorePath(target.storePath, {
     agentId: target.agentId,
   }).path;
-}
-
-function toJsonSessionRow(row: SessionRow): Omit<SessionRow, "displayModelRef" | "runtimeLabel"> {
-  const { displayModelRef, runtimeLabel, ...jsonRow } = row;
-  void displayModelRef;
-  void runtimeLabel;
-  return jsonRow;
 }
 
 function stripChannelRecipientPrefix(
@@ -269,7 +256,6 @@ function resolveDisplayRuntimePolicySessionKey(params: {
     : undefined;
 }
 
-/** Lists sessions across selected stores with optional JSON output. */
 export async function sessionsCommand(
   opts: {
     json?: boolean;
@@ -283,11 +269,10 @@ export async function sessionsCommand(
 ) {
   const aggregateAgents = opts.allAgents === true;
   const cfg = getRuntimeConfig();
-  const displayDefaults = resolveSessionDisplayDefaults(cfg);
-  const { lookupContextTokens, resolveModelContextTokenProjection } =
-    await contextLookupRuntimeLoader.load();
-  const configContextTokens =
-    lookupContextTokens(displayDefaults.model, { allowAsyncLoad: false }) ?? DEFAULT_CONTEXT_TOKENS;
+  const { resolveModelContextTokenProjection } = await import("../agents/context.js");
+  const { loadPreparedModelCatalogSnapshot } = await import("../agents/prepared-model-catalog.js");
+  const { callGateway, isImplicitLocalGatewayTarget } = await import("../gateway/call.js");
+  const { readActiveGatewayLockIdentity } = await import("../infra/gateway-lock.js");
   const targets = resolveCommandSessionStoreTargets({ cfg, opts });
 
   let activeMinutes: number | undefined;
@@ -342,77 +327,162 @@ export async function sessionsCommand(
       entry,
     })),
   });
-  const rows = sessionEntries.map(({ acpSessionKey, agentId, entry, row }) => {
-    const acpMeta = acpSessionMetaByEntry.get(entry);
-    const acpRuntime = acpMeta != null;
-    // ACP rows need stored-key metadata before model/runtime resolution so
-    // bridge sessions and true ACP runtime sessions display differently.
-    const modelRef = applyAcpModelOverlayIfNeeded(
-      resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId),
-      acpSessionKey,
-      acpRuntime,
-    );
-    const agentRuntime = resolveModelAgentRuntimeMetadata({
-      cfg,
-      agentId,
-      sessionEntry: entry,
-      provider: modelRef.provider,
-      model: modelRef.model,
-      sessionKey: acpSessionKey,
-      acpRuntime,
-      acpBackend: acpMeta?.backend,
-    });
-    const hasPersistedContextTokens =
-      typeof entry.contextTokens === "number" && entry.contextTokens > 0;
-    // CLI-backed rows can store a canonical display provider that does not own
-    // the runtime's context policy, so retain their model-only offline fallback.
-    const usesCliContextFallback =
-      !hasPersistedContextTokens && classifyCliProvider(agentRuntime.id);
-    const modelContext = usesCliContextFallback
-      ? {
-          contextTokens: lookupContextTokens(modelRef.model, { allowAsyncLoad: false }),
-          authoredContextTokens: resolveAuthoredModelContextTokens({
-            cfg,
-            provider: modelRef.provider,
-            model: modelRef.model,
-          }),
-        }
-      : resolveModelContextTokenProjection({
-          cfg,
-          provider: modelRef.provider,
-          model: modelRef.model,
-          allowAsyncLoad: false,
-        });
-    const contextTokens = resolveProjectedSessionContextTokens({
-      entry,
-      provider: modelRef.provider,
-      model: modelRef.model,
-      agentHarnessId: agentRuntime.id,
-      resolvedContextTokens: modelContext.contextTokens,
-      authoredContextTokens: modelContext.authoredContextTokens,
-    });
-    return Object.assign({}, row, {
-      agentId,
-      acpRuntime,
-      agentRuntime,
-      contextTokens,
-      displayModelRef: modelRef,
-      kind: classifySessionKind(row.key, entry),
-      runtimePolicySessionKey: resolveDisplayRuntimePolicySessionKey({
+  const catalogs = new Map<string, Promise<ModelCatalogSnapshot | undefined>>();
+  let catalogWarningShown = false;
+  const warnCatalogUnavailable = () => {
+    if (!catalogWarningShown) {
+      catalogWarningShown = true;
+      runtime.error(
+        "Could not read the active Gateway model catalog; showing configured or last verified capacity. Retry when the Gateway is reachable.",
+      );
+    }
+  };
+  const gatewayOwner =
+    opts.store === undefined &&
+    sessionEntries.length > 0 &&
+    (await isImplicitLocalGatewayTarget({ config: cfg }))
+      ? await readActiveGatewayLockIdentity({ requireInspection: true }).catch(() => {
+          warnCatalogUnavailable();
+          return undefined;
+        })
+      : undefined;
+  const rows = await Promise.all(
+    sessionEntries.map(async ({ acpSessionKey, agentId, entry, row }) => {
+      const acpMeta = acpSessionMetaByEntry.get(entry);
+      const acpRuntime = acpMeta != null;
+      // ACP rows need stored-key metadata before model/runtime resolution so
+      // bridge sessions and true ACP runtime sessions display differently.
+      const modelRef = applyAcpModelOverlayIfNeeded(
+        resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId),
+        acpSessionKey,
+        acpRuntime,
+      );
+      const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
+        cfg,
         agentId,
+        sessionEntry: entry,
+        provider: modelRef.provider,
+        model: modelRef.model,
+        sessionKey: acpSessionKey,
+        acpRuntime,
+        acpBackend: acpMeta?.backend,
+      });
+      const catalogKey = `${agentId}\0${entry.spawnedWorkspaceDir ?? ""}\0${modelRef.provider}`;
+      let pendingCatalog = catalogs.get(catalogKey);
+      if (!pendingCatalog) {
+        const readSavedCatalog = () =>
+          loadPreparedModelCatalogSnapshot({
+            config: cfg,
+            agentId,
+            workspaceDir: entry.spawnedWorkspaceDir,
+            readOnly: true,
+            providerDiscoveryProviderIds: [modelRef.provider],
+          }).catch(() => undefined);
+        // The agent catalog cannot supply another spawned workspace's capacity.
+        const useGatewayCatalog =
+          gatewayOwner &&
+          (!entry.spawnedWorkspaceDir ||
+            entry.spawnedWorkspaceDir === resolveAgentWorkspaceDir(cfg, agentId));
+        pendingCatalog = useGatewayCatalog
+          ? callGateway<ModelsListResult>({
+              config: cfg,
+              localPortOverride: gatewayOwner.port,
+              method: "models.list",
+              params: {
+                agentId,
+                provider: modelRef.provider,
+                view: "all",
+                includeDetails: true,
+                includeDefaultModels: false,
+                preparedOnly: true,
+              },
+            })
+              .then(({ models }) => ({
+                entries: models.map((model) => toSessionCatalogEntry(model)),
+                routeVariants: models.flatMap((model) =>
+                  [model, ...(model.runtimeChoices ?? [])].map((choice) =>
+                    toSessionCatalogEntry(model, choice),
+                  ),
+                ),
+              }))
+              .catch(() => {
+                warnCatalogUnavailable();
+                return readSavedCatalog();
+              })
+          : readSavedCatalog();
+        catalogs.set(catalogKey, pendingCatalog);
+      }
+      const catalog = await pendingCatalog;
+      const logicalEntry = findModelInCatalog(
+        catalog?.entries ?? [],
+        modelRef.provider,
+        modelRef.model,
+      );
+      if (agentRuntime.id === "auto") {
+        agentRuntime.id = resolveEffectiveAgentRuntime({
+          cfg,
+          agentScope: { kind: "prepared", agentId },
+          sessionKey: acpSessionKey,
+          sessionEntry: entry,
+          provider: modelRef.provider,
+          modelId: modelRef.model,
+          modelApi: logicalEntry?.api,
+          modelBaseUrl: logicalEntry?.baseUrl,
+        });
+      }
+      const catalogEntry =
+        logicalEntry &&
+        selectModelCatalogRuntimeEntry({
+          entry: logicalEntry,
+          routeVariants: catalog?.routeVariants ?? [],
+          runtimeId: agentRuntime.id,
+          allowApiFallback: false,
+        }).entry;
+      const modelContext = resolveModelContextTokenProjection({
         cfg,
-        key: row.key,
+        provider: modelRef.provider,
+        model: modelRef.model,
+        modelContextWindow: resolveModelContextWindowProfile({
+          catalogEntry,
+          selected: entry.contextWindow,
+        }).contextTokens,
+        modelContextTokens: catalogEntry?.contextTokens,
+        allowCacheLookup: false,
+        allowAsyncLoad: false,
+      });
+      const contextTokens = resolveProjectedSessionContextTokens({
         entry,
-      }),
-      runtimeLabel: resolveSessionRuntimeLabel({
-        cfg,
-        entry,
+        provider: modelRef.provider,
+        model: modelRef.model,
+        agentHarnessId: agentRuntime.id,
+        resolvedContextTokens: modelContext.contextTokens,
+        authoredContextTokens: modelContext.authoredContextTokens,
+      });
+      return Object.assign(row, {
+        agentId,
+        acpRuntime,
         agentRuntime,
-        modelProvider: modelRef.provider,
-        classifyCliProvider,
-      }),
-    });
-  });
+        contextTokens,
+        displayModelRef: modelRef,
+        kind: classifySessionKind(row.key, entry),
+        runtimePolicySessionKey: resolveDisplayRuntimePolicySessionKey({
+          agentId,
+          cfg,
+          key: row.key,
+          entry,
+        }),
+        runtimeLabel: opts.json
+          ? ""
+          : resolveSessionRuntimeLabel({
+              cfg,
+              entry,
+              agentRuntime,
+              modelProvider: modelRef.provider,
+              classifyCliProvider,
+            }),
+      });
+    }),
+  );
   const hasMore = rows.length < totalCount;
 
   if (opts.json) {
@@ -432,17 +502,15 @@ export async function sessionsCommand(
       limitApplied: limit ?? null,
       hasMore,
       activeMinutes: activeMinutes ?? null,
-      sessions: rows.map((row) => {
-        const r = toJsonSessionRow(row);
-        const modelRef = row.displayModelRef;
-        return {
-          ...r,
-          totalTokens: resolveSessionTotalTokens(r) ?? null,
-          totalTokensFresh: resolveFreshSessionTotalTokens(r) !== undefined,
-          contextTokens: r.contextTokens ?? configContextTokens ?? null,
+      sessions: rows.map(({ displayModelRef: modelRef, runtimeLabel, ...row }) => {
+        void runtimeLabel;
+        return Object.assign(row, {
+          totalTokens: resolveSessionTotalTokens(row) ?? null,
+          totalTokensFresh: resolveFreshSessionTotalTokens(row) !== undefined,
+          contextTokens: row.contextTokens ?? null,
           modelProvider: modelRef.provider,
           model: modelRef.model,
-        };
+        });
       }),
     });
     return;
@@ -498,7 +566,7 @@ export async function sessionsCommand(
         tokens: formatTokensCell(
           resolveSessionTotalTokens(row),
           resolveFreshSessionTotalTokens(row),
-          row.contextTokens ?? configContextTokens,
+          row.contextTokens ?? null,
           rich,
         ),
         flags: formatSessionFlagsCell(row, rich),

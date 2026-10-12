@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { configureMemoryCoreDreamingStateForTests } from "./test-helpers.js";
@@ -10,7 +10,7 @@ export async function createMemoryForgetFixture(prefix = "openclaw-memory-forget
   const { stateDir, workspaceDir } = state;
   await configureMemoryCoreDreamingStateForTests();
   const cfg: OpenClawConfig = {
-    agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main", default: true }] },
+    agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
   };
   return {
     stateDir,
@@ -29,10 +29,15 @@ export async function seedMemoryForgetSession(
   hookSource?: "gmail" | "webhook",
 ): Promise<void> {
   const sessionKey = `agent:main:${sessionId}`;
-  await upsertSessionEntry({
+  const entry = { sessionId, updatedAt: 1_000 };
+  await patchSessionEntry({
     agentId: "main",
     sessionKey,
-    entry: { sessionId, updatedAt: 1_000 },
+    update: () => entry,
+    fallbackEntry: entry,
+    replaceEntry: true,
+    // Retention workers must not race direct schema setup or reclaim fixture sessions.
+    skipMaintenance: true,
   });
   if (hookSource) {
     openOpenClawAgentDatabase({ agentId: "main" })

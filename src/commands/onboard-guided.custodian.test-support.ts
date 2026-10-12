@@ -128,7 +128,7 @@ vi.mock("./onboard-agent.js", () => ({
   ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({
     config: {
       ...config,
-      agents: { ...config.agents, list: [{ id: "main", default: true }] },
+      agents: { ...config.agents, entries: { main: {} } },
     },
     agentId: "main",
     bootstrapPending: true,
@@ -267,7 +267,7 @@ function setupDeps(params: {
     runSetupMemoryImportStep,
     runAppRecommendations:
       params.runAppRecommendations ??
-      vi.fn(async ({ config }) => ({ config, commitResult: vi.fn() })),
+      vi.fn(async ({ config }) => ({ config, commitResult: vi.fn(async () => undefined) })),
     runBrowserHandoff:
       params.runBrowserHandoff ??
       (vi.fn(async () => ({

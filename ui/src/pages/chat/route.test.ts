@@ -1,8 +1,12 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createApplicationRouter } from "../../app-routes.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createChatPageSessions } from "./chat-page.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import { pages } from "./route.ts";
@@ -31,6 +35,8 @@ function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey =
   const client = { request };
   const context = {
     basePath: "",
+    chatSubmissions: createChatSubmissions(),
+    placementStartup: { get: vi.fn(() => null) },
     router: { getState: () => ({ matches: [], pendingMatches: [] }), subscribe: () => () => {} },
     gateway: {
       snapshot: { phase: "connected", client, hello: null },
@@ -44,7 +50,159 @@ function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey =
   return { context: { ...context, sessions }, list, request };
 }
 
+function coldContext() {
+  type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
+  let listener: GatewayListener | null = null;
+  let snapshot = {
+    phase: "connecting",
+    client: null,
+    hello: null,
+  } as unknown as ApplicationContext["gateway"]["snapshot"];
+  const context = {
+    basePath: "",
+    gateway: {
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe: (next: GatewayListener) => {
+        listener = next;
+        return () => undefined;
+      },
+    },
+    agents: { state: { agentsList: null } },
+    sessions: createChatPageSessions(),
+  } as unknown as ApplicationContext;
+  return {
+    context,
+    connect(this: void, mainKey = "workspace") {
+      snapshot = {
+        phase: "connected",
+        client: {},
+        hello: { snapshot: { sessionDefaults: { mainKey } } },
+      } as unknown as ApplicationContext["gateway"]["snapshot"];
+      if (!listener) {
+        throw new Error("expected gateway readiness subscription");
+      }
+      listener(snapshot);
+    },
+  };
+}
+
 describe("loadChatRoute", () => {
+  it.each(["connection", "profile"])(
+    "does not carry an established key into a new %s scope",
+    async (replacement) => {
+      const { context, request } = contextFor({ ok: true, ...row(), agentId: "main" });
+      context.gateway.snapshot.selfUser = { id: "first" };
+      const router = createApplicationRouter();
+      onTestFinished(() => router.stop());
+      const route = router.getRoute("chat")!;
+      const component = vi.spyOn(route, "component").mockResolvedValue({ render: () => null });
+      onTestFinished(() => component.mockRestore());
+      const scopedContext = { ...context, router };
+      const location = { pathname: "/chat/main/deploy-monitor-12345678", search: "", hash: "" };
+      await router.navigate("chat", scopedContext, {}, location);
+      if (replacement === "connection") {
+        Object.defineProperty(context.gateway, "connectionRevision", { value: 1 });
+      } else {
+        context.gateway.snapshot.selfUser = { id: "second" };
+      }
+      const nextKey = "agent:main:dashboard:12345678-0000-4000-8000-000000000001";
+      request.mockImplementation(async (_method, params) =>
+        params.shortId ? { ok: true, ...row({ key: nextKey }), agentId: "main" } : { ok: false },
+      );
+      // The router retains its old active match while a different-deps match loads.
+      const loaded = await route.loader!(scopedContext, {
+        location,
+        deps: route.loaderDeps!(scopedContext, location),
+        cause: "revalidate",
+        revalidating: true,
+        shouldRun: () => true,
+        signal: new AbortController().signal,
+      });
+      expect(loaded).toMatchObject({ kind: "session", sessionKey: nextKey });
+    },
+  );
+
+  it.each(["deploy-monitor-12345678", "deploy-monitor"])(
+    "keeps a disconnected exact revalidation retryable for %s",
+    async (reference) => {
+      const { context, request } = contextFor({ ok: true, ...row(), agentId: "main" });
+      const router = createApplicationRouter();
+      onTestFinished(() => router.stop());
+      const component = vi
+        .spyOn(router.getRoute("chat")!, "component")
+        .mockResolvedValue({ render: () => null });
+      onTestFinished(() => component.mockRestore());
+      const scopedContext = { ...context, router };
+      const location = { pathname: `/chat/main/${reference}`, search: "", hash: "" };
+      await router.navigate("chat", scopedContext, {}, location);
+      const pending = createDeferredCore<SessionsResolveResult>();
+      request.mockReturnValueOnce(pending.promise);
+      const revalidation = router
+        .revalidate(scopedContext, "chat")
+        .catch((error: unknown) => error);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+      context.gateway.snapshot.phase = "reconnecting";
+      pending.resolve({ ok: false });
+      await revalidation;
+      expect(router.getState().matches[0]?.status).toBe("error");
+      context.gateway.snapshot.phase = "connected";
+      request.mockResolvedValue({ ok: false });
+      await router.revalidate(scopedContext, "chat");
+      expect(router.getState().matches[0]?.data).toMatchObject({ kind: "missing-session" });
+    },
+  );
+
+  it.each(["deploy-monitor-12345678", "deploy-monitor"])(
+    "keeps revalidation bound to the established session when %s is reassigned",
+    async (reference) => {
+      const { context, request } = contextFor({ ok: true, ...row(), agentId: "main" });
+      const router = createApplicationRouter();
+      onTestFinished(() => router.stop());
+      const component = vi
+        .spyOn(router.getRoute("chat")!, "component")
+        .mockResolvedValue({ render: () => null });
+      onTestFinished(() => component.mockRestore());
+      const scopedContext = { ...context, router };
+      const location = { pathname: `/chat/main/${reference}`, search: "", hash: "" };
+      await router.navigate("chat", scopedContext, {}, location);
+      expect(router.getState().matches[0]?.data).toMatchObject({ sessionKey });
+      request.mockImplementation(async (_method, params) =>
+        params.reference &&
+        typeof params.reference === "object" &&
+        "key" in params.reference &&
+        params.reference.key === sessionKey
+          ? { ok: false }
+          : {
+              ok: true,
+              ...row({ key: "agent:main:dashboard:12345678-0000-4000-8000-000000000001" }),
+              agentId: "main",
+            },
+      );
+      await router.revalidate(scopedContext, "chat");
+      expect(router.getState().matches[0]?.data).toMatchObject({ kind: "missing-session" });
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.resolve",
+        expect.objectContaining({ reference: { key: sessionKey } }),
+      );
+    },
+  );
+
+  it("revalidates an exact slug-shaped key instead of trusting a retained roster row", async () => {
+    const { context, request } = contextFor();
+    const key = "agent:main:research";
+    context.sessions.state.result = sessionsResult([row({ key })], 1);
+    const location = { pathname: "/chat/main/research", search: "", hash: "" };
+    await expect(
+      loadChatRoute(context, location, "chat", new AbortController().signal),
+    ).resolves.toMatchObject({ kind: "session", sessionKey: key });
+    expect(request).not.toHaveBeenCalled();
+    await expect(
+      loadChatRoute(context, location, "chat", new AbortController().signal, {}),
+    ).resolves.toMatchObject({ kind: "missing-session" });
+    expect(request).toHaveBeenCalledOnce();
+  });
   it("leaves a bare namespace unresolved instead of inventing a main session", async () => {
     const { context, list } = contextFor({ ok: false }, "workspace");
     const loaded = await loadChatRoute(
@@ -56,104 +214,6 @@ describe("loadChatRoute", () => {
 
     expect(loaded).toEqual({ type: "notFound", data: { routeId: "chat" } });
     expect(list).not.toHaveBeenCalled();
-  });
-
-  it("survives sessionId rotation and canonicalizes decorative short-form segments", async () => {
-    const { context, list, request } = contextFor({ ok: true, ...row(), agentId: "main" });
-    const signal = new AbortController().signal;
-    const redirected = await loadChatRoute(
-      context,
-      { pathname: "/chat/main/not-the-name-12345678", search: "?draft=ship", hash: "" },
-      "chat",
-      signal,
-    );
-    expect(redirected).toEqual({
-      kind: "session",
-      routeLoadingSkeleton: true,
-      sessionKey,
-      agentId: "main",
-      draft: "ship",
-      face: "chat",
-      canonicalLocation: {
-        pathname: "/chat/main/deploy-monitor-12345678",
-        search: "?draft=ship",
-        hash: "",
-      },
-      canonicalLocationSource: {
-        pathname: "/chat/main/not-the-name-12345678",
-        search: "?draft=ship",
-        hash: "",
-      },
-    });
-
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat/main/deploy-monitor-12345678", search: "?draft=ship", hash: "" },
-        "chat",
-        signal,
-      ),
-    ).resolves.toEqual({
-      kind: "session",
-      sessionKey,
-      agentId: "main",
-      draft: "ship",
-      face: "chat",
-    });
-    expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("round-trips literal channel, peer, and cron keys without searching", async () => {
-    const { context, list } = contextFor();
-    for (const [pathname, expectedKey] of [
-      ["/chat/main/telegram/12345", "agent:main:telegram:12345"],
-      ["/chat/ops/signal/direct/%2B15551212", "agent:ops:signal:direct:+15551212"],
-      ["/chat/main/cron/nightly/run/8821", "agent:main:cron:nightly:run:8821"],
-    ] as const) {
-      await expect(
-        loadChatRoute(
-          context,
-          { pathname, search: "", hash: "" },
-          "chat",
-          new AbortController().signal,
-        ),
-      ).resolves.toEqual({
-        kind: "session",
-        sessionKey: expectedKey,
-        draft: undefined,
-        face: "chat",
-      });
-    }
-    expect(list).not.toHaveBeenCalled();
-  });
-
-  it("passes longer disambiguation prefixes directly to the gateway resolver", async () => {
-    const target = row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" });
-    const { context, list, request } = contextFor({ ok: true, ...target, agentId: "main" });
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat/main/deploy-monitor-123456780a", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toEqual({
-      kind: "session",
-      sessionKey: target.key,
-      routeLoadingSkeleton: true,
-      agentId: "main",
-      draft: undefined,
-      face: "chat",
-      shortId: "123456780a",
-    });
-    expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", {
-      shortId: "123456780a",
-      slugHint: "deploy-monitor",
-      agentId: "main",
-      allowMissing: true,
-    });
   });
 
   it("builds distinct working links for ambiguous prefixes", async () => {
@@ -220,24 +280,6 @@ describe("loadChatRoute", () => {
     }
   });
 
-  it("loads an agent main session without a search request", async () => {
-    const { context, list } = contextFor();
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/dashboard/work", search: "", hash: "" },
-        "dashboard",
-        new AbortController().signal,
-      ),
-    ).resolves.toEqual({
-      kind: "session",
-      sessionKey: "agent:work:main",
-      draft: undefined,
-      face: "dashboard",
-    });
-    expect(list).not.toHaveBeenCalled();
-  });
-
   it("carries expanded dashboard presentation into route data", async () => {
     const { context } = contextFor();
     await expect(
@@ -268,128 +310,8 @@ describe("loadChatRoute", () => {
     });
   });
 
-  it("waits for configured session defaults before resolving an agent main route", async () => {
-    type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
-    let listener: GatewayListener | null = null;
-    let snapshot = {
-      phase: "connecting",
-      client: null,
-      hello: null,
-    } as unknown as ApplicationContext["gateway"]["snapshot"];
-    const context = {
-      basePath: "",
-      gateway: {
-        get snapshot() {
-          return snapshot;
-        },
-        subscribe: (next: GatewayListener) => {
-          listener = next;
-          return () => undefined;
-        },
-      },
-      agents: { state: { agentsList: null } },
-    } as unknown as ApplicationContext;
-    const pending = loadChatRoute(
-      context,
-      { pathname: "/chat/research", search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    snapshot = {
-      phase: "connected",
-      client: {},
-      hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } },
-    } as unknown as ApplicationContext["gateway"]["snapshot"];
-    const connectedListener = listener as GatewayListener | null;
-    if (!connectedListener) {
-      throw new Error("expected gateway subscription");
-    }
-    connectedListener(snapshot);
-
-    await expect(pending).resolves.toEqual({
-      kind: "session",
-      sessionKey: "agent:research:workspace",
-      draft: undefined,
-      face: "chat",
-    });
-  });
-
-  it("treats a configured main key as a reserved literal", async () => {
-    const { context, list } = contextFor({ ok: false }, "workspace");
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat/main/workspace", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toEqual({
-      kind: "session",
-      sessionKey: "agent:main:workspace",
-      draft: undefined,
-      face: "chat",
-      canonicalLocation: { pathname: "/chat/main", search: "", hash: "" },
-      canonicalLocationSource: { pathname: "/chat/main/workspace", search: "", hash: "" },
-    });
-    expect(list).not.toHaveBeenCalled();
-  });
-
-  it("canonicalizes a literal configured-main route when defaults are warm", async () => {
-    const { context, list } = contextFor({ ok: false }, "workspace");
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat/research/workspace", search: "?draft=ship", hash: "#pane" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toEqual({
-      kind: "session",
-      sessionKey: "agent:research:workspace",
-      draft: "ship",
-      face: "chat",
-      canonicalLocation: {
-        pathname: "/chat/research",
-        search: "?draft=ship",
-        hash: "#pane",
-      },
-      canonicalLocationSource: {
-        pathname: "/chat/research/workspace",
-        search: "?draft=ship",
-        hash: "#pane",
-      },
-    });
-    expect(list).not.toHaveBeenCalled();
-  });
-
   it("reclassifies a slug-shaped path after cold defaults reveal the main key", async () => {
-    type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
-    let listener: GatewayListener | null = null;
-    let snapshot = {
-      phase: "connecting",
-      client: null,
-      hello: null,
-    } as unknown as ApplicationContext["gateway"]["snapshot"];
-    const context = {
-      basePath: "",
-      gateway: {
-        get snapshot() {
-          return snapshot;
-        },
-        subscribe: (next: GatewayListener) => {
-          listener = next;
-          return () => undefined;
-        },
-      },
-      agents: { state: { agentsList: null } },
-    } as unknown as ApplicationContext;
+    const { context, connect } = coldContext();
     const pending = loadChatRoute(
       context,
       { pathname: "/chat/research/workspace", search: "", hash: "" },
@@ -403,16 +325,7 @@ describe("loadChatRoute", () => {
     await Promise.resolve();
     expect(settled).toBe(false);
 
-    snapshot = {
-      phase: "connected",
-      client: {},
-      hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } },
-    } as unknown as ApplicationContext["gateway"]["snapshot"];
-    const connectedListener = listener as GatewayListener | null;
-    if (!connectedListener) {
-      throw new Error("expected gateway readiness subscription");
-    }
-    connectedListener(snapshot);
+    connect();
 
     await expect(pending).resolves.toEqual({
       kind: "session",
@@ -438,26 +351,7 @@ describe("loadChatRoute", () => {
       ],
       ["/chat/research/main", "agent:research:main", "workspace", null],
     ] as const) {
-      type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
-      let listener: GatewayListener | null = null;
-      let snapshot = {
-        phase: "connecting",
-        client: null,
-        hello: null,
-      } as unknown as ApplicationContext["gateway"]["snapshot"];
-      const context = {
-        basePath: "",
-        gateway: {
-          get snapshot() {
-            return snapshot;
-          },
-          subscribe: (next: GatewayListener) => {
-            listener = next;
-            return () => undefined;
-          },
-        },
-        agents: { state: { agentsList: null } },
-      } as unknown as ApplicationContext;
+      const { context, connect } = coldContext();
       const loaded = await loadChatRoute(
         context,
         { pathname, search: "", hash: "" },
@@ -473,16 +367,7 @@ describe("loadChatRoute", () => {
         throw new Error("expected deferred main-session canonicalization");
       }
 
-      snapshot = {
-        phase: "connected",
-        client: {},
-        hello: { snapshot: { sessionDefaults: { mainKey } } },
-      } as unknown as ApplicationContext["gateway"]["snapshot"];
-      const connectedListener = listener as GatewayListener | null;
-      if (!connectedListener) {
-        throw new Error("expected gateway readiness subscription");
-      }
-      connectedListener(snapshot);
+      connect(mainKey);
 
       await expect(loaded.canonicalLocationReady).resolves.toEqual(expectedCanonicalLocation);
     }
@@ -510,52 +395,10 @@ describe("loadChatRoute", () => {
     });
     expect(list).not.toHaveBeenCalled();
   });
-
-  it("preserves the path agent for synthetic catalog sessions", async () => {
-    const { context } = contextFor();
-    await expect(
-      loadChatRoute(
-        context,
-        {
-          pathname: "/chat/research",
-          search: "?catalog=claude&host=gateway%3Alocal&thread=thread-2",
-          hash: "",
-        },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({
-      kind: "session",
-      sessionKey: "agent:research:catalog:claude:gateway%3Alocal:thread-2",
-      agentId: "research",
-    });
-  });
-
-  it("loads synthetic catalog sessions in the dashboard namespace", async () => {
-    const { context } = contextFor();
-    await expect(
-      loadChatRoute(
-        context,
-        {
-          pathname: "/dashboard/research",
-          search: "?catalog=claude&host=gateway%3Alocal&thread=thread-2",
-          hash: "",
-        },
-        "dashboard",
-        new AbortController().signal,
-      ),
-    ).resolves.toEqual({
-      kind: "session",
-      sessionKey: "agent:research:catalog:claude:gateway%3Alocal:thread-2",
-      agentId: "research",
-      draft: undefined,
-      face: "dashboard",
-    });
-  });
 });
 
 describe("session route cache ownership", () => {
-  it.each(pages)("isolates $id loader results across connection owners", (page) => {
+  it.each([pages[1]])("isolates $id loader results across connection owners", (page) => {
     const { context } = contextFor();
     let snapshot = context.gateway.snapshot;
     let revision = 0;

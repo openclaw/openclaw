@@ -1,38 +1,53 @@
-// Pure Telegram thread-binding record shapes and legacy-file readers, split
-// from thread-bindings.ts so doctor/setup closures (state-migrations) never
-// load the acp-runtime/session graph the manager runtime needs.
 import { createHash } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { AccountScopedConversationBindingRecord } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
 export const TELEGRAM_THREAD_BINDINGS_NAMESPACE = "telegram.thread-bindings";
 export const TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES = 5_000;
-const TELEGRAM_THREAD_BINDINGS_STORE_VERSION = 1;
 
-export type TelegramBindingTargetKind = "subagent" | "acp";
+type TelegramBindingTargetKind = "subagent" | "acp";
 
-export type TelegramThreadBindingRecord = {
+export type TelegramThreadBindingRecord =
+  AccountScopedConversationBindingRecord<TelegramBindingTargetKind> & {
+    idleTimeoutMs?: number;
+    maxAgeMs?: number;
+    metadata?: Record<string, unknown>;
+  };
+
+export type TelegramThreadBindingManager = {
   accountId: string;
-  conversationId: string;
-  targetKind: TelegramBindingTargetKind;
-  targetSessionKey: string;
-  agentId?: string;
-  label?: string;
-  boundBy?: string;
-  boundAt: number;
-  lastActivityAt: number;
-  idleTimeoutMs?: number;
-  maxAgeMs?: number;
-  metadata?: Record<string, unknown>;
-};
-
-type StoredTelegramBindingState = {
-  version: number;
-  bindings: TelegramThreadBindingRecord[];
+  shouldPersistMutations: () => boolean;
+  getIdleTimeoutMs: () => number;
+  getMaxAgeMs: () => number;
+  getByConversationId: (conversationId: string) => TelegramThreadBindingRecord | undefined;
+  listBySessionKey: (targetSessionKey: string) => TelegramThreadBindingRecord[];
+  listBindings: () => TelegramThreadBindingRecord[];
+  touchConversation: (
+    conversationId: string,
+    at?: number,
+  ) => Promise<TelegramThreadBindingRecord | null>;
+  unbindConversation: (params: {
+    conversationId: string;
+    reason?: string;
+    sendFarewell?: boolean;
+    throwOnPersistError?: boolean;
+  }) => Promise<TelegramThreadBindingRecord | null>;
+  unbindBySessionKey: (params: {
+    targetSessionKey: string;
+    reason?: string;
+    sendFarewell?: boolean;
+    throwOnPersistError?: boolean;
+  }) => Promise<TelegramThreadBindingRecord[]>;
+  updateBySessionKey: (
+    targetSessionKey: string,
+    update: (entry: TelegramThreadBindingRecord, now: number) => TelegramThreadBindingRecord,
+  ) => Promise<TelegramThreadBindingRecord[]>;
+  /** @deprecated Use touchConversation or updateBySessionKey; removed in the next Plugin SDK major. */
+  updateConversationSync: (
+    conversationId: string,
+    update: (entry: TelegramThreadBindingRecord) => TelegramThreadBindingRecord | undefined,
+  ) => TelegramThreadBindingRecord | null;
+  stop: () => Promise<void>;
 };
 
 export function resolveStoredBindingKey(params: {
@@ -45,15 +60,7 @@ export function resolveStoredBindingKey(params: {
     .slice(0, 32);
 }
 
-export function resolveTelegramThreadBindingsPath(
-  accountId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  const stateDir = resolveStateDir(env, os.homedir);
-  return path.join(stateDir, "telegram", `thread-bindings-${accountId}.json`);
-}
-
-function normalizeMetadataForStore(
+export function normalizeMetadataForStore(
   metadata: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
   if (!metadata) {
@@ -99,14 +106,11 @@ export function sanitizeStoredBinding(
   if (typeof entry?.maxAgeMs === "number" && Number.isFinite(entry.maxAgeMs)) {
     record.maxAgeMs = Math.max(0, Math.floor(entry.maxAgeMs));
   }
-  if (typeof entry?.agentId === "string" && entry.agentId.trim()) {
-    record.agentId = entry.agentId.trim();
-  }
-  if (typeof entry?.label === "string" && entry.label.trim()) {
-    record.label = entry.label.trim();
-  }
-  if (typeof entry?.boundBy === "string" && entry.boundBy.trim()) {
-    record.boundBy = entry.boundBy.trim();
+  for (const field of ["agentId", "label", "boundBy"] as const) {
+    const value = entry?.[field];
+    if (typeof value === "string" && value.trim()) {
+      record[field] = value.trim();
+    }
   }
   const metadata = normalizeMetadataForStore(
     entry?.metadata && typeof entry.metadata === "object" ? { ...entry.metadata } : undefined,
@@ -115,45 +119,4 @@ export function sanitizeStoredBinding(
     record.metadata = metadata;
   }
   return record;
-}
-
-function readLegacyBindingsFile(
-  filePath: string,
-  accountId: string,
-): TelegramThreadBindingRecord[] {
-  try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as StoredTelegramBindingState;
-    if (
-      parsed?.version !== TELEGRAM_THREAD_BINDINGS_STORE_VERSION ||
-      !Array.isArray(parsed.bindings)
-    ) {
-      return [];
-    }
-    const bindings: TelegramThreadBindingRecord[] = [];
-    for (const entry of parsed.bindings) {
-      const record = sanitizeStoredBinding(accountId, entry);
-      if (record) {
-        bindings.push(record);
-      }
-    }
-    return bindings;
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code !== "ENOENT") {
-      logVerbose(`telegram thread bindings load failed (${accountId}): ${String(err)}`);
-    }
-    return [];
-  }
-}
-
-export function listTelegramLegacyThreadBindingEntries(params: {
-  accountId: string;
-  persistedPath?: string;
-}): Array<{ key: string; value: TelegramThreadBindingRecord }> {
-  const bindings = readLegacyBindingsFile(
-    params.persistedPath ?? resolveTelegramThreadBindingsPath(params.accountId),
-    params.accountId,
-  );
-  return bindings.map((value) => ({ key: resolveStoredBindingKey(value), value }));
 }

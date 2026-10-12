@@ -1,116 +1,164 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { SessionActivitySummary } from "../config/sessions/activity-summary.js";
+import type {
+  SessionActivitySummaryBatchInput,
+  SessionActivitySummaryBatchResult,
+} from "../config/sessions/activity-summary-source.types.js";
+import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import {
-  readSessionTranscriptActivePathEntryRelation,
-  readSessionTranscriptBoundedMessageTailPage,
-  readSessionTranscriptWatermark,
   SessionTranscriptProjectionUnavailableError,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
+import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
+import { readActivePathEntryRelationFromProjection } from "../config/sessions/session-accessor.sqlite-active-events.js";
+import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
+import {
+  prepareSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
+import {
+  extractAssistantPhaseText,
+  extractAssistantTextForPhase,
+} from "../shared/chat-message-content.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 
-/** Restore only this transcript, then read one chronological, byte-bounded batch. */
-export async function readActivitySummarySource(params: {
-  scope: Parameters<typeof readSessionTranscriptBoundedMessageTailPage>[0];
-  previous?: SessionActivitySummary;
-  assertCurrent: () => void;
-}) {
-  const { readRestoredSessionTranscript } =
-    await import("../config/sessions/session-cold-storage-read.js");
-  params.assertCurrent();
-  const read = () => {
-    params.assertCurrent();
-    const readSnapshot = () =>
-      readSessionTranscriptBoundedMessageTailPage(params.scope, {
+/** Runs in the existing transcript worker; only byte-bounded bodies leave it. */
+export function readActivitySummaryBatch(
+  params: SessionActivitySummaryBatchInput,
+): SessionActivitySummaryBatchResult {
+  return withCurrentProjectionSnapshot(
+    params.scope,
+    (projection) => {
+      const snapshot = readSessionTranscriptBoundedMessageTailPageFromProjection(projection, {
         maxBytes: 0,
         maxMessages: 0,
         offset: 0,
       });
-    const snapshot = readSnapshot();
-    let previous = params.previous;
-    if (
-      previous &&
-      (previous.generation !== (snapshot.snapshot.generation ?? null) ||
-        previous.coveredMessages > snapshot.totalMessages ||
-        (previous.leafEntryId &&
-          !["exact", "ancestor"].includes(
-            readSessionTranscriptActivePathEntryRelation(params.scope, previous.leafEntryId),
-          )))
-    ) {
-      previous = undefined;
-    }
-    const watermark = readSessionTranscriptWatermark(params.scope);
-    const covered = previous?.coveredMessages ?? 0;
-    let batchSize = Math.min(64, snapshot.totalMessages - covered);
-    let page = readSessionTranscriptBoundedMessageTailPage(params.scope, {
-      maxBytes: 128 * 1024,
-      maxMessages: batchSize,
-      offset: snapshot.totalMessages - covered - batchSize,
-    });
-    while (batchSize > 1 && page.events.length < page.scannedMessages) {
-      batchSize = Math.max(1, Math.floor(batchSize / 2));
-      page = readSessionTranscriptBoundedMessageTailPage(params.scope, {
-        maxBytes: 128 * 1024,
-        maxMessages: batchSize,
-        offset: snapshot.totalMessages - covered - batchSize,
+      let previous = params.previous;
+      if (
+        previous &&
+        (previous.generation !== (snapshot.snapshot.generation ?? null) ||
+          previous.coveredMessages > snapshot.totalMessages ||
+          (previous.leafEntryId &&
+            !["exact", "ancestor"].includes(
+              readActivePathEntryRelationFromProjection(projection, previous.leafEntryId),
+            )))
+      ) {
+        previous = undefined;
+      }
+      const watermark = {
+        generation: projection.version.generation,
+        maxSeq: projection.version.rawSeq,
+      };
+      const covered = previous?.coveredMessages ?? 0;
+      let batchSize = Math.min(64, snapshot.totalMessages - covered);
+      const readPage = (maxMessages: number, includeEarlier = false) =>
+        readSessionTranscriptBoundedMessageTailPageFromProjection(projection, {
+          maxBytes: 128 * 1024,
+          maxMessages,
+          offset: snapshot.totalMessages - covered - maxMessages,
+          oversizedMessageCheck: {
+            roles: ["user", "assistant"],
+            includeEarlier,
+          },
+        });
+      const earlierOmission =
+        previous?.omittedContent &&
+        (previous.formatRevision === ACTIVITY_SUMMARY_FORMAT_REVISION ||
+          readPage(0, true).hasOversizedMessages);
+      let page = readPage(batchSize);
+      while (batchSize > 1 && page.events.length < page.scannedMessages) {
+        batchSize = Math.max(1, Math.floor(batchSize / 2));
+        page = readPage(batchSize);
+      }
+      // Shrinking leaves only individually oversized omissions; recheck legacy flags by role.
+      return {
+        previous,
+        snapshot,
+        watermark,
+        covered,
+        page,
+        omitted: earlierOmission === true || page.hasOversizedMessages === true,
+      };
+    },
+    { readOnly: true },
+  );
+}
+
+export async function readActivitySummarySource(
+  params: SessionActivitySummaryBatchInput & {
+    assertCurrent: () => void;
+  },
+) {
+  const { readRestoredSessionTranscript } =
+    await import("../config/sessions/session-cold-storage-read.js");
+  const { withSessionHistoryWorkerDatabase } =
+    await import("../config/sessions/session-transcript-worker-runtime.js");
+  const resolved = await prepareSqliteTranscriptReadScope(params.scope);
+  params.assertCurrent();
+  const options = toDatabaseOptions(resolved);
+  const scope = {
+    ...params.scope,
+    agentId: resolved.agentId,
+    storePath: resolveOpenClawAgentSqlitePath(options),
+  };
+  const admission = resolveSessionTranscriptReadFence(resolved);
+  return withSessionHistoryWorkerDatabase(options, async (owner) => {
+    const read = async () => {
+      params.assertCurrent();
+      const source = await owner.readActivitySummarySource({
+        scope,
+        previous: params.previous,
+        admission,
       });
-    }
-    if (
-      page.totalMessages !== snapshot.totalMessages ||
-      page.snapshot.generation !== snapshot.snapshot.generation ||
-      page.snapshot.indexedSeq !== snapshot.snapshot.indexedSeq
-    ) {
-      return undefined;
-    }
-    const omitted =
-      (previous?.omittedContent ?? false) || page.events.length < page.scannedMessages;
-    const notes = page.events
-      .map(({ event }) => {
+      params.assertCurrent();
+      if (!source) {
+        return undefined;
+      }
+      const notes = source.page.events.flatMap(({ event }) => {
         const message = isRecord(event) ? event.message : undefined;
-        if (!isRecord(message)) {
-          return "";
+        if (!isRecord(message) || (message.role !== "user" && message.role !== "assistant")) {
+          return [];
         }
-        const role = typeof message.role === "string" ? message.role : "message";
-        const content = message.content;
         const text =
-          typeof content === "string"
-            ? content
-            : Array.isArray(content)
-              ? content
-                  .flatMap((part) => {
-                    if (!isRecord(part)) {
-                      return [];
-                    }
-                    if (part.type === "text" && typeof part.text === "string") {
-                      return [part.text];
-                    }
-                    if (part.type === "toolCall" && typeof part.name === "string") {
-                      return [`Tool: ${part.name}`];
-                    }
-                    return [];
-                  })
-                  .join(" ")
-              : "";
-        const cleaned = redactToolPayloadText(text).replace(/\s+/gu, " ").trim();
+          message.role === "assistant"
+            ? (extractAssistantPhaseText(message) ??
+              extractAssistantTextForPhase(message, { phase: "commentary" }))
+            : extractTextFromChatContent(message.content);
+        const cleaned = redactToolPayloadText(text ?? "")
+          .replace(/\s+/gu, " ")
+          .trim();
+        if (!cleaned) {
+          return [];
+        }
         const excerpt =
           cleaned.length <= 800
             ? cleaned
             : `${sliceUtf16Safe(cleaned, 0, 395)} … ${sliceUtf16Safe(cleaned, -400)}`;
-        return excerpt ? `${role}: ${excerpt}` : "";
-      })
-      .filter(Boolean);
-
-    return { previous, snapshot, watermark, covered, page, omitted, notes };
-  };
-  try {
-    return await readRestoredSessionTranscript(params.scope, read);
-  } catch (error) {
-    if (!(error instanceof SessionTranscriptProjectionUnavailableError)) {
-      throw error;
+        return [`${message.role}: ${excerpt}`];
+      });
+      return { ...source, notes };
+    };
+    for (let retry = false; ; retry = true) {
+      try {
+        return await readRestoredSessionTranscript(scope, read, {
+          assertCurrent: params.assertCurrent,
+        });
+      } catch (error) {
+        if (retry || !(error instanceof SessionTranscriptProjectionUnavailableError)) {
+          throw error;
+        }
+        params.assertCurrent();
+        startSessionTranscriptIndexReconcile({
+          ...options,
+          preferredSessionId: resolved.sessionId,
+        });
+        await waitForSessionTranscriptProjection(scope);
+      }
     }
-    await waitForSessionTranscriptProjection(params.scope);
-    params.assertCurrent();
-    return await readRestoredSessionTranscript(params.scope, read);
-  }
+  });
 }

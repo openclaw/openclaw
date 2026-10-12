@@ -1,6 +1,5 @@
 import { normalizeOptionalString as readLogString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { RuntimeLogger } from "../plugins/runtime/types.js";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -11,37 +10,73 @@ import {
 } from "../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
 import {
-  resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync,
   type ResolvedRealtimeVoiceProvider,
 } from "../talk/provider-resolver.js";
-import type {
-  RealtimeVoiceBridgeEvent,
-  RealtimeVoiceProviderConfig,
-  RealtimeVoiceResponseOutcome,
-} from "../talk/provider-types.js";
-import type { RealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
+import type { RealtimeVoiceProviderConfig } from "../talk/provider-types.js";
+import {
+  createRealtimeVoiceSessionHarness,
+  type RealtimeVoiceSessionHarness,
+} from "../talk/realtime-session-harness.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
-import type { createMeetingRealtimeOutputOwner } from "./realtime-output-owner.js";
 
-const MEETING_REALTIME_CANCELLATION_RACE_DETAIL = "Cancellation failed: no active response found";
+const MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS = 900;
+// Playback duration plus a tail blocks live loopback; transcript lookback catches delayed echo.
+const MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS = 3_000;
+const MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS = 45_000;
 
-type MeetingRealtimeLifecycleHandlersParams = {
-  clearOutputPlayback: () => void;
-  lifecycle: {
-    realtimeReady: boolean;
-    continuityResetActive: boolean;
-    outputGenerationActive: boolean;
-  };
-  harness: RealtimeVoiceSessionHarness;
-  invalidateOutputPlayback: () => void;
-  logScope: string;
-  logger: RuntimeLogger;
-  outputOwner: ReturnType<typeof createMeetingRealtimeOutputOwner>;
-  outputTalkPayload: { bridgeId: string } | { meetingSessionId: string };
-  realtimeLogScope: string;
-  resetToolContinuity: (reason: string) => void;
-};
+type HarnessOptions = Parameters<typeof createRealtimeVoiceSessionHarness>[0];
+
+export function createMeetingRealtimeHarness(
+  params: {
+    config: { chrome: { audioFormat: MeetingRealtimeAudioFormat } };
+    transport: { inputAudioIsolated?: boolean };
+    logger: NonNullable<HarnessOptions["talkback"]>["logger"];
+    meetingSessionId: string;
+    requesterSessionKey?: string;
+    consultAgent(request: {
+      meetingSessionId: string;
+      requesterSessionKey?: string;
+      args: { question: string; responseStyle: string };
+      transcript: RealtimeVoiceSessionHarness["transcript"];
+      abortSignal: AbortSignal;
+    }): Promise<{ text: string }>;
+  },
+  options: Pick<HarnessOptions, "talk" | "talkPayloads"> & {
+    logPrefix: string;
+    deliver: NonNullable<HarnessOptions["talkback"]>["deliver"];
+  },
+): RealtimeVoiceSessionHarness {
+  const harness: RealtimeVoiceSessionHarness = createRealtimeVoiceSessionHarness({
+    talk: options.talk,
+    talkPayloads: options.talkPayloads,
+    echoSuppression: params.transport.inputAudioIsolated
+      ? undefined
+      : {
+          bytesPerMs: meetingOutputBytesPerMs(params.config.chrome.audioFormat),
+          tailMs: MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
+          transcriptLookbackMs: MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
+        },
+    talkback: {
+      debounceMs: MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS,
+      logger: params.logger,
+      logPrefix: options.logPrefix,
+      responseStyle: "Brief, natural spoken answer for a live meeting.",
+      fallbackText: "I hit an error while checking that. Please try again.",
+      consult: ({ question, responseStyle, signal }) =>
+        params.consultAgent({
+          meetingSessionId: params.meetingSessionId,
+          requesterSessionKey: params.requesterSessionKey,
+          args: { question, responseStyle },
+          transcript: harness.transcript,
+          abortSignal: signal,
+        }),
+      deliver: options.deliver,
+    },
+  });
+  return harness;
+}
 
 type MeetingRealtimeProviderSelectionConfig = {
   realtime: {
@@ -63,13 +98,13 @@ export function meetingOutputBytesPerMs(audioFormat: MeetingRealtimeAudioFormat)
   return audioFormat === "g711-ulaw-8khz" ? 8 : 48;
 }
 
-export function resolveMeetingRealtimeProvider(params: {
+export async function resolveMeetingRealtimeProvider(params: {
   config: MeetingRealtimeProviderSelectionConfig;
   fullConfig: OpenClawConfig;
   providers?: RealtimeVoiceProviderPlugin[];
-}): ResolvedRealtimeVoiceProvider {
+}): Promise<ResolvedRealtimeVoiceProvider> {
   const providerId = params.config.realtime.voiceProvider ?? params.config.realtime.provider;
-  return resolveConfiguredRealtimeVoiceProvider({
+  return resolveConfiguredRealtimeVoiceProviderAsync({
     configuredProviderId: providerId,
     providerConfigs: params.config.realtime.providers,
     cfg: params.fullConfig,
@@ -82,11 +117,11 @@ export function resolveMeetingRealtimeProvider(params: {
   });
 }
 
-export function resolveMeetingRealtimeTranscriptionProvider(params: {
+export async function resolveMeetingRealtimeTranscriptionProvider(params: {
   config: MeetingRealtimeProviderSelectionConfig;
   fullConfig: OpenClawConfig;
   providers?: RealtimeTranscriptionProviderPlugin[];
-}): ResolvedRealtimeTranscriptionProvider {
+}): Promise<ResolvedRealtimeTranscriptionProvider> {
   const providers = params.providers ?? listRealtimeTranscriptionProviders(params.fullConfig);
   if (providers.length === 0) {
     throw new Error("No configured realtime transcription provider registered");
@@ -110,7 +145,11 @@ export function resolveMeetingRealtimeTranscriptionProvider(params: {
   const providerConfig = provider.resolveConfig
     ? provider.resolveConfig({ cfg: params.fullConfig, rawConfig })
     : rawConfig;
-  if (!provider.isConfigured({ cfg: params.fullConfig, providerConfig })) {
+  if (
+    !(provider.isConfiguredAsync
+      ? await provider.isConfiguredAsync({ cfg: params.fullConfig, providerConfig })
+      : (provider.isConfigured?.({ cfg: params.fullConfig, providerConfig }) ?? false))
+  ) {
     throw new Error(`Realtime transcription provider "${provider.id}" is not configured`);
   }
   return { provider, providerConfig };
@@ -153,13 +192,7 @@ export function formatMeetingRealtimeVoiceModelLog(params: {
   return [
     `${params.logScope} realtime voice bridge starting: strategy=${formatLogValue(params.strategy)}`,
     `provider=${formatLogValue(params.provider.id)}`,
-    `model=${formatLogValue(
-      resolveProviderModelForLog({
-        provider: params.provider,
-        providerConfig: params.providerConfig,
-        fallbackModel: params.fallbackModel,
-      }),
-    )}`,
+    `model=${formatLogValue(resolveProviderModelForLog(params))}`,
     `audioFormat=${formatLogValue(params.audioFormat)}`,
   ].join(" ");
 }
@@ -174,12 +207,7 @@ export function formatMeetingAgentAudioModelLog(params: {
     `${params.logScope} agent audio bridge starting: transcriptionProvider=${formatLogValue(
       params.provider.id,
     )}`,
-    `transcriptionModel=${formatLogValue(
-      resolveProviderModelForLog({
-        provider: params.provider,
-        providerConfig: params.providerConfig,
-      }),
-    )}`,
+    `transcriptionModel=${formatLogValue(resolveProviderModelForLog(params))}`,
     "tts=telephony",
     `audioFormat=${formatLogValue(params.audioFormat)}`,
   ].join(" ");
@@ -227,91 +255,4 @@ export function normalizeMeetingTtsPromptText(text: string | undefined): string 
     return sayExactly.replace(/^["']|["']$/g, "").trim() || trimmed;
   }
   return trimmed;
-}
-
-export function createMeetingRealtimeLifecycleHandlers(
-  params: MeetingRealtimeLifecycleHandlersParams,
-) {
-  const onEvent = (event: RealtimeVoiceBridgeEvent) => {
-    if (event.direction === "server" && event.type === "session.created") {
-      params.lifecycle.continuityResetActive = false;
-    }
-    if (event.direction === "client" && event.type === "session.continuity.reset") {
-      if (params.lifecycle.continuityResetActive) {
-        return;
-      }
-      params.lifecycle.continuityResetActive = true;
-      params.lifecycle.realtimeReady = false;
-      params.outputOwner.reset();
-      params.lifecycle.outputGenerationActive = false;
-      params.resetToolContinuity(event.type);
-      const turnId = params.harness.talk.activeTurnId;
-      params.invalidateOutputPlayback();
-      params.harness.flushOutput(params.clearOutputPlayback);
-      params.harness.finishOutputAudio(event.type);
-      if (turnId) {
-        params.harness.talk.cancelTurn({
-          turnId,
-          payload: { ...params.outputTalkPayload, reason: event.type },
-        });
-      }
-      return;
-    }
-    params.outputOwner.noteEvent(event);
-    if (event.type === "input_audio_buffer.speech_started") {
-      params.harness.ensureTurn();
-    } else if (event.type === "input_audio_buffer.speech_stopped") {
-      const turnId = params.harness.talk.activeTurnId;
-      if (!turnId) {
-        return;
-      }
-      params.harness.emit({
-        type: "input.audio.committed",
-        turnId,
-        payload: { ...params.outputTalkPayload, source: event.type },
-        final: true,
-      });
-    } else if (
-      event.type === "error" &&
-      event.detail === MEETING_REALTIME_CANCELLATION_RACE_DETAIL
-    ) {
-      if (params.outputOwner.clearBlocked()) {
-        params.lifecycle.outputGenerationActive = false;
-        params.harness.finishOutputAudio(event.type);
-      }
-    } else if (event.type === "error") {
-      params.harness.emit({
-        type: "session.error",
-        payload: { message: event.detail ?? "Realtime provider error" },
-        final: true,
-      });
-    }
-    if (
-      event.type === "error" ||
-      event.type === "response.done" ||
-      event.type === "input_audio_buffer.speech_started" ||
-      event.type === "input_audio_buffer.speech_stopped" ||
-      event.type === "conversation.item.input_audio_transcription.completed" ||
-      event.type === "conversation.item.input_audio_transcription.failed"
-    ) {
-      const detail = event.detail ? ` ${event.detail}` : "";
-      params.logger.info(
-        `${params.logScope} ${params.realtimeLogScope} ${event.direction}:${event.type}${detail}`,
-      );
-    }
-  };
-
-  const onResponseDone = (outcome: RealtimeVoiceResponseOutcome) => {
-    if (!params.outputOwner.terminal(outcome.responseId)) {
-      return;
-    }
-    params.lifecycle.outputGenerationActive = false;
-    if (outcome.status === "failed" || outcome.status === "incomplete") {
-      params.logger.warn(
-        `${params.logScope} ${params.realtimeLogScope} response ${outcome.status}: ${outcome.message}`,
-      );
-    }
-  };
-
-  return { onEvent, onResponseDone };
 }

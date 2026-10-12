@@ -61,8 +61,8 @@ const ANCHOR_SELECTOR = /(^|[\s,(>~+])a([.#:[]|\b)/u;
 const NEW_TAB_ACTION_SELECTOR = /\[data-new-tab-action\]/u;
 
 describe("Control UI cursor policy", () => {
-  it("keeps the unconditional pointer on links and explicit new-tab controls only", () => {
-    const offenders = collectStyleSources(path.join(stylesDir, ".."))
+  it("keeps the unconditional pointer on links, new-tab controls, and composer suggestions", () => {
+    const actionPointers = collectStyleSources(path.join(stylesDir, ".."))
       .flatMap((filePath) => {
         const lines = fs.readFileSync(filePath, "utf8").split("\n");
         return lines.flatMap((line, index) =>
@@ -78,8 +78,10 @@ describe("Control UI cursor policy", () => {
         (hit) => !ANCHOR_SELECTOR.test(hit.selector) && !NEW_TAB_ACTION_SELECTOR.test(hit.selector),
       );
 
-    // State controls consume var(--cursor-action); only links and the explicit
-    // browser-tab/window hook may own an unconditional hand.
-    expect(offenders).toEqual([]);
+    // Composer suggestions explicitly use a pointer; other state controls
+    // continue to consume var(--cursor-action).
+    expect(actionPointers).toEqual([
+      { file: "chat/composer.css", selector: '.slash-menu-item[role="option"]' },
+    ]);
   });
 });

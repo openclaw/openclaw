@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createDiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
@@ -31,6 +32,7 @@ defineDiscordVoiceTests(
       let cfg: OpenClawConfig = { channels: { discord: discordConfig } };
       const client = createClientWithMember("333", "Guest", "4321");
       const manager = new managerModule.DiscordVoiceManager({
+        scheduler: createTestPluginServiceScheduler(),
         cfg,
         discordConfig,
         client: client as never,
@@ -258,8 +260,7 @@ defineDiscordVoiceTests(
             });
           });
           const player = target as ReturnType<typeof createAudioPlayerMock>;
-          const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1];
-          idleHandler?.();
+          player.emit("idle");
           await readinessFailure;
         }
       });
@@ -331,7 +332,7 @@ defineDiscordVoiceTests(
         await receiveRecordedSpeech(manager, undefined, entry, "u-guest");
         await vi.waitFor(() =>
           expect(entersStateMock).toHaveBeenCalledWith(
-            entry.player,
+            player,
             buffering ? "playing" : "idle",
             expect.any(AbortSignal),
           ),

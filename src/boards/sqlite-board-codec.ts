@@ -18,10 +18,8 @@ import {
   createBoardDeclaredSummary,
   resolveBoardWidgetPutParams,
   type BoardWidgetHtmlViewMetadata,
-  type BoardWidgetHtmlDocument,
   type BoardWidgetDocument,
   type BoardWidgetNameIdentityMarker,
-  type BoardWidgetRegisteredDocument,
 } from "./board-store.js";
 
 export type SelectedBoardTabRow = Selectable<BoardTabRow>;
@@ -83,20 +81,7 @@ type ParsedRegisteredPluginContent = {
 type ParsedPluginContent = ParsedTrustedPluginContent | ParsedRegisteredPluginContent;
 
 export function parseManifest(value: string): ParsedBoardManifest {
-  const parsed = JSON.parse(value) as {
-    contentOwner?: unknown;
-    registeredContentKind?: unknown;
-    netOrigins?: unknown;
-    tools?: unknown;
-    grantSemanticsVersion?: unknown;
-    presentation?: unknown;
-    heightMode?: unknown;
-    nameIdentity?: unknown;
-    mcpAppInteractive?: unknown;
-    mcpAppInstanceId?: unknown;
-    registeredInstanceId?: unknown;
-    pluginInstanceId?: unknown;
-  };
+  const parsed = JSON.parse(value) as Record<string, unknown>;
   const contentOwnerPresent = Object.hasOwn(parsed, "contentOwner");
   const contentOwner =
     parsed.contentOwner === "html" ||
@@ -273,70 +258,43 @@ export function createBoardWidgetContentFields(
         }
       : { kind: "explicit" },
   );
-  if (params.content.kind === "html") {
-    const sha256 = createHash("sha256").update(params.content.html).digest("hex");
-    return {
-      content_kind: "html",
-      html: Buffer.from(params.content.html, "utf8"),
-      descriptor_json: null,
-      sha256,
-      view_generation: instanceId,
-      revision,
-      manifest,
-      grant_state: grantState,
-      granted_sha: grantState === "granted" ? sha256 : null,
-      updated_at: now,
-    };
+  const content = params.content;
+  let html: Buffer | null = null;
+  let descriptorJson: string | null = null;
+  let hashInput: string;
+  switch (content.kind) {
+    case "html":
+      hashInput = content.html;
+      html = Buffer.from(content.html, "utf8");
+      break;
+    case "plugin":
+      descriptorJson = JSON.stringify({
+        pluginKind: content.pluginKind,
+        ...(content.props !== undefined ? { props: content.props } : {}),
+      });
+      hashInput = descriptorJson;
+      break;
+    case "registered":
+      descriptorJson = JSON.stringify({ pluginKind: content.pluginKind, source: content.source });
+      hashInput = content.source;
+      break;
+    case "mcp-app":
+      descriptorJson = JSON.stringify(content.descriptor);
+      hashInput = descriptorJson;
+      break;
   }
-  if (params.content.kind === "plugin") {
-    const descriptorJson = JSON.stringify({
-      pluginKind: params.content.pluginKind,
-      ...(params.content.props !== undefined ? { props: params.content.props } : {}),
-    });
-    return {
-      content_kind: "plugin",
-      html: null,
-      descriptor_json: descriptorJson,
-      sha256: createHash("sha256").update(descriptorJson).digest("hex"),
-      view_generation: null,
-      revision,
-      manifest,
-      grant_state: "none",
-      granted_sha: null,
-      updated_at: now,
-    };
-  }
-  if (params.content.kind === "registered") {
-    const descriptorJson = JSON.stringify({
-      pluginKind: params.content.pluginKind,
-      source: params.content.source,
-    });
-    const sha256 = createHash("sha256").update(params.content.source).digest("hex");
-    return {
-      content_kind: "plugin",
-      html: null,
-      descriptor_json: descriptorJson,
-      sha256,
-      view_generation: null,
-      revision,
-      manifest,
-      grant_state: grantState,
-      granted_sha: grantState === "granted" ? sha256 : null,
-      updated_at: now,
-    };
-  }
-  const descriptorJson = JSON.stringify(params.content.descriptor);
-  const sha256 = createHash("sha256").update(descriptorJson).digest("hex");
+  const sha256 = createHash("sha256").update(hashInput).digest("hex");
+  const storedGrantState = content.kind === "plugin" ? "none" : grantState;
   return {
-    content_kind: "mcp-app",
-    html: null,
+    content_kind: content.kind === "registered" ? "plugin" : content.kind,
+    html,
     descriptor_json: descriptorJson,
     sha256,
-    view_generation: null,
+    view_generation: content.kind === "html" ? instanceId : null,
     revision,
     manifest,
-    grant_state: grantState,
-    granted_sha: grantState === "granted" ? sha256 : null,
+    grant_state: storedGrantState,
+    granted_sha: storedGrantState === "granted" ? sha256 : null,
     updated_at: now,
   };
 }
@@ -411,27 +369,6 @@ export function parsePluginContent(value: string): ParsedPluginContent {
       };
 }
 
-function rowToHtmlDocument(
-  row: Pick<
-    SelectedBoardWidgetRow,
-    "content_kind" | "html" | "revision" | "sha256" | "view_generation" | "grant_state" | "manifest"
-  >,
-): BoardWidgetHtmlDocument | undefined {
-  if (row.content_kind !== "html" || row.html === null || row.view_generation === null) {
-    return undefined;
-  }
-  const manifest = parseManifest(row.manifest);
-  const declared = manifest.declared;
-  return {
-    html: Buffer.from(row.html).toString("utf8"),
-    revision: row.revision,
-    sha256: row.sha256,
-    viewGeneration: row.view_generation,
-    grantState: effectiveGrantState(row.grant_state, manifest),
-    ...(declared ? { declared } : {}),
-  };
-}
-
 export function rowToBoardWidgetDocument(
   row: Pick<
     SelectedBoardWidgetRow,
@@ -447,13 +384,39 @@ export function rowToBoardWidgetDocument(
   >,
 ): BoardWidgetDocument | undefined {
   if (row.content_kind === "html") {
-    return rowToHtmlDocument(row);
-  }
-  if (row.content_kind === "plugin") {
-    return rowToRegisteredDocument(row);
+    if (row.html === null || row.view_generation === null) {
+      return undefined;
+    }
+    const manifest = parseManifest(row.manifest);
+    const declared = manifest.declared;
+    return {
+      html: Buffer.from(row.html).toString("utf8"),
+      revision: row.revision,
+      sha256: row.sha256,
+      viewGeneration: row.view_generation,
+      grantState: effectiveGrantState(row.grant_state, manifest),
+      ...(declared ? { declared } : {}),
+    };
   }
   if (row.descriptor_json === null) {
     return undefined;
+  }
+  if (row.content_kind === "plugin") {
+    const content = parsePluginContent(row.descriptor_json);
+    const manifest = parseManifest(row.manifest);
+    if (!("source" in content) || !manifest.registeredInstanceId) {
+      return undefined;
+    }
+    return {
+      pluginKind: content.pluginKind,
+      source: content.source,
+      ...(row.title !== null ? { title: row.title } : {}),
+      revision: row.revision,
+      sha256: row.sha256,
+      viewGeneration: manifest.registeredInstanceId,
+      grantState: effectiveGrantState(row.grant_state, manifest),
+      ...(manifest.declared ? { declared: manifest.declared } : {}),
+    };
   }
   const manifest = parseManifest(row.manifest);
   if (manifest.mcpAppInteractive === undefined || manifest.mcpAppInstanceId === undefined) {
@@ -466,38 +429,6 @@ export function rowToBoardWidgetDocument(
     grantState: effectiveGrantState(row.grant_state, manifest),
     declaredTools: manifest.declared?.tools ?? [],
     interactive: manifest.mcpAppInteractive,
-  };
-}
-
-function rowToRegisteredDocument(
-  row: Pick<
-    SelectedBoardWidgetRow,
-    | "content_kind"
-    | "descriptor_json"
-    | "title"
-    | "revision"
-    | "sha256"
-    | "grant_state"
-    | "manifest"
-  >,
-): BoardWidgetRegisteredDocument | undefined {
-  if (row.content_kind !== "plugin" || row.descriptor_json === null) {
-    return undefined;
-  }
-  const content = parsePluginContent(row.descriptor_json);
-  const manifest = parseManifest(row.manifest);
-  if (!("source" in content) || !manifest.registeredInstanceId) {
-    return undefined;
-  }
-  return {
-    pluginKind: content.pluginKind,
-    source: content.source,
-    ...(row.title !== null ? { title: row.title } : {}),
-    revision: row.revision,
-    sha256: row.sha256,
-    viewGeneration: manifest.registeredInstanceId,
-    grantState: effectiveGrantState(row.grant_state, manifest),
-    ...(manifest.declared ? { declared: manifest.declared } : {}),
   };
 }
 

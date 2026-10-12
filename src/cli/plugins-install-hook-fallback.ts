@@ -22,7 +22,6 @@ import {
   resolveFullyBlockedConfigMutationReason,
   type ConfigSnapshotForInstallExecution,
 } from "../plugins/install-config.js";
-import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import { resolveBundledInstallPlanForNpmFailure } from "../plugins/install-source-plan.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
@@ -33,9 +32,10 @@ import { shortenHomePath } from "../utils.js";
 import { persistHookPackInstall } from "./hook-install-persistence.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import {
-  createHookPackInstallLogger,
+  createPluginInstallLogger,
   formatPluginInstallWithHookFallbackError,
 } from "./plugins-command-helpers.js";
+import { runWithLocalPluginState } from "./plugins-local-state.js";
 
 type HookCompatibleSource = Extract<PluginsInstallParams, { source: "local" | "npm" }>;
 type InstallParams = Parameters<typeof installManagedPlugin>[0] & {
@@ -54,16 +54,6 @@ type InstallResult =
       installSource?: ManagedPluginLifecycleError["installSource"];
     };
 
-export function resolveInstallSafetyOverrides(
-  overrides: InstallSafetyOverrides,
-): InstallSafetyOverrides {
-  return {
-    config: overrides.config,
-    onInstallPolicyWarning: overrides.onInstallPolicyWarning,
-    trustedSourceLinkedOfficialInstall: overrides.trustedSourceLinkedOfficialInstall,
-  };
-}
-
 async function attemptHookInstall(
   source: HookCompatibleSource,
   params: InstallParams,
@@ -74,12 +64,16 @@ async function attemptHookInstall(
   },
   assertOwned?: () => void,
 ): Promise<InstallHooksResult> {
+  const runtime = params.runtime ?? defaultRuntime;
   const common = requestDeferredPackageDirInstall(
     {
-      ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
+      ...params.safetyOverrides,
       config: params.snapshot.config,
       mode: source.mode,
-      logger: createHookPackInstallLogger(params.runtime),
+      logger: {
+        info: (message: string) => runtime.log(message),
+        warn: (message: string) => runtime.log(theme.warn(message)),
+      },
       ...options,
     },
     assertOwned,
@@ -105,6 +99,24 @@ async function installHookPack(
   source: HookCompatibleSource,
   params: InstallParams,
   expectedPackageKind?: "hook-only",
+): Promise<InstallResult> {
+  if (params.request.enable === false) {
+    return {
+      ok: false,
+      error:
+        "--no-enable is only supported for plugins. Install hook packs separately with openclaw hooks install.",
+    };
+  }
+  return await runWithLocalPluginState("install (hook fallback)", (assertCurrent) =>
+    installHookPackLocal(source, params, expectedPackageKind, assertCurrent),
+  );
+}
+
+async function installHookPackLocal(
+  source: HookCompatibleSource,
+  params: InstallParams,
+  expectedPackageKind: "hook-only" | undefined,
+  assertCurrent: () => void,
 ): Promise<InstallResult> {
   // Online plugin rejection can precede this fallback; acquire and reread only for the hook write.
   return await withPluginLifecycleLease({ signal: params.signal }, async (lease) => {
@@ -134,6 +146,7 @@ async function installHookPack(
       return { ok: false, error: "Linked hook pack paths must be directories." };
     }
     const beforePersistentApply = () => {
+      assertCurrent();
       params.signal?.throwIfAborted();
       lease.assertOwned();
       snapshot.writeOptions.assertConfigPathForWrite?.();
@@ -242,14 +255,25 @@ export async function installPluginWithHookFallback(params: InstallParams): Prom
     }
   }
   const install = async (installRequest: PluginsInstallParams): Promise<InstallResult> => {
+    const runtime = params.runtime ?? defaultRuntime;
+    const logWarning = options.logger?.warn ?? createPluginInstallLogger(runtime).warn;
+    const warnings = new Set<string>();
+    // Local installs stream warnings that also appear in the final result;
+    // Gateway installs only return them. Both routes share one terminal sink.
+    const warn = (message: string) => {
+      if (!warnings.has(message)) {
+        warnings.add(message);
+        logWarning(message);
+      }
+    };
     try {
       const result = await execute({
         ...options,
+        logger: { ...options.logger, warn },
         request: installRequest,
       });
-      const runtime = params.runtime ?? defaultRuntime;
       for (const warning of result.warnings ?? []) {
-        runtime.log(theme.warn(warning));
+        warn(warning);
       }
       runtime.log(
         installRequest.source === "local" && installRequest.link
@@ -317,7 +341,11 @@ export async function installPluginWithHookFallback(params: InstallParams): Prom
     });
     if (fallback) {
       (params.runtime ?? defaultRuntime).log(theme.warn(fallback.warning));
-      return await install({ source: "bundled", pluginId: fallback.bundledSource.pluginId });
+      return await install({
+        source: "bundled",
+        pluginId: fallback.bundledSource.pluginId,
+        ...(request.enable === false ? { enable: false } : {}),
+      });
     }
   }
   const hook = await installHookPack(hookSource, params);

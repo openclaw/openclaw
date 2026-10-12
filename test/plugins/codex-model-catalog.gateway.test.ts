@@ -8,10 +8,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import * as codexPluginModule from "../../extensions/codex/index.js";
 import type { ModelsListResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { prepareModelCatalogView } from "../../src/agents/model-catalog-view.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../src/agents/prepared-model-catalog.js";
 import { getRuntimeConfig } from "../../src/config/config.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { waitForCatalogPublication } from "../../src/gateway/server-methods/models-auth-catalog.test-support.js";
 import {
   listModels,
   WITHOUT_OPENAI_ENV_AUTH,
@@ -20,7 +20,6 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../../src/gateway/test-helpers.e2e.js";
-import { loadManifestMetadataSnapshot } from "../../src/plugins/manifest-contract-eligibility.js";
 import * as pluginModuleLoader from "../../src/plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import {
@@ -181,19 +180,18 @@ describe("models.list native account catalog", () => {
                   refresh,
                   ...(refresh ? { provider: "openai" } : {}),
                 });
-              await expect
-                .poll(
-                  async () =>
-                    (await registeredList()).models.find((row) => row.id === "synthetic-opaque")
-                      ?.available,
-                  { timeout: 15_000 },
-                )
-                .toBe(true);
-              await expect
-                .poll(async () => (await registeredList()).pendingProviders ?? [], {
-                  timeout: 15_000,
-                })
-                .not.toContain("openai");
+              // Cold catalog preparation and native discovery are host-dependent; wake on owner
+              // publications instead of timing the first demanded read.
+              const nativeCatalogSettled = (available: boolean) =>
+                waitForCatalogPublication({
+                  signal: ctx.signal,
+                  read: () => registeredList(),
+                  ready: (result) =>
+                    !result.pendingProviders?.includes("openai") &&
+                    result.models.find((row) => row.id === "synthetic-opaque")?.available ===
+                      available,
+                });
+              await nativeCatalogSettled(true);
               const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
                 agentId: "main",
                 config: getRuntimeConfig(),
@@ -288,22 +286,8 @@ describe("models.list native account catalog", () => {
                       timeout: 15_000,
                     })
                     .toBeGreaterThan(beforeModels);
-                  await expect
-                    .poll(async () => (await registeredList()).pendingProviders ?? [], {
-                      timeout: 15_000,
-                    })
-                    .not.toContain("openai");
-                  await expect
-                    .poll(() => readiness(), { timeout: 15_000 })
-                    .toEqual(observed.readiness);
-                  await expect
-                    .poll(
-                      async () =>
-                        (await registeredList()).models.find((row) => row.id === "synthetic-opaque")
-                          ?.available,
-                      { timeout: 15_000 },
-                    )
-                    .toBe(observed.available);
+                  await nativeCatalogSettled(observed.available);
+                  expect(readiness()).toEqual(observed.readiness);
                 }
                 const hostRoutes: OpenClawConfig["models"][] = [
                   {
@@ -367,30 +351,6 @@ describe("models.list native account catalog", () => {
                 }
                 await expect.poll(() => readiness()).toBeUndefined();
                 expect((await configured()).models[0]?.available).toBe(false);
-                const snapshot = { entries: rows, routeVariants: rows };
-                const nativeView = prepareModelCatalogView({
-                  ...scope,
-                  cfg: config,
-                  snapshot,
-                  metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
-                });
-                expect(
-                  nativeView.evaluateNative(rows[0]!, {
-                    availability: true,
-                    selectedAuthMode: "oauth",
-                    evidence: "runtime",
-                    routeResolution: null,
-                  }).availability,
-                ).toBe(false);
-                const hostRow = { ...rows[0]! };
-                delete hostRow.nativeRuntime;
-                const hostEvidence = {
-                  availability: true,
-                  selectedAuthMode: "oauth",
-                  evidence: "runtime" as const,
-                  routeResolution: null,
-                };
-                expect(nativeView.evaluateNative(hostRow, hostEvidence)).toBe(hostEvidence);
                 const replacement = createEmptyPluginRegistry();
                 setActivePluginRegistry(replacement);
                 expect((await configured()).models[0]?.available).toBe(false);

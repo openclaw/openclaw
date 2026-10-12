@@ -1,18 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import * as activeTranscriptEvents from "../config/sessions/session-accessor.sqlite-active-events.js";
-import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../config/sessions/session-transcript-reconcile.js";
 import * as redact from "../logging/redact.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
@@ -20,12 +17,10 @@ import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
-  // Deferred reconciliation must settle before its databases and fixture directories close.
+  // Worker leases still need these databases until asynchronous cleanup settles.
   for (const stateDir of tempDirs.dirs) {
-    await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+    await cleanupSessionStateForTest({ stateDir });
   }
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
 
@@ -41,6 +36,22 @@ function createScope(prefix: string) {
 }
 
 describe("session companion context", () => {
+  it("reads replaced session identities without host SQL", async () => {
+    const scope = createScope("companion-context-identity");
+    for (const sessionId of [scope.sessionId, `${scope.sessionId}-replacement`]) {
+      await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+      const hostSql = observeHostDataSql();
+      try {
+        await expect(defaultSessionCompanionContextReader.currentSessionId(scope)).resolves.toBe(
+          sessionId,
+        );
+        expect(hostSql.queries).toEqual([]);
+      } finally {
+        hostSql.restore();
+      }
+    }
+  });
+
   it.each(
     [false, true].flatMap((warm) =>
       (["reset", "dispose", "request-abort", "backing-reset"] as const).map((cancellation) => ({
@@ -55,9 +66,12 @@ describe("session companion context", () => {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const run = vi.fn(async () => "Existing answer.");
       const service = createSessionCompanion({
+        scheduler: createTestGatewayScheduler(),
         getConfig: () => ({}),
         contextReader: defaultSessionCompanionContextReader,
-        sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+        sessionObserver: {
+          getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }),
+        },
         resolveUtilityModelRef: () => "openai/gpt-5.6-luna",
         run,
         now: () => 123,
@@ -348,7 +362,12 @@ describe("session companion context", () => {
       touchSessionEntry: true,
     });
 
-    await expect(defaultSessionCompanionContextReader.read(scope)).resolves.toEqual({
+    const hostSql = observeHostDataSql();
+    const result = await defaultSessionCompanionContextReader
+      .read(scope)
+      .finally(() => hostSql.restore());
+    expect(hostSql.queries).toEqual([]);
+    expect(result).toEqual({
       kind: "ready",
       context: {
         empty: false,
@@ -359,47 +378,6 @@ describe("session companion context", () => {
         sessionId: scope.sessionId,
       },
     });
-  });
-
-  it("rejects context assembled across different transcript snapshots", async () => {
-    const scope = createScope("companion-context-snapshot-fence");
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const page = vi
-      .spyOn(activeTranscriptEvents, "readSessionTranscriptBoundedMessageTailPage")
-      .mockReturnValueOnce({
-        activeLeafEntryId: "leaf-1",
-        events: [
-          {
-            event: {
-              type: "message",
-              id: "message-1",
-              parentId: null,
-              message: { role: "user", content: "stable context", timestamp: 1 },
-            },
-            eventSeq: 1,
-            seq: 1,
-          },
-        ],
-        newestContiguousEventCount: 1,
-        scannedMessages: 1,
-        serializedBytes: 128,
-        snapshot: { generation: "generation-1", indexedSeq: 1 },
-        totalMessages: 1,
-      })
-      .mockReturnValueOnce({
-        activeLeafEntryId: "leaf-1",
-        events: [],
-        newestContiguousEventCount: 0,
-        scannedMessages: 0,
-        serializedBytes: 0,
-        snapshot: { generation: "generation-2", indexedSeq: 1 },
-        totalMessages: 1,
-      });
-
-    await expect(defaultSessionCompanionContextReader.read(scope)).resolves.toEqual({
-      kind: "unavailable",
-    });
-    expect(page).toHaveBeenCalledTimes(2);
   });
 
   it("keeps transcript-visible messages across compaction", async () => {

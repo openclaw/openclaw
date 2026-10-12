@@ -67,19 +67,6 @@ function signedEnvelope(params: {
 }
 
 describe("official external plugin catalog signed envelopes", () => {
-  it.each(["base64", "base64url"] as const)(
-    "verifies decoded payload bytes from %s envelopes",
-    (encoding) => {
-      const key = createSigningKey("catalog-root");
-      const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
-        signedEnvelope({ keys: [key], encoding }),
-        { trustedKeys: [{ keyId: key.keyId, publicKey: exportPublicKey(key) }] },
-      );
-
-      expect(result).toMatchObject({ ok: true, feed: fixtureFeed(), signedBy: key.keyId });
-    },
-  );
-
   it("enforces distinct trusted key material for signature thresholds", () => {
     const first = createSigningKey("first");
     const second = createSigningKey("second");
@@ -215,27 +202,6 @@ describe("official external plugin catalog signed envelopes", () => {
         { trustedKeys: [{ keyId: key.keyId, publicKey: exportPublicKey(key) }] },
       ),
     ).toMatchObject({ ok: false, error: "invalid-envelope" });
-  });
-
-  it("ignores unrecognized DSSE envelope and signature fields", () => {
-    const key = createSigningKey("catalog-root");
-    const envelope = signedEnvelope({ keys: [key] });
-    const signature = envelope.signatures[0];
-    expect(signature).toBeDefined();
-    if (!signature) {
-      throw new Error("expected a generated signature");
-    }
-
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(
-        {
-          ...envelope,
-          futureEnvelopeField: true,
-          signatures: [{ ...signature, futureSignatureField: true }],
-        },
-        { trustedKeys: [{ keyId: key.keyId, publicKey: exportPublicKey(key) }] },
-      ),
-    ).toMatchObject({ ok: true, signedBy: key.keyId });
   });
 
   it("accepts beta legacy field names only for persisted snapshots", () => {

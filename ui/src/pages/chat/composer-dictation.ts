@@ -1,18 +1,15 @@
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
-  bytesToBase64,
   floatToG711Ulaw,
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,
-} from "./realtime-talk-audio.ts";
-import {
-  describeRealtimeTalkInputError,
-  RealtimeTalkInputController,
-} from "./realtime-talk-input.ts";
-import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
+} from "./talk/audio.ts";
+import { describeRealtimeTalkInputError, RealtimeTalkInputController } from "./talk/input.ts";
+import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
@@ -23,7 +20,7 @@ const MAX_PENDING_AUDIO_SAMPLES = DICTATION_SAMPLE_RATE_HZ * 10;
 
 type DictationPhase = "idle" | "pressing" | "holding" | "connecting" | "recording" | "stopping";
 
-// Transcription relay talk.event payload (src/gateway/talk-transcription-relay.ts):
+// Transcription relay talk.event payload (src/gateway/talk/transcription-relay.ts):
 // the transcriptionSessionId envelope is the relay's emission shape, shared with the
 // Android dictation client; the canonical TalkEvent rides alongside as `talkEvent`.
 type DictationEvent = {
@@ -189,7 +186,7 @@ class ComposerDictationSession {
   }
 
   transcriptSnapshot(): string {
-    return this.transcriptIncludingPartial();
+    return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
   }
 
   async finish(drainFinalTranscript = false): Promise<string> {
@@ -201,7 +198,7 @@ class ComposerDictationSession {
       void cleanup.catch(() => undefined);
       return lateFinal;
     }
-    return cleanup.then(() => this.transcriptIncludingPartial());
+    return cleanup.then(() => this.transcriptSnapshot());
   }
 
   async cancel(): Promise<void> {
@@ -279,22 +276,17 @@ class ComposerDictationSession {
     ) {
       return;
     }
-    if (payload.type === "transcript" && typeof payload.text === "string") {
+    if (
+      (payload.type === "transcript" || payload.type === "partial") &&
+      typeof payload.text === "string"
+    ) {
       const text = payload.text.trim();
-      if (payload.final !== true) {
+      if (payload.type === "partial" || payload.final !== true) {
         this.currentPartial = text;
-        this.callbacks.onTranscriptChange();
-        return;
-      }
-      if (text) {
+      } else if (text) {
         this.finalTranscripts.push(text);
         this.currentPartial = "";
       }
-      this.callbacks.onTranscriptChange();
-      return;
-    }
-    if (payload.type === "partial" && typeof payload.text === "string") {
-      this.currentPartial = payload.text.trim();
       this.callbacks.onTranscriptChange();
       return;
     }
@@ -322,10 +314,6 @@ class ComposerDictationSession {
 
   private hasTranscript(): boolean {
     return this.finalTranscripts.length > 0 || Boolean(this.currentPartial);
-  }
-
-  private transcriptIncludingPartial(): string {
-    return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
   }
 
   private async stopCapture(): Promise<void> {
@@ -396,7 +384,6 @@ export class ComposerDictationController {
   private pointerBounds: DOMRect | null = null;
   private holdTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private session: ComposerDictationSession | null = null;
-  private suppressClick = false;
   private suppressedPointerId: number | null = null;
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private pendingCommitSession: ComposerDictationSession | null = null;
@@ -477,8 +464,7 @@ export class ComposerDictationController {
     this.pointerTarget = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     this.pointerBounds = this.pointerTarget?.getBoundingClientRect() ?? null;
     this.pointerTarget?.setPointerCapture?.(event.pointerId);
-    this.pointerTarget?.addEventListener("lostpointercapture", this.handleLostPointerCapture);
-    this.suppressClick = true;
+    this.pointerTarget?.addEventListener("lostpointercapture", this.handleDocumentPointerCancel);
     this.suppressedPointerId = event.pointerId;
     this.setPhase("pressing");
     // A normal click gets a quiet grace period. Only a sustained press enters
@@ -499,7 +485,7 @@ export class ComposerDictationController {
   }
 
   handleClick(event: MouseEvent): void {
-    if (this.suppressClick) {
+    if (this.suppressedPointerId !== null) {
       this.clearClickSuppression();
       event.preventDefault();
       return;
@@ -582,16 +568,9 @@ export class ComposerDictationController {
     void this.stop({ commit: false });
   };
 
-  private readonly handleLostPointerCapture = (event: Event): void => {
-    if ((event as PointerEvent).pointerId === this.pointerId) {
-      void this.stop({ commit: false });
-    }
-  };
-
   private readonly handleVisibilityChange = (): void => {
     if (document.visibilityState === "hidden") {
-      this.clearClickSuppression();
-      void this.stop({ commit: false });
+      this.handleWindowBlur();
     }
   };
 
@@ -651,7 +630,7 @@ export class ComposerDictationController {
     try {
       await session.start();
     } catch (error) {
-      if (this.session !== session || this.disposed || this.isStopping()) {
+      if (this.session !== session || this.disposed || this.finalizing) {
         return;
       }
       this.options.onError(messageFromError(error), { kind: "start", preservesText: false });
@@ -726,7 +705,10 @@ export class ComposerDictationController {
       this.holdTimer = null;
     }
     if (this.pointerId !== null) {
-      this.pointerTarget?.removeEventListener("lostpointercapture", this.handleLostPointerCapture);
+      this.pointerTarget?.removeEventListener(
+        "lostpointercapture",
+        this.handleDocumentPointerCancel,
+      );
       try {
         this.pointerTarget?.releasePointerCapture?.(this.pointerId);
       } catch {
@@ -742,7 +724,7 @@ export class ComposerDictationController {
   }
 
   private expireClickSuppression(): void {
-    if (!this.suppressClick || this.suppressClickTimer !== null) {
+    if (this.suppressedPointerId === null || this.suppressClickTimer !== null) {
       return;
     }
     this.suppressClickTimer = globalThis.setTimeout(() => this.clearClickSuppression(), 0);
@@ -756,11 +738,6 @@ export class ComposerDictationController {
     document.removeEventListener("pointerup", this.handleSuppressedPointerRelease);
     document.removeEventListener("pointercancel", this.handleSuppressedPointerRelease);
     this.suppressedPointerId = null;
-    this.suppressClick = false;
-  }
-
-  private isStopping(): boolean {
-    return this.phase === "stopping";
   }
 
   private setPhase(phase: DictationPhase): void {

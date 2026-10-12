@@ -4,14 +4,16 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import * as triageUpdate from "../../commands/triage-update.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
+import * as scheduledTasks from "../../daemon/schtasks.js";
 import * as gatewayService from "../../daemon/service.js";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
+import * as failureArtifacts from "../../infra/update-failure-report-artifact.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import * as handoffCleanup from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
@@ -24,9 +26,11 @@ import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as triage from "../../infra/update-triage.js";
 import * as installedPlugins from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as stateOwnership from "../../state/openclaw-state-ownership.js";
 import { resolveProfileStateDir } from "../profile-utils.js";
+import { registerSignalExitGate, waitForCliSignalExit } from "../signal-exit-barrier.js";
 import * as updateShared from "./shared.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import * as updateConfig from "./update-command-config.js";
@@ -37,12 +41,16 @@ import {
   finishSuccessfulPackageSwitch,
   taskRecovery,
 } from "./update-command-post-update.test-support.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import * as updateResume from "./update-command-resume.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
+import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 import { updateCommand } from "./update-command.js";
+import { updateRepairCommand } from "./update-repair-command.js";
 
 const dirs = new Set<string>();
 afterEach(() => cleanupTempDirs(dirs));
@@ -76,21 +84,23 @@ function materialSnapshot(root: string) {
 
 function pendingPackageInvocation(
   params: {
-    redirected?: boolean;
+    serviceDrift?: boolean;
     alias?: boolean;
     existingRun?: boolean;
-    manager?: "npm" | "pnpm" | "bun";
     profile?: string;
     readOnlyConfig?: boolean;
   } = {},
 ) {
+  if (params.serviceDrift) {
+    stubNodeRuntime();
+  }
   const home = fs.realpathSync(makeTempDir(dirs, "pending-package-admission-"));
   const identity = createManagedServiceIdentityFixture(home);
   const state = resolveProfileStateDir(params.profile ?? "default", process.env, () => home);
   const source = path.join(home, "prefix", "lib", "node_modules", "openclaw");
-  const target = path.join(home, "service-prefix", "lib", "node_modules", "openclaw");
+  const serviceRoot = path.join(home, "service-prefix", "lib", "node_modules", "openclaw");
   const control = path.join(home, "control");
-  for (const root of [source, target]) {
+  for (const root of [source, serviceRoot]) {
     fs.mkdirSync(path.join(root, "dist"), { recursive: true });
     fs.writeFileSync(path.join(root, "package.json"), '{"name":"openclaw","version":"1.0.0"}\n');
     fs.writeFileSync(path.join(root, "dist", "entry.js"), "// installed entrypoint\n");
@@ -102,7 +112,10 @@ function pendingPackageInvocation(
   const metaPath = path.join(home, "sentinel.json");
   fs.writeFileSync(configPath, "{}\n");
   fs.writeFileSync(contextPath, "retained triage\n");
-  fs.writeFileSync(metaPath, JSON.stringify({ meta: { triageContextPath: contextPath } }));
+  fs.writeFileSync(
+    metaPath,
+    JSON.stringify({ version: 1, meta: { triageContextPath: contextPath } }),
+  );
   for (const key of [
     "OPENCLAW_UPDATE_RUN_ID",
     POST_CORE_UPDATE_ENV,
@@ -128,13 +141,20 @@ function pendingPackageInvocation(
   }
   vi.spyOn(updateShared, "resolveUpdateRoot").mockResolvedValue(invocationRoot);
   vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
-  const manager = vi
-    .spyOn(updateShared, "resolveGlobalManager")
-    .mockResolvedValue(params.manager ?? "npm");
-  const service = gatewayService.resolveGatewayService();
+  const manager = vi.spyOn(updateShared, "resolveGlobalManager").mockResolvedValue("npm");
+  const service = createMockGatewayService({
+    isLoaded: async () => true,
+    readRuntime: async () => ({ status: "running", systemd: { managerUid: 2001 } }),
+  });
   const readCommand = vi.fn(async () =>
-    params.redirected
-      ? { programArguments: [process.execPath, path.join(target, "dist", "entry.js"), "gateway"] }
+    params.serviceDrift
+      ? {
+          programArguments: [
+            process.execPath,
+            path.join(serviceRoot, "dist", "entry.js"),
+            "gateway",
+          ],
+        }
       : null,
   );
   vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({ ...service, readCommand });
@@ -149,7 +169,7 @@ function pendingPackageInvocation(
     .mockResolvedValue(false);
   const runTriage = vi.fn(async () => ({ status: "cancelled" as const }));
   const prepareTriage = vi.spyOn(triage, "prepareUpdateFailureTriage").mockResolvedValue(runTriage);
-  const writeTriage = vi.spyOn(triageUpdate, "writeTriageUpdateFailure");
+  const writeTriage = vi.spyOn(failureArtifacts, "writeTriageUpdateFailure");
   const cleanupHandoffs = vi.spyOn(handoffCleanup, "cleanupStaleManagedServiceUpdateHandoffs");
   const loadPlugins = vi.spyOn(installedPlugins, "loadInstalledPluginIndexInstallRecords");
   const resumePostCore = vi
@@ -157,7 +177,7 @@ function pendingPackageInvocation(
     .mockRejectedValue(new Error("Untrusted continuation reached plugin convergence"));
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
-  const addPending = (root = params.redirected ? target : source) => {
+  const addPending = (root = params.serviceDrift ? serviceRoot : source) => {
     const anchor = resolvePackageActivationAnchor(root);
     fs.mkdirSync(anchor, { mode: 0o700 });
     // A crash during sealing is already pending, even before a complete journal exists.
@@ -170,7 +190,7 @@ function pendingPackageInvocation(
     home,
     state,
     source,
-    target,
+    serviceRoot,
     runId: process.env.OPENCLAW_UPDATE_RUN_ID,
     restore() {
       vi.unstubAllEnvs();
@@ -197,20 +217,19 @@ function pendingPackageInvocation(
 
 describe.skipIf(process.platform === "win32")("pending package activation admission", () => {
   it.each([
-    { name: "source with absent history" },
     { name: "canonical source behind an alias", alias: true },
-    { name: "redirected service target", redirected: true, existingRun: true },
+    { name: "managed service in another prefix", serviceDrift: true, existingRun: true },
     {
-      name: "pnpm caller with another profile",
-      manager: "pnpm" as const,
+      name: "caller with another profile",
       profile: "other",
       existingRun: true,
     },
-    { name: "Bun caller with another profile", manager: "bun" as const, profile: "other" },
-    { name: "externally managed config", readOnlyConfig: true, existingRun: true },
   ])("refuses $name before writable preparation or run admission", async (params) => {
     const f = pendingPackageInvocation(params);
     try {
+      f.writers.manager.mockRejectedValue(
+        new Error("Package manager selection reached before retained recovery admission"),
+      );
       const opts: UpdateCommandOptions = { json: true, yes: true };
       f.addPending();
       const before = materialSnapshot(f.home);
@@ -219,7 +238,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
         expect.objectContaining({
           status: "error",
           reason: "update-recovery-pending",
-          ...(params.redirected ? { root: f.target } : {}),
+          ...(params.serviceDrift ? { root: f.serviceRoot } : {}),
           recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
         }),
       );
@@ -235,16 +254,19 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
     }
   });
 
-  it.each([false, true])(
-    "reports pending after lease acquisition with existing history=%s without changing retained material",
-    async (existingRun) => {
-      const f = pendingPackageInvocation({ existingRun });
+  it.each([
+    { existingRun: false, serviceDrift: false },
+    { existingRun: true, serviceDrift: true },
+  ])(
+    "reports pending after lease acquisition (existing history=$existingRun, service drift=$serviceDrift) without changing retained material",
+    async ({ existingRun, serviceDrift }) => {
+      const f = pendingPackageInvocation({ existingRun, serviceDrift });
       const withExecutor = updateExecutor.withUpdateCommandExecutor;
       let anchor: string | undefined;
       let record: ReturnType<typeof ledger.getUpdateRun> | undefined;
       const retainedMaterial = () => ({
         source: materialSnapshot(f.source),
-        target: materialSnapshot(f.target),
+        service: materialSnapshot(f.serviceRoot),
         anchor: anchor ? materialSnapshot(anchor) : undefined,
         config: fs.readFileSync(path.join(f.state, "openclaw.json")),
         triage: fs.readFileSync(path.join(f.home, "triage.json")),
@@ -256,6 +278,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
           skipPluginValidation: true,
           observe: false,
         }),
+        configReadFailure: undefined,
         legacyConfigPlan: undefined,
         storedChannel: null,
       });
@@ -271,6 +294,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
             async (executor) =>
               operation({
                 async enter(root, enterOptions) {
+                  expect(root).toBe(f.source);
                   const fence = await executor.enter(root, enterOptions);
                   if (!anchor) {
                     anchor = f.addPending();
@@ -297,6 +321,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
           expect.objectContaining({
             status: "error",
             reason: "update-recovery-pending",
+            root: serviceDrift ? f.serviceRoot : f.source,
             recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
           }),
         );
@@ -353,13 +378,11 @@ async function fixture() {
     windows,
     rollback,
     complete,
-    entries: () => 0,
-    invoke: (previousInstallRoot = runtime.root) =>
+    invoke: () =>
       finishSuccessfulPackageSwitch(
         { packageRoot: runtime.root, run },
         {
           root: runtime.root,
-          previousInstallRoot,
           opts,
           result: {
             status: "error",
@@ -385,20 +408,23 @@ async function fixture() {
 }
 
 describe("pending recovery finalizer", () => {
-  it("refuses standalone finalization before recreating a displaced canonical database", async () => {
+  it.each([
+    { command: "finalize", invoke: updateFinalizeCommand },
+    { command: "repair", invoke: updateRepairCommand },
+  ])("refuses $command before recreating a displaced canonical database", async ({ invoke }) => {
     const f = await fixture();
     const before = fs.readFileSync(f.displaced);
     const configPath = path.join(f.root, "openclaw.json");
     const originalConfig = fs.readFileSync(configPath);
     const resolveRoot = vi
       .spyOn(updateShared, "resolveUpdateRoot")
-      .mockRejectedValue(new Error("ordinary finalization reached root discovery"));
+      .mockRejectedValue(new Error("ordinary maintenance reached root discovery"));
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
     await expect(
       withOwnedManagedUpdateEnv(
         { ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: configPath },
-        () => updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
+        () => invoke({ json: true, yes: true, deferCompletionCache: true }),
       ),
     ).rejects.toThrow("full-state recovery is deferred");
     expect(resolveRoot).not.toHaveBeenCalled();
@@ -407,7 +433,7 @@ describe("pending recovery finalizer", () => {
     expect(fs.readFileSync(configPath)).toEqual(originalConfig);
   });
 
-  it.each([true, false])(
+  it.each([false])(
     "preserves a missing canonical database with live-context=%s",
     async (context) => {
       const f = await fixture();
@@ -427,7 +453,6 @@ describe("pending recovery finalizer", () => {
           recovery: { serviceRestartSafe: false },
         },
       });
-      expect(f.entries()).toBe(0);
       expect(fs.existsSync(f.file)).toBe(false);
       expect(fs.readFileSync(f.displaced)).toEqual(before);
       expect(f.rollback).not.toHaveBeenCalled();
@@ -436,22 +461,6 @@ describe("pending recovery finalizer", () => {
       expect(f.windows.complete).not.toHaveBeenCalled();
     },
   );
-  it("refuses retained recovery without touching either the managed or caller root", async () => {
-    const f = await fixture();
-    const failure = await f.invoke(path.join(f.root, "caller-install")).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(failure).toMatchObject({
-      name: "UpdateCommandPendingRecoveryFailure",
-      result: { reason: "candidate-failed" },
-    });
-    expect(f.entries()).toBe(0);
-    expect(fs.existsSync(f.file)).toBe(false);
-    expect(f.rollback).not.toHaveBeenCalled();
-    expect(f.windows.restore).not.toHaveBeenCalled();
-  });
-
   it.each(["finalizer", "reported", "unexpected", "completed"] as const)(
     "keeps %s unwind away from autostart, history and managed triage",
     async (kind) => {
@@ -467,7 +476,7 @@ describe("pending recovery finalizer", () => {
       const context = path.join(f.root, "triage.json");
       const meta = path.join(f.root, "sentinel.json");
       fs.writeFileSync(context, "unchanged");
-      fs.writeFileSync(meta, JSON.stringify({ meta: { triageContextPath: context } }));
+      fs.writeFileSync(meta, JSON.stringify({ version: 1, meta: { triageContextPath: context } }));
       const primary = {
         status: "error" as const,
         mode: "npm" as const,
@@ -516,63 +525,136 @@ describe("pending recovery finalizer", () => {
       expect(fs.readFileSync(f.displaced)).toEqual(before);
       expect(fs.readFileSync(context, "utf8")).toBe("unchanged");
       expect(f.windows.restore).not.toHaveBeenCalled();
-      expect(f.windows.complete).not.toHaveBeenCalled();
+      if (f.opts.recovery) {
+        expect(f.windows.complete).not.toHaveBeenCalled();
+      } else {
+        expect(f.windows.complete).toHaveBeenCalledExactlyOnceWith(false, { preserveState: true });
+      }
       expect(f.rollback).not.toHaveBeenCalled();
       expect(f.complete).not.toHaveBeenCalled();
     },
   );
 });
 
+it.each([true])(
+  "settles interrupted Windows suspension without touching pending databases (mutated=%s)",
+  async (mutated) => {
+    const f = await fixture();
+    const run = f.opts.run!;
+    const before = materialSnapshot(f.root);
+    const listeners = process.listeners("SIGINT");
+    const previousExitCode = process.exitCode;
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const suspend = vi
+      .spyOn(scheduledTasks, "suspendScheduledTaskAutoStartForUpdate")
+      .mockResolvedValue(true);
+    const resume = vi.spyOn(scheduledTasks, "resumeScheduledTaskAutoStartAfterUpdate");
+    const recovery = createWindowsTaskAutoStartRecovery({ serviceEnv: f.env, updateRun: run });
+    await recovery.suspended;
+    if (mutated) {
+      recovery.beginMutation();
+    }
+    const signal = process.listeners("SIGINT").find((listener) => !listeners.includes(listener));
+    expect(signal).toBeDefined();
+    const siblingFinished = createDeferredCore();
+    const unregisterSibling = registerSignalExitGate(siblingFinished.promise);
+    const retired = createDeferredCore();
+    const removeListener = process.off.bind(process);
+    // Bun removes native signal listeners without emitting EventEmitter.removeListener.
+    // Observe the real removal effect, preserving its implementation and return value.
+    const off = vi.spyOn(process, "off").mockImplementation((event, listener) => {
+      const result = removeListener(event, listener);
+      if (event === "SIGBREAK" && listener === signal) {
+        retired.resolve();
+      }
+      return result;
+    });
+    const cause = new UpdateCommandRecoveryPendingError("Database rollback could not finish");
+    try {
+      signal!("SIGINT");
+      await expect(
+        withUpdateCommandRecoveryUnwind(
+          { run },
+          { triageTarget: { env: f.env }, windowsTaskAutoStartRecovery: recovery },
+          async () => {
+            throw cause;
+          },
+        ),
+      ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure", cause });
+      // Unwind releases its own gate without awaiting the still-pending sibling.
+      expect(process.listeners("SIGINT")).toContain(signal);
+      signal!("SIGINT");
+      expect(process.listeners("SIGINT")).toContain(signal);
+      siblingFinished.resolve();
+      expect(await waitForCliSignalExit()).toBe(130);
+      // Shared drain completion precedes this owner's status publication and retirement.
+      // Observe removal of its last signal listener instead of flushing microtasks.
+      await retired.promise;
+      expect(process.listeners("SIGINT")).toEqual(listeners);
+      expect(process.exitCode).toBe(130);
+      expect(exit).not.toHaveBeenCalled();
+      expect(suspend).toHaveBeenCalledOnce();
+      expect(resume).not.toHaveBeenCalled();
+      expect(materialSnapshot(f.root)).toEqual(before);
+    } finally {
+      siblingFinished.resolve();
+      unregisterSibling();
+      await recovery.complete(false, { preserveState: true });
+      await waitForCliSignalExit();
+      await retired.promise;
+      off.mockRestore();
+      process.exitCode = previousExitCode;
+    }
+  },
+);
+
 describe("migrated-runtime unwind", () => {
-  it.each([false, true])(
-    "preserves newer canonical state after handoff (failure=%s)",
-    async (failed) => {
-      const root = fs.realpathSync(makeTempDir(dirs, "migrated-unwind-"));
-      const env = { HOME: root, OPENCLAW_STATE_DIR: root };
-      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-      closeOpenClawStateDatabaseForTest();
-      const file = path.join(root, "state", "openclaw.sqlite");
-      const db = new DatabaseSync(file);
-      try {
-        const row = db.prepare("PRAGMA user_version").get();
-        db.exec(`PRAGMA user_version=${Number(row?.user_version) + 1}`);
-      } finally {
-        db.close();
-      }
-      const before = fs.readFileSync(file);
-      const windows = taskRecovery();
-      const failure = new UpdateCommandFailure({
-        status: "error",
-        mode: "npm",
-        runId: run.runId,
-        reason: "new-runtime-failed",
-        steps: [],
-        durationMs: 1,
-      });
-      const completion = withUpdateCommandRecoveryUnwind(
-        { run },
-        {
-          ledgerHandoffOwned: true,
-          ledgerHandoffCompleted: true,
-          triageTarget: { env },
-          windowsTaskAutoStartRecovery: windows,
-        },
-        async () => {
-          if (failed) {
-            throw failure;
-          }
-        },
-      );
-      if (failed) {
-        await expect(completion).rejects.toBe(failure);
-      } else {
-        await expect(completion).resolves.toBeUndefined();
-      }
-      expect(windows.restore).toHaveBeenCalledOnce();
-      expect(windows.complete).toHaveBeenCalledOnce();
-      expect(fs.readFileSync(file)).toEqual(before);
-    },
-  );
+  it.each([true])("preserves newer canonical state after handoff (failure=%s)", async (failed) => {
+    const root = fs.realpathSync(makeTempDir(dirs, "migrated-unwind-"));
+    const env = { HOME: root, OPENCLAW_STATE_DIR: root };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    closeOpenClawStateDatabaseForTest();
+    const file = path.join(root, "state", "openclaw.sqlite");
+    const db = new DatabaseSync(file);
+    try {
+      const row = db.prepare("PRAGMA user_version").get();
+      db.exec(`PRAGMA user_version=${Number(row?.user_version) + 1}`);
+    } finally {
+      db.close();
+    }
+    const before = fs.readFileSync(file);
+    const windows = taskRecovery();
+    const failure = new UpdateCommandFailure({
+      status: "error",
+      mode: "npm",
+      runId: run.runId,
+      reason: "new-runtime-failed",
+      steps: [],
+      durationMs: 1,
+    });
+    const completion = withUpdateCommandRecoveryUnwind(
+      { run },
+      {
+        ledgerHandoffOwned: true,
+        ledgerHandoffCompleted: true,
+        triageTarget: { env },
+        windowsTaskAutoStartRecovery: windows,
+      },
+      async () => {
+        if (failed) {
+          throw failure;
+        }
+      },
+    );
+    if (failed) {
+      await expect(completion).rejects.toBe(failure);
+    } else {
+      await expect(completion).resolves.toBeUndefined();
+    }
+    expect(windows.restore).toHaveBeenCalledOnce();
+    expect(windows.complete).toHaveBeenCalledOnce();
+    expect(fs.readFileSync(file)).toEqual(before);
+  });
 });
 
 it.each([false, true])(

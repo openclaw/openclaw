@@ -1,575 +1,173 @@
+import os from "node:os";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
+import { captureTranscriptRedactionSnapshot } from "../../agents/transcript-redact-text.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
-import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
+import { readLegacyCompactionMetrics } from "../../config/sessions/legacy-compaction-history.js";
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
+  ChatHistoryMessageParams,
 } from "../../config/sessions/session-history-types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import {
-  dropPreSessionStartAnnouncePairs,
-  isHeartbeatHistoryTurnBoundaryMessage,
-  projectChatDisplayMessages,
-  projectChatDisplayMessagesWithState,
-  projectChatHistoryRecovery,
-  augmentChatHistoryWithCanvasBlocks,
-  createCurrentUserProfileMessageProjector,
-} from "../chat-display-projection.js";
+  prepareForwardedMessageCronJobNameResolver,
+  projectForwardedMessages,
+} from "../chat-display-projection.history.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
-import {
-  capOffsetChatHistoryProjectedMessages,
-  dropChatHistoryOverreadContextMessage,
-  readChatHistoryMessageId,
-  readChatHistoryRecoveryContext,
-  readChatHistoryMessageSeq,
-  readIncrementalChatHistoryTail,
-  type IncrementalChatHistoryTail,
-} from "../session-history-tail.js";
-import { readSessionMessagesAroundIdWithStatsAsync } from "../session-transcript-anchor-reader.js";
-import {
-  readSessionMessagesAsync,
-  type ReadRecentSessionMessagesResult,
-} from "../session-transcript-readers.js";
+import type { IncognitoSessionHistoryReader } from "../session-history-snapshot.js";
+import * as sessionTranscriptReaders from "../session-transcript-readers.js";
+import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
+import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
+import { encodeChatHistoryResponsePage } from "./chat-history-response-page.js";
 
-function readCliIdentityProjectionKey(message: unknown): string | undefined {
-  const id = readChatHistoryMessageId(message);
-  if (id) {
-    return `id:${id}`;
-  }
-  const record = asOptionalRecord(message);
-  const meta = asOptionalRecord(record?.["__openclaw"]);
-  const position = readTranscriptDisplayPosition(meta?.transcriptPosition);
-  if (!record || !position) {
-    return undefined;
-  }
-  return JSON.stringify([position, record.role, record.text, record.content]);
-}
-
-function projectCliIdentityOntoPagedMessages(params: {
-  pagedMessages: unknown[];
-  completeMessages: unknown[];
-}): unknown[] {
-  const importedMetaByKey = new Map<string, Record<string, unknown>>();
-  for (const message of params.completeMessages) {
-    const key = readCliIdentityProjectionKey(message);
-    const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
-    if (key && meta) {
-      importedMetaByKey.set(key, meta);
-    }
-  }
-  return params.pagedMessages.map((message) => {
-    const record = asOptionalRecord(message);
-    const key = readCliIdentityProjectionKey(message);
-    const importedMeta = key ? importedMetaByKey.get(key) : undefined;
-    if (!record || !importedMeta) {
-      return message;
-    }
-    const localMeta = asOptionalRecord(record["__openclaw"]);
-    return {
-      ...record,
-      __openclaw: {
-        ...localMeta,
-        importedFrom: importedMeta.importedFrom,
-        externalId: importedMeta.externalId,
-        cliSessionId: importedMeta.cliSessionId,
-      },
-    };
-  });
-}
-
-export function resolveChatHistoryNextOffset(params: {
-  messages: unknown[];
-  totalMessages: number;
-  offset: number;
-  rawPageMessages: number;
-  replayOldestRecord?: boolean;
-}): number {
-  const oldestSeq = params.messages
-    .map((message) => readChatHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
-  if (oldestSeq === undefined) {
-    return params.offset + params.rawPageMessages;
-  }
-  const recordOffset = params.totalMessages - oldestSeq + 1;
-  const replayOffset = recordOffset - 1;
-  if (params.replayOldestRecord && replayOffset > params.offset) {
-    return replayOffset;
-  }
-  // A replay cursor that does not advance strands every older transcript record.
-  return Math.max(params.offset + 1, recordOffset);
-}
-
-export function shouldReplayOldestChatHistoryRecord(params: {
-  projected: unknown[];
-  bounded: unknown[];
-}): boolean {
-  const oldestSeq = params.bounded
-    .map((message) => readChatHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
-  return (
-    oldestSeq !== undefined &&
-    params.bounded.filter((message) => readChatHistoryMessageSeq(message) === oldestSeq).length <
-      params.projected.filter((message) => readChatHistoryMessageSeq(message) === oldestSeq).length
-  );
-}
-
-function resolveChatHistoryActiveLeafEntryId(
-  readPage: ReadRecentSessionMessagesResult,
-): string | null {
-  if (readPage.transcriptSource !== "active") {
-    return null;
-  }
-  if (Object.hasOwn(readPage, "activeLeafEntryId")) {
-    return readPage.activeLeafEntryId ?? null;
-  }
-  return resolveSessionTranscriptActiveLeafEntryId(readPage.transcriptEvents ?? []) ?? null;
-}
-
-/** Add checkpoint token metrics to the synthetic transcript compaction marker. */
-export function enrichChatHistoryCompactionMarkers(
-  messages: unknown[],
-  entry: ChatHistoryPageParams["entry"],
-): unknown[] {
-  const checkpoints = entry?.compactionCheckpoints;
-  if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
-    return messages;
-  }
-  const checkpointByEntryId = new Map(
-    checkpoints.flatMap((checkpoint) => {
-      const entryId = checkpoint.postCompaction?.entryId;
-      return typeof entryId === "string" && entryId ? [[entryId, checkpoint] as const] : [];
-    }),
-  );
-  let changed = false;
-  const enriched = messages.map((message) => {
-    const record = asOptionalRecord(message);
-    const metadata = asOptionalRecord(record?.["__openclaw"]);
-    if (metadata?.kind !== "compaction" || typeof metadata.id !== "string") {
-      return message;
-    }
-    const checkpoint = checkpointByEntryId.get(metadata.id);
-    if (!checkpoint) {
-      return message;
-    }
-    const tokensBefore = checkpoint.tokensBefore;
-    const tokensAfter = checkpoint.tokensAfter;
-    if (
-      (typeof tokensBefore !== "number" || !Number.isFinite(tokensBefore)) &&
-      (typeof tokensAfter !== "number" || !Number.isFinite(tokensAfter))
-    ) {
-      return message;
-    }
-    changed = true;
-    return {
-      ...record,
-      __openclaw: {
-        ...metadata,
-        ...(typeof tokensBefore === "number" && Number.isFinite(tokensBefore)
-          ? { tokensBefore }
-          : {}),
-        ...(typeof tokensAfter === "number" && Number.isFinite(tokensAfter) ? { tokensAfter } : {}),
-      },
-    };
-  });
-  return changed ? enriched : messages;
-}
-
-function resolveChatHistoryMessageGroup(
-  messages: unknown[],
-  index: number,
-  messageCost: (message: unknown) => number,
-): { start: number; end: number; cost: number } {
-  const seq = readChatHistoryMessageSeq(messages[index]);
-  let start = index;
-  let end = index + 1;
-  let cost = messageCost(messages[index]);
-  if (seq === undefined) {
-    return { start, end, cost };
-  }
-  while (start > 0 && readChatHistoryMessageSeq(messages[start - 1]) === seq) {
-    start -= 1;
-    cost += messageCost(messages[start]);
-  }
-  while (end < messages.length && readChatHistoryMessageSeq(messages[end]) === seq) {
-    cost += messageCost(messages[end]);
-    end += 1;
-  }
-  return { start, end, cost };
-}
-
-export function capChatHistoryAroundMessage(params: {
-  messages: unknown[];
-  messageId: string;
-  maxCost: number;
-  messageCost?: (message: unknown) => number;
-}): unknown[] {
-  const anchorIndex = params.messages.findIndex(
-    (message) => readChatHistoryMessageId(message) === params.messageId,
-  );
-  if (anchorIndex === -1) {
-    return [];
-  }
-  const messageCost = params.messageCost ?? (() => 1);
-  const anchorGroup = resolveChatHistoryMessageGroup(params.messages, anchorIndex, messageCost);
-  if (!(anchorGroup.cost <= params.maxCost)) {
-    return [params.messages[anchorIndex]];
-  }
-
-  let { start, end, cost } = anchorGroup;
-  let canGrowOlder = start > 0;
-  let canGrowNewer = end < params.messages.length;
-  while (canGrowOlder || canGrowNewer) {
-    if (canGrowOlder) {
-      const olderGroup = resolveChatHistoryMessageGroup(params.messages, start - 1, messageCost);
-      if (cost + olderGroup.cost <= params.maxCost) {
-        start = olderGroup.start;
-        cost += olderGroup.cost;
-      } else {
-        canGrowOlder = false;
+function prepareChatHistoryParams<Params extends ChatHistoryPageParams>(input: Params): Params {
+  return getCliSessionBinding(input.entry, "claude-cli")?.sessionId
+    ? {
+        ...input,
+        cliHistoryHomeDir: process.env.HOME || os.homedir(),
+        cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
       }
-    }
-    canGrowOlder &&= start > 0;
+    : input;
+}
 
-    if (canGrowNewer) {
-      const newerGroup = resolveChatHistoryMessageGroup(params.messages, end, messageCost);
-      if (cost + newerGroup.cost <= params.maxCost) {
-        end = newerGroup.end;
-        cost += newerGroup.cost;
-      } else {
-        canGrowNewer = false;
+function chatHistoryScope(params: ChatHistoryPageParams) {
+  return {
+    agentId: params.sessionAgentId,
+    sessionId: params.sessionId ?? "",
+    sessionKey: params.canonicalKey,
+    storePath: params.storePath,
+    sessionEntry: params.entry,
+  };
+}
+
+export async function readChatHistoryMessageById(
+  input: ChatHistoryMessageParams,
+  suppliedIncognito?: IncognitoSessionHistoryReader,
+) {
+  const incognito =
+    suppliedIncognito ??
+    sessionTranscriptReaders.captureIncognitoSessionHistoryReader(chatHistoryScope(input));
+  if (incognito) {
+    const captured = structuredClone(input);
+    return incognito.consume(chatHistoryScope(captured), async (readers) => {
+      if (getCliSessionBinding(captured.entry, "claude-cli")?.sessionId) {
+        const { readProcessHeldCliHistoryMessage } =
+          await import("../cli-session-history.process-held.js");
+        return readProcessHeldCliHistoryMessage(prepareChatHistoryParams(captured), incognito);
       }
-    }
-    canGrowNewer &&= end < params.messages.length;
+      return readers.readSessionMessageByIdAsync(chatHistoryScope(captured), captured.messageId, {
+        allowResetArchiveFallback: true,
+        historyVisibility: { sessionStartedAt: captured.entry?.sessionStartedAt },
+      });
+    });
   }
-  return params.messages.slice(start, end);
+  const binding = getCliSessionBinding(input.entry, "claude-cli");
+  if (!binding?.sessionId || !input.storePath) {
+    return sessionTranscriptReaders.readSessionMessageByIdAsync(
+      chatHistoryScope(input),
+      input.messageId,
+      {
+        allowResetArchiveFallback: true,
+        historyVisibility: { sessionStartedAt: input.entry?.sessionStartedAt },
+      },
+    );
+  }
+  const params = prepareChatHistoryParams(input);
+  if (params.entry?.incognito || isIncognitoSessionKey(params.canonicalKey)) {
+    const { readProcessHeldCliHistoryMessage } =
+      await import("../cli-session-history.process-held.js");
+    return readProcessHeldCliHistoryMessage(params);
+  }
+  const { readSessionHistoryPageInWorker } =
+    await import("../../config/sessions/session-history-worker-runtime.js");
+  return readSessionHistoryPageInWorker({
+    kind: "rpc-message",
+    params: { ...params, storePath: input.storePath },
+  });
 }
 
 export async function readChatHistoryPage(
-  params: ChatHistoryPageParams,
+  input: ChatHistoryPageParams,
   signal?: AbortSignal,
+  suppliedIncognito?: IncognitoSessionHistoryReader,
 ): Promise<ChatHistoryPage> {
   signal?.throwIfAborted();
+  const incognito =
+    suppliedIncognito ??
+    (input.sessionId && input.storePath
+      ? sessionTranscriptReaders.captureIncognitoSessionHistoryReader(
+          chatHistoryScope(input),
+          signal,
+        )
+      : undefined);
+  const binding = getCliSessionBinding(input.entry, "claude-cli");
+  const params = prepareChatHistoryParams(incognito ? structuredClone(input) : input);
+  if (incognito) {
+    const useCliHistory = Boolean(binding?.sessionId && !params.ignoreCliSessionImports);
+    return incognito.consume(chatHistoryScope(params), async () => {
+      let page: ChatHistoryPage;
+      if (useCliHistory) {
+        const { readProcessHeldCliHistory } =
+          await import("../cli-session-history.process-held.js");
+        page = await readProcessHeldCliHistory(params, signal, incognito);
+      } else {
+        page = await incognito.rpc({ ...params, encodeResponse: false });
+      }
+      const messages = await refreshForwardedLabels(page.messages);
+      signal?.throwIfAborted();
+      const refreshed = { ...page, messages };
+      return useCliHistory ? refreshed : encodeChatHistoryResponsePage(refreshed, params);
+    });
+  }
+  if (
+    params.sessionId &&
+    params.storePath &&
+    (params.entry?.incognito || isIncognitoSessionKey(params.canonicalKey)) &&
+    binding?.sessionId &&
+    !params.ignoreCliSessionImports
+  ) {
+    const { readProcessHeldCliHistory } = await import("../cli-session-history.process-held.js");
+    const page = await readProcessHeldCliHistory(params, signal);
+    return { ...page, messages: await refreshForwardedLabels(page.messages) };
+  }
   if (
     !params.sessionId ||
     !params.storePath ||
     params.entry?.incognito ||
-    isIncognitoSessionKey(params.canonicalKey) ||
-    getCliSessionBinding(params.entry, "claude-cli")?.sessionId
+    isIncognitoSessionKey(params.canonicalKey)
   ) {
-    return readChatHistoryPageLocal(params);
+    const page = await readChatHistoryPageKernel(params, {
+      readers: sessionTranscriptReaders,
+      resolveCurrentUserProfileDisplay,
+      resolveCronJobName: () => undefined,
+    });
+    return { ...page, messages: await refreshForwardedLabels(page.messages) };
   }
   const { readSessionHistoryPageInWorker } =
     await import("../../config/sessions/session-history-worker-runtime.js");
-  const page = await readSessionHistoryPageInWorker(
+  return readSessionHistoryPageInWorker(
     {
       kind: "rpc",
       params: {
         ...params,
+        compactionMetrics: readLegacyCompactionMetrics(params.entry),
         sessionId: params.sessionId,
         storePath: params.storePath,
-        entry: params.entry
-          ? {
-              sessionId: params.entry.sessionId,
-              updatedAt: params.entry.updatedAt,
-              sessionStartedAt: params.entry.sessionStartedAt,
-            }
-          : undefined,
       },
     },
     signal,
   );
-  const project = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
-  return {
-    ...page,
-    messages: page.messages.map((message) => {
-      const record = asOptionalRecord(message);
-      return record ? project(record) : message;
-    }),
-  };
 }
 
-/** One page kernel is shared by process-memory reads and the transcript worker. */
-export async function readChatHistoryPageLocal(
-  params: ChatHistoryPageParams,
-  options: { readOnly?: boolean; deferProfileDisplay?: boolean } = {},
-): Promise<ChatHistoryPage> {
-  const {
-    entry,
-    provider,
-    sessionId,
-    storePath,
-    sessionAgentId,
-    canonicalKey,
-    max,
-    maxHistoryBytes,
-    effectiveMaxChars,
-    offset,
-    messageId,
-  } = params;
-  if (!sessionId || !storePath) {
-    if (messageId) {
-      return { messages: [] };
-    }
-    return {
-      ...((offset ?? 0) === 0 ? { activeLeafEntryId: null } : {}),
-      messages: [],
-      ...(offset !== undefined ? { responseOffset: offset } : {}),
-      pagination: { offset: offset ?? 0, totalMessages: 0, rawPageMessages: 0 },
-    };
-  }
-
-  const readScope = {
-    agentId: sessionAgentId,
-    sessionEntry: entry,
-    sessionId,
-    sessionKey: canonicalKey,
-    storePath,
-  };
-  const cliSessionId = params.ignoreCliSessionImports
-    ? undefined
-    : getCliSessionBinding(entry, "claude-cli")?.sessionId;
-  // Bound snapshots are terminal by contract, so offset requests return the same
-  // full snapshot. Paging oversized imports needs an opaque snapshot cursor and
-  // is deferred to a follow-up issue. Anchored reads fall through with them: the
-  // full-snapshot merge below still centers on messageId at the handler cap.
-  if ((offset !== undefined || messageId) && !cliSessionId) {
-    let pageOffset = offset ?? 0;
-    let hasOverreadContext = false;
-    let readPage: ReadRecentSessionMessagesResult;
-    let incrementalTail: IncrementalChatHistoryTail | undefined;
-    if (messageId) {
-      const anchoredPage = await readSessionMessagesAroundIdWithStatsAsync(readScope, {
-        messageId,
-        maxMessages: max,
-        allowResetArchiveFallback: true,
-        readOnly: options.readOnly,
-      });
-      if (!anchoredPage.found) {
-        return { messages: [] };
-      }
-      pageOffset = anchoredPage.offset;
-      hasOverreadContext = anchoredPage.hasOverreadContext;
-      readPage = anchoredPage;
-    } else {
-      incrementalTail = await readIncrementalChatHistoryTail({
-        entry,
-        readScope,
-        effectiveMaxChars,
-        max,
-        maxBytes: maxHistoryBytes,
-        offset: pageOffset,
-        ...options,
-      });
-      readPage = incrementalTail.readPage;
-    }
-    const isTailPage = !messageId && pageOffset === 0;
-    const overreadContextMessage = incrementalTail
-      ? incrementalTail.overreadContextMessage
-      : hasOverreadContext || readPage.messages.length > max
-        ? readPage.messages[0]
-        : undefined;
-    const localMessages = incrementalTail
-      ? incrementalTail.rawMessages
-      : dropChatHistoryOverreadContextMessage(
-          dropPreSessionStartAnnouncePairs(
-            readPage.messages,
-            typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-          ),
-          overreadContextMessage,
-        );
-    const rawPageMessages = incrementalTail
-      ? incrementalTail.rawPageMessages
-      : Math.min(
-          max,
-          Math.max(readPage.messages.length, readPage.totalMessages > pageOffset ? 1 : 0),
-        );
-    const project = (messages: unknown[]) =>
-      projectChatDisplayMessagesWithState(messages, {
-        includeCommentaryFallbacks: true,
-        maxChars: effectiveMaxChars,
-        ...(options.deferProfileDisplay ? {} : { resolveCurrentUserProfileDisplay }),
-        turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
-      });
-    const projection = incrementalTail?.projection ?? project(localMessages);
-    let projected = incrementalTail?.projected ?? projection.messages;
-    const newestPageSeq = readChatHistoryMessageSeq(localMessages.at(-1));
-    if (
-      !incrementalTail &&
-      pageOffset > 0 &&
-      newestPageSeq !== undefined &&
-      projection.assistantErrorPending
-    ) {
-      const recoveryContext = await readChatHistoryRecoveryContext({
-        messages: localMessages,
-        projectRecovery: (messages) =>
-          projectChatHistoryRecovery(messages, { maxChars: effectiveMaxChars }),
-        readScope,
-        displaySource: readPage.displaySource,
-        maxBytes: maxHistoryBytes,
-        readOnly: options.readOnly,
-      });
-      if (recoveryContext.length > 0) {
-        projected = project([...localMessages, ...recoveryContext]).messages.filter(
-          (message) => (readChatHistoryMessageSeq(message) ?? Infinity) <= newestPageSeq,
-        );
-      }
-    }
-    const windowed = messageId
-      ? capChatHistoryAroundMessage({
-          messages: projected,
-          messageId,
-          maxCost: max,
-        })
-      : projected;
-    if (messageId) {
-      // Numeric offsets do not encode the selected historical transcript source.
-      return { messages: augmentChatHistoryWithCanvasBlocks(windowed) };
-    }
-    return {
-      ...(isTailPage
-        ? {
-            activeLeafEntryId: resolveChatHistoryActiveLeafEntryId(readPage),
-            ...(readPage.transcriptSource === "active" &&
-            readPage.deltaCursor &&
-            !incrementalTail?.projection.assistantErrorPending
-              ? { deltaCursor: readPage.deltaCursor }
-              : {}),
-          }
-        : {}),
-      messages: augmentChatHistoryWithCanvasBlocks(windowed),
-      responseOffset: pageOffset,
-      pagination: {
-        offset: pageOffset,
-        totalMessages: readPage.totalMessages,
-        rawPageMessages,
-      },
-    };
-  }
-
-  const incrementalTail = await readIncrementalChatHistoryTail({
-    entry,
-    readScope,
-    effectiveMaxChars,
-    max,
-    maxBytes: maxHistoryBytes,
-    offset,
-    ...options,
-  });
-  const { readPage } = incrementalTail;
-  const activeLeafEntryId = resolveChatHistoryActiveLeafEntryId(readPage);
-  const localMessagesWithBoundaryFilter = incrementalTail.rawMessages;
-  const buildTailPage = (messages: unknown[]): ChatHistoryPage => {
-    const windowedTailMessages =
-      offset === undefined
-        ? messages.length > max
-          ? messages.slice(-max)
-          : messages
-        : capOffsetChatHistoryProjectedMessages(messages, max);
-    return {
-      activeLeafEntryId,
-      ...(readPage.transcriptSource === "active" &&
-      readPage.deltaCursor &&
-      !incrementalTail.projection.assistantErrorPending
-        ? { deltaCursor: readPage.deltaCursor }
-        : {}),
-      messages: augmentChatHistoryWithCanvasBlocks(windowedTailMessages),
-      pagination: {
-        offset: offset ?? 0,
-        totalMessages: readPage.totalMessages,
-        rawPageMessages: incrementalTail.rawPageMessages,
-      },
-    };
-  };
-  if (!cliSessionId) {
-    return buildTailPage(incrementalTail.projected);
-  }
-  const { readChatHistoryCliSessionImportSnapshot, resolveChatHistoryWithCliSessionImports } =
-    await import("../cli-session-history.js");
-  const importedMessages = await readChatHistoryCliSessionImportSnapshot({
-    entry,
-    provider,
-    localMessages: localMessagesWithBoundaryFilter,
-  });
-  const cliHistory = resolveChatHistoryWithCliSessionImports({
-    entry,
-    provider,
-    localMessages: localMessagesWithBoundaryFilter,
-    preparedImportedMessages: importedMessages,
-  });
-  if ((offset !== undefined || messageId) && !cliHistory.imported) {
-    return readChatHistoryPageLocal({ ...params, ignoreCliSessionImports: true }, options);
-  }
-  if (cliHistory.expanded || messageId) {
-    // Reuse this request's redacted external snapshot after the full local read;
-    // re-reading here would duplicate a large import and defeat cross-client singleflight.
-    const completeLocalMessages = dropPreSessionStartAnnouncePairs(
-      await readSessionMessagesAsync(readScope, {
-        mode: "full",
-        reason: "chat.history CLI import merge",
-        allowResetArchiveFallback: true,
-        readOnly: options.readOnly,
-      }),
-      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-    );
-    const completeCliHistory = resolveChatHistoryWithCliSessionImports({
-      entry,
-      provider,
-      localMessages: completeLocalMessages,
-      preparedImportedMessages: importedMessages,
-    });
-    if (!completeCliHistory.imported) {
-      return readChatHistoryPageLocal({ ...params, ignoreCliSessionImports: true }, options);
-    }
-    const mergedMessages = dropPreSessionStartAnnouncePairs(
-      completeCliHistory.messages,
-      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-    );
-    const displayMessages = projectChatDisplayMessages(mergedMessages, {
-      includeCommentaryFallbacks: true,
-      maxChars: effectiveMaxChars,
-      ...(options.deferProfileDisplay ? {} : { resolveCurrentUserProfileDisplay }),
-    });
-    if (!completeCliHistory.expanded && !messageId) {
-      // A tail-only merge can look expanded because older imported rows are absent
-      // from that local window. Preserve normal local pagination after the full merge
-      // proves that the import only contributes identity metadata.
-      const localPage = await readChatHistoryPageLocal(
-        { ...params, ignoreCliSessionImports: true },
-        options,
-      );
-      return {
-        ...localPage,
-        messages: projectCliIdentityOntoPagedMessages({
-          pagedMessages: localPage.messages,
-          completeMessages: displayMessages,
-        }),
-      };
-    }
-    // Import snapshots are terminal, but a missing display anchor is not a tail request.
-    if (
-      messageId &&
-      !displayMessages.some((message) => readChatHistoryMessageId(message) === messageId)
-    ) {
-      return { messages: [] };
-    }
-    return {
-      activeLeafEntryId,
-      messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
-      completeCliImport: true,
-      pagination: {
-        offset: 0,
-        totalMessages: mergedMessages.length,
-        rawPageMessages: mergedMessages.length,
-        exhausted: true,
-      },
-    };
-  }
-  const projectedTailMessages = cliHistory.imported
-    ? projectCliIdentityOntoPagedMessages({
-        pagedMessages: incrementalTail.projected,
-        completeMessages: cliHistory.messages,
-      })
-    : incrementalTail.projected;
-  return buildTailPage(projectedTailMessages);
+async function refreshForwardedLabels(messages: unknown[]): Promise<unknown[]> {
+  return projectChatHistoryWithReplies(
+    messages.filter(
+      (message): message is Record<string, unknown> => asOptionalRecord(message) !== undefined,
+    ),
+    async (displayMessages) =>
+      projectForwardedMessages(
+        displayMessages,
+        await prepareForwardedMessageCronJobNameResolver(displayMessages),
+      ),
+  );
 }

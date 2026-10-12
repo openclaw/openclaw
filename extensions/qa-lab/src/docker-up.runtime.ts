@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements docker up behavior.
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -16,18 +15,6 @@ import {
 import { shellQuote } from "./shell-quote.js";
 
 const QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
-
-type QaDockerUpResult = {
-  outputDir: string;
-  composeFile: string;
-  qaLabUrl: string;
-  gatewayUrl: string;
-  stopCommand: string;
-};
-
-function resolveDefaultQaDockerDir(repoRoot: string) {
-  return path.resolve(repoRoot, ".artifacts/qa-docker");
-}
 
 async function isQaLabDockerHealthReachable(url: string, fetchImpl: FetchLike) {
   let response: Awaited<ReturnType<FetchLike>> | undefined;
@@ -98,10 +85,10 @@ export async function runQaDockerUp(
     sleepImpl?: (ms: number) => Promise<unknown>;
     resolveHostPortImpl?: typeof resolveHostPort;
   },
-): Promise<QaDockerUpResult> {
+) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const resolveHostPortImpl = deps?.resolveHostPortImpl ?? resolveHostPort;
-  const outputDir = path.resolve(params.outputDir ?? resolveDefaultQaDockerDir(repoRoot));
+  const outputDir = path.resolve(params.outputDir ?? path.join(repoRoot, ".artifacts/qa-docker"));
   const gatewayPort = await resolveHostPortImpl(
     params.gatewayPort ?? 18789,
     params.gatewayPort != null,
@@ -129,7 +116,6 @@ export async function runQaDockerUp(
     imageName: params.image,
     usePrebuiltImage: params.usePrebuiltImage,
     bindUiDist: params.bindUiDist,
-    includeQaLabUi: true,
   });
 
   const composeFile = path.join(outputDir, "docker-compose.qa.yml");

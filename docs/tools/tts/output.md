@@ -22,7 +22,10 @@ Auto-TTS set to `always` (or eligible `inbound` mode), streamed text is held
 until synthesis finishes and sent as the voice-note caption. Text beyond
 Telegram's caption limit follows the voice note as a normal text message. If
 synthesis or a proven pre-send delivery step fails, OpenClaw sends the visible
-text instead. `tagged` mode keeps its normal streaming behavior, and text
+text instead. When that fallback follows an immediate delivery result, it comes
+before later replies from the same turn. Channels that buffer sends until the
+turn settles may send the fallback after their buffered replies. `tagged` mode
+keeps its normal streaming behavior, and text
 inside a `[[tts:text]]` block remains audio-only.
 
 After synthesis, OpenClaw persists batch TTS output in the media store under
@@ -73,6 +76,7 @@ When `tts.auto` is enabled, OpenClaw:
 - Skips replies dominated by fenced code; inline code and surrounding prose remain eligible for speech.
 - Summarizes long replies when summaries are enabled, using
   `summaryModel` (or `agents.defaults.model.primary`).
+  Summary model access uses the replying agent's credentials and ownership.
 - Attaches the generated audio to the reply.
 - In `mode: "final"`, sends TTS after streamed text completes. Channels without
   captioned-final support receive an audio-only supplement; Telegram puts text

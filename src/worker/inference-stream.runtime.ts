@@ -4,6 +4,7 @@ import {
   parseTerminalToolCallArguments,
   type ToolArgumentPreviewSchedule,
 } from "@openclaw/ai/internal/runtime";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceContext,
@@ -11,12 +12,12 @@ import type {
   WorkerInferenceModelRef,
   WorkerInferenceOptions,
   WorkerInferenceStartParams,
-  WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   invalidateComputerFrameIfMissing,
   type ComputerContextEpoch,
 } from "../agents/tools/computer-tool.js";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -29,11 +30,7 @@ import {
   isWorkerTranscriptMessageFrameSafe,
   WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
 } from "./transcript-message.js";
-import type { WorkerInferenceProxyClient } from "./worker-rpc-clients.js";
-
-type StreamingToolCall = ToolCall & {
-  partialJson: string;
-};
+import type { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 
 type WorkerInferenceStreamAdapterOptions = {
   client: WorkerInferenceProxyClient;
@@ -60,14 +57,7 @@ function emptyAssistantMessage(modelRef: WorkerInferenceModelRef): AssistantMess
     provider: modelRef.provider,
     model: modelRef.model,
     stopReason: "stop",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: makeZeroUsageSnapshot(),
     timestamp: Date.now(),
   };
 }
@@ -95,72 +85,51 @@ function processInferenceEvent(
       };
       return { type: "text_start", contentIndex: event.contentIndex, partial };
     }
-    case "text_delta": {
+    case "text_delta":
+    case "text_end":
+    case "thinking_delta":
+    case "thinking_end": {
       const content = partial.content[event.contentIndex];
-      if (content?.type !== "text") {
+      const kind = event.type === "text_delta" || event.type === "text_end" ? "text" : "thinking";
+      const isDelta = event.type === "text_delta" || event.type === "thinking_delta";
+      if ((content?.type !== "text" && content?.type !== "thinking") || content.type !== kind) {
         if (tolerateMissingState) {
           return undefined;
         }
-        throw new Error("worker inference text delta has no active text block");
+        throw new Error(
+          `worker inference ${kind} ${isDelta ? "delta" : "end"} has no active ${kind} block`,
+        );
       }
-      content.text += event.delta;
-      return { type: "text_delta", contentIndex: event.contentIndex, delta: event.delta, partial };
-    }
-    case "text_end": {
-      const content = partial.content[event.contentIndex];
-      if (content?.type !== "text") {
-        if (tolerateMissingState) {
-          return undefined;
+      if (isDelta) {
+        if (content.type === "text") {
+          content.text += event.delta;
+        } else {
+          content.thinking += event.delta;
         }
-        throw new Error("worker inference text end has no active text block");
+        return {
+          type: event.type,
+          contentIndex: event.contentIndex,
+          delta: event.delta,
+          partial,
+        };
       }
       if (event.contentSignature !== undefined) {
-        content.textSignature = event.contentSignature;
+        if (content.type === "text") {
+          content.textSignature = event.contentSignature;
+        } else {
+          content.thinkingSignature = event.contentSignature;
+        }
       }
       return {
-        type: "text_end",
+        type: event.type,
         contentIndex: event.contentIndex,
-        content: content.text,
+        content: content.type === "text" ? content.text : content.thinking,
         partial,
       };
     }
     case "thinking_start": {
       partial.content[event.contentIndex] = { type: "thinking", thinking: "" };
       return { type: "thinking_start", contentIndex: event.contentIndex, partial };
-    }
-    case "thinking_delta": {
-      const content = partial.content[event.contentIndex];
-      if (content?.type !== "thinking") {
-        if (tolerateMissingState) {
-          return undefined;
-        }
-        throw new Error("worker inference thinking delta has no active thinking block");
-      }
-      content.thinking += event.delta;
-      return {
-        type: "thinking_delta",
-        contentIndex: event.contentIndex,
-        delta: event.delta,
-        partial,
-      };
-    }
-    case "thinking_end": {
-      const content = partial.content[event.contentIndex];
-      if (content?.type !== "thinking") {
-        if (tolerateMissingState) {
-          return undefined;
-        }
-        throw new Error("worker inference thinking end has no active thinking block");
-      }
-      if (event.contentSignature !== undefined) {
-        content.thinkingSignature = event.contentSignature;
-      }
-      return {
-        type: "thinking_end",
-        contentIndex: event.contentIndex,
-        content: content.thinking,
-        partial,
-      };
     }
     case "toolcall_start": {
       const content = {
@@ -169,63 +138,46 @@ function processInferenceEvent(
         name: event.toolName,
         arguments: {},
         partialJson: "",
-      } satisfies StreamingToolCall;
+      } satisfies ToolCall;
       partial.content[event.contentIndex] = content;
       toolArgumentPreviewSchedules.set(event.contentIndex, createToolArgumentPreviewSchedule());
       return { type: "toolcall_start", contentIndex: event.contentIndex, partial };
     }
-    case "toolcall_delta": {
-      const content = partial.content[event.contentIndex];
-      if (content?.type !== "toolCall") {
-        if (tolerateMissingState) {
-          return undefined;
-        }
-        throw new Error("worker inference tool delta has no active tool call");
-      }
-      const streaming = content as StreamingToolCall;
-      streaming.partialJson += event.delta;
-      const previewSchedule = toolArgumentPreviewSchedules.get(event.contentIndex);
-      if (!previewSchedule) {
-        throw new Error("worker inference tool delta has no preview schedule");
-      }
-      if (previewSchedule(streaming.partialJson.length)) {
-        content.arguments = parseStreamingJson(streaming.partialJson);
-      }
-      return {
-        type: "toolcall_delta",
-        contentIndex: event.contentIndex,
-        delta: event.delta,
-        partial,
-      };
-    }
+    case "toolcall_delta":
     case "toolcall_end": {
       const content = partial.content[event.contentIndex];
       if (content?.type !== "toolCall") {
         if (tolerateMissingState) {
           return undefined;
         }
-        throw new Error("worker inference tool end has no active tool call");
+        throw new Error(
+          `worker inference tool ${event.type === "toolcall_delta" ? "delta" : "end"} has no active tool call`,
+        );
       }
-      const streaming = content as StreamingToolCall;
-      content.arguments = parseTerminalToolCallArguments(streaming.partialJson);
+      if (event.type === "toolcall_delta") {
+        const partialJson = (content.partialJson ?? "") + event.delta;
+        content.partialJson = partialJson;
+        const previewSchedule = toolArgumentPreviewSchedules.get(event.contentIndex);
+        if (!previewSchedule) {
+          throw new Error("worker inference tool delta has no preview schedule");
+        }
+        if (previewSchedule(partialJson.length)) {
+          content.arguments = parseStreamingJson(partialJson);
+        }
+        return {
+          type: "toolcall_delta",
+          contentIndex: event.contentIndex,
+          delta: event.delta,
+          partial,
+        };
+      }
+      content.arguments = parseTerminalToolCallArguments(content.partialJson);
       toolArgumentPreviewSchedules.delete(event.contentIndex);
-      delete (content as Partial<StreamingToolCall>).partialJson;
+      delete content.partialJson;
       return { type: "toolcall_end", contentIndex: event.contentIndex, toolCall: content, partial };
     }
   }
   return undefined;
-}
-
-function terminalErrorMessage(
-  partial: AssistantMessage,
-  outcome: Extract<WorkerInferenceTerminalOutcome, { type: "error" }>,
-): AssistantMessage {
-  partial.stopReason = outcome.reason === "cancelled" ? "aborted" : "error";
-  partial.errorMessage = outcome.message;
-  if (outcome.usage) {
-    partial.usage = structuredClone(outcome.usage);
-  }
-  return partial;
 }
 
 function transcriptSafeErrorMessage(
@@ -236,8 +188,16 @@ function transcriptSafeErrorMessage(
     return message;
   }
   const replacement = emptyAssistantMessage(modelRef);
+  replacement.api = message.api;
+  replacement.provider = message.provider;
+  replacement.model = message.model;
+  replacement.timestamp = message.timestamp;
   replacement.stopReason = message.stopReason === "aborted" ? "aborted" : "error";
-  replacement.errorMessage = "Worker inference result exceeds the transcript message limit.";
+  replacement.errorMessage = truncateUtf16Safe(
+    message.errorMessage ?? "Worker inference result exceeds the transcript message limit.",
+    256,
+  );
+  replacement.usage = structuredClone(message.usage);
   return replacement;
 }
 
@@ -267,7 +227,7 @@ function createInferenceRequestMeasure(request: WorkerInferenceStartParams) {
     let bytes = envelopeBytes + Math.max(0, messages.length - 1);
     for (const message of messages) {
       // The fitter replaces each changed message but reuses its candidate array.
-      // Cache message sizes only, scoped to this cloned request's synchronous fitting.
+      // Cache message sizes only, scoped to this request's synchronous fitting.
       let size = messageBytes.get(message);
       if (size === undefined) {
         size = Buffer.byteLength(JSON.stringify(message), "utf8");
@@ -303,52 +263,40 @@ export function createWorkerInferenceStreamAdapter(
     let request: WorkerInferenceStartParams = {
       ...identity,
       modelRef: inferenceRequest.modelRef,
-      context: structuredClone(inferenceRequest.context),
-      options: structuredClone(inferenceRequest.options),
+      context: inferenceRequest.context,
+      options: inferenceRequest.options,
     };
-    const fail = (error: unknown) => {
+    const finishError = (
+      error: unknown,
+      reason: "aborted" | "error",
+      usage?: AssistantMessage["usage"],
+    ) => {
       if (settled) {
         return;
       }
       settled = true;
-      partial.stopReason = inferenceRequest.signal?.aborted ? "aborted" : "error";
+      partial.stopReason = reason;
       partial.errorMessage = error instanceof Error ? error.message : String(error);
-      stream.push({
-        type: "error",
-        reason: partial.stopReason,
-        error: transcriptSafeErrorMessage(adapter.modelRef, partial),
-      });
-      stream.end();
-    };
-    const finishAborted = () => {
-      if (settled) {
-        return;
+      if (usage) {
+        partial.usage = structuredClone(usage);
       }
-      settled = true;
-      partial.stopReason = "aborted";
-      partial.errorMessage = "Worker inference aborted.";
       stream.push({
         type: "error",
-        reason: "aborted",
+        reason,
         error: transcriptSafeErrorMessage(adapter.modelRef, partial),
       });
       stream.end();
     };
+    const fail = (error: unknown) =>
+      finishError(error, inferenceRequest.signal?.aborted ? "aborted" : "error");
     const abort = () => {
       void adapter.client
         .cancel(identity)
         .catch(() => undefined)
-        .finally(finishAborted);
+        .finally(() => finishError("Worker inference aborted.", "aborted"));
     };
     if (inferenceRequest.signal?.aborted) {
-      partial.stopReason = "aborted";
-      partial.errorMessage = "Worker inference aborted before start.";
-      stream.push({
-        type: "error",
-        reason: "aborted",
-        error: transcriptSafeErrorMessage(adapter.modelRef, partial),
-      });
-      stream.end();
+      finishError("Worker inference aborted before start.", "aborted");
       return stream;
     }
     try {
@@ -399,12 +347,13 @@ export function createWorkerInferenceStreamAdapter(
         if (settled) {
           return;
         }
-        settled = true;
         if (outcome.type === "done") {
+          settled = true;
           if (!isWorkerTranscriptMessageFrameSafe(outcome.message)) {
             const message = emptyAssistantMessage(adapter.modelRef);
             message.stopReason = "error";
             message.errorMessage = "Worker inference result exceeds the transcript message limit.";
+            message.usage = structuredClone(outcome.message.usage);
             stream.push({ type: "error", reason: "error", error: message });
             stream.end();
             return;
@@ -415,13 +364,11 @@ export function createWorkerInferenceStreamAdapter(
           stream.end();
           return;
         }
-        const message = transcriptSafeErrorMessage(
-          adapter.modelRef,
-          terminalErrorMessage(partial, outcome),
+        finishError(
+          outcome.message,
+          outcome.reason === "cancelled" ? "aborted" : "error",
+          outcome.usage,
         );
-        const reason = outcome.reason === "cancelled" ? "aborted" : "error";
-        stream.push({ type: "error", reason, error: message });
-        stream.end();
       })
       .catch(fail)
       .finally(() => {

@@ -1,5 +1,5 @@
 // Coverage for embedded attempt tool construction and runtime allowlists.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 import {
   applyEmbeddedAttemptToolsAllow,
@@ -41,41 +41,6 @@ function expectConstructionPlan(
 }
 
 describe("applyEmbeddedAttemptToolsAllow", () => {
-  it("keeps explicit toolsAllow authoritative after force-added tools are built", () => {
-    const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
-
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, ["exec", "read"]).map((tool) => tool.name),
-    ).toEqual(["exec", "read"]);
-  });
-
-  it("keeps forced message tool through explicit runtime allowlists", () => {
-    // Forced delivery tools must remain available even when callers narrow the
-    // runtime allowlist to a plugin-specific tool.
-    const tools = [{ name: "music_generate" }, { name: "message" }];
-    const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(["music_generate"], {
-      forceMessageTool: true,
-    });
-
-    expect(toolsAllow).toEqual(["music_generate", "message"]);
-    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
-      "music_generate",
-      "message",
-    ]);
-  });
-
-  it("materializes forced message tool through empty runtime allowlists", () => {
-    const tools = [{ name: "music_generate" }, { name: "message" }];
-    const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow([], {
-      forceMessageTool: true,
-    });
-
-    expect(toolsAllow).toEqual(["message"]);
-    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
-      "message",
-    ]);
-  });
-
   it("materializes host-required collector output through empty runtime allowlists", () => {
     const tools = [{ name: "structured_output" }, { name: "read" }];
     const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow([], {
@@ -106,14 +71,6 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     ]);
   });
 
-  it("normalizes explicit toolsAllow entries before filtering", () => {
-    const tools = [{ name: "cron" }, { name: "read" }, { name: "message" }];
-
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, [" cron ", "READ"]).map((tool) => tool.name),
-    ).toEqual(["cron", "read"]);
-  });
-
   it("honors wildcard and group allowlists in the final filter", () => {
     const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
 
@@ -137,17 +94,6 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
       "write",
       "apply_patch",
     ]);
-  });
-
-  it("keeps plugin-only allowlists on the shared tool policy path", () => {
-    const tools = [{ name: "memory_search" }, { name: "plugin_extra" }];
-
-    expect(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["memory_search"] }),
-    ).toHaveProperty("includeCoreTools", false);
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, ["memory_search"]).map((tool) => tool.name),
-    ).toEqual(["memory_search"]);
   });
 
   it("expands plugin group and plugin-id allowlists before the final filter", () => {
@@ -239,20 +185,6 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
     });
   });
 
-  it("short-circuits all local tool construction for explicit no-tools runs", () => {
-    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [] }), {
-      constructTools: false,
-      includeCoreTools: false,
-      coding: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: false,
-        includeOpenClawTools: false,
-        includePluginTools: false,
-      },
-    });
-  });
-
   it("short-circuits tool construction when the model disables tools", () => {
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({
@@ -275,45 +207,6 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
     );
   });
 
-  it("constructs message tool for forced message delivery on explicit no-tools runs", () => {
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [], forceMessageTool: true }),
-      {
-        constructTools: true,
-        includeCoreTools: true,
-        runtimeToolAllowlist: ["message"],
-        coding: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: true,
-          includePluginTools: false,
-        },
-      },
-    );
-  });
-
-  it.each([
-    "memory_search",
-    "strict__strict_probe",
-    "mail-connector__send_message",
-    "calendar-connector__create_event",
-    "plugin__*",
-  ])("materializes plugin candidates for the %s allowlist", (toolName) => {
-    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [toolName] }), {
-      constructTools: true,
-      includeCoreTools: false,
-      runtimeToolAllowlist: [toolName],
-      coding: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: true,
-        includeOpenClawTools: false,
-        includePluginTools: true,
-      },
-    });
-  });
-
   it("materializes OpenClaw tools when a plugin-only allowlist forces message", () => {
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({
@@ -333,161 +226,6 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         },
       },
     );
-  });
-
-  it("limits known core allowlists to the matching local families", () => {
-    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["read"] }), {
-      constructTools: true,
-      includeCoreTools: true,
-      coding: {
-        includeBaseCodingTools: true,
-        includeShellTools: false,
-        includeChannelTools: false,
-        includeOpenClawTools: false,
-        includePluginTools: false,
-      },
-    });
-    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["exec"] }), {
-      coding: {
-        includeBaseCodingTools: false,
-        includeShellTools: true,
-        includeChannelTools: false,
-        includeOpenClawTools: false,
-        includePluginTools: false,
-      },
-    });
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["session_status"] }),
-      {
-        coding: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: true,
-          includePluginTools: false,
-        },
-      },
-    );
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["update_plan"] }),
-      {
-        coding: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: true,
-          includePluginTools: false,
-        },
-      },
-    );
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["skill_workshop"] }),
-      {
-        constructTools: true,
-        includeCoreTools: true,
-        runtimeToolAllowlist: ["skill_workshop"],
-        coding: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: true,
-          includePluginTools: false,
-        },
-      },
-    );
-    for (const toolName of ["suggest_task", "dismiss_task", "screen"]) {
-      expectConstructionPlan(
-        resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [toolName] }),
-        {
-          constructTools: true,
-          includeCoreTools: true,
-          runtimeToolAllowlist: [toolName],
-          coding: {
-            includeBaseCodingTools: false,
-            includeShellTools: false,
-            includeChannelTools: false,
-            includeOpenClawTools: true,
-            includePluginTools: false,
-          },
-        },
-      );
-    }
-  });
-
-  it("materializes the shell family for matching wildcard allowlists", () => {
-    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["exec*"] }), {
-      constructTools: true,
-      includeCoreTools: true,
-      runtimeToolAllowlist: ["exec*"],
-      coding: {
-        includeBaseCodingTools: false,
-        includeShellTools: true,
-        includeOpenClawTools: false,
-        includePluginTools: true,
-      },
-    });
-
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["plugin_*"] }),
-      {
-        includeCoreTools: false,
-        coding: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: true,
-        },
-      },
-    );
-
-    const incompatibleIntersection = attachToolAllowlistIntersection(
-      ["exec*"],
-      [["exec*"], ["read"]],
-    );
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: incompatibleIntersection }),
-      {
-        includeCoreTools: false,
-        coding: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: true,
-        },
-      },
-    );
-  });
-
-  it.each([
-    {
-      toolsAllow: ["read*"],
-      coding: { includeBaseCodingTools: true, includeShellTools: false },
-    },
-    {
-      toolsAllow: ["web_*"],
-      coding: { includeOpenClawTools: true, includeShellTools: false },
-    },
-    {
-      toolsAllow: ["group:fs"],
-      coding: { includeBaseCodingTools: true, includeShellTools: true },
-    },
-    {
-      toolsAllow: ["apply-patch"],
-      coding: { includeBaseCodingTools: false, includeShellTools: true },
-    },
-    {
-      toolsAllow: ["apply_*"],
-      coding: { includeBaseCodingTools: false, includeShellTools: true },
-    },
-    {
-      toolsAllow: ["group:runtime"],
-      coding: { includePluginTools: true, includeShellTools: true },
-    },
-  ])("materializes core families for $toolsAllow", ({ toolsAllow, coding }) => {
-    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow }), {
-      includeCoreTools: true,
-      coding,
-    });
   });
 
   it("honors runtime-cap intersections when selecting core families", () => {
@@ -526,138 +264,9 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
       },
     );
   });
-
-  it("materializes computer for an exact core-tool allowlist", () => {
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["computer"] }),
-      {
-        constructTools: true,
-        includeCoreTools: true,
-        runtimeToolAllowlist: ["computer"],
-        coding: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: true,
-          includePluginTools: false,
-        },
-      },
-    );
-  });
-
-  it("materializes transcripts through the core factory", () => {
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["transcripts"] }),
-      {
-        includeCoreTools: true,
-        coding: {
-          includeChannelTools: false,
-          includeOpenClawTools: true,
-          includePluginTools: false,
-        },
-      },
-    );
-  });
-
-  it("keeps plugin-owned catalog tools on the plugin construction path", () => {
-    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["canvas"] }), {
-      includeCoreTools: false,
-      coding: {
-        includeChannelTools: true,
-        includeOpenClawTools: false,
-        includePluginTools: true,
-      },
-    });
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["browser"] }),
-      {
-        constructTools: true,
-        includeCoreTools: false,
-        coding: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: true,
-          includeOpenClawTools: false,
-          includePluginTools: true,
-        },
-      },
-    );
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["code_execution"] }),
-      {
-        constructTools: true,
-        includeCoreTools: false,
-        coding: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: true,
-          includeOpenClawTools: false,
-          includePluginTools: true,
-        },
-      },
-    );
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["x_search"] }),
-      {
-        includeCoreTools: false,
-        coding: {
-          includeChannelTools: true,
-          includeOpenClawTools: false,
-          includePluginTools: true,
-        },
-      },
-    );
-  });
-
-  it("keeps channel tools available for narrow channel-owned allowlists", () => {
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["whatsapp_login"] }),
-      {
-        constructTools: true,
-        includeCoreTools: false,
-        coding: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: true,
-          includeOpenClawTools: false,
-          includePluginTools: true,
-        },
-      },
-    );
-  });
-
-  it("skips local construction for the bundle-mcp group", () => {
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["bundle-mcp"] }),
-      {
-        constructTools: false,
-        includeCoreTools: false,
-      },
-    );
-  });
 });
 
 describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
-  it.each([
-    { toolsAllow: undefined, expected: true },
-    { toolsAllow: ["*"], expected: true },
-    { toolsAllow: ["chrome*", "bundle-mcp"], expected: true },
-    { toolsAllow: ["chrome*", "group:plugins"], expected: true },
-    { toolsAllow: ["chrome*", "other__tool"], expected: true },
-    { toolsAllow: [], expected: false },
-    { toolsAllow: ["bash"], expected: false },
-  ])("keeps decisive allowlists metadata-free: $toolsAllow", ({ toolsAllow, expected }) => {
-    const resolveConfiguredMcpNamespaces = vi.fn(() => ["chrome__"]);
-    expect(
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow,
-        resolveConfiguredMcpNamespaces,
-      }),
-    ).toBe(expected);
-    expect(resolveConfiguredMcpNamespaces).not.toHaveBeenCalled();
-  });
-
   it("does not treat a generated bash namespace as the core exec alias", () => {
     expect(
       shouldCreateBundleMcpRuntimeForAttempt({

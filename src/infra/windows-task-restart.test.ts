@@ -200,6 +200,8 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(script.startsWith("@echo off\r\n")).toBe(true);
     expect(script).toContain(`Get-Process -Id ${process.pid}`);
     expect(script).toContain("WaitForExit(180000)");
+    expect(script).toContain("[DateTime]::UtcNow.AddSeconds(5400)");
+    expect(script).toContain("replacement Gateway listener appeared within 5400s");
     expect(script).toContain("gateway-restart.log");
     expect(script).toContain(
       'openclaw restart attempt source=windows-task-handoff target="OpenClaw Gateway (work)"',
@@ -317,23 +319,22 @@ describe("relaunchGatewayScheduledTask", () => {
       return { unref: vi.fn() };
     });
 
-    relaunchGatewayScheduledTask({
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (Bob's work)",
-    });
-
-    const scriptPath = expectDefined(
-      [...createdScriptPaths][0],
-      "[...createdScriptPaths][0] test invariant",
-    );
-    const script = fs.readFileSync(scriptPath, "utf8");
-    expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (Bob\'s work)"');
-    expect(
-      script
-        .split("\r\n")
-        .filter((line) => line.startsWith("powershell.exe"))
-        .join("\n"),
-    ).not.toContain("Bob");
-    expect(script).not.toContain("findstr");
+    const observations: string[][] = [];
+    for (const taskName of ["OpenClaw Gateway", "OpenClaw Gateway (Bob's work)"]) {
+      const result = relaunchGatewayScheduledTask({
+        // Log paths may contain the same text as the task name without affecting observation.
+        OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "Bob-restart-logs"),
+        OPENCLAW_WINDOWS_TASK_NAME: taskName,
+      });
+      expect(result.ok).toBe(true);
+      const scriptPath = expectDefined([...createdScriptPaths].at(-1), "restart helper path");
+      const script = fs.readFileSync(scriptPath, "utf8");
+      expect(script).toContain(`schtasks /Run /TN "${taskName}"`);
+      observations.push(script.split("\r\n").filter((line) => line.startsWith("powershell.exe")));
+      expect(script).not.toContain("findstr");
+    }
+    expect(observations[0]).toHaveLength(2);
+    expect(observations[1]).toEqual(observations[0]);
   });
 
   it("returns failed when the helper cannot be spawned", () => {

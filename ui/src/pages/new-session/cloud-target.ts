@@ -1,26 +1,35 @@
 import { html, nothing, type TemplateResult } from "lit";
 import "../../components/tooltip.ts";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  WorkerMachineOption,
+  WorkerOperatingSystem,
+} from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
+import { compareCloudProfiles, resolveCloudProfileIcon } from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
-import type {
-  DraftCloudProfile,
-  DraftEnvironment,
-  DraftMachineOption,
-  DraftOperatingSystem,
-} from "./discovery.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
+import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 import {
   cloudMachinesForOs,
+  defaultCloudMachine,
   defaultCloudOs,
   readDraftCloudProfiles,
   readDraftEnvironments,
 } from "./discovery.ts";
 
+registerNewSessionSetupEnglish();
+registerSessionPlacementEnglish();
+
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
   runtimeId?: string,
-): Promise<{ profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }> {
+): Promise<{
+  profiles: DraftCloudProfile[];
+  environments: DraftEnvironment[];
+}> {
   const result = await client.request<EnvironmentsListResult>(
     "environments.list",
     runtimeId ? { runtimeId } : {},
@@ -34,6 +43,7 @@ export async function requestPlaceCatalog(
 type SessionMenuItemOptions = {
   value: string;
   label: string;
+  accessibleProvider?: string;
   description?: string;
   icon?: unknown;
   sub?: string;
@@ -64,7 +74,10 @@ function formatUnavailableReason(
 ) {
   if (remediation === "enable-session-hosting") {
     return html`<div>${t("newSession.sessionHostingAction")}</div>
-      <code class="new-session-page__command">openclaw connect --service --session-host</code>`;
+      <code class="new-session-page__command"
+        >openclaw config set nodeHost.workerRuns.enabled true</code
+      >
+      <code class="new-session-page__command">openclaw node install --force</code>`;
   }
   if (remediation === "update-device") {
     return html`<div>${t("newSession.updateAction")}</div>
@@ -86,6 +99,20 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
   const description = params.compact ? undefined : params.description;
   const accessibleBlocker = params.compact && params.disabled && !params.hideDetails;
   const touchDetails = params.compact && !params.disabled && !params.hideDetails;
+  const accessibilityHints = [
+    params.suggested ? t("newSession.machineDefault") : undefined,
+    params.accessibleProvider
+      ? t("newSession.cloudWorkerProvider", { provider: params.accessibleProvider })
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const accessibleDescription = [
+    accessibilityHints,
+    params.accessibleProvider ? unavailableReason : undefined,
+  ]
+    .filter(Boolean)
+    .join(", ");
   const row = html`
     <button
       type="button"
@@ -93,7 +120,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
         description ? "session-menu__item--described" : ""
       } ${params.compact ? "new-session-page__environment-option" : ""}"
       data-suggested=${params.suggested ? "true" : nothing}
-      aria-description=${params.suggested ? t("newSession.machineDefault") : nothing}
+      aria-description=${accessibleDescription || nothing}
       data-value=${params.value}
       data-popover=${params.keepOpen || accessibleBlocker ? nothing : "close"}
       aria-pressed=${String(params.checked)}
@@ -132,15 +159,11 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
       ${
         !params.compact && params.facts?.length
           ? html`<span class="new-session-page__menu-meta">
-              ${
-                params.facts?.length
-                  ? html`<span class="new-session-page__menu-facts">
-                      ${params.facts.map(
-                        (fact) => html`<span class="new-session-page__menu-fact">${fact}</span>`,
-                      )}
-                    </span>`
-                  : nothing
-              }
+              <span class="new-session-page__menu-facts">
+                ${params.facts.map(
+                  (fact) => html`<span class="new-session-page__menu-fact">${fact}</span>`,
+                )}
+              </span>
             </span>`
           : nothing
       }
@@ -168,22 +191,23 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
         placement="right-start"
         ?open-on-click=${accessibleBlocker || touchDetails}
       >
-        ${
-          touchDetails
-            ? html`<div class="new-session-page__environment-detail-trigger">
-                ${row}
-                <button
+        <div class="new-session-page__environment-detail-trigger">
+          ${row}
+          ${
+            touchDetails
+              ? html`<button
                   type="button"
                   class="new-session-page__touch-details"
                   aria-label=${t("newSession.environmentDetails", { name: params.label })}
                   ?disabled=${submitting}
                 >
                   ${icons.info}
-                </button>
-              </div>`
-            : row
-        }
+                </button>`
+              : nothing
+          }
+        </div>
         <div slot="content" class="new-session-page__environment-card">
+          ${accessibilityHints ? html`<span hidden>${accessibilityHints}, </span>` : nothing}
           ${
             unavailableReason
               ? html`<span>${formatUnavailableReason(unavailableReason, params.remediation)}</span>`
@@ -246,14 +270,14 @@ export function renderCloudProfileMenuItems(params: {
   onSelectOs?: (osId: string) => void;
   onSelectMachine?: (machineId: string) => void;
   submitting: boolean;
-  icon?: unknown;
   disabled?: boolean;
   disabledReason?: string;
   profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
   compact?: boolean;
   onSelect: (profileId: string, useDefaults?: boolean) => void;
 }) {
-  return params.profiles.map((profile) => {
+  return params.profiles.toSorted(compareCloudProfiles).map((profile) => {
+    const presentation = resolveCloudProfileIcon(profile);
     const profileDisabledReason = params.profileDisabledReason?.(profile);
     const selected = params.selectedId === profile.id;
     const osId = (selected ? params.selectedOs : undefined) || defaultCloudOs(profile);
@@ -262,23 +286,32 @@ export function renderCloudProfileMenuItems(params: {
     const machine =
       (selected && params.selectedMachine
         ? machines.find((option) => option.id === params.selectedMachine)
-        : undefined) ?? machines.find((option) => option.default);
+        : undefined) ?? defaultCloudMachine(profile, osId);
+    const hasSubmenu =
+      params.compact &&
+      !params.disabled &&
+      !profileDisabledReason &&
+      ((profile.operatingSystems?.some((option) => !option.disabledReason) ?? false) ||
+        machines.length > 0);
 
     const item = renderSessionMenuItem(
       {
         value: `cloud:${profile.id}`,
         label: params.compact ? profile.id : t("newSession.cloudWorker", { profile: profile.id }),
-        hasSubmenu:
-          params.compact &&
-          !params.disabled &&
-          !profileDisabledReason &&
-          ((profile.operatingSystems?.filter((option) => !option.disabledReason).length ?? 0) > 0 ||
-            machines.length > 0),
+        hasSubmenu,
         selectedSummary:
           params.compact && selected
-            ? [os?.label, machine?.label].filter(Boolean).join(" · ")
+            ? [
+                os?.label,
+                machine?.label,
+                profile.inference === "worker" ? t("sessionsView.inferenceWorker") : undefined,
+              ]
+                .filter(Boolean)
+                .join(" · ")
             : undefined,
-        icon: params.icon,
+        description: profile.inference === "worker" ? t("sessionsView.inferenceWorker") : undefined,
+        icon: presentation.icon,
+        accessibleProvider: presentation.label,
         compact: params.compact,
         facts:
           !params.compact && profile.trust === "disposable"
@@ -287,7 +320,7 @@ export function renderCloudProfileMenuItems(params: {
               ? [t("newSession.environmentPersistent")]
               : undefined,
         trust: params.compact ? profile.trust : undefined,
-        provider: params.compact ? profile.providerId : undefined,
+        provider: params.compact ? presentation.label : undefined,
         platform: params.compact ? os?.label : undefined,
         hardware: params.compact && machine ? machineShapeText(machine) : undefined,
         hideDetails: params.compact && !params.disabled && !profileDisabledReason,
@@ -296,7 +329,7 @@ export function renderCloudProfileMenuItems(params: {
         disabled: params.disabled || Boolean(profileDisabledReason),
         title:
           (params.disabled ? params.disabledReason : profileDisabledReason) ??
-          t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
+          t("newSession.cloudWorkerProvider", { provider: presentation.label }),
         onSelect: () =>
           params.compact && !selected
             ? params.onSelect(profile.id, true)
@@ -304,11 +337,7 @@ export function renderCloudProfileMenuItems(params: {
       },
       params.submitting,
     );
-    return params.compact &&
-      !params.disabled &&
-      !profileDisabledReason &&
-      ((profile.operatingSystems?.filter((option) => !option.disabledReason).length ?? 0) > 0 ||
-        machines.length > 0)
+    return hasSubmenu
       ? html`<openclaw-tooltip
           class="new-session-page__environment-details new-session-page__cloud-config-card"
           placement="right"
@@ -316,6 +345,9 @@ export function renderCloudProfileMenuItems(params: {
         >
           ${item}
           <div slot="content">
+            <span hidden
+              >${t("newSession.cloudWorkerProvider", { provider: presentation.label })}</span
+            >
             ${renderCloudConfiguration({
               profile,
               operatingSystems: profile.operatingSystems ?? [],
@@ -344,7 +376,7 @@ export function renderCloudProfileMenuItems(params: {
 }
 
 /** Machine shape as a picker sub-line; providers may report neither, one, or both numbers. */
-function machineShapeText(machine: DraftMachineOption): string | undefined {
+function machineShapeText(machine: WorkerMachineOption): string | undefined {
   const cpu = machine.cpu === undefined ? undefined : String(machine.cpu);
   const memory = machine.memoryGb === undefined ? undefined : String(machine.memoryGb);
   if (cpu && memory) {
@@ -359,69 +391,60 @@ function machineShapeText(machine: DraftMachineOption): string | undefined {
 function renderCloudConfiguration(params: {
   profile: DraftCloudProfile;
   suggested?: boolean;
-  operatingSystems: readonly DraftOperatingSystem[];
-  machines: readonly DraftMachineOption[];
+  operatingSystems: readonly WorkerOperatingSystem[];
+  machines: readonly WorkerMachineOption[];
   selectedOs: string;
   selectedMachine: string;
   submitting: boolean;
   onSelectOs: (id: string) => void;
   onSelectMachine: (id: string) => void;
 }) {
-  const operatingSystems = params.operatingSystems.filter((os) => !os.disabledReason);
-  const fixedOs = operatingSystems.length === 1 ? operatingSystems[0] : undefined;
-  const fixedMachine = params.machines.length === 1 ? params.machines[0] : undefined;
+  const groups = [
+    {
+      kind: "os",
+      label: t("newSession.operatingSystem"),
+      choices: params.operatingSystems.filter((os) => !os.disabledReason),
+      selectedId: params.selectedOs,
+      suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
+      onSelect: params.onSelectOs,
+    },
+    {
+      kind: "machine",
+      label: t("newSession.machine"),
+      choices: params.machines,
+      selectedId: params.selectedMachine,
+      suggestedId: params.suggested
+        ? defaultCloudMachine(params.profile, params.selectedOs)?.id
+        : undefined,
+      onSelect: params.onSelectMachine,
+    },
+  ] as const;
   return html`<section
     class="new-session-page__cloud-configuration"
     aria-label=${params.profile.id}
   >
-    <div class="new-session-page__environment-heading">${t("newSession.operatingSystem")}</div>
-    <div
-      class="new-session-page__cloud-choice-list"
-      role="group"
-      aria-label=${t("newSession.operatingSystem")}
-    >
-      ${
-        fixedOs
-          ? html`<span class="new-session-page__fixed-os" data-value=${`os:${fixedOs.id}`}
-              >${fixedOs.label}</span
-            >`
-          : renderCloudOsMenuItems({
-              operatingSystems,
-              selectedId: params.selectedOs,
-              suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
-              submitting: params.submitting,
-              onSelect: params.onSelectOs,
-            })
+    ${groups.map((group) => {
+      if (!group.choices.length) {
+        return nothing;
       }
-    </div>
-    ${
-      params.machines.length
-        ? html`<div class="new-session-page__environment-heading">${t("newSession.machine")}</div>
-            <div
-              class="new-session-page__cloud-choice-list"
-              role="group"
-              aria-label=${t("newSession.machine")}
-            >
-              ${
-                fixedMachine
-                  ? renderFixedMachine(fixedMachine)
-                  : renderCloudMachineMenuItems({
-                      machines: params.machines,
-                      selectedId: params.selectedMachine,
-                      suggestedId: params.suggested
-                        ? params.machines.find((machine) => machine.default)?.id
-                        : undefined,
-                      submitting: params.submitting,
-                      onSelect: params.onSelectMachine,
-                    })
-              }
-            </div>`
-        : nothing
-    }
+      const fixed = group.choices.length === 1 ? group.choices[0] : undefined;
+      return html`<div class="new-session-page__environment-heading">${group.label}</div>
+        <div class="new-session-page__cloud-choice-list" role="group" aria-label=${group.label}>
+          ${
+            fixed
+              ? group.kind === "machine"
+                ? renderFixedMachine(fixed)
+                : html`<span class="new-session-page__fixed-os" data-value=${`os:${fixed.id}`}
+                    >${fixed.label}</span
+                  >`
+              : renderCloudChoiceMenuItems({ ...group, submitting: params.submitting })
+          }
+        </div>`;
+    })}
   </section>`;
 }
 
-function renderFixedMachine(machine: DraftMachineOption) {
+function renderFixedMachine(machine: WorkerMachineOption) {
   const shape = machineShapeText(machine);
   return html`<span class="new-session-page__fixed-machine" data-value=${`machine:${machine.id}`}>
     <span>${machine.label}</span>${shape ? html`<span>${shape}</span>` : nothing}
@@ -429,51 +452,32 @@ function renderFixedMachine(machine: DraftMachineOption) {
 }
 
 // The move-session dialog retains its existing menu-based choices.
-export function renderCloudMachineMenuItems(params: {
-  machines: readonly DraftMachineOption[];
+export function renderCloudChoiceMenuItems(params: {
+  kind: "machine" | "os";
+  choices: readonly (WorkerMachineOption & WorkerOperatingSystem)[];
   selectedId: string;
   suggestedId?: string;
   submitting: boolean;
-  onSelect: (machineId: string) => void;
+  onSelect: (id: string) => void;
 }) {
-  return params.machines.map((machine) =>
+  return params.choices.map((choice) =>
     renderSessionMenuItem(
       {
-        suggested: params.suggestedId === machine.id,
-        value: `machine:${machine.id}`,
-        label: machine.label,
-        sub: machineShapeText(machine),
+        suggested: params.suggestedId === choice.id,
+        value: `${params.kind}:${choice.id}`,
+        label: choice.label,
+        ...(params.kind === "machine"
+          ? { sub: machineShapeText(choice) }
+          : {
+              description: choice.disabledReason,
+              disabled: Boolean(choice.disabledReason),
+              title: choice.disabledReason,
+            }),
         checked:
-          params.selectedId === machine.id ||
-          (!params.selectedId && params.suggestedId === machine.id),
+          params.selectedId === choice.id ||
+          (!params.selectedId && params.suggestedId === choice.id),
         keepOpen: true,
-        onSelect: () => params.onSelect(machine.id),
-      },
-      params.submitting,
-    ),
-  );
-}
-
-export function renderCloudOsMenuItems(params: {
-  operatingSystems: readonly DraftOperatingSystem[];
-  selectedId: string;
-  suggestedId?: string;
-  submitting: boolean;
-  onSelect: (osId: string) => void;
-}) {
-  return params.operatingSystems.map((os) =>
-    renderSessionMenuItem(
-      {
-        suggested: params.suggestedId === os.id,
-        value: `os:${os.id}`,
-        label: os.label,
-        description: os.disabledReason,
-        disabled: Boolean(os.disabledReason),
-        title: os.disabledReason,
-        checked:
-          params.selectedId === os.id || (!params.selectedId && params.suggestedId === os.id),
-        keepOpen: true,
-        onSelect: () => params.onSelect(os.id),
+        onSelect: () => params.onSelect(choice.id),
       },
       params.submitting,
     ),

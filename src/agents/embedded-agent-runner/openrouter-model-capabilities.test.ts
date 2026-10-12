@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { createCorePluginStateSyncKeyedStore } from "../../plugin-state/plugin-state-store.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 
 async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) {
   // Each case gets an isolated state dir because the module persists capability
@@ -27,6 +32,8 @@ async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) 
         try {
           await run(stateDir);
         } finally {
+          await closePreparedModelRuntimeSnapshots();
+          await closeOpenClawStateDatabaseAsync();
           resetPluginStateStoreForTests();
         }
       },
@@ -80,7 +87,13 @@ describe("openrouter-model-capabilities", () => {
       );
 
       const module = await importOpenRouterModelCapabilities("top-level-max-tokens");
-      await module.loadOpenRouterModelCapabilities("acme/top-level-max-completion");
+      const sql = observeHostDataSql();
+      try {
+        await module.loadOpenRouterModelCapabilities("acme/top-level-max-completion");
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
 
       const maxCompletion = module.getOpenRouterModelCapabilities("acme/top-level-max-completion");
       expect(maxCompletion?.input).toEqual(["text", "image"]);
@@ -113,38 +126,32 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("uses endpoint-specific OpenRouter context length when top_provider reports one", async () => {
-    await withOpenRouterStateDir(async () => {
+  it("persists a fetched catalog to the store selected before the network wait", async () => {
+    await withOpenRouterStateDir(async (stateDir) => {
+      const requested = createDeferredCore();
+      const response = createDeferredCore<Response>();
       vi.stubGlobal(
         "fetch",
-        vi.fn(async () =>
-          Response.json({
-            data: [
-              {
-                id: "nvidia/nemotron-3-super-120b-a12b:free",
-                name: "Nemotron 3 Super 120B Free",
-                architecture: { modality: "text->text" },
-                context_length: 1_000_000,
-                top_provider: {
-                  context_length: 262_144,
-                  max_completion_tokens: 262_144,
-                },
-                pricing: { prompt: "0", completion: "0" },
-              },
-            ],
-          }),
-        ),
+        vi.fn(() => {
+          requested.resolve();
+          return response.promise;
+        }),
       );
-
-      const module = await importOpenRouterModelCapabilities("top-provider-context-length");
-      await module.loadOpenRouterModelCapabilities("nvidia/nemotron-3-super-120b-a12b:free");
-
-      expect(
-        module.getOpenRouterModelCapabilities("nvidia/nemotron-3-super-120b-a12b:free"),
-      ).toMatchObject({
-        contextWindow: 262_144,
-        maxTokens: 262_144,
+      const module = await importOpenRouterModelCapabilities("captured-store");
+      const loading = module.loadOpenRouterModelCapabilities("acme/captured-model");
+      await requested.promise;
+      const stored = () =>
+        createCorePluginStateSyncKeyedStore({
+          ownerId: "core:openrouter-model-capabilities",
+          namespace: "models.v4",
+          maxEntries: 10_000,
+        }).entries();
+      await withEnvAsync({ OPENCLAW_STATE_DIR: join(stateDir, "successor") }, async () => {
+        response.resolve(Response.json({ data: [{ id: "acme/captured-model" }] }));
+        await loading;
+        expect(stored()).toEqual([]);
       });
+      expect(stored()).toEqual([expect.objectContaining({ key: "acme/captured-model" })]);
     });
   });
 
@@ -207,7 +214,7 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("preserves partial native OpenRouter pricing overrides in memory and across SQLite reads", async () => {
+  it("preserves native pricing and reasoning capabilities in memory and across SQLite reads", async () => {
     await withOpenRouterStateDir(async () => {
       const cost = {
         input: 2,
@@ -239,6 +246,7 @@ describe("openrouter-model-capabilities", () => {
               name: "SQLite Cached Model",
               architecture: { modality: "text+image->text" },
               supported_parameters: ["tools"],
+              reasoning: { supported_efforts: ["high", "low"], mandatory: true },
               context_length: 8765,
               max_completion_tokens: 4321,
               pricing: {
@@ -254,6 +262,7 @@ describe("openrouter-model-capabilities", () => {
                 ],
               },
             },
+            { id: "minimax/minimax-m2.7", reasoning: { mandatory: true } },
           ],
         }),
       );
@@ -270,6 +279,8 @@ describe("openrouter-model-capabilities", () => {
       expect(secondModule.getOpenRouterModelCapabilities("acme/sqlite-cached-model")).toMatchObject(
         {
           input: ["text", "image"],
+          compat: { supportedReasoningEfforts: ["high", "low"] },
+          thinkingLevelMap: { off: null },
           supportsTools: true,
           contextWindow: 8765,
           maxTokens: 4321,
@@ -277,6 +288,57 @@ describe("openrouter-model-capabilities", () => {
         },
       );
       expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(secondModule.getOpenRouterModelCapabilities("minimax/minimax-m2.7")).toMatchObject({
+        reasoning: true,
+        compat: { supportsReasoningEffort: false },
+        thinkingLevelMap: { off: null },
+      });
+    });
+  });
+
+  it("retries an unavailable catalog before replacing cached rows without mandatory-reasoning metadata", async () => {
+    await withOpenRouterStateDir(async () => {
+      const modelId = "minimax/minimax-m2.7";
+      createCorePluginStateSyncKeyedStore({
+        ownerId: "core:openrouter-model-capabilities",
+        namespace: "models.v3",
+        maxEntries: 10_000,
+      }).register(modelId, {
+        name: modelId,
+        input: ["text"],
+        reasoning: true,
+        contextWindow: 32_000,
+        maxTokens: 4096,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      });
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(new Response("temporarily unavailable", { status: 503 }))
+        .mockResolvedValueOnce(
+          Response.json({
+            data: [{ id: modelId, reasoning: { mandatory: true } }],
+          }),
+        );
+      vi.stubGlobal("fetch", fetchSpy);
+      const cache = await importOpenRouterModelCapabilities("mandatory-metadata-cache-upgrade");
+      await cache.loadOpenRouterModelCapabilities(modelId);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(cache.getOpenRouterModelCapabilities(modelId)).toBeUndefined();
+      expect(fetchSpy).toHaveBeenCalledOnce();
+
+      await cache.loadOpenRouterModelCapabilities(modelId);
+      expect(cache.getOpenRouterModelCapabilities(modelId)).toMatchObject({
+        compat: { supportsReasoningEffort: false },
+        thinkingLevelMap: { off: null },
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+      const reader = await importOpenRouterModelCapabilities("mandatory-metadata-cache-recovered");
+      expect(reader.getOpenRouterModelCapabilities(modelId)).toMatchObject({
+        compat: { supportsReasoningEffort: false },
+        thinkingLevelMap: { off: null },
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -460,7 +522,14 @@ describe("openrouter-model-capabilities", () => {
 
       // Fresh import reads only from the SQLite cache the bounded read populated.
       const reader = await importOpenRouterModelCapabilities("chunked-sqlite-reader");
-      expect(reader.getOpenRouterModelCapabilities("acme/chunked-model")).toMatchObject({
+      const sql = observeHostDataSql();
+      try {
+        await reader.loadOpenRouterModelCapabilities("acme/chunked-model");
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      expect(reader.getLoadedOpenRouterModelCapabilities("acme/chunked-model")).toMatchObject({
         input: ["text", "image"],
         reasoning: true,
         supportsTools: true,
@@ -471,29 +540,65 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("does not refetch immediately after an awaited miss for the same model id", async () => {
+  it.each(["getOpenRouterModelCapabilities", "getLoadedOpenRouterModelCapabilities"] as const)(
+    "does not refetch immediately after an awaited miss through %s",
+    async (firstLookup) => {
+      await withOpenRouterStateDir(async () => {
+        const fetchSpy = vi.fn(async () =>
+          Response.json({
+            data: [
+              {
+                id: "acme/known-model",
+                name: "Known Model",
+                architecture: { modality: "text->text" },
+                context_length: 1234,
+              },
+            ],
+          }),
+        );
+        vi.stubGlobal("fetch", fetchSpy);
+
+        const module = await importOpenRouterModelCapabilities(`awaited-miss-${firstLookup}`);
+        await module.loadOpenRouterModelCapabilities("acme/missing-model");
+        expect(module[firstLookup]("acme/missing-model")).toBeUndefined();
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+        expect(module.getOpenRouterModelCapabilities("acme/missing-model")).toBeUndefined();
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
+      });
+    },
+  );
+
+  it("reads only loaded capabilities and follows catalog refreshes", async () => {
     await withOpenRouterStateDir(async () => {
-      const fetchSpy = vi.fn(async () =>
+      const modelId = "acme/refreshed-model";
+      const catalog = (efforts: string[]) =>
         Response.json({
-          data: [
-            {
-              id: "acme/known-model",
-              name: "Known Model",
-              architecture: { modality: "text->text" },
-              context_length: 1234,
-            },
-          ],
-        }),
-      );
+          data: [{ id: modelId, reasoning: { supported_efforts: efforts, mandatory: true } }],
+        });
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(catalog(["xhigh", "high"]))
+        .mockResolvedValueOnce(catalog(["high"]));
       vi.stubGlobal("fetch", fetchSpy);
+      const writer = await importOpenRouterModelCapabilities("loaded-writer");
+      await writer.loadOpenRouterModelCapabilities(modelId);
 
-      const module = await importOpenRouterModelCapabilities("awaited-miss");
-      await module.loadOpenRouterModelCapabilities("acme/missing-model");
-      expect(module.getOpenRouterModelCapabilities("acme/missing-model")).toBeUndefined();
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      // A cold process has SQLite rows available but must not read them or fetch.
+      const reader = await importOpenRouterModelCapabilities("loaded-reader");
+      expect(reader.getLoadedOpenRouterModelCapabilities(modelId)).toBeUndefined();
+      expect(fetchSpy).toHaveBeenCalledOnce();
 
-      expect(module.getOpenRouterModelCapabilities("acme/missing-model")).toBeUndefined();
+      await reader.loadOpenRouterModelCapabilities(modelId);
+      expect(
+        reader.getLoadedOpenRouterModelCapabilities(modelId)?.compat?.supportedReasoningEfforts,
+      ).toEqual(["xhigh", "high"]);
+
+      await reader.loadOpenRouterModelCapabilities("acme/new-model");
       expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(
+        reader.getLoadedOpenRouterModelCapabilities(modelId)?.compat?.supportedReasoningEfforts,
+      ).toEqual(["high"]);
     });
   });
 });

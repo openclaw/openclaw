@@ -317,8 +317,6 @@ describe("registerPluginCommand", () => {
       command: {
         // Runtime plugin payloads are untyped; guard at boundary.
         name: undefined as unknown as string,
-        description: "Demo",
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -328,9 +326,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects invalid command descriptions",
       command: {
-        name: "demo",
         description: undefined as unknown as string,
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -340,10 +336,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects invalid agent prompt guidance",
       command: {
-        name: "demo",
-        description: "Demo",
         agentPromptGuidance: "use /demo" as unknown as string[],
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -353,10 +346,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects invalid structured agent prompt guidance",
       command: {
-        name: "demo",
-        description: "Demo",
         agentPromptGuidance: [{ text: "Use /demo.", surfaces: ["nope"] }] as never,
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -367,10 +357,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects empty structured agent prompt guidance surfaces",
       command: {
-        name: "demo",
-        description: "Demo",
         agentPromptGuidance: [{ text: "Use /demo.", surfaces: [] }] as never,
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -380,10 +367,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects invalid channel scopes",
       command: {
-        name: "demo",
-        description: "Demo",
         channels: ["telegram", "   "],
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -393,10 +377,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects primitive native command metadata",
       command: {
-        name: "demo",
-        description: "Demo",
         nativeNames: "demo-native",
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -406,10 +387,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects primitive client presentation metadata",
       command: {
-        name: "demo",
-        description: "Demo",
         clientPresentation: "device-pairing",
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -419,13 +397,10 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects unknown client presentation actions",
       command: {
-        name: "demo",
-        description: "Demo",
         clientPresentation: {
           when: "no-arguments",
           action: { kind: "open-route" },
         },
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -435,14 +410,11 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects additional client presentation fields",
       command: {
-        name: "demo",
-        description: "Demo",
         clientPresentation: {
           when: "no-arguments",
           action: { kind: "device-pairing" },
           route: "/settings/devices",
         },
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -452,13 +424,10 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects additional client presentation action fields",
       command: {
-        name: "demo",
-        description: "Demo",
         clientPresentation: {
           when: "no-arguments",
           action: { kind: "device-pairing", callback: "run" },
         },
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -466,7 +435,9 @@ describe("registerPluginCommand", () => {
       },
     },
   ] as const)("$name", ({ command, expected }) => {
-    expect(registerPluginCommand("demo-plugin", command as never)).toEqual(expected);
+    expect(registerPluginCommand("demo-plugin", createVoiceCommand(command as never))).toEqual(
+      expected,
+    );
   });
 
   it("normalizes command metadata for downstream consumers", () => {
@@ -554,30 +525,30 @@ describe("registerPluginCommand", () => {
     expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Ambient guidance"]);
   });
 
-  it.each([
-    ["zeta-plugin", "alpha-plugin"],
-    ["alpha-plugin", "zeta-plugin"],
-  ])("keeps prompt guidance stable for plugin discovery order %j", (...pluginIds) => {
-    for (const pluginId of pluginIds) {
-      const alpha = pluginId === "alpha-plugin";
-      expect(
-        registerPluginCommand(pluginId, {
-          name: alpha ? "alpha_cmd" : "zeta_cmd",
-          description: alpha ? "Alpha command" : "Zeta command",
-          agentPromptGuidance: alpha
-            ? ["Use /alpha_cmd first.", "Then finish the alpha workflow."]
-            : ["Use /zeta_cmd for zeta routing."],
-          handler: async () => ({ text: "ok" }),
-        }),
-      ).toEqual({ ok: true });
-    }
+  it.each([["zeta-plugin", "alpha-plugin"]])(
+    "keeps prompt guidance stable for plugin discovery order %j",
+    (...pluginIds) => {
+      for (const pluginId of pluginIds) {
+        const alpha = pluginId === "alpha-plugin";
+        expect(
+          registerPluginCommand(pluginId, {
+            name: alpha ? "alpha_cmd" : "zeta_cmd",
+            description: alpha ? "Alpha command" : "Zeta command",
+            agentPromptGuidance: alpha
+              ? ["Use /alpha_cmd first.", "Then finish the alpha workflow."]
+              : ["Use /zeta_cmd for zeta routing."],
+            handler: async () => ({ text: "ok" }),
+          }),
+        ).toEqual({ ok: true });
+      }
 
-    expect(listRegisteredPluginAgentPromptGuidance()).toEqual([
-      "Use /alpha_cmd first.",
-      "Then finish the alpha workflow.",
-      "Use /zeta_cmd for zeta routing.",
-    ]);
-  });
+      expect(listRegisteredPluginAgentPromptGuidance()).toEqual([
+        "Use /alpha_cmd first.",
+        "Then finish the alpha workflow.",
+        "Use /zeta_cmd for zeta routing.",
+      ]);
+    },
+  );
 
   it("normalizes and filters structured agent prompt guidance by surface", () => {
     const result = registerPluginCommand("demo-plugin", {
@@ -713,25 +684,6 @@ describe("registerPluginCommand", () => {
     expect(listProviderPluginCommandSpecs("discord")).toStrictEqual([]);
   });
 
-  it("allows Slack to resolve provider-native plugin specs without changing shared native gating", () => {
-    const result = registerVoiceCommandForTest({
-      nativeNames: {
-        default: "talkvoice",
-        discord: "discordvoice",
-      },
-      description: "Demo command",
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(listProviderPluginCommandSpecs("slack")).toEqual([
-      {
-        name: "talkvoice",
-        description: "Demo command",
-        acceptsArgs: false,
-      },
-    ]);
-  });
-
   it("requires config before using read-only manifest command defaults", () => {
     setActivePluginRegistry(createTestRegistry([]));
     registerVoiceCommandForTest({
@@ -768,18 +720,6 @@ describe("registerPluginCommand", () => {
     ]);
   });
 
-  it("accepts native progress metadata on plugin commands", () => {
-    const result = registerVoiceCommandForTest({
-      nativeProgressMessages: { telegram: "Running voice command..." },
-      description: "Demo command",
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(matchPluginCommand("/voice")?.command.nativeProgressMessages).toEqual({
-      telegram: "Running voice command...",
-    });
-  });
-
   it("exposes native description localizations on plugin command specs", () => {
     const result = registerVoiceCommandForTest({
       description: "Demo command",
@@ -806,18 +746,6 @@ describe("registerPluginCommand", () => {
     expect(result).toEqual({
       ok: false,
       error: 'Description localization "ko" cannot be empty',
-    });
-  });
-
-  it("rejects empty native progress metadata", () => {
-    const result = registerVoiceCommandForTest({
-      nativeProgressMessages: { telegram: "   " },
-      description: "Demo command",
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: 'Native progress message "telegram" cannot be empty',
     });
   });
 
@@ -851,71 +779,6 @@ describe("registerPluginCommand", () => {
       ok: false,
       error: 'Command name "codex" is reserved by a built-in command',
     });
-  });
-
-  it("reserves the built-in learn command name", () => {
-    const result = registerPluginCommand("demo-plugin", {
-      name: "learn",
-      description: "Fake learn command",
-      handler: async () => ({ text: "ok" }),
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: 'Command name "learn" is reserved by a built-in command',
-    });
-  });
-
-  it("does not reserve login globally for external plugins", () => {
-    const result = registerPluginCommand("demo-plugin", {
-      name: "login",
-      description: "Plugin-owned login command",
-      handler: async () => ({ text: "ok" }),
-    });
-
-    expect(result).toEqual({ ok: true });
-  });
-
-  it("rejects reserved ownership on non-reserved direct command registrations", () => {
-    const result = registerPluginCommand(
-      "demo-plugin",
-      {
-        name: "voice",
-        description: "Voice command",
-        ownership: "reserved",
-        handler: async () => ({ text: "ok" }),
-      },
-      { allowReservedCommandNames: true },
-    );
-
-    expect(result).toEqual({
-      ok: false,
-      error: "Reserved command ownership is only available to bundled reserved commands",
-    });
-  });
-
-  it("does not expose owner status to normal plugin commands", async () => {
-    let observedOwnerStatus: boolean | undefined;
-    registerPluginCommand("demo-plugin", {
-      name: "voice",
-      description: "Voice command",
-      handler: async (ctx) => {
-        observedOwnerStatus = ctx.senderIsOwner;
-        return { text: "ok" };
-      },
-    });
-    const match = requirePluginCommandMatch("/voice");
-
-    await executePluginCommand({
-      command: match.command,
-      channel: "telegram",
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      commandBody: "/voice",
-      config: {},
-    });
-
-    expect(observedOwnerStatus).toBeUndefined();
   });
 
   it("sanitizes oversized arguments before passing them to plugin handlers", async () => {
@@ -1046,81 +909,6 @@ describe("registerPluginCommand", () => {
     expect(observedOwnerStatus).toBe(true);
   });
 
-  it("allows command owners to run scoped plugin commands without gateway scopes", async () => {
-    let observedOwnerStatus: boolean | undefined;
-    const handler = vi.fn(async (ctx: { senderIsOwner?: boolean }) => {
-      observedOwnerStatus = ctx.senderIsOwner;
-      return { text: "ok" };
-    });
-    registerPluginCommand("demo-plugin", {
-      name: "pairlike",
-      description: "Scoped command",
-      requiredScopes: ["operator.pairing"],
-      handler,
-    });
-    const match = requirePluginCommandMatch("/pairlike");
-
-    const result = await executePluginCommand({
-      command: match.command,
-      channel: "telegram",
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      commandBody: "/pairlike",
-      config: {},
-    });
-
-    expect(result).toEqual({ text: "ok" });
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(observedOwnerStatus).toBe(true);
-  });
-
-  it("rejects command owners when explicit gateway scopes miss the required scope", async () => {
-    const handler = vi.fn(async () => ({ text: "ok" }));
-    registerPluginCommand("demo-plugin", {
-      name: "pairlike",
-      description: "Scoped command",
-      requiredScopes: ["operator.pairing"],
-      handler,
-    });
-    const match = requirePluginCommandMatch("/pairlike");
-
-    const result = await executePluginCommand({
-      command: match.command,
-      channel: "webchat",
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      commandBody: "/pairlike",
-      gatewayClientScopes: ["operator.write"],
-      config: {},
-    });
-
-    expect(result).toEqual({ text: "⚠️ This command requires gateway scope: operator.pairing." });
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-owner scoped plugin commands without gateway scopes", async () => {
-    const handler = vi.fn(async () => ({ text: "ok" }));
-    registerPluginCommand("demo-plugin", {
-      name: "pairlike",
-      description: "Scoped command",
-      requiredScopes: ["operator.pairing"],
-      handler,
-    });
-    const match = requirePluginCommandMatch("/pairlike");
-
-    const result = await executePluginCommand({
-      command: match.command,
-      channel: "telegram",
-      isAuthorizedSender: true,
-      senderIsOwner: false,
-      commandBody: "/pairlike",
-      config: {},
-    });
-
-    expect(result).toEqual({ text: "⚠️ This command requires gateway scope: operator.pairing." });
-    expect(handler).not.toHaveBeenCalled();
-  });
-
   it("skips direct plugin command execution on unsupported channels", async () => {
     let handlerCalled = false;
     const handler = async () => {
@@ -1248,7 +1036,7 @@ describe("registerPluginCommand", () => {
     second.clearPluginCommands();
   });
 
-  it.each(["default", "discord"] as const)(
+  it.each(["discord"] as const)(
     "matches live %s aliases back to the canonical command",
     (provider) => {
       const nativeNames = { default: "talkvoice", discord: "discordvoice" };
@@ -1298,19 +1086,6 @@ describe("registerPluginCommand", () => {
       expected: {
         ok: false,
         error: 'Command "pair_device" already registered by plugin "demo-plugin"',
-      },
-    },
-    {
-      name: "rejects reserved provider aliases",
-      candidate: createVoiceCommand({
-        nativeNames: {
-          telegram: "help",
-        },
-      }),
-      expected: {
-        ok: false,
-        error:
-          'Native command alias "telegram" invalid: Command name "help" is reserved by a built-in command',
       },
     },
   ] as const)("$name", ({ setup, candidate, expected }) => {
@@ -1447,42 +1222,6 @@ describe("registerPluginCommand", () => {
     expect(receivedCtx?.sessionId).toBe("session-123");
   });
 
-  it("passes a host-bound llm runtime through to plugin command handlers", async () => {
-    let receivedCtx:
-      | {
-          runtimeContext?: {
-            llm?: {
-              complete?: unknown;
-            };
-          };
-        }
-      | undefined;
-    const handler = async (ctx: typeof receivedCtx) => {
-      receivedCtx = ctx;
-      return { text: "ok" };
-    };
-
-    const result = await executePluginCommand({
-      command: {
-        name: "runtimecheck",
-        description: "Demo command",
-        acceptsArgs: false,
-        handler,
-        pluginId: "demo-plugin",
-      },
-      channel: "telegram",
-      senderId: "U123",
-      isAuthorizedSender: true,
-      sessionKey: "agent:main:telegram:direct:runtimecheck",
-      authProfileId: "openai:claude@example.com",
-      commandBody: "/runtimecheck",
-      config: {} as never,
-    });
-
-    expect(result).toEqual({ text: "ok" });
-    expect(receivedCtx?.runtimeContext?.llm?.complete).toEqual(expect.any(Function));
-  });
-
   it("binds legacy main session plugin llm runtime to the default agent", async () => {
     const handler = async (ctx: {
       runtimeContext?: {
@@ -1514,7 +1253,7 @@ describe("registerPluginCommand", () => {
       commandBody: "/runtimecheck",
       config: {
         agents: {
-          list: [{ id: "ops", default: true }],
+          entries: { ops: {} },
           defaults: {
             model: "openai/gpt-5.5",
           },

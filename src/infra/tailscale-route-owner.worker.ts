@@ -1,8 +1,10 @@
 // Owns one foreground Tailscale route claim and releases it when Gateway IPC closes.
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
+import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   TAILSCALE_ROUTE_OWNER_ARG,
   type TailscaleRouteOwnerMessage,
@@ -13,6 +15,7 @@ import {
 const READY_MARKER = "Press Ctrl+C to exit.";
 const OUTPUT_LIMIT = 200_000;
 const STOP_GRACE_MS = 2_000;
+const execFileAsync = promisify(execFile);
 
 type RouteOwnerStart = { argv: string[] };
 
@@ -34,15 +37,23 @@ function parseStart(raw: string | undefined): RouteOwnerStart {
   return { argv };
 }
 
+const pendingReports = new Set<Promise<void>>();
+
 function send(message: TailscaleRouteOwnerMessage): void {
-  if (!process.connected || !process.send) {
+  const sendMessage = process.send?.bind(process);
+  if (!process.connected || !sendMessage) {
     return;
   }
-  try {
-    process.send(message, () => undefined);
-  } catch {
-    // The parent can disappear between the connected check and send.
-  }
+  const report = new Promise<void>((resolve) => {
+    try {
+      sendMessage(message, () => resolve());
+    } catch {
+      // The parent can disappear between the connected check and send.
+      resolve();
+    }
+  });
+  pendingReports.add(report);
+  void report.then(() => pendingReports.delete(report));
 }
 
 export type TailscaleRouteOwnerExit = {
@@ -56,11 +67,34 @@ export type TailscaleRouteOwnerHandle = {
   stop: () => void;
 };
 
-function signalChild(child: ChildProcess, signal: "SIGTERM" | "SIGKILL"): void {
+async function signalChild(
+  child: ChildProcess,
+  signal: "SIGTERM" | "SIGKILL",
+  privileged: boolean,
+  onError: (message: string) => void,
+): Promise<void> {
   if (typeof child.pid !== "number" || child.pid <= 0) {
     return;
   }
   if (process.platform !== "win32") {
+    if (privileged) {
+      // The detached, non-TTY sudo claim owns this group. An unprivileged
+      // kill cannot reach its root processes; serve off cannot release it.
+      try {
+        await execFileAsync(
+          "sudo",
+          ["-n", "/bin/kill", `-${signal.slice(3)}`, "--", `-${child.pid}`],
+          { timeout: 5_000, maxBuffer: 16_384 },
+        );
+      } catch {
+        onError(
+          `Could not stop the owned Tailscale process group ${child.pid} through sudo. ` +
+            `Run \`sudo /bin/kill -TERM -- -${child.pid}\` to stop it, then ` +
+            "`sudo tailscale set --operator=$USER` to avoid privileged claims.",
+        );
+      }
+      return;
+    }
     signalProcessTree(child.pid, signal, { detached: true });
     return;
   }
@@ -76,15 +110,13 @@ export function runTailscaleRouteOwner(
     throw new Error("Tailscale route-owner command is empty");
   }
   const args = start.argv.slice(1);
-  let stdout = "";
-  let stderr = "";
+  const output = { stdout: "", stderr: "" };
   let ready = false;
   let stopping = false;
+  let closed = false;
   let forceTimer: NodeJS.Timeout | undefined;
-  let resolveExit!: (exit: TailscaleRouteOwnerExit) => void;
-  const exited = new Promise<TailscaleRouteOwnerExit>((resolve) => {
-    resolveExit = resolve;
-  });
+  const signalOperations: Promise<void>[] = [];
+  const exit = createDeferredCore<TailscaleRouteOwnerExit>();
   const child = spawn(command, args, {
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
@@ -92,12 +124,21 @@ export function runTailscaleRouteOwner(
   });
 
   const stop = () => {
-    if (stopping) {
+    if (stopping || closed) {
       return;
     }
     stopping = true;
-    signalChild(child, "SIGTERM");
-    forceTimer = setTimeout(() => signalChild(child, "SIGKILL"), STOP_GRACE_MS);
+    const signal = (value: "SIGTERM" | "SIGKILL") => {
+      signalOperations.push(
+        signalChild(child, value, command === "sudo" && args[0] === "-n", (message) => {
+          if (!closed) {
+            sendMessage({ type: "stop-failed", message });
+          }
+        }),
+      );
+    };
+    signal("SIGTERM");
+    forceTimer = setTimeout(() => signal("SIGKILL"), STOP_GRACE_MS);
     forceTimer.unref?.();
   };
   child.once("spawn", () => {
@@ -105,53 +146,67 @@ export function runTailscaleRouteOwner(
       sendMessage({ type: "spawned", pid: child.pid });
     }
   });
-  child.stdout?.on("data", (chunk: Buffer) => {
-    stdout = appendBounded(stdout, chunk);
-    if (!ready && stdout.includes(READY_MARKER)) {
-      ready = true;
-      sendMessage({ type: "ready" });
-    }
-  });
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderr = appendBounded(stderr, chunk);
-    if (!ready && stderr.includes(READY_MARKER)) {
-      ready = true;
-      sendMessage({ type: "ready" });
-    }
-  });
+  for (const stream of ["stdout", "stderr"] as const) {
+    child[stream]?.on("data", (chunk: Buffer) => {
+      output[stream] = appendBounded(output[stream], chunk);
+      if (!ready && output[stream].includes(READY_MARKER)) {
+        ready = true;
+        sendMessage({ type: "ready" });
+      }
+    });
+  }
   child.once("error", (error) => {
-    stderr = appendBounded(stderr, error instanceof Error ? error.message : String(error));
+    output.stderr = appendBounded(
+      output.stderr,
+      error instanceof Error ? error.message : String(error),
+    );
   });
   child.once("close", (code, signal) => {
+    closed = true;
     if (forceTimer) {
       clearTimeout(forceTimer);
     }
-    if (!stopping || !ready) {
-      sendMessage({ type: "failed", code, signal, stdout, stderr });
-    }
-    resolveExit({ code, signal, stopping });
+    void Promise.all(signalOperations).then(() => {
+      if (!stopping || !ready) {
+        sendMessage({ type: "failed", code, signal, ...output });
+      }
+      exit.resolve({ code, signal, stopping });
+    });
   });
-  return { exited, stop };
+  return { exited: exit.promise, stop };
 }
 
 if (process.argv[2] === TAILSCALE_ROUTE_OWNER_ARG) {
+  let finalExitCode = 0;
   try {
     const owner = runTailscaleRouteOwner(parseStart(process.argv[3]));
     // The owner survives a Gateway process-group kill. IPC closure releases the
     // detached claim even when the Gateway cannot run its shutdown hooks.
-    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-      process.once(signal, owner.stop);
-    }
-    process.once("disconnect", owner.stop);
-    process.once("message", (message: unknown) => {
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    const onMessage = (message: unknown) => {
       if (isRecord(message) && message.type === "stop") {
         owner.stop();
       }
-    });
-    if (!process.connected) {
-      owner.stop();
+    };
+    for (const signal of signals) {
+      process.on(signal, owner.stop);
     }
-    void owner.exited.then((exit) => process.exit(exit.stopping ? 0 : 1));
+    process.once("disconnect", owner.stop);
+    process.once("message", onMessage);
+    try {
+      if (!process.connected) {
+        owner.stop();
+      }
+      const exit = await owner.exited;
+      finalExitCode = exit.stopping ? 0 : 1;
+    } finally {
+      // Retirement must not signal the departed claim again on our own disconnect.
+      for (const signal of signals) {
+        process.off(signal, owner.stop);
+      }
+      process.off("disconnect", owner.stop);
+      process.off("message", onMessage);
+    }
   } catch (error) {
     send({
       type: "failed",
@@ -160,6 +215,14 @@ if (process.argv[2] === TAILSCALE_ROUTE_OWNER_ARG) {
       stdout: "",
       stderr: error instanceof Error ? error.message : String(error),
     });
-    process.exit(1);
+    finalExitCode = 1;
+  } finally {
+    // The foreground claim and its pipes have closed. Join its final failure
+    // report before releasing the parent-owned IPC channel.
+    await Promise.all(pendingReports);
+    if (process.connected) {
+      process.disconnect?.();
+    }
+    process.exitCode = finalExitCode;
   }
 }

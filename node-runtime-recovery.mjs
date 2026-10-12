@@ -3,46 +3,21 @@ import { spawn, spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { consumeRootOptionToken as consumeLauncherRootOptionToken } from "./cli-root-options.mjs";
+import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
+import {
+  RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS,
+  resolveLauncherStopTimeoutMs,
+} from "./gateway-shutdown-budget.mjs";
+import { withNodeRuntimePath } from "./node-runtime-env.mjs";
 import {
   detectCurrentSqliteCapabilities,
   nodeRuntimeFailure,
   SQLITE_CAPABILITY_PROBE,
 } from "./node-sqlite.mjs";
 
-const LAUNCHER_ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
-const LAUNCHER_ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level", "--container"]);
+export { consumeLauncherRootOptionToken };
 export const isNativeHookRelayInvocation = (argv) => argv[2] === "hooks" && argv[3] === "relay";
-
-const isLauncherRootOptionValueToken = (arg) => {
-  if (!arg || arg === "--") {
-    return false;
-  }
-  if (!arg.startsWith("-")) {
-    return true;
-  }
-  return /^-\d+(?:\.\d+)?$/.test(arg);
-};
-
-export const consumeLauncherRootOptionToken = (args, index) => {
-  const arg = args[index];
-  if (!arg) {
-    return 0;
-  }
-  if (LAUNCHER_ROOT_BOOLEAN_FLAGS.has(arg)) {
-    return 1;
-  }
-  if (
-    arg.startsWith("--profile=") ||
-    arg.startsWith("--log-level=") ||
-    arg.startsWith("--container=")
-  ) {
-    return 1;
-  }
-  if (LAUNCHER_ROOT_VALUE_FLAGS.has(arg)) {
-    return isLauncherRootOptionValueToken(args[index + 1]) ? 2 : 1;
-  }
-  return 0;
-};
 
 // Mirror the entry's foreground Gmail policy: a wrapper would kill that run before descendant cleanup finishes.
 export const isForegroundGmailRunInvocation = (argv) => {
@@ -65,27 +40,36 @@ const respawnSignals =
   process.platform === "win32"
     ? ["SIGTERM", "SIGINT", "SIGBREAK"]
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
-const respawnSignalExitGraceMs = 1_000;
-const respawnSignalForceKillGraceMs = 1_000;
-const respawnSignalHardExitGraceMs = 1_000;
+const respawnSignalForceKillGraceMs = RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS;
 
+/** Resolve true only after the replacement and its stdio close; the caller must return. */
 export const runRespawnedChild = (command, args, env) => {
+  // The serving Gateway owns drain and cleanup. Reap a stuck child only in the
+  // supervisor's exit margin, after that owner has had its full shutdown budget.
+  // An already-running older macOS launcher can still enforce its shorter timer;
+  // the serving Gateway retains that cap until it can identify the parent version.
+  const launcherStopTimeoutMs = resolveLauncherStopTimeoutMs({
+    platform: process.platform,
+    foreground: isForegroundGatewayRunArgv(process.argv),
+  });
+  const signalExitGraceMs = launcherStopTimeoutMs - respawnSignalForceKillGraceMs;
+  const stdioIsTerminal = process.stdin.isTTY || process.stdout.isTTY;
   const child = spawn(command, args, {
     stdio: "inherit",
     env,
+    windowsHide: !stdioIsTerminal,
   });
   const listeners = new Map();
-  // Keep signal forwarding and bounded shutdown in sync with src/entry.compile-cache.ts.
+  // Keep signal forwarding and bounded shutdown in sync with src/entry.compile-cache.ts,
+  // which drives src/process/respawn-child-runner.ts. That runner still holds its own
+  // copies of the escalation graces and reaps on a fixed short one, so only this
+  // launcher's deadline is the one the serving Gateway derives.
   let signalExitTimer = null;
   let signalForceKillTimer = null;
-  let signalHardExitTimer = null;
   let firstForwardedSignal = null;
   let hardKillBackstopStarted = false;
-  const detach = () => {
-    for (const [signal, listener] of listeners) {
-      process.off(signal, listener);
-    }
-    listeners.clear();
+  let childExited = false;
+  const clearEscalation = () => {
     if (signalExitTimer) {
       clearTimeout(signalExitTimer);
       signalExitTimer = null;
@@ -94,10 +78,13 @@ export const runRespawnedChild = (command, args, env) => {
       clearTimeout(signalForceKillTimer);
       signalForceKillTimer = null;
     }
-    if (signalHardExitTimer) {
-      clearTimeout(signalHardExitTimer);
-      signalHardExitTimer = null;
+  };
+  const detach = () => {
+    clearEscalation();
+    for (const [signal, listener] of listeners) {
+      process.off(signal, listener);
     }
+    listeners.clear();
   };
   const forceKillChild = () => {
     try {
@@ -115,10 +102,7 @@ export const runRespawnedChild = (command, args, env) => {
     signalForceKillTimer = setTimeout(() => {
       hardKillBackstopStarted = true;
       forceKillChild();
-      signalHardExitTimer = setTimeout(() => {
-        process.exit(1);
-      }, respawnSignalHardExitGraceMs);
-      signalHardExitTimer.unref?.();
+      // Completion still belongs to close, after the owned child has been reaped.
     }, respawnSignalForceKillGraceMs);
     signalForceKillTimer.unref?.();
   };
@@ -129,11 +113,14 @@ export const runRespawnedChild = (command, args, env) => {
     }
     signalExitTimer = setTimeout(() => {
       requestChildTermination();
-    }, respawnSignalExitGraceMs);
+    }, signalExitGraceMs);
     signalExitTimer.unref?.();
   };
   for (const signal of respawnSignals) {
     const listener = () => {
+      if (childExited) {
+        return;
+      }
       try {
         child.kill(signal);
       } catch {
@@ -148,13 +135,24 @@ export const runRespawnedChild = (command, args, env) => {
       // Unsupported signal on this platform.
     }
   }
-  child.once("exit", (code, signal) => {
-    detach();
-    if (signal) {
-      if (process.platform !== "win32") {
-        process.kill(process.pid, signal);
-        return;
-      }
+  return new Promise((resolve) => {
+    let failed = false;
+    child.once("error", (error) => {
+      failed = true;
+      process.stderr.write(
+        `[openclaw] Failed to respawn launcher: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+      );
+    });
+    child.once("exit", () => {
+      childExited = true;
+      // The process is gone, but its pipes may still be draining. Keep the
+      // launcher alive and signal handlers installed until close, without
+      // escalating against an exited child or changing its recorded outcome.
+      clearEscalation();
+    });
+    child.once("close", (code, signal) => {
+      detach();
+      const signalCode = signal && os.constants.signals[signal];
       const forwardedSignalExitCode =
         !hardKillBackstopStarted && signal === firstForwardedSignal
           ? signal === "SIGINT"
@@ -163,20 +161,22 @@ export const runRespawnedChild = (command, args, env) => {
               ? 143
               : undefined
           : undefined;
-      process.exit(forwardedSignalExitCode ?? 1);
-    }
-    process.exit(code ?? 1);
+      process.exitCode = failed
+        ? 1
+        : signal
+          ? process.platform === "win32"
+            ? (forwardedSignalExitCode ?? 1)
+            : signalCode
+              ? 128 + signalCode
+              : 1
+          : (code ?? 1);
+      // Preserve the Unix supervisor contract, but only after child and stdio settlement.
+      if (!failed && signal && process.platform !== "win32") {
+        process.kill(process.pid, signal);
+      }
+      resolve(true);
+    });
   });
-  child.once("error", (error) => {
-    detach();
-    process.stderr.write(
-      `[openclaw] Failed to respawn launcher: ${
-        error instanceof Error ? (error.stack ?? error.message) : String(error)
-      }\n`,
-    );
-    process.exit(1);
-  });
-  return true;
 };
 
 function readSmallFile(filename, encoding = "utf8") {
@@ -382,7 +382,10 @@ export function resolveRecoveryPath(
 }
 
 // Do not pass preload hooks, native-library overrides, or application secrets to probes.
-export function isUsableNode(nodePath, { allowCwd = false, trustedRoot, env = process.env } = {}) {
+export function isUsableNode(
+  nodePath,
+  { allowCwd = false, trustedRoot, env = process.env, acceptVersion } = {},
+) {
   const resolved = resolveRecoveryPath(nodePath, undefined, { allowCwd, trustedRoot });
   if (!resolved || !/^node(?:\.exe)?$/i.test(path.basename(resolved))) {
     return false;
@@ -393,25 +396,29 @@ export function isUsableNode(nodePath, { allowCwd = false, trustedRoot, env = pr
       probeEnv[key] = value;
     }
   }
-  const result = spawnSync(
-    resolved,
-    [
-      "-e",
-      `const probe = ${SQLITE_CAPABILITY_PROBE}; process.stdout.write(JSON.stringify({ version: process.versions.node, probe }));`,
-    ],
-    {
-      encoding: "utf8",
-      env: probeEnv,
-      timeout: 5_000,
-      killSignal: "SIGKILL",
-      maxBuffer: 65_536,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
   try {
+    const result = spawnSync(
+      resolved,
+      [
+        "-e",
+        `const probe = ${SQLITE_CAPABILITY_PROBE}; process.stdout.write(JSON.stringify({ version: process.versions.node, probe }));`,
+      ],
+      {
+        encoding: "utf8",
+        env: probeEnv,
+        timeout: 5_000,
+        killSignal: "SIGKILL",
+        maxBuffer: 65_536,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     const details = JSON.parse(result.stdout);
-    return result.status === 0 && !nodeRuntimeFailure(details.version, details.probe);
+    return (
+      result.status === 0 &&
+      !nodeRuntimeFailure(details.version, details.probe) &&
+      (!acceptVersion || acceptVersion(details.version))
+    );
   } catch {
     return false;
   }
@@ -645,22 +652,15 @@ function* availableNodeCandidates(homeDir, env) {
   }
 }
 
-/** Recover only at CLI startup, before reading config or state. */
-export async function recoverNodeRuntime({
+/** Select a verified runtime without respawning; callers own target admission and activation. */
+export async function findUsableNodeRuntime({
   homeDir,
   allowInstall = false,
   env = process.env,
+  acceptVersion,
+  nodeVersion,
+  installCommand,
 } = {}) {
-  if (
-    process.versions.bun ||
-    env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1" ||
-    !process.argv[1] ||
-    isForegroundGmailRunInvocation(process.argv) ||
-    (process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) ||
-    !nodeRuntimeFailure(process.versions.node, detectCurrentSqliteCapabilities())
-  ) {
-    return false;
-  }
   // userInfo reads the account home without consulting the mutable process environment.
   const inheritedHome = env.HOME?.trim() || env.USERPROFILE?.trim();
   let accountHome;
@@ -689,7 +689,12 @@ export async function recoverNodeRuntime({
     });
   const { resolveUpdatedNodeRuntime } = await import("./node-runtime-update.mjs");
   let nodePath = recoveryRoot
-    ? await resolveUpdatedNodeRuntime(recoveryRoot, { allowInstall: false, env })
+    ? await resolveUpdatedNodeRuntime(recoveryRoot, {
+        allowInstall: false,
+        env,
+        acceptVersion,
+        installCommand,
+      })
     : null;
   let reason = "cached OpenClaw runtime";
   const currentNode = realNodePath(process.execPath);
@@ -706,7 +711,7 @@ export async function recoverNodeRuntime({
         continue;
       }
       seen.add(realPath);
-      if (isUsableNode(realPath, { allowCwd, env })) {
+      if (isUsableNode(realPath, { allowCwd, env, acceptVersion })) {
         nodePath = realPath;
         reason = source;
         break;
@@ -714,19 +719,48 @@ export async function recoverNodeRuntime({
     }
   }
   if (!nodePath && allowInstall && recoveryRoot) {
-    nodePath = await resolveUpdatedNodeRuntime(recoveryRoot, { env });
+    nodePath = await resolveUpdatedNodeRuntime(recoveryRoot, {
+      env,
+      acceptVersion,
+      nodeVersion,
+      installCommand,
+    });
     reason = "private OpenClaw runtime";
   }
+  return nodePath ? { nodePath, reason } : null;
+}
+
+/**
+ * Recover only at CLI startup, before reading config or state. A true result
+ * means the replacement completed and exitCode is recorded: do not resume startup.
+ */
+export async function recoverNodeRuntime({
+  homeDir,
+  allowInstall = false,
+  env = process.env,
+} = {}) {
+  if (
+    process.versions.bun ||
+    env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1" ||
+    !process.argv[1] ||
+    isForegroundGmailRunInvocation(process.argv) ||
+    (process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) ||
+    !nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities())
+  ) {
+    return false;
+  }
+  const selected = await findUsableNodeRuntime({ homeDir, allowInstall, env });
+  const nodePath = selected?.nodePath;
+  const reason = selected?.reason;
   if (!nodePath) {
     return false;
   }
   process.stderr.write(
     `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; current Node failed runtime admission).\n`,
   );
-  runRespawnedChild(nodePath, [...process.execArgv, process.argv[1], ...process.argv.slice(2)], {
-    ...env,
-    OPENCLAW_NODE_UPDATE_RESPAWNED: "1",
-  });
-  // The original CLI must not continue while the replacement owns the invocation.
-  return await new Promise(() => {});
+  return await runRespawnedChild(
+    nodePath,
+    [...process.execArgv, process.argv[1], ...process.argv.slice(2)],
+    { ...withNodeRuntimePath(env, nodePath), OPENCLAW_NODE_UPDATE_RESPAWNED: "1" },
+  );
 }

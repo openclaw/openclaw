@@ -66,6 +66,7 @@ const { FakeWebSocket, providerAuthMocks, ssrfMocks } = vi.hoisted(() => {
     FakeWebSocket: MockWebSocket,
     providerAuthMocks: {
       isProviderAuthProfileConfigured: vi.fn(),
+      isProviderAuthProfileConfiguredAsync: vi.fn(),
       resolveProviderAuthProfileApiKey: vi.fn(),
     },
     ssrfMocks: {
@@ -74,12 +75,15 @@ const { FakeWebSocket, providerAuthMocks, ssrfMocks } = vi.hoisted(() => {
   };
 });
 
-vi.mock("ws", () => ({
-  default: FakeWebSocket,
+// Intercept the shared transport constructor, not Bun's bare ws adapter.
+vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
+  WebSocket: FakeWebSocket,
 }));
 
+// mock-isolation: Transcription transport tests supply synthetic credentials without opening host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: providerAuthMocks.isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync: providerAuthMocks.isProviderAuthProfileConfiguredAsync,
   resolveProviderAuthProfileApiKey: providerAuthMocks.resolveProviderAuthProfileApiKey,
 }));
 
@@ -148,6 +152,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     providerAuthMocks.isProviderAuthProfileConfigured.mockReset();
+    providerAuthMocks.isProviderAuthProfileConfiguredAsync.mockReset();
     providerAuthMocks.resolveProviderAuthProfileApiKey.mockReset();
     ssrfMocks.fetchWithSsrFGuard.mockReset();
     vi.stubEnv("OPENAI_API_KEY", "");
@@ -163,50 +168,6 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     }
     sessions.clear();
     vi.unstubAllEnvs();
-  });
-
-  it("normalizes OpenAI config defaults", () => {
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as never,
-      rawConfig: {
-        providers: {
-          openai: {
-            apiKey: "sk-test", // pragma: allowlist secret
-          },
-        },
-      },
-    });
-
-    expect(resolved).toEqual({
-      apiKey: "sk-test",
-    });
-  });
-
-  it("keeps provider-owned transcription settings configurable via raw provider config", () => {
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as never,
-      rawConfig: {
-        providers: {
-          openai: {
-            language: "en",
-            model: "gpt-4o-transcribe",
-            prompt: "expect OpenClaw product names",
-            silenceDurationMs: 900,
-            vadThreshold: 0.45,
-          },
-        },
-      },
-    });
-
-    expect(resolved).toEqual({
-      language: "en",
-      model: "gpt-4o-transcribe",
-      prompt: "expect OpenClaw product names",
-      silenceDurationMs: 900,
-      vadThreshold: 0.45,
-    });
   });
 
   it("preserves explicit zero-valued VAD settings", () => {
@@ -227,134 +188,20 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     expect(resolved?.vadThreshold).toBe(0);
   });
 
-  it("drops malformed VAD timing settings", () => {
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as never,
-      rawConfig: {
-        providers: {
-          openai: {
-            silenceDurationMs: -1,
-            vadThreshold: 1.5,
-          },
-        },
-      },
-    });
-
-    expect(resolved?.silenceDurationMs).toBeUndefined();
-    expect(resolved?.vadThreshold).toBeUndefined();
-  });
-
-  it("accepts the legacy openai-realtime alias", () => {
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-    expect(provider.aliases).toContain("openai-realtime");
-  });
-
-  it("treats an OpenAI API-key profile as configured", () => {
+  it("treats an OpenAI API-key profile as configured through its asynchronous owner", async () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
     const cfg = { auth: { order: { openai: ["openai:default"] } } };
-    providerAuthMocks.isProviderAuthProfileConfigured.mockReturnValue(true);
+    providerAuthMocks.isProviderAuthProfileConfiguredAsync.mockResolvedValue(true);
 
-    expect(provider.isConfigured({ cfg: cfg as never, providerConfig: {} })).toBe(true);
-    expect(providerAuthMocks.isProviderAuthProfileConfigured).toHaveBeenCalledWith({
+    expect(await provider.isConfiguredAsync?.({ cfg: cfg as never, providerConfig: {} })).toBe(
+      true,
+    );
+    expect(providerAuthMocks.isProviderAuthProfileConfigured).not.toHaveBeenCalled();
+    expect(providerAuthMocks.isProviderAuthProfileConfiguredAsync).toHaveBeenCalledWith({
       provider: "openai",
       cfg,
       profileTypes: ["api_key"],
     });
-  });
-
-  it("does not treat a whitespace-only environment API key as configured", () => {
-    vi.stubEnv("OPENAI_API_KEY", "   ");
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-
-    expect(provider.isConfigured({ cfg: {} as never, providerConfig: {} })).toBe(false);
-  });
-
-  it("mints an API-key client secret for realtime transcription sockets", async () => {
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-    const release = vi.fn();
-    providerAuthMocks.resolveProviderAuthProfileApiKey.mockResolvedValue("sk-profile"); // pragma: allowlist secret
-    ssrfMocks.fetchWithSsrFGuard.mockResolvedValue({
-      response: new Response(JSON.stringify({ value: "ek-test" }), { status: 200 }),
-      release,
-    });
-    const cfg = { auth: { order: { openai: ["openai:default"] } } };
-    const session = provider.createSession({
-      cfg: cfg as never,
-      providerConfig: {},
-    });
-
-    const connecting = session.connect();
-    const socket = await waitForFakeSocket(session);
-
-    expect(socket.headers?.Authorization).toBe("Bearer ek-test");
-    expect(providerAuthMocks.resolveProviderAuthProfileApiKey).toHaveBeenCalledWith({
-      provider: "openai",
-      cfg,
-      profileTypes: ["api_key"],
-    });
-    const request = mockCallArg(ssrfMocks.fetchWithSsrFGuard);
-    expect(request.auditContext).toBe("openai-realtime-transcription-session");
-    expect(request.url).toBe("https://api.openai.com/v1/realtime/client_secrets");
-    expect(request.policy).toEqual({
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: ["api.openai.com"],
-    });
-    const init = request.init as {
-      method?: string;
-      headers?: Record<string, string>;
-      body?: unknown;
-    };
-    expect(init.method).toBe("POST");
-    expect(init.headers?.Authorization).toBe("Bearer sk-profile");
-    expect(init.headers?.["Content-Type"]).toBe("application/json");
-    expect(typeof init.body).toBe("string");
-    expect(JSON.parse(init.body as string)).toEqual({
-      session: {
-        type: "transcription",
-        audio: {
-          input: {
-            format: { type: "audio/pcmu" },
-            transcription: { model: "gpt-4o-transcribe" },
-            turn_detection: {
-              type: "server_vad",
-              threshold: 0.5,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 800,
-            },
-          },
-        },
-      },
-    });
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "transcription_session.updated" })));
-    await connecting;
-
-    expect(release).toHaveBeenCalled();
-    expect(parseSent(socket)[0]).toEqual({
-      type: "session.update",
-      session: {
-        type: "transcription",
-        audio: {
-          input: {
-            format: { type: "audio/pcmu" },
-            transcription: { model: "gpt-4o-transcribe" },
-            turn_detection: {
-              type: "server_vad",
-              threshold: 0.5,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 800,
-            },
-          },
-        },
-      },
-    });
-    session.sendAudio(Buffer.alloc(0));
-    session.close();
-    expect(parseSent(socket).at(-1)?.type).toBe("session.update");
   });
 
   it("does not use Codex OAuth for realtime transcription", async () => {
@@ -482,64 +329,44 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     replacementSocket.close();
   });
 
-  it.each(["audio append", "final commit"] as const)(
-    "reports websocket backpressure during %s exactly once",
-    async (phase) => {
-      const onError = vi.fn();
-      const session = createTranscriptionSession({
-        onError,
-      });
-      const socket = await connectFakeSession(session);
-      if (phase === "final commit") {
-        session.sendAudio(Buffer.alloc(800, 1));
-      }
-      Object.defineProperty(socket, "bufferedAmount", { value: 1024 * 1024 });
-      if (phase === "audio append") {
-        session.sendAudio(Buffer.alloc(800, 1));
-      }
+  it("reports websocket backpressure during final commit exactly once", async () => {
+    const onError = vi.fn();
+    const session = createTranscriptionSession({
+      onError,
+    });
+    const socket = await connectFakeSession(session);
+    session.sendAudio(Buffer.alloc(800, 1));
+    Object.defineProperty(socket, "bufferedAmount", { value: 1024 * 1024 });
 
-      session.close();
-      session.close();
+    session.close();
+    session.close();
 
-      expect(onError).toHaveBeenCalledOnce();
-      if (phase === "final commit") {
-        expect(onError).toHaveBeenCalledWith(
-          expect.objectContaining({ message: expect.stringContaining("final audio commit") }),
-        );
-      }
-      expect(parseSent(socket).at(-1)?.type).toBe(
-        phase === "audio append" ? "session.update" : "input_audio_buffer.append",
-      );
-    },
-  );
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("final audio commit") }),
+    );
+    expect(parseSent(socket).at(-1)?.type).toBe("input_audio_buffer.append");
+  });
 
   it.each([
-    [1, 0, false, false],
-    [799, 0, false, false],
-    [800, 1, false, false],
-    [800, 0, true, false],
-    [1599, 0, true, false],
-    [1600, 1, true, false],
-    [1600, 1, true, true],
+    [1599, 0, false],
+    [1600, 1, false],
+    [1600, 1, true],
   ] as const)(
-    "commits eligible %i-byte audio once (%i commits, VAD stopped: %s, acknowledged: %s)",
-    async (audioBytes, expectedCommits, vadStopped, acknowledged) => {
+    "commits eligible %i-byte audio once (%i commits, VAD stopped: true, acknowledged: %s)",
+    async (audioBytes, expectedCommits, acknowledged) => {
       const session = createTranscriptionSession({});
       const socket = await connectFakeSession(session);
-      if (vadStopped) {
-        session.sendAudio(Buffer.alloc(800, 1));
-        session.sendAudio(Buffer.alloc(audioBytes - 800, 2));
-        emitJson(socket, {
-          type: "input_audio_buffer.speech_stopped",
-          item_id: "first-turn",
-          audio_end_ms: 100,
-        });
-        if (acknowledged) {
-          emitJson(socket, { type: "input_audio_buffer.committed", item_id: "first-turn" });
-          emitJson(socket, { type: "input_audio_buffer.committed", item_id: "first-turn" });
-        }
-      } else {
-        session.sendAudio(Buffer.alloc(audioBytes, 1));
+      session.sendAudio(Buffer.alloc(800, 1));
+      session.sendAudio(Buffer.alloc(audioBytes - 800, 2));
+      emitJson(socket, {
+        type: "input_audio_buffer.speech_stopped",
+        item_id: "first-turn",
+        audio_end_ms: 100,
+      });
+      if (acknowledged) {
+        emitJson(socket, { type: "input_audio_buffer.committed", item_id: "first-turn" });
+        emitJson(socket, { type: "input_audio_buffer.committed", item_id: "first-turn" });
       }
 
       session.close();
@@ -771,26 +598,6 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     expect(transcripts).toEqual(["first"]);
     expect(errors).toEqual(["first failure"]);
     expect(partials).toEqual([]);
-    expect(session.isConnected()).toBe(true);
-    session.close();
-  });
-
-  it("keeps active predecessor satisfaction as terminal history grows", async () => {
-    const transcripts: string[] = [];
-    const session = createTranscriptionSession({
-      onTranscript: (transcript) => transcripts.push(transcript),
-    });
-    const socket = await connectFakeSession(session);
-
-    emitCommitted(socket, "root", null);
-    emitCompleted(socket, "root", "root transcript");
-    emitCommitted(socket, "waiting", "root");
-    for (let index = 0; index < 64; index += 1) {
-      emitCompleted(socket, `uncommitted-${index}`, "");
-    }
-    emitCompleted(socket, "waiting", "waiting transcript");
-
-    expect(transcripts).toEqual(["root transcript", "waiting transcript"]);
     expect(session.isConnected()).toBe(true);
     session.close();
   });

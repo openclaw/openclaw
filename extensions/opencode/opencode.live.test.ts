@@ -15,7 +15,7 @@ import {
 const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 const OPENCODE_API_KEY =
   process.env.OPENCODE_API_KEY?.trim() || process.env.OPENCODE_ZEN_API_KEY?.trim() || "";
-const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENCODE_MODEL?.trim() || "mimo-v2.5-free";
+const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENCODE_MODEL?.trim() || "ling-3.0-flash-fin-free";
 const LIVE = isLiveTestEnabled(["OPENCODE_LIVE_TEST"]) && OPENCODE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -116,10 +116,10 @@ describeLive("opencode plugin live", () => {
   it("completes a discovered live tool-call round trip", async () => {
     const { model, reasoningOptions } = await resolveOpencodeToolLiveModel();
     const tool = liveEchoTool();
-    const firstOptions = {
+    const options = {
       apiKey: OPENCODE_API_KEY,
       ...reasoningOptions,
-      maxTokens: 128,
+      maxTokens: 4096,
     } as const;
 
     const first = await completeSimple(
@@ -134,7 +134,7 @@ describeLive("opencode plugin live", () => {
         ],
         tools: [tool],
       },
-      firstOptions,
+      options,
     );
 
     if (first.stopReason === "error") {
@@ -169,11 +169,7 @@ describeLive("opencode plugin live", () => {
         ],
         tools: [tool],
       },
-      {
-        apiKey: OPENCODE_API_KEY,
-        ...reasoningOptions,
-        maxTokens: 64,
-      },
+      options,
     );
 
     if (second.stopReason === "error") {

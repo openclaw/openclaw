@@ -23,7 +23,8 @@ type ShellRenderState = {
   render: () => TemplateResult;
 };
 
-afterEach(() => {
+afterEach(async () => {
+  await vi.dynamicImportSettled();
   resetAppHostTestGlobals();
 });
 
@@ -135,6 +136,10 @@ describe("OpenClaw shell dock suppression", () => {
           | null
       )?.available ?? false;
 
+    const homeAvailable = () =>
+      container.querySelector<HTMLElement & { homeAvailable: boolean }>("openclaw-assistant-panel")
+        ?.homeAvailable ?? false;
+
     shell.routeState = { routeId: "appearance" };
     renderLit(shell.render(), container);
     expect(
@@ -171,6 +176,13 @@ describe("OpenClaw shell dock suppression", () => {
           custodianSuppressed: boolean;
         }
       ).custodianSuppressed,
+    ).toBe(true);
+
+    shell.routeState = { routeId: "systems" };
+    renderLit(shell.render(), container);
+    expect(
+      container.querySelector<HTMLElement & { suppressed: boolean }>("openclaw-desktop-panel")
+        ?.suppressed,
     ).toBe(true);
 
     shell.routeState = { routeId: "chat" };
@@ -255,34 +267,46 @@ describe("OpenClaw shell dock suppression", () => {
     renderLit(shell.render(), container);
     expect(desktopAvailable()).toBe(true);
 
-    // The collapsed toolbar opens the shared dock through Home.
+    // Home now lives in the retained rail, not duplicate floating chrome.
+    // The shell still projects its access through permission, reconnect, and Gateway changes.
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     context.navigation.snapshot.navCollapsed = true;
     renderLit(shell.render(), container);
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
-    expect(container.querySelector(".shell-chrome-controls__home")).not.toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(container.querySelector(".shell--navigation-rail openclaw-app-sidebar")).not.toBeNull();
+    expect(homeAvailable()).toBe(true);
     context.gateway.snapshot.hello!.auth = {
       role: "operator",
       scopes: ["operator.read", "operator.write"],
     };
     renderLit(shell.render(), container);
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
-    expect(container.querySelector(".shell-chrome-controls__home")).not.toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(container.querySelector(".shell--navigation-rail openclaw-app-sidebar")).not.toBeNull();
+    expect(homeAvailable()).toBe(true);
     context.gateway.snapshot.phase = "offline";
     renderLit(shell.render(), container);
-    expect(container.querySelector(".shell-chrome-controls__home")).not.toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(container.querySelector(".shell--navigation-rail openclaw-app-sidebar")).not.toBeNull();
+    expect(homeAvailable()).toBe(true);
     context.gateway.connection.gatewayUrl = "ws://another-gateway.test";
     renderLit(shell.render(), container);
     expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(homeAvailable()).toBe(false);
     context.gateway.snapshot.phase = "connected";
     renderLit(shell.render(), container);
-    expect(container.querySelector(".shell-chrome-controls__home")).not.toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(container.querySelector(".shell--navigation-rail openclaw-app-sidebar")).not.toBeNull();
+    expect(homeAvailable()).toBe(true);
     context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
     renderLit(shell.render(), container);
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(homeAvailable()).toBe(false);
     context.gateway.snapshot.phase = "offline";
     renderLit(shell.render(), container);
     expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(homeAvailable()).toBe(false);
   });
 });

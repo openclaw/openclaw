@@ -2,9 +2,8 @@
 import type { AuditMessageFailureStage } from "../../audit/audit-event-types.js";
 import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
-  findPlatformMessageRejectedError,
+  isAmbiguousDeliveryTransportError,
   isProvenDeliveryNotSentError,
 } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
@@ -14,8 +13,12 @@ import type {
   PlatformSendRoute,
 } from "./deliver-contracts.js";
 import { deliverOutboundPayloadsCore } from "./deliver-core.js";
+import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
 import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
 import {
+  findTerminalBatchRejection,
+  isProvenBatchNotSent,
+  rejectQueuedDelivery,
   persistQueuedPostSendState,
   persistQueuedPreSendState,
   type QueuedPostSendState,
@@ -31,7 +34,8 @@ import {
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import { runOutboundDeliveryCommitHooks } from "./delivery-commit-hooks.js";
-import { rejectDurableDelivery, settleDurableDelivery } from "./delivery-completion.js";
+import { settleDurableDelivery } from "./delivery-completion.js";
+import { prepareOutboundDeliveryGeneration } from "./delivery-generation.js";
 import type { DeliveryProducerLease } from "./delivery-queue-lease.js";
 import {
   failDelivery,
@@ -39,13 +43,12 @@ import {
   failDeliveryBeforePlatformSend,
   markDeliveryPlatformSendDispatched,
 } from "./delivery-queue-storage.js";
-import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
+import { createOutboundMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
   completedOutboundAuditTerminals,
   emitOutboundAuditLifecycle,
   emitOutboundAuditTerminals,
   failedOutboundAuditTerminals,
-  uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 
@@ -60,11 +63,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
 ): Promise<OutboundDeliveryResult[]> {
   // Lease loss revokes queue mutation authority. Caller cancellation still
   // follows the normal abort cleanup path through the combined signal.
-  const throwIfProducerLeaseLost = (): void => {
-    if (producerLease?.signal.aborted) {
-      throw producerLease.signal.reason;
-    }
-  };
+  const throwIfProducerLeaseLost = (): void => producerLease?.signal.throwIfAborted();
   const payloadCount = params.preparedBatch?.sourcePayloadCount ?? params.payloads.length;
   const ownsAuditTerminal = params.deliveryQueueId === undefined;
   // Terminal evidence belongs to delivery custody, independently of audit subscribers.
@@ -103,18 +102,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   // Deliberately process-local: message_sent is best-effort after queue
   // settlement, not a durable plugin outbox or a reason to retry delivery.
   const messageSentEvents: MessageSentEvent[] = [];
-  const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
-  const { emitMessageSent, hasMessageSentHooks } = createMessageSentEmitter({
-    hookRunner: getGlobalHookRunner(),
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId,
-    sessionKeyForInternalHooks,
-    isGroup: params.mirror?.isGroup,
-    groupId: params.mirror?.groupId,
-    runId: params.preparedBatch?.runId,
-    logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
-  });
+  const { emitMessageSent, hasMessageSentHooks, sessionKeyForInternalHooks } =
+    createOutboundMessageSentEmitter(params, OUTBOUND_DELIVERY_LOG_SCOPE);
   if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
       `${OUTBOUND_DELIVERY_LOG_SCOPE}: session.agentId present without session key; internal message:sent hook will be skipped`,
@@ -140,6 +129,14 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       },
       params.deliveryQueueStateContext,
     );
+  const failAfterPlatformSend = async (
+    owner: QueuedDeliveryOwner,
+    error: string,
+    ambiguousTransportError?: true,
+  ): Promise<void> => {
+    await owner.fail(failDeliveryAfterPlatformSend, error, ambiguousTransportError);
+    queuedPostSendState = "failed";
+  };
   const emitTerminals = (
     terminals: Parameters<typeof emitOutboundAuditTerminals>[0]["terminals"],
   ): void => {
@@ -159,29 +156,36 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     }
     commitHooksRun = true;
     flushMessageSentEvents();
-    if (deliveredResults.length > 0) {
-      await runOutboundDeliveryCommitHooks(deliveredResults);
+    await runOutboundDeliveryCommitHooks(deliveredResults);
+  };
+  const auditBatch = () => ({ payloadCount, results: deliveredResults, payloadOutcomes });
+  const failedTerminals = (failureStage: AuditMessageFailureStage) =>
+    failedOutboundAuditTerminals({ ...auditBatch(), failureStage });
+  const emitFailedTerminals = (failureStage: AuditMessageFailureStage) =>
+    emitTerminals(() => failedTerminals(failureStage));
+  const completedTerminals = () => completedOutboundAuditTerminals(auditBatch());
+  const finishAck = async (terminals: Parameters<typeof emitTerminals>[0]): Promise<void> => {
+    queuedPostSendState = "acked";
+    await runCommitHooksAfterAck();
+    emitTerminals(terminals);
+  };
+  const finishPermanentRejection = async (
+    owner: QueuedDeliveryOwner,
+    rejection: PlatformMessageNotDispatchedError,
+  ): Promise<void> => {
+    const terminals = failedTerminals("platform_send");
+    if (await rejectQueuedDelivery(owner, rejection, params, terminals)) {
+      await finishAck(() => terminals);
     }
   };
-  let releaseCancelledPreparation: (() => Promise<void>) | undefined;
-  const cancelBeforeSend = (): void => {
-    if (!queueOwner || platformSendStarted || queuedPostSendState !== undefined) {
-      return;
-    }
-    try {
-      releaseCancelledPreparation = queueOwner.retireUnsent();
-      if (releaseCancelledPreparation) {
-        // Keep preparation attached so its late token reaches afterSendFailure.
-        // Custody ends now; media and plugin resources end when that work settles.
-        producerLease?.stop();
-        queuedPostSendState = "acked";
-        emitTerminals(() =>
-          uniformOutboundAuditTerminals(payloadCount, { outcome: "failed", failureStage: "queue" }),
-        );
-      }
-    } catch (error) {
-      log.warn(`failed to retire cancelled delivery ${queueId}: ${formatErrorMessage(error)}`);
-    }
+  let generation: Awaited<ReturnType<typeof prepareOutboundDeliveryGeneration>> | undefined;
+  const assertPlatformSendAuthorized = (): void => {
+    throwIfAborted(params.abortSignal);
+    assertSessionWriterDeliveryAuthorized(
+      params.deliveryCompletion?.kind === "pending-final"
+        ? params.deliveryCompletion.sessionWriterDeliveryAuthority
+        : undefined,
+    );
   };
   const wrappedParams: InternalDeliverOutboundPayloadsParams = {
     ...params,
@@ -235,23 +239,15 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       platformSendStarted = true;
     },
     onDirectAdapterHandoff: async () => {
-      throwIfAborted(params.abortSignal);
-      assertSessionWriterDeliveryAuthorized(
-        params.deliveryCompletion?.kind === "pending-final"
-          ? params.deliveryCompletion.sessionWriterDeliveryAuthority
-          : undefined,
-      );
+      assertPlatformSendAuthorized();
       await params.onPlatformSendDispatch?.();
       throwIfAborted(params.abortSignal);
+      generation?.assertCurrent();
     },
     assertDirectAdapterHandoff: () => {
+      generation?.assertCurrent();
       params.assertDirectAdapterHandoff?.();
-      throwIfAborted(params.abortSignal);
-      assertSessionWriterDeliveryAuthorized(
-        params.deliveryCompletion?.kind === "pending-final"
-          ? params.deliveryCompletion.sessionWriterDeliveryAuthority
-          : undefined,
-      );
+      assertPlatformSendAuthorized();
     },
     onPlatformSendDispatch: async () => {
       throwIfAborted(params.abortSignal);
@@ -259,23 +255,13 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       // A later payload dispatch must not regress that durable evidence to attempt-started.
       if (platformQueueId && queuedPreSendState !== "acked" && queuedPostSendState === undefined) {
         try {
-          if (producerClaimId) {
-            await markDeliveryPlatformSendDispatched(
-              platformQueueId,
-              platformQueueStateDir,
-              platformSendRoute,
-              producerClaimId,
-              params.deliveryQueueStateContext,
-            );
-          } else {
-            await markDeliveryPlatformSendDispatched(
-              platformQueueId,
-              platformQueueStateDir,
-              platformSendRoute,
-              undefined,
-              params.deliveryQueueStateContext,
-            );
-          }
+          await markDeliveryPlatformSendDispatched(
+            platformQueueId,
+            platformQueueStateDir,
+            platformSendRoute,
+            producerClaimId || undefined,
+            params.deliveryQueueStateContext,
+          );
           queuedPreSendState ??= "marked";
         } catch (dispatchMarkError) {
           // Any SQLite-fenced live producer must prove it still owns the row at
@@ -289,14 +275,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           );
         }
       }
-      throwIfAborted(params.abortSignal);
-      assertSessionWriterDeliveryAuthorized(
-        params.deliveryCompletion?.kind === "pending-final"
-          ? params.deliveryCompletion.sessionWriterDeliveryAuthority
-          : undefined,
-      );
+      assertPlatformSendAuthorized();
       await params.onPlatformSendDispatch?.();
       throwIfAborted(params.abortSignal);
+      generation?.assertCurrent();
       if (platformSendSourceIndex !== undefined) {
         platformDispatchedPayloads.add(platformSendSourceIndex);
       }
@@ -331,11 +313,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   let platformResultsReturned = false;
 
   try {
-    params.abortSignal?.addEventListener("abort", cancelBeforeSend, { once: true });
-    if (params.abortSignal?.aborted) {
-      cancelBeforeSend();
-    }
     throwIfProducerLeaseLost();
+    if (params.sessionGeneration !== undefined) {
+      generation = await prepareOutboundDeliveryGeneration(params.sessionGeneration);
+      throwIfProducerLeaseLost();
+    }
     const conversationAttemptAuthority =
       params.deliveryCompletion?.kind === "conversation"
         ? params.deliveryCompletion
@@ -343,21 +325,21 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     if (conversationAttemptAuthority) {
       // Conversation delivery was not stable-shipped before route fingerprints. An unfinished
       // legacy intent cannot be rebound safely after upgrade, so missing authority fails closed.
-      if (!conversationAttemptAuthority.routeFingerprint || !params.onDeliveryAttempt) {
+      if (
+        !conversationAttemptAuthority.routeFingerprint ||
+        (!params.onDeliveryAttempt && !params.withDirectAdapterHandoff)
+      ) {
         throw new PlatformMessageNotDispatchedError(
           "Conversation delivery is missing its current route authorization",
           { cause: undefined, retryable: false },
         );
       }
-      // One durable attempt admits its bounded adapter fanout/retries. A later queue or recovery
-      // attempt rechecks from the serialized fingerprint; in-flight revocation is not promised.
-      await params.onDeliveryAttempt();
+      // Released callbacks retain their attempt boundary. Bundled conversations also fence each
+      // concrete platform invocation after asynchronous preparation through the handoff owner.
+      await params.onDeliveryAttempt?.();
       throwIfProducerLeaseLost();
     }
     const results = await deliverOutboundPayloadsCore(wrappedParams);
-    if (releaseCancelledPreparation) {
-      throwIfAborted(params.abortSignal);
-    }
     // Core reconciles adapter progress objects with hook-bearing final results.
     deliveredResults = results;
     const failedOutcomes = payloadOutcomes.filter((outcome) => outcome.status === "failed");
@@ -375,8 +357,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       )
     ) {
       const error = "platform send returned no delivery identity for part of the delivery batch";
-      await queueOwner.fail(failDeliveryAfterPlatformSend, error);
-      queuedPostSendState = "failed";
+      await failAfterPlatformSend(queueOwner, error);
       throw new OutboundDeliveryError(error, {
         cause: new Error(error),
         results,
@@ -390,19 +371,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         flushMessageSentEvents();
         await runOutboundDeliveryCommitHooks(results);
       }
-      emitTerminals(() =>
-        failedOutcomes.length > 0
-          ? failedOutboundAuditTerminals({
-              payloadCount,
-              results,
-              payloadOutcomes,
-              failureStage: "platform_send",
-            })
-          : completedOutboundAuditTerminals({
-              payloadCount,
-              results,
-              payloadOutcomes,
-            }),
+      emitTerminals(
+        failedOutcomes.length > 0 ? () => failedTerminals("platform_send") : completedTerminals,
       );
       return results;
     }
@@ -422,6 +392,14 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         const postSendState =
           queuedPostSendState ??
           (partialSendEvidence ? await persistPostSendState(queueOwner) : undefined);
+        const permanentRejection =
+          !partialSendEvidence && postSendState === undefined
+            ? findTerminalBatchRejection(failedOutcomes.map((outcome) => outcome.error))
+            : undefined;
+        if (permanentRejection) {
+          await finishPermanentRejection(queueOwner, permanentRejection);
+          return results;
+        }
         const error = "partial delivery failure (bestEffort)";
         if (postSendState === undefined || postSendState === "marked") {
           const recordFailure =
@@ -436,15 +414,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         } else if (postSendState === "acked") {
           // Direct ack is the fallback when the post-send marker cannot be
           // written. Once the row is gone, recovery cannot run these hooks.
-          await runCommitHooksAfterAck();
-          emitTerminals(() =>
-            failedOutboundAuditTerminals({
-              payloadCount,
-              results,
-              payloadOutcomes,
-              failureStage: "platform_send",
-            }),
-          );
+          await finishAck(() => failedTerminals("platform_send"));
         }
       } else {
         const postSendState =
@@ -458,86 +428,83 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         if (results.length === 0 && postSendState === "marked") {
           // The provider was invoked but returned no recipient-visible identity;
           // never convert that ambiguous platform outcome into a success receipt.
-          await queueOwner.fail(
-            failDeliveryAfterPlatformSend,
-            "platform send returned no delivery identity",
-          );
-          queuedPostSendState = "failed";
+          await failAfterPlatformSend(queueOwner, "platform send returned no delivery identity");
           // Durable custody remains with recovery. Publishing a terminal here
           // would make a later reconciliation reuse the same audit identity.
           return results;
         }
         const acked =
-          postSendState === "acked"
-            ? true
-            : postSendState === "failed"
-              ? false
-              : await (
-                  results.length === 0 && typeof params.completionRetention === "object"
-                    ? queueOwner.ack({ suppressCompletionReceipt: true })
-                    : queueOwner.ack()
-                )
-                  .then(() => true)
-                  .catch(async (err: unknown) => {
-                    const hasSendEvidence =
-                      deliveredResults.length > 0 ||
-                      (queuedPreSendState !== undefined && !allPayloadsSuppressed);
-                    try {
-                      if (hasSendEvidence) {
-                        await queueOwner.fail(
-                          failDeliveryAfterPlatformSend,
-                          `failed to ack sent delivery: ${formatErrorMessage(err)}`,
-                        );
-                        queuedPostSendState = "failed";
-                      } else {
-                        // Proven omission clears the handoff marker so recovery can safely retry.
-                        await queueOwner.fail(
-                          allPayloadsSuppressed ? failDeliveryBeforePlatformSend : failDelivery,
-                          `failed to ack unsent delivery: ${formatErrorMessage(err)}`,
-                        );
-                      }
-                    } catch (persistErr: unknown) {
-                      log.warn(
-                        `failed to preserve queued delivery ${queueId} after ack failure: ${formatErrorMessage(persistErr)}`,
-                      );
-                    }
-                    if (queuePolicy === "required") {
-                      throw err;
-                    }
-                    log.warn(
-                      hasSendEvidence
-                        ? `failed to ack queued delivery ${queueId}; preserved unknown-after-send state: ${formatErrorMessage(err)}`
-                        : `failed to ack unsent queued delivery ${queueId}; retained it for retry: ${formatErrorMessage(err)}`,
+          postSendState === "acked" ||
+          (postSendState !== "failed" &&
+            (await queueOwner
+              .ack(
+                results.length === 0 && typeof params.completionRetention === "object"
+                  ? { suppressCompletionReceipt: true }
+                  : undefined,
+              )
+              .then(() => true)
+              .catch(async (err: unknown) => {
+                const hasSendEvidence =
+                  deliveredResults.length > 0 ||
+                  (queuedPreSendState !== undefined && !allPayloadsSuppressed);
+                try {
+                  if (hasSendEvidence) {
+                    await failAfterPlatformSend(
+                      queueOwner,
+                      `failed to ack sent delivery: ${formatErrorMessage(err)}`,
                     );
-                    return false;
-                  });
+                  } else {
+                    // Proven omission clears the handoff marker so recovery can safely retry.
+                    await queueOwner.fail(
+                      allPayloadsSuppressed ? failDeliveryBeforePlatformSend : failDelivery,
+                      `failed to ack unsent delivery: ${formatErrorMessage(err)}`,
+                    );
+                  }
+                } catch (persistErr: unknown) {
+                  log.warn(
+                    `failed to preserve queued delivery ${queueId} after ack failure: ${formatErrorMessage(persistErr)}`,
+                  );
+                }
+                if (queuePolicy === "required") {
+                  throw err;
+                }
+                log.warn(
+                  hasSendEvidence
+                    ? `failed to ack queued delivery ${queueId}; preserved unknown-after-send state: ${formatErrorMessage(err)}`
+                    : `failed to ack unsent queued delivery ${queueId}; retained it for retry: ${formatErrorMessage(err)}`,
+                );
+                return false;
+              })));
         if (acked) {
-          queuedPostSendState = "acked";
-          await runCommitHooksAfterAck();
-          emitTerminals(() =>
-            completedOutboundAuditTerminals({
-              payloadCount,
-              results,
-              payloadOutcomes,
-            }),
-          );
+          await finishAck(completedTerminals);
         }
       }
     }
     return results;
-  } catch (err) {
+  } catch (caughtError) {
+    let err = caughtError;
     try {
       throwIfProducerLeaseLost();
-      if (releaseCancelledPreparation) {
-        flushMessageSentEvents();
-        throw err;
-      }
       if (isOutboundDeliveryAdmissionClosedError(err)) {
         throw err;
+      }
+      if (
+        !platformSendStarted &&
+        deliveredResults.length === 0 &&
+        queuedPostSendState === undefined &&
+        !(err instanceof OutboundDeliveryError && err.sentBeforeError)
+      ) {
+        // Initial handler/bootstrap failures precede every adapter handoff.
+        try {
+          assertOutboundHandoffCurrent(wrappedParams.assertDirectAdapterHandoff);
+        } catch (rejection) {
+          err = rejection;
+        }
       }
       if (err instanceof OutboundDeliveryError && err.results.length > 0) {
         deliveredResults = err.results;
       }
+      const failureIsProvenNotSent = isProvenBatchNotSent(err, payloadOutcomes);
       const hasPlatformSendEvidence =
         deliveredResults.length > 0 ||
         (!allPayloadsSuppressed &&
@@ -545,16 +512,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         (err instanceof OutboundDeliveryError && err.sentBeforeError) ||
         (reusableProducerClaimId !== undefined &&
           payloadOutcomes.some((outcome) => outcome.status === "sent"));
-      // Every terminal below reports the same failed batch; only the stage differs.
-      const emitFailedTerminals = (failureStage: AuditMessageFailureStage) =>
-        emitTerminals(() =>
-          failedOutboundAuditTerminals({
-            payloadCount,
-            results: deliveredResults,
-            payloadOutcomes,
-            failureStage,
-          }),
-        );
       const platformSendFailureStage: AuditMessageFailureStage =
         err instanceof OutboundDeliveryError ? err.stage : "platform_send";
       if (queueOwner) {
@@ -563,39 +520,52 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           await runCommitHooksAfterAck();
           emitFailedTerminals(platformSendFailureStage);
         } else if (params.abortSignal?.aborted) {
-          if (hasPlatformSendEvidence) {
+          if (
+            failureIsProvenNotSent &&
+            deliveredResults.length === 0 &&
+            params.deliveryCompletion
+          ) {
+            // A pre-I/O fence may abort after its durable dispatch marker was
+            // written. Keep the wholly unsent final replayable, not ambiguous;
+            // the next attempt still rechecks its persisted writer authority.
+            await queueOwner.fail(failDeliveryBeforePlatformSend, formatErrorMessage(err));
+            queuedPostSendState = "failed";
+          } else if (hasPlatformSendEvidence) {
             if (queuedPostSendState !== "failed") {
-              await queueOwner.fail(
-                failDeliveryAfterPlatformSend,
+              await failAfterPlatformSend(
+                queueOwner,
                 `delivery aborted after platform send: ${formatErrorMessage(err)}`,
               );
-              queuedPostSendState = "failed";
             }
           } else if (
-            await (
-              producerClaimId
-                ? queueOwner.ack({ suppressCompletionReceipt: true })
-                : queueOwner.ack()
-            )
+            await queueOwner
+              .ack(producerClaimId ? { suppressCompletionReceipt: true } : undefined)
               .then(() => true)
               .catch(() => false)
           ) {
-            queuedPostSendState = "acked";
-            await runCommitHooksAfterAck();
-            emitFailedTerminals("queue");
+            await finishAck(() => failedTerminals("queue"));
           }
         } else if (!platformResultsReturned) {
+          const ambiguousFinalTransport =
+            params.retryAmbiguousFinalText === true &&
+            platformSendStarted &&
+            deliveredResults.length === 0 &&
+            isAmbiguousDeliveryTransportError(err);
           const sendEvidence =
             deliveredResults.length > 0 ||
-            (!isProvenDeliveryNotSentError(err) &&
+            ambiguousFinalTransport ||
+            (!failureIsProvenNotSent &&
               (platformDispatchedPayloads.size > 0 ||
                 (err instanceof OutboundDeliveryError && err.sentBeforeError)));
           if (sendEvidence) {
             try {
               queuedPostSendState ??= await persistPostSendState(queueOwner);
               if (queuedPostSendState === "marked") {
-                await queueOwner.fail(failDeliveryAfterPlatformSend, formatErrorMessage(err));
-                queuedPostSendState = "failed";
+                await failAfterPlatformSend(
+                  queueOwner,
+                  formatErrorMessage(err),
+                  ambiguousFinalTransport ? true : undefined,
+                );
               }
             } catch (persistErr: unknown) {
               // Do not convert concrete send evidence back into a generic retry.
@@ -609,61 +579,25 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
               emitFailedTerminals(platformSendFailureStage);
             }
           } else {
-            const permanentRejection = findPlatformMessageRejectedError(err);
-            let terminalRejectionHandled = false;
+            const permanentRejection =
+              queuedPostSendState === undefined && failureIsProvenNotSent
+                ? findTerminalBatchRejection([
+                    err,
+                    ...payloadOutcomes.flatMap((outcome) =>
+                      outcome.status === "failed" ? [outcome.error] : [],
+                    ),
+                  ])
+                : undefined;
             if (permanentRejection) {
-              let ownerRejected = false;
-              let queueAcked = false;
-              try {
-                const ambiguousStableRejection =
-                  producerClaimId !== undefined &&
-                  (deliveredResults.length > 0 ||
-                    queuedPostSendState === "marked" ||
-                    (reusableProducerClaimId &&
-                      payloadOutcomes.some((outcome) => outcome.status === "sent")));
-                if (ambiguousStableRejection) {
-                  await queueOwner.fail(
-                    failDeliveryAfterPlatformSend,
-                    `delivery partially sent before permanent rejection: ${permanentRejection.message}`,
-                  );
-                  queuedPostSendState = "failed";
-                  terminalRejectionHandled = true;
-                } else {
-                  if (params.deliveryCompletion) {
-                    await rejectDurableDelivery(
-                      params.deliveryCompletion,
-                      permanentRejection.message,
-                      platformQueueStateDir,
-                      params.deliveryQueueStateContext,
-                      params.conversationDeliveryTarget,
-                    );
-                    ownerRejected = true;
-                  }
-                  await (producerClaimId
-                    ? queueOwner.ack({ suppressCompletionReceipt: true })
-                    : queueOwner.ack());
-                  queueAcked = true;
-                }
-              } catch (rejectionError) {
-                log.warn(
-                  `failed to finalize permanently rejected delivery ${queueId}: ${formatErrorMessage(rejectionError)}`,
-                );
-              }
-              terminalRejectionHandled ||= ownerRejected || queueAcked;
-              if (queueAcked) {
-                queuedPostSendState = "acked";
-                await runCommitHooksAfterAck();
-                emitFailedTerminals("platform_send");
-              }
-            }
-            if (!terminalRejectionHandled) {
+              await finishPermanentRejection(queueOwner, permanentRejection);
+            } else {
               // A caller that resends this failure itself must not leave a row
               // behind: the recovery drain would send the same message again
               // behind that retry (#124279). Callers that only report the error
               // (CLI, gateway RPC) and durable completions keep their own owner,
               // so their rows stay replayable (#100979).
               const callerOwnsRetry =
-                isProvenDeliveryNotSentError(err) &&
+                failureIsProvenNotSent &&
                 params.deliveryRetryOwner === "caller" &&
                 !params.deliveryCompletion;
               if (callerOwnsRetry) {
@@ -682,7 +616,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
                   );
                 }
               } else {
-                const recordFailure = isProvenDeliveryNotSentError(err)
+                const recordFailure = failureIsProvenNotSent
                   ? failDeliveryBeforePlatformSend
                   : failDelivery;
                 try {
@@ -711,12 +645,12 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         : error;
     }
   } finally {
+    generation?.release();
+    await producerLease?.stop();
     for (const outcome of payloadOutcomes) {
       if (outcome.status === "failed" && params.deliveryQueueOwner) {
         outcome.error = params.deliveryQueueOwner.project(outcome.error);
       }
     }
-    params.abortSignal?.removeEventListener("abort", cancelBeforeSend);
-    await releaseCancelledPreparation?.();
   }
 }

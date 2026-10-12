@@ -1,11 +1,10 @@
-// Telegram plugin module implements access groups behavior.
+import { isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   expandAllowFromWithAccessGroups,
   parseAccessGroupAllowFromEntry,
 } from "openclaw/plugin-sdk/security-runtime";
 import {
-  isSenderAllowed,
   normalizeAllowFrom,
   normalizeDmAllowFromWithStore,
   type NormalizedAllowFrom,
@@ -28,10 +27,7 @@ export async function expandTelegramAllowFromWithAccessGroups(params: {
           accountId: params.accountId ?? "default",
           senderId,
           isSenderAllowed: (candidateSenderId, allowEntries) =>
-            isSenderAllowed({
-              allow: normalizeAllowFrom(allowEntries),
-              senderId: candidateSenderId,
-            }),
+            isSenderIdAllowed(normalizeAllowFrom(allowEntries), candidateSenderId, true),
         })
       : allowFrom;
   const originalEntries = new Set(allowFrom);
@@ -56,10 +52,8 @@ export async function resolveTelegramDmAllow(params: {
 }> {
   const allowFrom = params.groupAllowOverride ?? params.allowFrom;
   const expandedAllowFrom = await expandTelegramAllowFromWithAccessGroups({
-    cfg: params.cfg,
+    ...params,
     allowFrom,
-    accountId: params.accountId,
-    senderId: params.senderId,
   });
   return {
     allowFrom,

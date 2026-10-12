@@ -1,47 +1,21 @@
-import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import type { DB } from "../../state/openclaw-state-db.generated.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
-import { find } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { matchesWorkerPlacementTarget } from "./placement-target.js";
+import {
+  PERSONAL_SCOPE,
+  readWorkspaceReservationAuthority,
+  SessionWorkspaceReservationBusyError,
+} from "./placement-workspace-reservation.kernel.js";
 
 const SCOPE = "session-workspace-action";
-const PERSONAL_SCOPE = "session-workspace-personal-publication";
-export class SessionWorkspaceReservationBusyError extends Error {}
-const query = (db: DatabaseSync) =>
-  getNodeSqliteKysely<
-    Pick<
-      DB,
-      "state_leases" | "worker_workspace_pending_results" | "worker_workspace_reconciliations"
-    >
-  >(db);
-
-/** Run admission and placement movement consult the same SQLite exclusion as publishers. */
-export function assertSessionWorkspaceUnreserved(db: DatabaseSync, sessionId: string): void {
-  if (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      query(db)
-        .selectFrom("state_leases")
-        .select("owner")
-        .where("scope", "=", PERSONAL_SCOPE)
-        .where("lease_key", "=", sessionId)
-        .where("expires_at", ">", Date.now()),
-    )
-  ) {
-    throw new SessionWorkspaceReservationBusyError(
-      "The session workspace is being published; wait for publication to finish and retry.",
-    );
-  }
-}
-
 function assertReconciled(
-  db: DatabaseSync,
+  facts: ReturnType<typeof readWorkspaceReservationAuthority>,
   identity: WorkerSessionPlacementIdentity,
   workspace: "local" | "repository",
 ): void {
-  const placement = find(db, identity.sessionId);
+  const { placement, pending, reconciling } = facts;
   if (
     placement &&
     (placement.agentId !== identity.agentId || placement.sessionKey !== identity.sessionKey)
@@ -64,21 +38,7 @@ function assertReconciled(
         : "My GitHub publication requires an idle local workspace; finish the turn and reclaim remote work first.",
     );
   }
-  const pending = executeSqliteQueryTakeFirstSync(
-    db,
-    query(db)
-      .selectFrom("worker_workspace_pending_results")
-      .select("session_id")
-      .where("session_id", "=", identity.sessionId),
-  );
-  const reconciliation = executeSqliteQueryTakeFirstSync(
-    db,
-    query(db)
-      .selectFrom("worker_workspace_reconciliations")
-      .select("session_id")
-      .where("session_id", "=", identity.sessionId),
-  );
-  if (pending || reconciliation) {
+  if (pending || reconciling) {
     throw new SessionWorkspaceReservationBusyError(
       "The session workspace is still reconciling; wait for reclaim to finish before publishing with My GitHub.",
     );
@@ -86,6 +46,7 @@ function assertReconciled(
 }
 
 export function createPlacementWorkspaceReservationOps(runtime: PlacementStoreRuntime) {
+  const signal = getGatewayRestartDrainSignal();
   const withReservation = async <T>(
     scope: string,
     sessionId: string,
@@ -99,6 +60,7 @@ export function createPlacementWorkspaceReservationOps(runtime: PlacementStoreRu
         leaseMs: 60000,
         waitMs: 0,
         leaseLabel: "session publication exclusion",
+        signal,
       },
       async (lease) => await run(() => lease.assertOwned()),
     );
@@ -115,19 +77,14 @@ export function createPlacementWorkspaceReservationOps(runtime: PlacementStoreRu
       identity.sessionId,
       async (assertPublisherExclusion) =>
         await withReservation(PERSONAL_SCOPE, identity.sessionId, async (assertOwned) => {
-          assertReconciled(runtime.read(), identity, workspace);
-          const initial = find(runtime.read(), identity.sessionId);
+          const initial = readWorkspaceReservationAuthority(runtime.read(), identity.sessionId);
+          assertReconciled(initial, identity, workspace);
           const assertCurrent = () => {
             assertPublisherExclusion();
             assertOwned();
-            assertReconciled(runtime.read(), identity, workspace);
-            const current = find(runtime.read(), identity.sessionId);
-            if (
-              current?.generation !== initial?.generation ||
-              current?.state !== initial?.state ||
-              current?.environmentId !== initial?.environmentId ||
-              current?.activeOwnerEpoch !== initial?.activeOwnerEpoch
-            ) {
+            const current = readWorkspaceReservationAuthority(runtime.read(), identity.sessionId);
+            assertReconciled(current, identity, workspace);
+            if (!matchesWorkerPlacementTarget(current.placement, initial.placement)) {
               throw new Error("The session workspace placement changed during publication.");
             }
           };

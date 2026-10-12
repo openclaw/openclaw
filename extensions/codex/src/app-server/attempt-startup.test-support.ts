@@ -9,6 +9,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { expect, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { withEphemeralCodexAuthStore } from "./auth-start-options.js";
+import type { CodexAppServerPreparedAuth } from "./auth-types.js";
 import { CodexAppServerClient } from "./client.js";
 import {
   type CodexPluginConfig,
@@ -19,10 +20,9 @@ import { createCodexTestHostCapabilities } from "./host-capability.test-support.
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
   getLeasedSharedCodexAppServerClient,
-  resolveCodexAppServerSpawnIdentity,
-  type CodexAppServerPreparedAuth,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
+import { resolveCodexAppServerSpawnIdentity } from "./spawn-identity.js";
 import {
   createClientHarness,
   createCodexTestModel,
@@ -30,7 +30,7 @@ import {
 } from "./test-support.js";
 
 export type AttemptClientHarness = ReturnType<typeof createClientHarness>;
-export const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
+const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
 
 export function createAttemptClientHarness(): AttemptClientHarness {
   return createInferenceReadyClientHarness({
@@ -84,12 +84,24 @@ export function createAttemptThreadStarter(
         resolveCodexAppServerRuntimeOptions({ pluginConfig: effectivePluginConfig }),
       pluginConfig: effectivePluginConfig,
       computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig: effectivePluginConfig }),
-      startupAuthProfileId: undefined,
-      startupAuthBindingFingerprint: undefined,
+      clientOptions: {
+        ...(overrides?.startupPreparedAuth
+          ? { preparedAuth: overrides.startupPreparedAuth }
+          : { authProfileId: undefined }),
+        authBindingFingerprint: undefined,
+        authRequirement: undefined,
+        ...(overrides?.runtimeArtifactRequest
+          ? {
+              runtimeArtifactMode: "capture",
+              ...(overrides.runtimeArtifactRequest.expected
+                ? { expectedRuntimeArtifact: overrides.runtimeArtifactRequest.expected }
+                : {}),
+            }
+          : {}),
+      },
       ...(overrides?.runtimeArtifactRequest
         ? { runtimeArtifactRequest: overrides.runtimeArtifactRequest }
         : {}),
-      startupPreparedAuth: overrides?.startupPreparedAuth,
       startupAuthAccountCacheKey: undefined,
       startupEnvApiKeyCacheKey: undefined,
       agentDir: paths.agentDir,
@@ -101,7 +113,6 @@ export function createAttemptThreadStarter(
       dynamicTools: [],
       webSearchAllowed: false,
       developerInstructions: undefined,
-      finalConfigPatch: undefined,
       bundleMcpThreadConfig,
       nativeToolSurfaceEnabled: true,
       nativeProviderWebSearchSupport: "supported",
@@ -141,15 +152,6 @@ export async function answerInitialize(harness: AttemptClientHarness): Promise<v
   });
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
   harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.149.0 (macOS; test)" } });
-}
-
-export async function answerPreparedApiKeyLogin(harness: AttemptClientHarness): Promise<void> {
-  const login = await waitForRequest(harness, "account/login/start");
-  expect(login.params).toEqual({
-    type: "apiKey",
-    apiKey: "prepared-platform-key",
-  });
-  harness.send({ id: login.id, result: { type: "apiKey" } });
 }
 
 export async function waitForRequest(

@@ -15,21 +15,6 @@ import { resolveUserPath } from "../utils.js";
 
 type SetupConfigSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
 
-export type LocalSetupRecovery = {
-  workspace: string;
-  applyOptions?: {
-    resume: true;
-    teamCoordinatorId?: string;
-    allowWorkspaceChange?: true;
-    firstAgent?: { name: string; team: true };
-    assertCommitPreconditions: (sourceConfig: OpenClawConfig) => void;
-  };
-  complete: (
-    appliedConfigPath: string,
-    authorize: <T>(effect: () => Promise<T> | T) => Promise<T>,
-  ) => Promise<SetupConfigSnapshot | undefined>;
-};
-
 /** A team receipt owns the complete preset under its root, not just the coordinator. */
 export async function matchesLocalSetupWorkspace(
   config: OpenClawConfig,
@@ -110,9 +95,7 @@ export async function completeLocalSetupRecovery(params: {
 }
 
 /** Adopt only a valid, local, same-workspace onboarding receipt. */
-export async function loadLocalSetupRecovery(
-  requestedWorkspace?: string,
-): Promise<LocalSetupRecovery> {
+export async function loadLocalSetupRecovery(requestedWorkspace?: string) {
   const snapshot = await readConfigFileSnapshot();
   const recorded =
     snapshot.exists &&
@@ -149,17 +132,21 @@ export async function loadLocalSetupRecovery(
       ? {
           applyOptions: {
             resume: true as const,
+            // The pending receipt already owns the approved workspace, even with a partial roster.
+            allowWorkspaceChange: true as const,
             assertCommitPreconditions: assertOwner,
-            ...(teamCoordinatorId
-              ? { teamCoordinatorId, allowWorkspaceChange: true as const }
-              : {}),
+            ...(teamCoordinatorId ? { teamCoordinatorId } : {}),
             ...(pending.teamCoordinatorId && !hasResolvedRosterBeforeMigrations(snapshot)
               ? { firstAgent: { name: pending.teamCoordinatorId, team: true as const } }
               : {}),
           },
         }
       : {}),
-    async complete(appliedConfigPath, authorize) {
+    async complete(
+      this: void,
+      appliedConfigPath: string,
+      authorize: <T>(effect: () => Promise<T> | T) => Promise<T>,
+    ) {
       if (!pending) {
         return undefined;
       }

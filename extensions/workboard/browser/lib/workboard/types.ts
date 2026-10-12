@@ -6,7 +6,6 @@ import type {
   WorkboardTemplateId,
 } from "@openclaw/workboard-contract";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { TaskSummary } from "../tasks/task-summary.ts";
 
 export * from "@openclaw/workboard-contract";
 export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
@@ -26,11 +25,7 @@ type WorkboardLifecycleState =
 export type WorkboardLifecycle = {
   session: GatewaySessionRow | null;
   state: WorkboardLifecycleState;
-  targetStatus?: WorkboardStatus;
-  sourceUpdatedAt?: number;
 };
-
-export type WorkboardTaskSummary = TaskSummary;
 
 type WorkboardDependencyParent = {
   id: string;
@@ -56,13 +51,7 @@ export type WorkboardDispatchSummary = {
 
 export type WorkboardRefreshSource = "initial" | "manual" | "live";
 
-export type WorkboardHealthKey =
-  | "running"
-  | "blocked"
-  | "stale"
-  | "readyUnassigned"
-  | "missingProof"
-  | "failedAttempts";
+export type WorkboardHealthKey = "stale" | "missingProof";
 
 export type WorkboardBulkDialog =
   | { kind: "delete"; cardIds: string[]; observedCards: WorkboardCard[] }
@@ -85,15 +74,13 @@ export type WorkboardUiState = {
   cards: WorkboardCard[];
   boards: WorkboardBoardSummary[];
   statuses: readonly WorkboardStatus[];
-  tasksByCardId: Map<string, WorkboardTaskSummary>;
-  missingTaskIds: Set<string>;
   lastDispatchSummary: WorkboardDispatchSummary | null;
   dispatching: boolean;
   query: string;
   searchOpen: boolean;
   priorityFilter: Set<WorkboardPriority>;
   statusFilter: Set<WorkboardStatus>;
-  attentionFilter: Set<"stale" | "missingProof">;
+  attentionFilter: Set<WorkboardHealthKey>;
   donePeriod: "all" | "week";
   agentFilter: string;
   boardFilter: string;
@@ -104,17 +91,7 @@ export type WorkboardUiState = {
   collapsedStatuses: Set<WorkboardStatus>;
   expandedEmptyStatuses: Set<WorkboardStatus>;
   lastRefreshAt: number | null;
-  lastRefreshStartedAt: number | null;
   lastRefreshError: string | null;
-  lastRefreshSource: WorkboardRefreshSource | null;
-  lifecycleTasksPrepared: boolean;
-  lifecycleTasksPreparedAt: number | null;
-  lifecycleTaskRefreshFailed: boolean;
-  lifecycleTaskRefreshRetryAt: number | null;
-  lifecycleTaskRefreshContinueAt: number | null;
-  lifecycleTaskRefreshError: string | null;
-  lifecycleConfirmedTaskIds: Set<string>;
-  lifecycleTaskConfirmationStartedAt: number | null;
   draftOpen: boolean;
   draftDiscardOpen: boolean;
   draftSaving: boolean;
@@ -141,10 +118,4 @@ export type WorkboardUiState = {
   draggedCardId: string | null;
   dragOverStatus: WorkboardStatus | null;
   dragBeforeCardId: string | null;
-  capturingSessionKeys: Set<string>;
 };
-
-export type WorkboardTaskLinkState = Pick<
-  WorkboardUiState,
-  "cards" | "tasksByCardId" | "missingTaskIds"
->;

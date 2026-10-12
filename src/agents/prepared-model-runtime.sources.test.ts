@@ -1,23 +1,54 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../config/io.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as sqliteReads from "../infra/sqlite-readonly-worker.js";
+import { bindPluginMetadataSnapshotCache, createPluginCache } from "../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import * as ambientAuth from "./agent-auth-discovery.js";
+import { resolveAuthProfileDatabaseOwnerId } from "./auth-profiles/sqlite.js";
+import { resolveModelAsync } from "./embedded-agent-runner/model.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
+import { resetModelsJsonReadyCacheForTest } from "./models-config-state.test-support.js";
+import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
+import * as modelsPlan from "./models-config.plan.js";
+import * as implicitCatalog from "./models-config.providers.implicit.js";
+import * as catalogAuth from "./plugin-model-catalog-auth.js";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
+import * as agentFacts from "./prepared-model-runtime.agent-facts.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
-import { prepareConfiguredRuntimeFactsBatch } from "./prepared-model-runtime.facts.js";
+import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
+import {
+  prepareConfiguredRuntimeFactsBatch,
+  prepareWorkspaceBuildGroup,
+  type PreparedConfiguredModelRegistries,
+} from "./prepared-model-runtime.facts.js";
 import {
   createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
 } from "./prepared-model-runtime.full-catalog.js";
+import * as inboundRegistry from "./prepared-model-runtime.inbound-registry.js";
+import { discardPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 const providerId = "prepared-source-fixture";
 const pluginId = "prepared-source-owner";
 const endpoint = "https://prepared.example.invalid/v1";
@@ -52,11 +83,17 @@ function fixture(mode: "merge" | "replace" = "merge") {
   };
   const preparedStaticProviderCatalog: PreparedProviderStaticCatalog = {
     providers: [provider],
-    entries: [{ provider, result: { provider: staticConfig } }],
+    entries: [
+      {
+        provider,
+        providerConfigs: { [providerId]: staticConfig },
+      },
+    ],
   };
   const generation = {
     pluginMetadataSnapshot: metadata,
     inlineProviderModels: [],
+    remoteCatalog: null,
     configuredCatalogEntries: [],
     providerStaticModels: [],
     preparedStaticProviderCatalog,
@@ -79,8 +116,260 @@ function fixture(mode: "merge" | "replace" = "merge") {
   return { facts, generation, configured, staticConfig, modelsJsonContents };
 }
 
+function persistedFixture() {
+  const prepared = fixture();
+  const { facts, configured } = prepared;
+  const agentDir = facts.input.agentDir;
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(agentDir, "state") };
+  facts.env = env;
+  facts.input = { ...facts.input, env, readOnly: true };
+  facts.configuredGeneratedCatalogPluginIds = [pluginId];
+  const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+  createCurrentOpenClawAgentDatabaseFixtures(path.join(agentDir, "template.sqlite"), [
+    { path: databasePath, agentId: resolveAuthProfileDatabaseOwnerId(agentDir) },
+  ]);
+  const catalogs = [
+    {
+      pluginId,
+      contents: JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: { [providerId]: { ...configured, models: [model("persisted-only")] } },
+      }),
+    },
+  ];
+  const database = new DatabaseSync(databasePath);
+  try {
+    database
+      .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
+      .run("plugin-model-catalog-v1", pluginId, catalogs[0]!.contents, 1);
+  } finally {
+    database.close();
+  }
+  return { ...prepared, catalogs };
+}
+
 describe("prepared catalog source composition", () => {
+  it.each([true, false])(
+    "admits persisted-only models only with current credentials (%s)",
+    async (authenticated) => {
+      const { facts, generation } = persistedFixture();
+      await using cache = createPluginCache();
+      bindPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot, cache);
+      facts.input = { ...facts.input, config: {} };
+      facts.providerIds = [];
+      facts.credentials = authenticated
+        ? { [providerId]: { type: "api_key", key: "synthetic-key" } }
+        : {};
+      facts.templateAuthStorage = AuthStorage.inMemory(facts.credentials);
+      vi.spyOn(agentFacts, "prepareAgentFacts").mockResolvedValue(facts);
+      vi.spyOn(ambientAuth, "prepareAmbientAgentCredentialsForDiscovery").mockResolvedValue({});
+      vi.spyOn(inboundRegistry, "prepareWorkspacePluginRegistries").mockResolvedValue({
+        inboundPluginRegistry: undefined,
+        runtimePluginRegistry: undefined,
+        primaryRegistry: undefined,
+      });
+      vi.spyOn(implicitCatalog, "prepareImplicitProviderStaticCatalog").mockResolvedValue({
+        entries: [],
+        providers: [],
+      });
+      try {
+        const prepared = await prepareWorkspaceBuildGroup(
+          [facts.input],
+          "static",
+          {},
+          undefined,
+          undefined,
+          generation.pluginMetadataSnapshot,
+        );
+        await using _ = {
+          [Symbol.asyncDispose]: () => discardPreparedPluginGeneration(prepared.pluginGeneration),
+        };
+        const batch = await prepareConfiguredRuntimeFactsBatch(prepared);
+        const registry = batch.catalogs.get(facts.input)!.templateModelRegistry;
+        const result = await resolveModelAsync(
+          providerId,
+          "persisted-only",
+          facts.input.agentDir,
+          {},
+          {
+            authStorage: facts.templateAuthStorage,
+            modelRegistry: registry,
+            authProfileMode: "api_key",
+            skipProviderRuntimeHooks: true,
+          },
+        );
+        if (authenticated) {
+          expect(result.model).toMatchObject({
+            provider: providerId,
+            id: "persisted-only",
+            baseUrl: endpoint,
+          });
+        } else {
+          expect(result.model).toBeUndefined();
+          expect(result.error).toContain("models list --refresh");
+        }
+      } finally {
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
+  it("prepares persisted catalog sources, fingerprints, and queued plans without caller-thread SQLite", async () => {
+    const { facts, generation, catalogs, modelsJsonContents } = persistedFixture();
+    const planner = vi
+      .spyOn(modelsPlan, "planOpenClawModelsJson")
+      .mockResolvedValue({ action: "skip" });
+    const authCapture = vi
+      .spyOn(catalogAuth, "capturePluginModelCatalogAuth")
+      .mockResolvedValue([]);
+    const workerRead = vi.spyOn(sqliteReads, "runSqliteReadOnlyOperation");
+    const sql = observeMainThreadSql({ includeClose: true });
+    const scope = sqliteReads.createSqliteReadOnlyWorkerScope();
+    resetModelsJsonReadyCacheForTest();
+    try {
+      sql.calibrate();
+      await scope.run(async () => {
+        const batch = await prepareConfiguredRuntimeFactsBatch({
+          agentFacts: [facts],
+          pluginGeneration: generation,
+        });
+        expect(
+          batch.catalogs.get(facts.input)?.templateModelRegistry.find(providerId, "persisted-only"),
+        ).toMatchObject({ id: "persisted-only", provider: providerId });
+        const source = await prepareAgentCatalogSource(facts, generation, "static");
+        expect(source).toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
+        const options = {
+          env: facts.env,
+          pluginMetadataSnapshot: generation.pluginMetadataSnapshot,
+        };
+        await expect(
+          ensureOpenClawModelsJson(facts.input.config, facts.input.agentDir, options),
+        ).resolves.toEqual({ agentDir: facts.input.agentDir, wrote: false });
+        expect(planner).toHaveBeenLastCalledWith(
+          expect.objectContaining({ pluginCatalogs: catalogs }),
+        );
+        await expect(
+          planOpenClawModelsJsonSource(facts.input.config, facts.input.agentDir, options),
+        ).resolves.toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
+        expect(planner).toHaveBeenLastCalledWith(
+          expect.objectContaining({ pluginCatalogs: catalogs }),
+        );
+      });
+      await scope.close();
+      expect(workerRead).toHaveBeenCalled();
+      sql.expectIdle();
+    } finally {
+      try {
+        await scope.close();
+      } finally {
+        sql.restore();
+        workerRead.mockRestore();
+        planner.mockRestore();
+        authCapture.mockRestore();
+        resetModelsJsonReadyCacheForTest();
+      }
+    }
+  });
+
+  it.for(["retired", "rejected"] as const)(
+    "does not construct a configured registry after a delayed catalog read is %s",
+    async (outcome, { signal }) => {
+      const { facts, generation, catalogs } = persistedFixture();
+      const started = createDeferred();
+      const reply = createDeferred<typeof catalogs>();
+      const failure = new Error(`catalog preparation ${outcome}`);
+      const workerRead = vi
+        .spyOn(sqliteReads, "runSqliteReadOnlyOperation")
+        .mockImplementationOnce(async () => {
+          started.resolve();
+          return await reply.promise;
+        });
+      let current = true;
+      const registries: PreparedConfiguredModelRegistries = new Map();
+      const pending = prepareConfiguredRuntimeFactsBatch({
+        agentFacts: [facts],
+        pluginGeneration: generation,
+        registries,
+        assertCurrent() {
+          if (!current) {
+            throw failure;
+          }
+        },
+      });
+      const rejected = expect(pending).rejects.toBe(failure);
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(started.promise, pending, "Catalog read was skipped"),
+          signal,
+        );
+        expect(registries.get(generation.pluginMetadataSnapshot)?.size).toBe(0);
+        if (outcome === "retired") {
+          current = false;
+          reply.resolve(catalogs);
+        } else {
+          reply.reject(failure);
+        }
+        await rejected;
+        expect(registries.get(generation.pluginMetadataSnapshot)?.size).toBe(0);
+      } finally {
+        reply.resolve(catalogs);
+        await Promise.allSettled([pending, rejected]);
+        workerRead.mockRestore();
+      }
+    },
+  );
+
+  it("publishes failed-discovery static rows once under the canonical provider", async () => {
+    const aliasId = "prepared-source-alias";
+    const { facts, generation, staticConfig } = fixture();
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: pluginId,
+          providers: [providerId],
+          modelCatalog: { aliases: { [aliasId]: { provider: providerId } } },
+        },
+      ],
+    });
+    // Single-provider static hooks answer under the canonical id and every runtime alias.
+    const providerStaticModels = [providerId, aliasId].flatMap((provider) =>
+      staticConfig.models.map((row) => ({
+        ...row,
+        input: ["text" as const],
+        contextWindow: 32000,
+        provider,
+        api: "openai-completions" as const,
+        baseUrl: endpoint,
+      })),
+    );
+    const full = await prepareFullCatalogFacts(
+      facts,
+      { ...generation, pluginMetadataSnapshot, providerStaticModels },
+      "static",
+      {
+        modelsJsonContents: JSON.stringify({ providers: { [aliasId]: staticConfig } }),
+        pluginCatalogs: [],
+        providerOutcomes: [{ provider: providerId, status: "unavailable" }],
+      },
+    );
+    const { catalog } = prepareModelCatalogPublication(
+      full.modelCatalog,
+      new Map(),
+      undefined,
+      { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
+      createPreparedModelCatalogProviderNormalizer(pluginMetadataSnapshot, facts.input.config),
+      new Map(),
+    );
+
+    expect(catalog.entries.map(({ provider, id }) => `${provider}/${id}`).toSorted()).toEqual([
+      `${providerId}/configured-only`,
+      `${providerId}/curated-only`,
+      `${providerId}/shared`,
+    ]);
+  });
+
   it("retains inherited catalogs and current request settings without custom model rows", async () => {
+    vi.stubEnv("OPENAI_API_KEY", undefined);
     const { facts, staticConfig } = fixture();
     const configPath = path.join(facts.input.agentDir, "openclaw.json");
     fs.writeFileSync(
@@ -127,31 +416,6 @@ describe("prepared catalog source composition", () => {
     );
   });
 
-  it.each(["merge", "replace"] as const)(
-    "materializes duplicate current declarations once in %s mode",
-    (mode) => {
-      const { facts, generation, configured } = fixture(mode);
-      configured.models = [
-        {
-          ...model("shared"),
-          name: "First current",
-          cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
-        },
-        { ...model("shared"), name: "Later duplicate", input: ["text", "image"] },
-      ];
-      const result = prepareConfiguredRuntimeFactsBatch({
-        agentFacts: [facts],
-        pluginGeneration: generation,
-      }).catalogs.get(facts.input)!;
-      const rows = result.templateModelRegistry.getAll().filter((entry) => entry.id === "shared");
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({
-        name: "First current",
-        input: ["text"],
-        cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
-      });
-    },
-  );
   it("does not restore noncurrent runtime fallbacks after replace publication", async () => {
     const { facts, generation, modelsJsonContents } = fixture("replace");
     facts.configuredRuntimeModels = [
@@ -168,10 +432,12 @@ describe("prepared catalog source composition", () => {
         },
       },
     ];
-    const startup = prepareConfiguredRuntimeFactsBatch({
-      agentFacts: [facts],
-      pluginGeneration: generation,
-    }).catalogs.get(facts.input)!;
+    const startup = (
+      await prepareConfiguredRuntimeFactsBatch({
+        agentFacts: [facts],
+        pluginGeneration: generation,
+      })
+    ).catalogs.get(facts.input)!;
     const full = await prepareFullCatalogFacts(facts, generation, "static", {
       modelsJsonContents,
       pluginCatalogs: [],
@@ -183,11 +449,15 @@ describe("prepared catalog source composition", () => {
         generation,
         catalogFacts,
         {
+          initialAuth: { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
           isCurrent: () => true,
           withRefreshStatus: (catalog) => catalog,
           readFullModelCatalog: () => undefined,
+          refreshExpiredModelCatalog: () => {},
+          recheckNativeLogin: () => {},
           readPublishedModels: () => undefined,
           loadFullModelCatalog: async () => catalogFacts.modelCatalog,
+          loadNativeModelCatalog: async () => catalogFacts.modelCatalog,
           loadAuth: async () => ({ authStore: facts.authStore, authModes: {}, credentials: {} }),
         },
       );
@@ -197,137 +467,97 @@ describe("prepared catalog source composition", () => {
       expect.soft(snapshot.modelCatalog.staticEntries ?? []).toEqual([]);
     }
   });
-  it.each([
-    { mode: "merge", ids: ["authored-only", "configured-only", "curated-only", "shared"] },
-    { mode: "replace", ids: ["configured-only", "shared"] },
-  ] as const)("composes the actual startup registry in $mode mode", ({ mode, ids }) => {
-    const { facts, generation } = fixture(mode);
-    const result = prepareConfiguredRuntimeFactsBatch({
-      agentFacts: [facts],
-      pluginGeneration: generation,
-    });
-    const captured = result.catalogs.get(facts.input)!;
-    expect(captured.templateModelRegistry.getError()).toBeUndefined();
-    expect(
-      captured.templateModelRegistry
-        .getAll()
-        .map((entry) => entry.id)
-        .toSorted(),
-    ).toEqual(ids);
-    expect(captured.modelCatalog.entries.map((entry) => entry.id).toSorted()).toEqual(ids);
-    expect(captured.templateModelRegistry.find(providerId, "shared")).toMatchObject({
-      name: "Current shared",
-      maxTokens: 2048,
-      maxTokensSource: "configured",
-    });
-  });
-
-  it("does not share composed registries across different current declarations", () => {
-    const { facts, generation, configured } = fixture();
-    const sibling = {
-      ...facts,
-      input: {
-        ...facts.input,
-        config: {
-          models: {
-            providers: { [providerId]: { ...configured, models: [model("other-current")] } },
-          },
-        },
-      },
-    };
-    const result = prepareConfiguredRuntimeFactsBatch({
-      agentFacts: [facts, sibling],
-      pluginGeneration: generation,
-    });
-    expect(
-      result.catalogs.get(facts.input)!.templateModelRegistry.find(providerId, "configured-only"),
-    ).toBeDefined();
-    expect(
-      result.catalogs.get(facts.input)!.templateModelRegistry.find(providerId, "other-current"),
-    ).toBeUndefined();
-    expect(
-      result.catalogs.get(sibling.input)!.templateModelRegistry.find(providerId, "other-current"),
-    ).toBeDefined();
-    expect(
-      result.catalogs.get(sibling.input)!.templateModelRegistry.find(providerId, "configured-only"),
-    ).toBeUndefined();
-  });
-
-  it("keeps an authored route when the prepared static catalog is empty", () => {
-    const { facts, generation, configured } = fixture();
-    const authoredEndpoint = "https://authored.example.invalid/v1";
-    fs.writeFileSync(
-      path.join(facts.input.agentDir, "models.json"),
-      JSON.stringify({ providers: { [providerId]: { ...configured, baseUrl: authoredEndpoint } } }),
-    );
-    const result = prepareConfiguredRuntimeFactsBatch({
-      agentFacts: [facts],
-      pluginGeneration: { ...generation, preparedStaticProviderCatalog: { entries: [] } },
-    });
-    expect(
-      result.catalogs.get(facts.input)!.templateModelRegistry.find(providerId, "shared"),
-    ).toMatchObject({ baseUrl: authoredEndpoint });
-  });
-
-  it.each(["merge", "replace"] as const)(
-    "keeps full catalog source ownership in %s mode",
-    async (mode) => {
-      const { facts, generation, modelsJsonContents } = fixture(mode);
-      const result = await prepareFullCatalogFacts(facts, generation, "static", {
-        modelsJsonContents,
-        pluginCatalogs: [],
-        providerOutcomes: [{ provider: providerId, status: "ready" }],
+  it.each(["same", "credentials"] as const)(
+    "shares captured registries across workspaces only for equivalent sources: %s",
+    async (difference) => {
+      const { facts, generation, modelsJsonContents } = fixture();
+      const registries: PreparedConfiguredModelRegistries = new Map();
+      const first = await prepareConfiguredRuntimeFactsBatch({
+        agentFacts: [facts],
+        pluginGeneration: generation,
+        registries,
       });
-      expect(result.templateModelRegistry.find(providerId, "curated-only")).toBeUndefined();
-      expect(result.modelCatalog.entries.some((entry) => entry.id === "configured-only")).toBe(
-        true,
-      );
-      expect(result.templateModelRegistry.find(providerId, "authored-only")).toEqual(
-        mode === "merge" ? expect.objectContaining({ id: "authored-only" }) : undefined,
+      const agentDir = tempDirs.make("openclaw-prepared-sibling-");
+      fs.writeFileSync(path.join(agentDir, "models.json"), modelsJsonContents);
+      const credentials: PreparedModelRuntimeAgentFacts["credentials"] =
+        difference === "credentials"
+          ? { [providerId]: { type: "api_key" as const, key: "sibling-key" } }
+          : {};
+      const sibling = {
+        ...facts,
+        input: { ...facts.input, agentDir, workspaceDir: path.join(agentDir, "workspace") },
+        credentials,
+        templateAuthStorage: AuthStorage.inMemory(credentials),
+      };
+      const second = await prepareConfiguredRuntimeFactsBatch({
+        agentFacts: [sibling],
+        pluginGeneration: generation,
+        registries,
+      });
+      expect(first.registryCount).toBe(1);
+      expect(second.registryCount).toBe(difference === "same" ? 0 : 1);
+      const firstRegistry = first.catalogs.get(facts.input)!.templateModelRegistry;
+      const secondRegistry = second.catalogs.get(sibling.input)!.templateModelRegistry;
+      const firstModel = firstRegistry.find(providerId, "curated-only")!;
+      const secondModel = secondRegistry.find(providerId, "curated-only")!;
+      expect(firstModel.baseUrl).toBe(endpoint);
+      expect(secondModel.baseUrl).toBe(endpoint);
+      expect(firstRegistry.hasConfiguredAuth(firstModel)).toBe(false);
+      expect(secondRegistry.hasConfiguredAuth(secondModel)).toBe(difference === "credentials");
+      expect(secondRegistry.getProviderMetadataOwners()).toBe(
+        generation.pluginMetadataSnapshot.owners,
       );
     },
   );
 
-  it("composes captured generated inventory without restoring its request authority", async () => {
-    const { facts, configured, staticConfig, modelsJsonContents } = fixture();
-    const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
-      config: facts.input.config,
-      modelsJsonContents,
-      pluginMetadataSnapshot: metadata,
-      staticProviderConfigs: { [providerId]: staticConfig },
-      pluginCatalogs: [
-        {
-          pluginId,
-          contents: JSON.stringify({
-            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-            providers: {
-              [providerId]: {
-                ...configured,
-                apiKey: "discarded-cache-key",
-                headers: { Authorization: "discarded-cache-header" },
-                models: [model("generated-only")],
-              },
-            },
-          }),
+  it("services event-loop work between dynamic model completions in one registry group", async () => {
+    const { facts, generation } = fixture();
+    const registry = createEmptyPluginRegistry();
+    const events: string[] = [];
+    let queued: Promise<void> | undefined;
+    registry.providers.push({
+      pluginId,
+      source: "fixture",
+      provider: {
+        id: providerId,
+        label: "Prepared source",
+        auth: [],
+        resolveDynamicModel: ({ modelId }) => {
+          events.push(modelId);
+          if (modelId === "first") {
+            queued = nextTurn().then(() => {
+              events.push("event-loop");
+            });
+          }
+          return {
+            ...model(modelId),
+            provider: providerId,
+            api: "openai-completions",
+            baseUrl: endpoint,
+            input: ["text"],
+            contextWindow: 32000,
+          };
         },
-      ],
+      },
     });
-    expect(
-      registry
-        .getAll()
-        .map((entry) => entry.id)
-        .toSorted(),
-    ).toEqual(["authored-only", "configured-only", "curated-only", "generated-only", "shared"]);
-    const generated = registry.find(providerId, "generated-only")!;
-    expect(generated).toMatchObject({ maxTokensSource: "discovered" });
-    await expect(registry.getApiKeyAndHeaders(generated)).resolves.toEqual({
-      ok: true,
-      apiKey: undefined,
-      headers: undefined,
+    const agents = ["first", "middle", "last"].map((modelId) =>
+      Object.assign({}, facts, {
+        input: Object.assign({}, facts.input, { agentId: modelId }),
+        configuredModelRefs: [{ provider: providerId, modelId }],
+      }),
+    );
+    const result = await prepareConfiguredRuntimeFactsBatch({
+      agentFacts: agents,
+      pluginGeneration: { ...generation, pluginRegistry: registry },
     });
+    await queued;
+    expect(result.registryCount).toBe(1);
+    expect(result.catalogs.size).toBe(3);
+    expect(events.indexOf("first")).toBeLessThan(events.indexOf("event-loop"));
+    expect(events.indexOf("event-loop")).toBeLessThan(events.indexOf("last"));
   });
 
-  it("replaces stale root request settings while keeping request-local forks isolated", async () => {
+  it("replaces stale root request settings with current configuration", async () => {
     const { facts, configured } = fixture();
     const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
       config: facts.input.config,
@@ -350,77 +580,52 @@ describe("prepared catalog source composition", () => {
       apiKey: undefined,
       headers: undefined,
     });
-    const fork = registry.fork(
-      AuthStorage.inMemory({ [providerId]: { type: "api_key", key: "current-request-key" } }),
-    );
-    await expect(fork.getApiKeyAndHeaders(selected)).resolves.toEqual({
-      ok: true,
-      apiKey: "current-request-key",
-      headers: undefined,
-    });
-    await expect(registry.getApiKeyAndHeaders(selected)).resolves.toEqual({
-      ok: true,
-      apiKey: undefined,
-      headers: undefined,
-    });
   });
 
-  it.each([
-    { sourceKey: "current-config-key", storeKey: undefined, expectedKey: "current-config-key" },
-    {
-      sourceKey: "current-config-key",
-      storeKey: "current-store-key",
-      expectedKey: "current-store-key",
-    },
-    { sourceKey: undefined, storeKey: "current-store-key", expectedKey: "current-store-key" },
-    { sourceKey: undefined, storeKey: undefined, expectedKey: undefined },
-  ])(
-    "uses current request authority for accepted routes ($sourceKey, $storeKey)",
-    async ({ sourceKey, storeKey, expectedKey }) => {
-      const { facts, configured } = fixture();
-      const config = {
-        ...facts.input.config,
-        models: {
-          providers: {
-            [providerId]: { ...configured, apiKey: sourceKey, headers: { "X-Current": "current" } },
+  it("uses current configured request authority for accepted routes", async () => {
+    const { facts, configured } = fixture();
+    const config = {
+      ...facts.input.config,
+      models: {
+        providers: {
+          [providerId]: {
+            ...configured,
+            apiKey: "current-config-key",
+            headers: { "X-Current": "current" },
           },
         },
-      };
-      const registry = ModelRegistry.create(
-        AuthStorage.inMemory(storeKey ? { [providerId]: { type: "api_key", key: storeKey } } : {}),
-        "captured:models.json",
+      },
+    };
+    const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+      config,
+      modelsJsonContents: null,
+      pluginMetadataSnapshot: metadata,
+      pluginCatalogs: [
         {
-          config,
-          modelsJsonContents: null,
-          pluginMetadataSnapshot: metadata,
-          pluginCatalogs: [
-            {
-              pluginId,
-              contents: JSON.stringify({
-                generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-                providers: {
-                  [providerId]: {
-                    ...configured,
-                    baseUrl: "https://accepted.example.invalid/v1",
-                    apiKey: "stale-cache-key",
-                    headers: { "X-Stale": "stale" },
-                    models: [model("shared"), model("generated-only")],
-                  },
-                },
-              }),
+          pluginId,
+          contents: JSON.stringify({
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              [providerId]: {
+                ...configured,
+                baseUrl: "https://accepted.example.invalid/v1",
+                apiKey: "stale-cache-key",
+                headers: { "X-Stale": "stale" },
+                models: [model("shared"), model("generated-only")],
+              },
             },
-          ],
+          }),
         },
-      );
-      for (const id of ["shared", "generated-only"]) {
-        const selected = registry.find(providerId, id)!;
-        expect(selected.baseUrl).toBe("https://accepted.example.invalid/v1");
-        await expect(registry.getApiKeyAndHeaders(selected)).resolves.toEqual({
-          ok: true,
-          apiKey: expectedKey,
-          headers: { "X-Current": "current" },
-        });
-      }
-    },
-  );
+      ],
+    });
+    for (const id of ["shared", "generated-only"]) {
+      const selected = registry.find(providerId, id)!;
+      expect(selected.baseUrl).toBe("https://accepted.example.invalid/v1");
+      await expect(registry.getApiKeyAndHeaders(selected)).resolves.toEqual({
+        ok: true,
+        apiKey: "current-config-key",
+        headers: { "X-Current": "current" },
+      });
+    }
+  });
 });

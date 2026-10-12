@@ -5,8 +5,10 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
+import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
+import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
 import {
@@ -15,7 +17,6 @@ import {
   readScheduledTaskCommand,
 } from "./schtasks-layout.js";
 import {
-  readWindowsProcessSnapshot,
   resolveScheduledTaskOwnedGatewayPids,
   terminateScheduledTaskGatewayListeners,
 } from "./schtasks-process.js";
@@ -84,7 +85,7 @@ const report = process.argv[2];
 const stop = process.argv[3];
 const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
 const server = net.createServer(socket => socket.end("ready"));
-const deadline = setTimeout(() => process.exit(1), 30_000);
+const deadline = setTimeout(() => process.exit(1), ${WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS + 30_000});
 const poll = setInterval(() => {
   if (fs.existsSync(stop)) {
     clearInterval(poll);
@@ -164,9 +165,20 @@ server.listen(port, "127.0.0.1", () => {
         port,
       });
       expect(observed.pid).not.toBe(child.pid);
-      const snapshot = readWindowsProcessSnapshot();
-      expect(snapshot?.some((entry) => entry.ProcessId === observed.pid)).toBe(true);
-      const installed = await readScheduledTaskCommand(env, { requireEffective: true });
+      expect(
+        readWindowsProcessArgsSync(
+          observed.pid,
+          WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+          process.env,
+          performance.now() + WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+        ),
+      ).toEqual(observed.argv);
+      if (!normalized) {
+        await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
+          "Effective Scheduled Task service command could not be inspected.",
+        );
+      }
+      const installed = await readScheduledTaskCommand(env, { requireEffective: normalized });
       expect(installed?.workingDirectory).toBe(dir);
       expect(installed?.environment?.OPENCLAW_TEST_LAUNCHER_VALUE).toBe("retained");
       if (normalized) {
@@ -245,7 +257,7 @@ server.listen(port, "127.0.0.1", () => {
       expect(await fs.readFile(outputPath, "utf8")).toContain("launcher-stdout");
       expect(await fs.readFile(outputPath, "utf8")).toContain("launcher-stderr");
     },
-    30_000,
+    WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS + 30_000,
   );
 });
 
@@ -271,11 +283,7 @@ describe("Windows Startup fallback environment", () => {
       }
       // Join the owned instances even after an assertion fails. An uncertain
       // close retains their inputs instead of treating PID disappearance as cleanup.
-      await withTestTimeout(
-        Promise.all(children.map(({ closed }) => closed)),
-        10_000,
-        "Startup fixture child did not close; retaining its directory",
-      );
+      await Promise.all(children.map(({ closed }) => closed));
       await fs.rm(dir, { recursive: true });
     });
     const reportPath = path.join(dir, "child.json");
@@ -324,7 +332,7 @@ fs.renameSync(file + ".tmp", file);
       await startStartupEntry({ OPENCLAW_TASK_SCRIPT: scriptPath }, output);
       expect(children).toHaveLength(1);
       const { child, closed } = expectDefined(children[0], "Startup fixture child");
-      expect(await withTestTimeout(closed, 10_000, "Startup fixture child did not close")).toEqual({
+      expect(await withinTest(closed, context.signal)).toEqual({
         code: 0,
         signal: null,
       });

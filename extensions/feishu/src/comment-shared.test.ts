@@ -2,21 +2,10 @@
 import { describe, expect, it } from "vitest";
 import { parseCommentContentElements } from "./comment-shared.js";
 
-function resolveCommentLinkedDocumentFromUrl(params: {
-  rawUrl: string;
-  currentDocument?: Parameters<typeof parseCommentContentElements>[0]["currentDocument"];
-}) {
-  const parsed = parseCommentContentElements({
-    elements: [{ type: "docs_link", docs_link: { url: params.rawUrl } }],
-    currentDocument: params.currentDocument,
-  });
-  return parsed.linkedDocuments[0] ?? { rawUrl: params.rawUrl, urlKind: "unknown" as const };
-}
-
 const VALID_TOKEN_22 = "ABCDEFGHIJKLMNOPQRSTUV";
 const VALID_TOKEN_27 = "ZsJfdxrBFo0RwuxteOLc1Ekvneb";
 
-describe("resolveCommentLinkedDocumentFromUrl", () => {
+describe("parseCommentContentElements linked documents", () => {
   it.each([
     {
       label: "doc",
@@ -138,22 +127,27 @@ describe("resolveCommentLinkedDocumentFromUrl", () => {
       expectedToken: VALID_TOKEN_22,
     },
   ])("$label", ({ url, expectedKind, expectedResolvedType, expectedToken }) => {
-    const linked = resolveCommentLinkedDocumentFromUrl({ rawUrl: url });
+    const parsed = parseCommentContentElements({
+      elements: [{ type: "docs_link", docs_link: { url } }],
+    });
 
-    expect(linked.urlKind).toBe(expectedKind);
-    expect(linked.resolvedObjType).toBe(expectedResolvedType);
-    expect(linked.resolvedObjToken ?? linked.wikiNodeToken).toBe(expectedToken);
+    expect(
+      parsed.linkedDocuments.map((linked) => [
+        linked.urlKind,
+        linked.resolvedObjType,
+        linked.resolvedObjToken ?? linked.wikiNodeToken,
+      ]),
+    ).toEqual([[expectedKind, expectedResolvedType, expectedToken]]);
   });
 
   it("does not resolve doc-like paths with short tokens", () => {
-    expect(
-      resolveCommentLinkedDocumentFromUrl({
-        rawUrl: "https://www.baidu.com/docx/guide",
-      }),
-    ).toEqual({
-      rawUrl: "https://www.baidu.com/docx/guide",
-      urlKind: "unknown",
+    const rawUrl = "https://www.baidu.com/docx/guide";
+    const parsed = parseCommentContentElements({
+      elements: [{ type: "docs_link", docs_link: { url: rawUrl } }],
     });
+
+    expect(parsed.plainText).toBe(rawUrl);
+    expect(parsed.linkedDocuments).toEqual([]);
   });
 });
 

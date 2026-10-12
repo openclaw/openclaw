@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
+import { sha256File } from "../../infra/directory-durability.js";
 import {
+  FsSafeError,
   isPathInside,
   resolveOpenedFileRealPathForHandle,
   root as fsRoot,
@@ -27,6 +30,17 @@ import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 type WorkspaceFileSnapshot =
   | { type: "file"; mode: number; size: number; sha256: string }
   | { type: "unsupported" };
+
+type WorkspaceFileContents =
+  | (Extract<WorkspaceFileSnapshot, { type: "file" }> & { content: Buffer })
+  | { type: "unsupported" };
+
+type WorkspaceFileRead = {
+  expectedPath: string;
+  maxBytes: number | ((openedSize: number) => number);
+  root?: string;
+  signal?: AbortSignal;
+};
 
 function localPath(root: string, relative: string): string {
   return path.join(root, ...relative.split("/"));
@@ -54,8 +68,33 @@ export async function readWorkspaceFileSnapshotWithLimit(
   maxBytes: number | ((openedSize: number) => number),
   root?: string,
   signal?: AbortSignal,
-  readBuffers?: Buffer[],
 ): Promise<WorkspaceFileSnapshot> {
+  return await readWorkspaceFile({
+    expectedPath,
+    maxBytes,
+    root,
+    signal,
+    contents: false,
+  });
+}
+
+export async function readWorkspaceFileContentsWithLimit(
+  expectedPath: string,
+  maxBytes: number,
+): Promise<WorkspaceFileContents> {
+  return await readWorkspaceFile({ expectedPath, maxBytes, contents: true });
+}
+
+function readWorkspaceFile(
+  params: WorkspaceFileRead & { contents: true },
+): Promise<WorkspaceFileContents>;
+function readWorkspaceFile(
+  params: WorkspaceFileRead & { contents: false },
+): Promise<WorkspaceFileSnapshot>;
+async function readWorkspaceFile(
+  params: WorkspaceFileRead & { contents: boolean },
+): Promise<WorkspaceFileSnapshot | WorkspaceFileContents> {
+  const { expectedPath, maxBytes, root, signal } = params;
   signal?.throwIfAborted();
   const handle = await fs.open(
     expectedPath,
@@ -77,7 +116,7 @@ export async function readWorkspaceFileSnapshotWithLimit(
       return { type: "unsupported" };
     }
     const identity = workspaceStatIdentity(owner, before);
-    let sha256 = hashMemo?.get(identity);
+    let sha256 = params.contents ? undefined : hashMemo?.get(identity);
     let size = Number(before.size);
     if (sha256) {
       if (metrics) {
@@ -85,30 +124,32 @@ export async function readWorkspaceFileSnapshotWithLimit(
       }
     } else {
       const hashStartedAt = performance.now();
-      const hash = createHash("sha256");
-      buffer = readBuffers?.pop() ?? Buffer.allocUnsafe(readBuffers ? 256 * 1024 : 64 * 1024);
-      size = 0;
-      for (;;) {
-        signal?.throwIfAborted();
-        const { bytesRead } = await handle.read(
-          buffer,
-          0,
-          Math.min(buffer.length, byteLimit - size + 1),
-          size,
-        );
-        if (bytesRead === 0) {
-          break;
-        }
-        size += bytesRead;
+      if (params.contents) {
+        buffer = Buffer.allocUnsafe(Number(before.size) + 1);
+        size = await readFileWindowFully(handle, buffer, 0, { signal });
         if (size > byteLimit) {
+          return { type: "unsupported" };
+        }
+        sha256 = createHash("sha256").update(buffer.subarray(0, size)).digest("hex");
+      } else {
+        try {
+          ({ bytes: size, digest: sha256 } = await sha256File(handle, {
+            maxBytes: byteLimit,
+            signal,
+          }));
+        } catch (error) {
+          signal?.throwIfAborted();
+          if (!(error instanceof FsSafeError) || error.code !== "too-large") {
+            throw error;
+          }
           if (typeof maxBytes !== "number") {
-            throw new Error("Gateway workspace file changed while it was being read");
+            throw new Error("Gateway workspace file changed while it was being read", {
+              cause: error,
+            });
           }
           return { type: "unsupported" };
         }
-        hash.update(buffer.subarray(0, bytesRead));
       }
-      sha256 = hash.digest("hex");
       if (metrics) {
         metrics.contentHashCount += 1;
         metrics.contentHashDurationMs += performance.now() - hashStartedAt;
@@ -120,16 +161,16 @@ export async function readWorkspaceFileSnapshotWithLimit(
       throw new Error("Gateway workspace file changed while it was being read");
     }
     hashMemo?.set(identity, sha256);
-    return {
-      type: "file",
+    const snapshot = {
+      type: "file" as const,
       mode: gitFileMode(Number(after.mode & 0o777n)),
       size,
       sha256,
     };
+    return params.contents && buffer
+      ? { ...snapshot, content: buffer.subarray(0, size) }
+      : snapshot;
   } finally {
-    if (buffer && readBuffers) {
-      readBuffers.push(buffer);
-    }
     await handle.close();
   }
 }
@@ -140,7 +181,7 @@ export async function readActualWorkspaceManifestImpl(params: {
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
   signal?: AbortSignal;
-}): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string }> {
+}): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string; rawManifest: string }> {
   params.signal?.throwIfAborted();
   let root: string;
   let isStagedInput: ReturnType<typeof createStagedInputPathMatcher>;
@@ -151,9 +192,8 @@ export async function readActualWorkspaceManifestImpl(params: {
     params.signal?.throwIfAborted();
     throw error;
   }
-  const rawEntries: Array<
-    WorkerWorkspaceManifestEntry | { path: string; type: "directory"; mode: number }
-  > = [];
+  const entries: WorkerWorkspaceManifestEntry[] = [];
+  const directories: string[] = [];
   let totalBytes = 0;
   let manifestPathBytes = 0;
   let traversedEntries = 0;
@@ -164,14 +204,21 @@ export async function readActualWorkspaceManifestImpl(params: {
       throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
     }
   };
-  const addEntry = (entry: (typeof rawEntries)[number], bytes = 0): void => {
+  const addEntry = (
+    entry: WorkerWorkspaceManifestEntry | { path: string; type: "directory" },
+    bytes = 0,
+  ): void => {
     addBytes(bytes);
     manifestPathBytes += Buffer.byteLength(entry.path);
     if (manifestPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
       throw new Error("Gateway workspace manifest paths exceed their byte limit");
     }
-    rawEntries.push(entry);
-    if (rawEntries.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+    if (entry.type === "directory") {
+      directories.push(entry.path);
+    } else {
+      entries.push(entry);
+    }
+    if (entries.length + directories.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
       throw new Error("Gateway workspace manifest has too many entries");
     }
   };
@@ -191,9 +238,6 @@ export async function readActualWorkspaceManifestImpl(params: {
     }
   };
   const filePaths: string[] = [];
-  // A buffer is borrowed only on a hash miss and returned after its reads settle.
-  // The scan's bounded admission limits the pool to its active file readers.
-  const readBuffers: Buffer[] = [];
   const runScans = async (
     start: number,
     end: number,
@@ -236,19 +280,26 @@ export async function readActualWorkspaceManifestImpl(params: {
       },
       root,
       scanSignal,
-      readBuffers,
     );
     if (snapshot.type === "file") {
-      addEntry({
-        path: relative,
-        type: "file",
-        mode: snapshot.mode,
-        size: snapshot.size,
-        sha256: snapshot.sha256,
-      });
+      addEntry({ path: relative, ...snapshot });
       return;
     }
     throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
+  };
+  const addLeaf = async (relative: string, absolute: string, stats: Stats): Promise<boolean> => {
+    if (stats.isSymbolicLink()) {
+      const target = await fs.readlink(absolute);
+      if (!isPortableRootContainedSymlink(root, relative, target)) {
+        return false;
+      }
+      addEntry({ path: relative, type: "symlink", mode: 0o777, target }, Buffer.byteLength(target));
+    } else if (stats.isFile()) {
+      filePaths.push(relative);
+    } else {
+      return false;
+    }
+    return true;
   };
   const addIncludedPath = async (
     relative: string,
@@ -271,7 +322,7 @@ export async function readActualWorkspaceManifestImpl(params: {
     }
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
       if (params.preserveDirectories?.has(relative)) {
-        addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
+        addEntry({ path: relative, type: "directory" });
         return "included";
       }
       let hasDerivedEntry = false;
@@ -289,27 +340,12 @@ export async function readActualWorkspaceManifestImpl(params: {
         }
       }
       if (hasIncludedEntry || !hasDerivedEntry) {
-        addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
+        addEntry({ path: relative, type: "directory" });
         return "included";
       }
       return "derived-only";
     }
-    if (stats.isSymbolicLink()) {
-      const target = await fs.readlink(absolute);
-      if (isPortableRootContainedSymlink(root, relative, target)) {
-        addEntry(
-          { path: relative, type: "symlink", mode: 0o777, target },
-          Buffer.byteLength(target),
-        );
-        return "included";
-      }
-      return "absent";
-    }
-    if (stats.isFile()) {
-      filePaths.push(relative);
-      return "included";
-    }
-    return "absent";
+    return (await addLeaf(relative, absolute, stats)) ? "included" : "absent";
   };
   const walk = async (
     relativeDirectory: string,
@@ -333,37 +369,16 @@ export async function readActualWorkspaceManifestImpl(params: {
       if (stats.isDirectory() && !stats.isSymbolicLink()) {
         const child = await walk(relative);
         if (child.included || params.preserveDirectories?.has(relative)) {
-          addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
+          addEntry({ path: relative, type: "directory" });
           hasNonDerivedEntry = true;
         } else {
           hasDerivedEntry ||= child.hasDerivedEntry;
         }
-      } else if (stats.isSymbolicLink()) {
-        hasNonDerivedEntry = true;
-        const target = await fs.readlink(absolute);
-        if (!isPortableRootContainedSymlink(root, relative, target)) {
-          // Like other unsupported local nodes, an escaping symlink is retained
-          // as a conflict but omitted from the canonical cloud manifest.
-          continue;
-        }
-        addEntry(
-          {
-            path: relative,
-            type: "symlink",
-            mode: 0o777,
-            target,
-          },
-          Buffer.byteLength(target),
-        );
-      } else if (stats.isFile()) {
-        hasNonDerivedEntry = true;
-        filePaths.push(relative);
       } else {
+        // Unsupported nodes and escaping links still make their directory nonempty;
+        // they stay local and become conflicts if a worker changes the same path.
         hasNonDerivedEntry = true;
-        // Special local nodes cannot be represented in a cloud manifest. They
-        // remain in place and are surfaced as conflicts when the worker changed
-        // the same path; omitting them lets that conflicted turn still finish.
-        continue;
+        await addLeaf(relative, absolute, stats);
       }
     }
     return {
@@ -408,21 +423,17 @@ export async function readActualWorkspaceManifestImpl(params: {
   // and join all opened handles before any manifest can be returned.
   await runScans(0, filePaths.length, (index) => addFile(filePaths[index]!));
   scanSignal.throwIfAborted();
-  const directories = rawEntries
-    .filter((entry) => entry.type === "directory")
-    .toSorted((left, right) => left.path.localeCompare(right.path));
   const manifest: WorkerWorkspaceManifest = {
     version: 1,
     baseCommit: params.baseCommit,
-    entries: rawEntries
-      .filter((entry): entry is WorkerWorkspaceManifestEntry => entry.type !== "directory")
-      .toSorted((left, right) => left.path.localeCompare(right.path)),
-    directories: directories.map((entry) => entry.path),
+    entries: entries.toSorted((left, right) => left.path.localeCompare(right.path)),
+    directories: directories.toSorted((left, right) => left.localeCompare(right)),
   };
   const raw = serializeWorkerWorkspaceManifest(manifest);
   const manifestRef = `sha256:${createHash("sha256").update(raw).digest("hex")}`;
   return {
     manifestRef,
     manifest,
+    rawManifest: raw,
   };
 }

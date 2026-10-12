@@ -4,11 +4,12 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type {
+  ProviderAuthContext,
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
+  ProviderNonInteractiveApiKeyCredentialParams,
   ProviderPluginWizardSetup,
 } from "./types.js";
 
@@ -26,6 +27,7 @@ type ProviderApiKeyAuthMethodOptions = {
   flagName: `--${string}`;
   envVar: string;
   promptMessage: string;
+  validateApiKey?: (apiKey: string) => string | undefined;
   profileId?: string;
   profileIds?: string[];
   allowProfile?: boolean;
@@ -43,17 +45,74 @@ type ProviderApiKeyAuthMethodOptions = {
   }) => Promise<string | undefined>;
 };
 
-const loadProviderApiKeyAuthRuntime = createLazyRuntimeSurface(
-  () => import("./provider-api-key-auth.runtime.js"),
-  ({ providerApiKeyAuthRuntime }) => providerApiKeyAuthRuntime,
-);
-
-function resolveStringOption(opts: Record<string, unknown> | undefined, optionKey: string) {
-  return normalizeOptionalSecretInput(opts?.[optionKey]);
+/** Captures the resolved key and its original storage input without persisting credentials. */
+export async function captureProviderApiKey(
+  ctx: Pick<
+    ProviderAuthContext,
+    "config" | "workspaceDir" | "prompter" | "secretInputMode" | "allowSecretRefPrompt"
+  >,
+  params: Omit<
+    Parameters<typeof import("./provider-auth-input.js").ensureApiKeyFromOptionEnvOrPrompt>[0],
+    | "config"
+    | "workspaceDir"
+    | "prompter"
+    | "secretInputMode"
+    | "normalize"
+    | "validate"
+    | "setCredential"
+  > & { missingInputMessage?: string },
+): Promise<{ apiKey: string; input: SecretInput; mode?: ProviderAuthContext["secretInputMode"] }> {
+  const { missingInputMessage, ...inputOptions } = params;
+  const { ensureApiKeyFromOptionEnvOrPrompt, normalizeApiKeyInput, validateApiKeyInput } =
+    await import("./provider-api-key-auth.runtime.js");
+  let input: SecretInput | undefined;
+  let mode: ProviderAuthContext["secretInputMode"];
+  let captured = false;
+  const apiKey = await ensureApiKeyFromOptionEnvOrPrompt({
+    ...inputOptions,
+    config: ctx.config,
+    workspaceDir: ctx.workspaceDir,
+    prompter: ctx.prompter,
+    secretInputMode:
+      ctx.allowSecretRefPrompt === false
+        ? (ctx.secretInputMode ?? "plaintext")
+        : ctx.secretInputMode,
+    normalize: normalizeApiKeyInput,
+    validate: validateApiKeyInput,
+    setCredential: async (credential, selectedMode) => {
+      input = credential;
+      mode = selectedMode;
+      captured = true;
+    },
+  });
+  if (!captured) {
+    throw new Error(
+      missingInputMessage ?? `Missing API key input for provider "${params.provider}".`,
+    );
+  }
+  return { apiKey, input: input ?? "", mode };
 }
 
-function resolveProfileId(params: { providerId: string; profileId?: string }) {
-  return normalizeOptionalString(params.profileId) || `${params.providerId}:default`;
+/** Persists a newly supplied key; existing profiles retain their stored credential and metadata. */
+export async function persistProviderApiKey(
+  ctx: Pick<ProviderAuthMethodNonInteractiveContext, "toApiKeyCredential" | "agentDir">,
+  profileId: string,
+  params: ProviderNonInteractiveApiKeyCredentialParams,
+): Promise<boolean> {
+  if (params.resolved.source === "profile") {
+    return true;
+  }
+  const credential = ctx.toApiKeyCredential(params);
+  if (!credential) {
+    return false;
+  }
+  const { upsertAuthProfileWithLockOrThrow } = await import("./provider-api-key-auth.runtime.js");
+  await upsertAuthProfileWithLockOrThrow({
+    profileId,
+    credential,
+    agentDir: ctx.agentDir,
+  });
+  return true;
 }
 
 function resolveProfileIds(params: {
@@ -65,7 +124,7 @@ function resolveProfileIds(params: {
   if (explicit.length > 0) {
     return explicit;
   }
-  return [resolveProfileId(params)];
+  return [normalizeOptionalString(params.profileId) || `${params.providerId}:default`];
 }
 
 async function resolveDefaultModel(
@@ -85,53 +144,30 @@ async function resolveDefaultModel(
   }
 }
 
-async function applyApiKeyConfig(params: {
-  ctx: ProviderAuthMethodNonInteractiveContext;
-  providerId: string;
-  profileIds: string[];
-  defaultModel?: string;
-  preserveExistingPrimary?: boolean;
-  applyConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
-}) {
-  const { applyAuthProfileConfig, applyPrimaryModel } = await loadProviderApiKeyAuthRuntime();
-  let next = params.ctx.config;
-  for (const profileId of params.profileIds) {
-    next = applyAuthProfileConfig(next, {
-      profileId,
-      provider: normalizeOptionalString(profileId.split(":", 1)[0]) || params.providerId,
-      mode: "api_key",
-    });
-  }
-  if (params.applyConfig) {
-    next = params.applyConfig(next);
-  }
-  if (!params.defaultModel) {
-    return next;
-  }
-  if (
-    params.preserveExistingPrimary === true &&
-    resolveAgentModelPrimaryValue(next.agents?.defaults?.model) !== undefined
-  ) {
-    return next;
-  }
-  return applyPrimaryModel(next, params.defaultModel);
-}
-
 /** Creates a provider auth method that captures, stores, and configures API-key credentials. */
 export function createProviderApiKeyAuthMethod(
   params: ProviderApiKeyAuthMethodOptions,
 ): ProviderAuthMethod {
+  const assertValidApiKey = (apiKey: string) => {
+    const error = params.validateApiKey?.(apiKey);
+    if (error) {
+      throw new Error(error);
+    }
+  };
   const resolveNonInteractiveCredential = async (
     ctx: ProviderAuthMethodNonInteractiveValidationContext,
   ) => {
-    const opts = ctx.opts as Record<string, unknown> | undefined;
-    return await ctx.resolveApiKey({
+    const resolved = await ctx.resolveApiKey({
       provider: params.providerId,
-      flagValue: resolveStringOption(opts, params.optionKey),
+      flagValue: normalizeOptionalSecretInput(ctx.opts?.[params.optionKey]),
       flagName: params.flagName,
       envVar: params.envVar,
       ...(params.allowProfile === false ? { allowProfile: false } : {}),
     });
+    if (resolved) {
+      assertValidApiKey(resolved.key);
+    }
+    return resolved;
   };
   return {
     id: params.methodId,
@@ -141,50 +177,22 @@ export function createProviderApiKeyAuthMethod(
     starterModel: params.defaultModel,
     wizard: params.wizard,
     run: async (ctx) => {
-      const opts = ctx.opts as Record<string, unknown> | undefined;
-      const flagValue = resolveStringOption(opts, params.optionKey);
-      let capturedSecretInput: SecretInput | undefined;
-      let capturedCredential = false;
-      let capturedMode: "plaintext" | "ref" | undefined;
-      const {
-        buildApiKeyCredential,
-        ensureApiKeyFromOptionEnvOrPrompt,
-        normalizeApiKeyInput,
-        validateApiKeyInput,
-      } = await loadProviderApiKeyAuthRuntime();
-
-      const apiKey = await ensureApiKeyFromOptionEnvOrPrompt({
+      const flagValue = normalizeOptionalSecretInput(ctx.opts?.[params.optionKey]);
+      const { buildApiKeyCredential } = await import("./provider-api-key-auth.runtime.js");
+      const { apiKey, input, mode } = await captureProviderApiKey(ctx, {
         token: flagValue ?? normalizeOptionalSecretInput(ctx.opts?.token),
         tokenProvider: flagValue
           ? params.providerId
           : normalizeOptionalSecretInput(ctx.opts?.tokenProvider),
-        secretInputMode:
-          ctx.allowSecretRefPrompt === false
-            ? (ctx.secretInputMode ?? "plaintext")
-            : ctx.secretInputMode,
-        config: ctx.config,
         env: ctx.env,
-        workspaceDir: ctx.workspaceDir,
         expectedProviders: params.expectedProviders ?? [params.providerId],
         provider: params.providerId,
         envLabel: params.envVar,
         promptMessage: params.promptMessage,
-        normalize: normalizeApiKeyInput,
-        validate: validateApiKeyInput,
-        prompter: ctx.prompter,
         noteMessage: params.noteMessage,
         noteTitle: params.noteTitle,
-        setCredential: async (credential, mode) => {
-          capturedSecretInput = credential;
-          capturedCredential = true;
-          capturedMode = mode;
-        },
       });
-
-      if (!capturedCredential) {
-        throw new Error(`Missing API key input for provider "${params.providerId}".`);
-      }
-      const credentialInput = capturedSecretInput ?? "";
+      assertValidApiKey(apiKey);
       const profileIds = resolveProfileIds(params);
       const defaultModel = await resolveDefaultModel(params, {
         apiKey,
@@ -197,11 +205,11 @@ export function createProviderApiKeyAuthMethod(
           profileId,
           credential: buildApiKeyCredential(
             normalizeOptionalString(profileId.split(":", 1)[0]) || params.providerId,
-            credentialInput,
+            input,
             params.metadata,
-            capturedMode
+            mode
               ? {
-                  secretInputMode: capturedMode,
+                  secretInputMode: mode,
                   config: ctx.config,
                 }
               : undefined,
@@ -219,36 +227,42 @@ export function createProviderApiKeyAuthMethod(
       }
 
       const profileIds = resolveProfileIds(params);
-      if (resolved.source !== "profile") {
-        const { upsertAuthProfileWithLockOrThrow } = await loadProviderApiKeyAuthRuntime();
-        for (const profileId of profileIds) {
-          const credential = ctx.toApiKeyCredential({
+      for (const profileId of profileIds) {
+        if (
+          !(await persistProviderApiKey(ctx, profileId, {
             provider: normalizeOptionalString(profileId.split(":", 1)[0]) || params.providerId,
             resolved,
             ...(params.metadata ? { metadata: params.metadata } : {}),
-          });
-          if (!credential) {
-            return null;
-          }
-          await upsertAuthProfileWithLockOrThrow({
-            profileId,
-            credential,
-            agentDir: ctx.agentDir,
-          });
+          }))
+        ) {
+          return null;
         }
       }
 
-      return await applyApiKeyConfig({
-        ctx,
-        providerId: params.providerId,
-        profileIds,
-        defaultModel: await resolveDefaultModel(params, {
-          apiKey: resolved.key,
-          config: ctx.config,
-        }),
-        preserveExistingPrimary: params.preserveExistingPrimary,
-        applyConfig: params.applyConfig,
+      const defaultModel = await resolveDefaultModel(params, {
+        apiKey: resolved.key,
+        config: ctx.config,
       });
+      const { applyAuthProfileConfig, applyPrimaryModel } =
+        await import("./provider-api-key-auth.runtime.js");
+      let next = ctx.config;
+      for (const profileId of profileIds) {
+        next = applyAuthProfileConfig(next, {
+          profileId,
+          provider: normalizeOptionalString(profileId.split(":", 1)[0]) || params.providerId,
+          mode: "api_key",
+        });
+      }
+      if (params.applyConfig) {
+        next = params.applyConfig(next);
+      }
+      return defaultModel &&
+        !(
+          params.preserveExistingPrimary === true &&
+          resolveAgentModelPrimaryValue(next.agents?.defaults?.model) !== undefined
+        )
+        ? applyPrimaryModel(next, defaultModel)
+        : next;
     },
   };
 }

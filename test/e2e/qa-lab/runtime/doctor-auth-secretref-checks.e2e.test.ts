@@ -70,6 +70,7 @@ describe.skipIf(process.platform === "win32")("doctor auth and SecretRef product
     async () => {
       instance = await createOpenClawTestInstance({
         name: "qa-doctor-auth-secretref",
+        reserveIdlePort: false,
       });
 
       const resolvedValue = "qa-resolved-gateway-value";
@@ -181,7 +182,7 @@ describe.skipIf(process.platform === "win32")("doctor auth and SecretRef product
         );
         expect(execGated.code).toBe(0);
         expect(normalizedOutputOf(execGated)).toMatch(
-          /Gateway health probes skipped because gateway credentials use an exec(?:\s|│)*SecretRef\./,
+          /Gateway health checks skipped because gateway credentials use an exec(?:\s|│)*SecretRef\./,
         );
         await expect(fs.access(execMarker)).rejects.toThrow();
 

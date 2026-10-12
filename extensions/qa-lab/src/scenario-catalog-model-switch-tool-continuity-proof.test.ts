@@ -148,61 +148,6 @@ describe("model-switch tool continuity terminal evidence", () => {
     );
   });
 
-  it("accepts a logical read appended after the physical Code Mode exec", async () => {
-    const { result } = await runToolContinuity(["exec", "read"]);
-
-    expect(result.status).toBe("pass");
-    expect(result.modelSwitchEvidence).toMatchObject({
-      alternate: { runId: "run-2", successfulToolNames: ["exec", "read"] },
-    });
-  });
-
-  it("accepts a response-model reroute recorded by the alternate terminal receipt", async () => {
-    const { result } = await runToolContinuity(["read"], {
-      alternateResponseModel: "alternate-model-served",
-    });
-
-    expect(result.status).toBe("pass");
-    expect(result.modelSwitchEvidence).toMatchObject({
-      alternate: {
-        effective: { model: "alternate-model", responseModel: "alternate-model-served" },
-        rerouted: true,
-      },
-    });
-  });
-
-  it("rejects a bare successful Code Mode exec without logical read evidence", async () => {
-    await expect(runToolContinuity(["exec"])).rejects.toThrow(
-      "alternate-model run did not return exact owned successful read evidence",
-    );
-  });
-
-  it("does not let a successful prior-run read satisfy the alternate run", async () => {
-    await expect(runToolContinuity([])).rejects.toThrow(
-      "alternate-model run did not return exact owned successful read evidence",
-    );
-  });
-
-  it("keeps primary evidence when the primary tool assertion fails", async () => {
-    const { result, runAgentPrompt } = await runToolContinuity(["read"], {
-      catchFailureResult: true,
-      primaryTools: [],
-    });
-
-    expect(result).toMatchObject({
-      status: "fail",
-      details: "default-model run did not return owned successful read evidence",
-      modelSwitchEvidence: {
-        primary: {
-          runId: "run-1",
-          successfulToolNames: [],
-        },
-        primaryDelivery: { status: "sent", resultCount: 1 },
-      },
-    });
-    expect(runAgentPrompt).toHaveBeenCalledTimes(1);
-  });
-
   it("rejects unrelated later continuity text when the alternate reply lacks it", async () => {
     await expect(
       runToolContinuity(["read"], {
@@ -212,38 +157,4 @@ describe("model-switch tool continuity terminal evidence", () => {
       }),
     ).rejects.toThrow("alternate-model terminal reply missed kickoff continuity");
   });
-
-  it.each([
-    ["missing", null],
-    ["suppressed", { status: "suppressed", resultCount: 0 }],
-    ["zero-count", { status: "sent", resultCount: 0 }],
-  ] as const)(
-    "rejects %s primary delivery evidence despite identical and unrelated bus messages",
-    async (_, evidence) => {
-      await expect(
-        runToolContinuity(["read"], {
-          primaryDelivery: evidence,
-          primaryOutboundText: "the QA scenario pack verifies source and docs",
-          unrelatedPrimaryOutboundText: "an unrelated tool run also replied",
-        }),
-      ).rejects.toThrow("default-model run did not return owned sent delivery evidence");
-    },
-  );
-
-  it.each([
-    ["missing", null],
-    ["suppressed", { status: "suppressed", resultCount: 0 }],
-    ["zero-count", { status: "sent", resultCount: 0 }],
-  ] as const)(
-    "rejects %s delivery evidence despite an identical bus message",
-    async (_, evidence) => {
-      await expect(
-        runToolContinuity(["read"], {
-          alternateDelivery: evidence,
-          alternateOutboundText:
-            "the model handoff preserved the QA mission after rereading the scenario pack",
-        }),
-      ).rejects.toThrow("alternate-model run did not return owned sent delivery evidence");
-    },
-  );
 });

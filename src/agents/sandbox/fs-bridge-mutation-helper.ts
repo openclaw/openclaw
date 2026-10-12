@@ -1,16 +1,26 @@
+import { PATH_ALIAS_POLICIES } from "@openclaw/fs-safe/advanced";
 /**
  * Shell plans for pinned sandbox filesystem operations.
  *
  * Selects the local interpreter and supplies quoted Python source to local and remote transports.
  */
-import { PATH_ALIAS_POLICIES } from "../../infra/path-alias-guards.js";
-import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-python.js";
+import { GUEST_FILESYSTEM_PYTHON } from "@openclaw/fs-safe/guest";
 import type {
   PathSafetyCheck,
   PinnedSandboxDirectoryEntry,
   PinnedSandboxEntry,
 } from "./fs-bridge-path-safety.js";
-import type { SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
+import type { SandboxResolvedFsPath } from "./fs-paths.js";
+
+// Plans carry path-safety checks alongside the command so rechecks and execution stay coupled.
+export type SandboxFsCommandPlan = {
+  checks: PathSafetyCheck[];
+  script: string;
+  args?: string[];
+  stdin?: Buffer | string;
+  recheckBeforeCommand?: boolean;
+  allowFailure?: boolean;
+};
 
 const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
   "/usr/bin/python3",
@@ -19,7 +29,15 @@ const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
   "/bin/python3",
 ] as const;
 
-export const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${SANDBOX_PINNED_MUTATION_PYTHON.replaceAll("'", `'\\''`)}'`;
+export const PINNED_MUTATION_ACTION_LABELS = {
+  write: "write files",
+  create: "create files",
+  mkdir: "create directories",
+  remove: "remove files",
+  "copy-destination": "copy files",
+} as const;
+
+export const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${GUEST_FILESYSTEM_PYTHON.replaceAll("'", `'\\''`)}'`;
 
 export type PinnedSandboxOperation =
   | {
@@ -94,24 +112,41 @@ export function buildPinnedMutationArgs(operation: PinnedSandboxOperation): stri
 
 type CheckedPinnedOperation =
   | (Exclude<PinnedSandboxOperation, { kind: "read" | "copy" | "rename" }> & {
-      check: PathSafetyCheck;
+      target: SandboxResolvedFsPath;
     })
   | (Extract<PinnedSandboxOperation, { kind: "copy" | "rename" }> & {
-      sourceCheck: PathSafetyCheck;
-      destinationCheck: PathSafetyCheck;
+      sourceTarget: SandboxResolvedFsPath;
+      destinationTarget: SandboxResolvedFsPath;
     });
 
+const PINNED_OPERATION_CHECK_OPTIONS = {
+  write: { action: "write files", requireWritable: true },
+  create: { action: "create files", requireWritable: true },
+  readdir: { action: "list directories", allowedType: "directory" },
+  mkdirp: { action: "create directories", requireWritable: true, allowedType: "directory" },
+  remove: { action: "remove files", requireWritable: true, allowedType: "file-or-directory" },
+  rename: { action: "rename files", requireWritable: "subtree", allowedType: "file-or-directory" },
+  copy: { action: "copy files", requireWritable: true },
+} satisfies Record<CheckedPinnedOperation["kind"], PathSafetyCheck["options"]>;
+
 export function buildPinnedMutationPlan(operation: CheckedPinnedOperation): SandboxFsCommandPlan {
-  const checks =
+  const options: PathSafetyCheck["options"] = { ...PINNED_OPERATION_CHECK_OPTIONS[operation.kind] };
+  if (operation.kind === "remove" && operation.recursive) {
+    options.requireWritable = "subtree";
+  }
+  const checks: PathSafetyCheck[] =
     operation.kind === "copy" || operation.kind === "rename"
-      ? [operation.sourceCheck, operation.destinationCheck]
-      : [operation.check];
+      ? [
+          {
+            target: operation.sourceTarget,
+            options:
+              operation.kind === "copy" ? { action: options.action, allowedType: "file" } : options,
+          },
+          { target: operation.destinationTarget, options },
+        ]
+      : [{ target: operation.target, options }];
   if (operation.kind === "remove" || operation.kind === "rename") {
-    const check = operation.kind === "remove" ? operation.check : operation.sourceCheck;
-    checks[0] = {
-      target: check.target,
-      options: { ...check.options, aliasPolicy: PATH_ALIAS_POLICIES.unlinkTarget },
-    };
+    checks[0]!.options = { ...checks[0]!.options, aliasPolicy: PATH_ALIAS_POLICIES.unlinkTarget };
   }
   const args = buildPinnedMutationArgs(operation);
   return {

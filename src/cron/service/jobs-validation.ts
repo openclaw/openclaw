@@ -5,16 +5,28 @@ import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
-import {
-  isSystemOwnedCronPayloadKind,
-  type CronDelivery,
-  type CronJob,
-  type CronJobPatch,
-} from "../types.js";
+import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
+import { isSystemOwnedCronPayloadKind, type CronJob, type CronJobPatch } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
+import { computeJobNextRunAtMs } from "./jobs-scheduling.js";
+import type { CronServiceState } from "./state.js";
+
+export async function resolveConfiguredChannelsForValidation(
+  state: CronServiceState,
+): Promise<readonly string[] | undefined> {
+  try {
+    return await state.deps.listConfiguredChannels?.();
+  } catch {
+    // Channel discovery is advisory at mutation time. Runtime delivery remains
+    // authoritative, so discovery failures must not create false rejections.
+    state.deps.log.debug({}, "cron: configured channel validation skipped");
+    return undefined;
+  }
+}
 
 function assertCronScriptSyntax(script: string, subject: "script payload" | "trigger script") {
   if (!script.trim()) {
@@ -30,17 +42,15 @@ function assertCronScriptSyntax(script: string, subject: "script payload" | "tri
 
 /** Validates that session target and payload kind form a supported cron job shape. */
 export function assertSupportedJobSpec(
-  job: Pick<CronJob, "schedule" | "sessionTarget" | "payload">,
+  job: Pick<CronJob, "sessionTarget"> & { payload: Pick<CronJob["payload"], "kind"> },
 ) {
   if (typeof job.sessionTarget !== "string") {
     throw new Error(
       'cron job is missing sessionTarget; expected "main", "isolated", "current", or "session:<id>"',
     );
   }
-  const isIsolatedLike =
-    job.sessionTarget === "isolated" ||
-    job.sessionTarget === "current" ||
-    job.sessionTarget.startsWith("session:");
+  const isConversationTarget =
+    job.sessionTarget === "current" || job.sessionTarget.startsWith("session:");
   if (job.sessionTarget.startsWith("session:")) {
     assertSafeCronSessionTargetId(job.sessionTarget.slice(8));
   }
@@ -50,23 +60,32 @@ export function assertSupportedJobSpec(
     job.payload.kind !== "script" &&
     !isSystemOwnedCronPayloadKind(job.payload.kind)
   ) {
-    throw new Error('main cron jobs require payload.kind="systemEvent" or "script"');
+    throw new Error(
+      'cron sessionTarget "main" requires payload.kind="systemEvent" or "script"; agent turns use "isolated", "current", or "session:<key>"',
+    );
   }
   if (
     job.payload.kind === "script" &&
     job.sessionTarget !== "main" &&
     job.sessionTarget !== "isolated"
   ) {
-    throw new Error('script cron jobs require sessionTarget="main" or "isolated"');
+    throw new Error(
+      `cron sessionTarget "${job.sessionTarget}" cannot run script payloads: scripts run headless and support only "main" or "isolated"; to run a turn in an existing conversation use payload {kind:"agentTurn",message} with sessionTarget "session:<key>"`,
+    );
+  }
+  if (isConversationTarget && job.payload.kind !== "agentTurn" && job.payload.kind !== "command") {
+    throw new Error(
+      `cron sessionTarget "${job.sessionTarget}" cannot run ${job.payload.kind}: systemEvent only runs in the main session; for sessionTarget "${job.sessionTarget}" use payload {kind:"agentTurn",message}`,
+    );
   }
   if (
-    isIsolatedLike &&
+    job.sessionTarget === "isolated" &&
     job.payload.kind !== "agentTurn" &&
     job.payload.kind !== "command" &&
-    !(job.sessionTarget === "isolated" && job.payload.kind === "script")
+    job.payload.kind !== "script"
   ) {
     throw new Error(
-      'isolated cron jobs require payload.kind="agentTurn", "command", or "script"; script payloads do not support current/session targets',
+      'cron sessionTarget "isolated" requires payload.kind="agentTurn", "command", or "script"',
     );
   }
 }
@@ -172,11 +191,7 @@ export function assertStreamScheduleSupport(
   }
 }
 
-export function assertTimeScheduleSatisfiable(
-  job: CronJob,
-  nowMs: number,
-  computeJobNextRunAtMs: (job: CronJob, nowMs: number) => number | undefined,
-) {
+export function assertTimeScheduleSatisfiable(job: CronJob, nowMs: number) {
   if (job.schedule.kind === "at") {
     if (parseAbsoluteTimeMs(job.schedule.at) === null) {
       throw new Error("cron at schedule must contain a Date-valid absolute timestamp");
@@ -198,7 +213,7 @@ export function assertTimeScheduleSatisfiable(
 }
 
 export function assertMainSessionAgentId(
-  job: Pick<CronJob, "sessionTarget" | "agentId" | "payload">,
+  job: CronJob,
   defaultAgentId: string | undefined,
   patch?: CronJobPatch,
 ) {
@@ -217,9 +232,11 @@ export function assertMainSessionAgentId(
   if (!job.agentId) {
     return;
   }
-  // Script payloads run no agent turn; system-owned monitors invoke Gateway
-  // dependencies directly, so both are valid for non-default agents.
-  if (job.payload.kind === "script" || isSystemOwnedCronPayloadKind(job.payload.kind)) {
+  if (
+    job.payload.kind === "script" ||
+    isSystemOwnedCronPayloadKind(job.payload.kind) ||
+    isHeartbeatTaskCronJob(job)
+  ) {
     return;
   }
   const normalized = normalizeAgentId(job.agentId);
@@ -232,6 +249,7 @@ export function assertMainSessionAgentId(
 }
 
 export function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
+  assertCanonicalCronDeliveryMode(job.delivery);
   if (!job.delivery) {
     return;
   }
@@ -317,24 +335,15 @@ export function cronPatchTouchesDeliveryResolution(patch: CronJobPatch): boolean
   );
 }
 
-function hasConcreteFailureDestination(
-  destination: CronDelivery["failureDestination"] | undefined,
-): boolean {
-  return Boolean(
-    destination &&
-    (destination.channel !== undefined ||
-      destination.to !== undefined ||
-      destination.accountId !== undefined ||
-      destination.mode !== undefined),
-  );
-}
-
 export function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
   const failureDestination = job.delivery?.failureDestination;
-  if (!failureDestination) {
-    return;
-  }
-  if (!hasConcreteFailureDestination(failureDestination)) {
+  if (
+    !failureDestination ||
+    (failureDestination.channel === undefined &&
+      failureDestination.to === undefined &&
+      failureDestination.accountId === undefined &&
+      failureDestination.mode === undefined)
+  ) {
     return;
   }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {

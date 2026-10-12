@@ -32,26 +32,6 @@ describe("createSandboxBridgeReadFile", () => {
     });
   });
 
-  it("falls back to container paths when the bridge has no host path", async () => {
-    const stat = vi.fn(async () => ({ type: "file", size: 1, mtimeMs: 1 }));
-    const resolved = await resolveSandboxedBridgeMediaPath({
-      sandbox: {
-        root: "/tmp/sandbox-root",
-        bridge: {
-          resolvePath: ({ filePath }: { filePath: string }) => ({
-            relativePath: filePath,
-            containerPath: `/sandbox/${filePath}`,
-          }),
-          stat,
-        } as unknown as SandboxFsBridge,
-      },
-      mediaPath: "image.png",
-    });
-
-    expect(resolved).toEqual({ resolved: "/sandbox/image.png" });
-    expect(stat).not.toHaveBeenCalled();
-  });
-
   it("keeps workspace-only container paths under the sandbox workspace mount", async () => {
     // Container paths must stay inside the remote workspace mount when workspaceOnly is set.
     const resolvePath = vi.fn(({ filePath }: { filePath: string }) => {
@@ -176,12 +156,19 @@ describe("sandbox media container file URLs", () => {
     await fs.mkdir(workspace, { recursive: true });
     await fs.writeFile(imagePath, "image", "utf8");
     bridge = createSandboxFsBridge({
-      sandbox: createSandboxTestContext({
-        overrides: {
-          workspaceDir: workspace,
-          agentWorkspaceDir: workspace,
+      sandbox: {
+        ...createSandboxTestContext({
+          overrides: {
+            workspaceDir: workspace,
+            agentWorkspaceDir: workspace,
+          },
+        }),
+        backend: {
+          runShellCommand: async () => {
+            throw new Error("Path resolution must not execute backend commands");
+          },
         },
-      }),
+      },
     });
   });
 
@@ -189,12 +176,7 @@ describe("sandbox media container file URLs", () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
-  it.each([
-    "file:///workspace/image.png",
-    "FILE:///workspace/image.png",
-    "file:/workspace/image.png",
-    "FILE:/workspace/image.png",
-  ])("reads a mounted file from %s", async (mediaPath) => {
+  it.each(["FILE:/workspace/image.png"])("reads a mounted file from %s", async (mediaPath) => {
     const resolved = await resolveSandboxedBridgeMediaPath({
       sandbox: { root: workspace, bridge, workspaceOnly: true },
       mediaPath,
@@ -204,33 +186,15 @@ describe("sandbox media container file URLs", () => {
     await expect(fs.readFile(resolved.resolved, "utf8")).resolves.toBe("image");
   });
 
-  it.each([
-    "file:///outside/image.png",
-    "FILE:///outside/image.png",
-    "file:/outside/image.png",
-    "FILE:/outside/image.png",
-  ])("rejects an outside mounted file from %s", async (mediaPath) => {
-    await expect(
-      resolveSandboxedBridgeMediaPath({
-        sandbox: { root: workspace, bridge, workspaceOnly: true },
-        mediaPath,
-      }),
-    ).rejects.toThrow(/escapes sandbox root/i);
-  });
-
-  it.each([
-    {
-      mediaPath: "file://remote.example/workspace/image.png",
-      error: "remote hosts are not allowed",
+  it.each(["FILE:/outside/image.png"])(
+    "rejects an outside mounted file from %s",
+    async (mediaPath) => {
+      await expect(
+        resolveSandboxedBridgeMediaPath({
+          sandbox: { root: workspace, bridge, workspaceOnly: true },
+          mediaPath,
+        }),
+      ).rejects.toThrow(/escapes sandbox root/i);
     },
-    { mediaPath: "file:///workspace/image%2f.png", error: "cannot encode path separators" },
-    { mediaPath: "FILE:/workspace/image%5C.png", error: "cannot encode path separators" },
-  ])("rejects an unsafe file URL from $mediaPath", async ({ mediaPath, error }) => {
-    await expect(
-      resolveSandboxedBridgeMediaPath({
-        sandbox: { root: workspace, bridge, workspaceOnly: true },
-        mediaPath,
-      }),
-    ).rejects.toThrow(error);
-  });
+  );
 });

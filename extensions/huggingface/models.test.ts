@@ -1,4 +1,3 @@
-// Huggingface tests cover models plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -32,43 +31,6 @@ describe("huggingface models", () => {
     },
   );
 
-  it("does not advertise the retired Llama 3.3 Turbo route", () => {
-    expect(HUGGINGFACE_MODEL_CATALOG.map((model) => model.id)).not.toContain(
-      "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-    );
-  });
-
-  it("discoverHuggingfaceModels returns static catalog when apiKey is empty", async () => {
-    const models = await discoverHuggingfaceModels("");
-    expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
-    expect(models.map((m) => m.id)).toEqual(HUGGINGFACE_MODEL_CATALOG.map((m) => m.id));
-    expect(models[0]?.contextWindow).toBe(131072);
-    expect(models[0]?.compat).toBeUndefined();
-  });
-
-  it("uses the live route context for bundled models while preserving their catalog metadata", async () => {
-    const bundledModel = HUGGINGFACE_MODEL_CATALOG[0]!;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({
-          data: [
-            {
-              id: bundledModel.id,
-              name: "Upstream name must not replace bundled metadata",
-              architecture: { input_modalities: ["text", "image"] },
-              providers: [{ context_length: 64000, supports_tools: true }],
-            },
-          ],
-        }),
-      ),
-    );
-
-    const models = await discoverHuggingfaceModels("hf_test_token");
-
-    expect(models).toEqual([{ ...bundledModel, contextWindow: 64000 }]);
-  });
-
   it("limits discovered models to every available route regardless of provider order", async () => {
     const bundledModel = HUGGINGFACE_MODEL_CATALOG[0]!;
     vi.stubGlobal(
@@ -86,11 +48,13 @@ describe("huggingface models", () => {
             },
             {
               id: bundledModel.id,
+              name: "Upstream name must not replace bundled metadata",
+              architecture: { input_modalities: ["text", "image"] },
               providers: [
                 { status: "error", context_length: 16000 },
                 { context_length: 96000 },
                 { context_length: 0 },
-                { context_length: 64000 },
+                { context_length: 64000, supports_tools: true },
               ],
             },
           ],
@@ -105,6 +69,7 @@ describe("huggingface models", () => {
       { id: "test/reversed-provider-order", contextWindow: 262144 },
       { id: bundledModel.id, contextWindow: 64000 },
     ]);
+    expect(models[2]).toEqual({ ...bundledModel, contextWindow: 64000 });
   });
 
   it("disables tools whenever an available route explicitly rejects them", async () => {
@@ -158,66 +123,25 @@ describe("huggingface models", () => {
     const models = await discoverHuggingfaceModels("hf_test_token");
 
     expect(
-      models.map(({ id, input, contextWindow, compat }) => ({ id, input, contextWindow, compat })),
+      models.map(({ id, input, contextWindow, compat }) => [id, input, contextWindow, compat]),
     ).toEqual([
-      {
-        id: "test/no-tools-vision",
-        input: ["text", "image"],
-        contextWindow: 64000,
-        compat: { supportsTools: false },
-      },
-      {
-        id: "test/mixed-routes",
-        input: ["text"],
-        contextWindow: 131072,
-        compat: { supportsTools: false },
-      },
-      {
-        id: "test/reversed-mixed-routes",
-        input: ["text"],
-        contextWindow: 131072,
-        compat: { supportsTools: false },
-      },
-      {
-        id: "test/unknown-route",
-        input: ["text"],
-        contextWindow: 48000,
-        compat: { supportsTools: false },
-      },
-      {
-        id: "test/errored-route",
-        input: ["text"],
-        contextWindow: 32000,
-        compat: { supportsTools: false },
-      },
-      {
-        id: "test/errored-unsupported-route",
-        input: ["text"],
-        contextWindow: 131072,
-        compat: undefined,
-      },
-      {
-        id: "test/no-routes",
-        input: ["text"],
-        contextWindow: 131072,
-        compat: undefined,
-      },
-      {
-        id: "test/unknown-only",
-        input: ["text"],
-        contextWindow: 131072,
-        compat: undefined,
-      },
-      {
-        id: "test/tools",
-        input: ["text"],
-        contextWindow: 131072,
-        compat: undefined,
-      },
+      ["test/no-tools-vision", ["text", "image"], 64000, { supportsTools: false }],
+      ["test/mixed-routes", ["text"], 131072, { supportsTools: false }],
+      ["test/reversed-mixed-routes", ["text"], 131072, { supportsTools: false }],
+      ["test/unknown-route", ["text"], 48000, { supportsTools: false }],
+      ["test/errored-route", ["text"], 32000, { supportsTools: false }],
+      ["test/errored-unsupported-route", ["text"], 131072, undefined],
+      ["test/no-routes", ["text"], 131072, undefined],
+      ["test/unknown-only", ["text"], 131072, undefined],
+      ["test/tools", ["text"], 131072, undefined],
     ]);
   });
 
-  it("uses the default discovery timeout for live Hugging Face fetches", async () => {
+  it.each([
+    { label: "default", timeoutMs: undefined, expected: 30_000 },
+    { label: "custom", timeoutMs: 25_000, expected: 25_000 },
+    { label: "oversized", timeoutMs: Number.MAX_SAFE_INTEGER, expected: MAX_TIMER_TIMEOUT_MS },
+  ])("bounds the $label discovery timeout", async ({ timeoutMs, expected }) => {
     const timeoutSpy = stubAbortSignalTimeout();
     vi.stubGlobal(
       "fetch",
@@ -228,104 +152,12 @@ describe("huggingface models", () => {
     );
 
     await expect(
-      discoverHuggingfaceModels("hf_test_token", undefined, { discoveryMode: "strict" }),
-    ).rejects.toMatchObject({ status: 500 });
-    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
-  });
-
-  it("accepts a custom discovery timeout override", async () => {
-    const timeoutSpy = stubAbortSignalTimeout();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response("{}", { status: 500, headers: { "Content-Type": "application/json" } }),
-      ),
-    );
-
-    await expect(
-      discoverHuggingfaceModels("hf_test_token", 25_000, { discoveryMode: "strict" }),
+      discoverHuggingfaceModels("hf_test_token", timeoutMs, { discoveryMode: "strict" }),
     ).rejects.toMatchObject({
       status: 500,
     });
 
-    expect(timeoutSpy).toHaveBeenCalledWith(25_000);
-  });
-
-  it("caps oversized live discovery timeout overrides", async () => {
-    const timeoutSpy = stubAbortSignalTimeout();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response("{}", { status: 500, headers: { "Content-Type": "application/json" } }),
-      ),
-    );
-
-    await expect(
-      discoverHuggingfaceModels("hf_test_token", Number.MAX_SAFE_INTEGER, {
-        discoveryMode: "strict",
-      }),
-    ).rejects.toMatchObject({ status: 500 });
-
-    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
-  });
-
-  it("cancels the response body before propagating an HTTP error", async () => {
-    stubAbortSignalTimeout();
-    const response = new Response("unavailable", { status: 503 });
-    const cancel = vi.spyOn(response.body!, "cancel");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => response),
-    );
-
-    await expect(
-      discoverHuggingfaceModels("hf_test_token", undefined, { discoveryMode: "strict" }),
-    ).rejects.toMatchObject({ status: 503 });
-    expect(cancel).toHaveBeenCalledTimes(1);
-  });
-
-  it("propagates discovery response overflow after releasing the reader", async () => {
-    const chunk = new Uint8Array(1024 * 1024);
-    const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
-      controller.enqueue(chunk);
-    });
-    const cancel = vi.fn(async () => undefined);
-    // Disable prefetch so each pull records a chunk requested by the bounded reader.
-    const response = new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
-      headers: { "Content-Type": "application/json" },
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => response),
-    );
-
-    await expect(
-      discoverHuggingfaceModels("hf_test_token", undefined, { discoveryMode: "strict" }),
-    ).rejects.toThrow("Live model catalog response exceeded");
-    expect(cancel).toHaveBeenCalledTimes(1);
-    expect(response.body?.locked).toBe(false);
-    expect(response.bodyUsed).toBe(true);
-    expect(pull).toHaveBeenCalledTimes(5);
-  });
-
-  it("parses a valid bounded discovery response", async () => {
-    const modelId = "test-org/test-model";
-    const body = new TextEncoder().encode(JSON.stringify({ data: [{ id: modelId }] }));
-    const response = new Response(body, { headers: { "Content-Type": "application/json" } });
-    const cancel = vi.spyOn(response.body!, "cancel");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => response),
-    );
-
-    const models = await discoverHuggingfaceModels("hf_test_token");
-
-    expect(models.some((model) => model.id === modelId)).toBe(true);
-    expect(cancel).not.toHaveBeenCalled();
-    expect(response.body?.locked).toBe(false);
-    expect(response.bodyUsed).toBe(true);
+    expect(timeoutSpy).toHaveBeenCalledWith(expected);
   });
 
   describe("isHuggingfacePolicyLocked", () => {

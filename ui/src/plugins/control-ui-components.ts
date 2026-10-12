@@ -3,7 +3,6 @@ import type {
   ControlUiComponentHandle,
   ControlUiComponents,
 } from "../../../src/plugin-sdk/control-ui-components.js";
-import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { icons } from "../components/icons.ts";
@@ -18,7 +17,7 @@ function resolveAppearanceColor(value: string | null | undefined): string {
 }
 
 export function createControlUiComponents(options: {
-  current: () => ApplicationContext<RouteId>;
+  current: () => ApplicationContext;
   signal: AbortSignal;
   onError: (error: unknown) => void;
 }): ControlUiComponents {
@@ -26,9 +25,9 @@ export function createControlUiComponents(options: {
     container: HTMLElement,
     initial: P,
     load: () => Promise<E>,
-    apply: (element: E, props: P, current: () => ApplicationContext<RouteId>) => void,
+    apply: (element: E, props: P, current: () => ApplicationContext) => void,
     listen?: (element: E, props: () => P) => () => void,
-    observe?: (context: ApplicationContext<RouteId>, refresh: () => void) => () => void,
+    observe?: (context: ApplicationContext, refresh: () => void) => () => void,
   ): ControlUiComponentHandle<P> {
     options.current();
     options.signal.throwIfAborted();
@@ -109,8 +108,8 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          const { AgentAvatar } = await import("../components/agent-avatar.ts");
-          return new AgentAvatar();
+          await import("../components/agent-avatar.ts");
+          return document.createElement("openclaw-agent-avatar");
         },
         (element, next, current) => {
           const context = current();
@@ -246,7 +245,7 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          await import("./control-ui-session-summary.ts");
+          await import("./control-ui-session-summary.tsx");
           return document.createElement("openclaw-plugin-session-summary");
         },
         (element, next, current) => {
@@ -255,7 +254,6 @@ export function createControlUiComponents(options: {
           element.agents = current().agents.state.agentsList?.agents ?? [];
           element.agentIdentity = current().agentIdentity;
           element.presented = next.presented;
-          element.requestUpdate();
         },
       ),
     mountDashboard: (container, props) =>
@@ -263,7 +261,7 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          await import("./control-ui-dashboard.ts");
+          await import("./control-ui-dashboard.tsx");
           return document.createElement("openclaw-plugin-session-dashboard");
         },
         (element, next, current) => {

@@ -5,7 +5,7 @@ import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "./bundle-mc
 
 const authMocks = vi.hoisted(() => ({
   loadExecApprovalsReadOnlyAsync: vi.fn(),
-  loadAuthProfileStoreForSecretsRuntime: vi.fn(),
+  loadAuthProfileStoreForRuntimeAsync: vi.fn(),
   resolveApiKeyForProfile: vi.fn(),
   resolveMcpOAuthAccessToken: vi.fn(),
 }));
@@ -14,8 +14,9 @@ vi.mock("../../infra/exec-approvals-store.js", () => ({
   loadExecApprovalsReadOnlyAsync: authMocks.loadExecApprovalsReadOnlyAsync,
 }));
 
+// mock-isolation: MCP projection consumes synthetic profile snapshots without reading host stores.
 vi.mock("../auth-profiles/store-runtime.js", () => ({
-  loadAuthProfileStoreForSecretsRuntime: authMocks.loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreForRuntimeAsync: authMocks.loadAuthProfileStoreForRuntimeAsync,
 }));
 
 vi.mock("../auth-profiles/oauth.js", () => ({
@@ -31,7 +32,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     authMocks.loadExecApprovalsReadOnlyAsync
       .mockReset()
       .mockResolvedValue({ version: 1, agents: {} });
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
+    authMocks.loadAuthProfileStoreForRuntimeAsync.mockReset();
     authMocks.resolveApiKeyForProfile.mockReset();
     authMocks.resolveMcpOAuthAccessToken.mockReset();
   });
@@ -188,30 +189,6 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
           url: "https://notes.example.org/mcp",
           bearer_token_env_var: "NOTES_TOKEN",
           env_http_headers: { "x-tenant": "NOTES_TENANT" },
-        },
-      },
-    });
-  });
-
-  it("projects Codex-specific default tool approval mode", async () => {
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
-      mcp: {
-        servers: {
-          search: {
-            transport: "streamable-http",
-            url: "https://mcp.example.com/mcp",
-            codex: {
-              defaultToolsApprovalMode: "approve",
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig);
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        search: {
-          url: "https://mcp.example.com/mcp",
-          default_tools_approval_mode: "approve",
         },
       },
     });
@@ -447,79 +424,6 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     expect(patch).toBeUndefined();
   });
 
-  it("preserves multiple user MCP servers as independent mcp_servers entries", async () => {
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
-      mcp: {
-        servers: {
-          one: { transport: "stdio", command: "one" },
-          two: { transport: "stdio", command: "two" },
-        },
-      },
-    } as unknown as OpenClawConfig);
-    expect(patch?.mcp_servers).toBeDefined();
-    expect(Object.keys(patch!.mcp_servers).toSorted()).toEqual(["one", "two"]);
-    expect(patch!.mcp_servers.one).toMatchObject({ command: "one" });
-    expect(patch!.mcp_servers.two).toMatchObject({ command: "two" });
-  });
-
-  it("projects auth-profile backed user MCP servers with a fresh bearer header at runtime", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
-      version: 1,
-      profiles: {
-        "ducktape:mcp": {
-          type: "oauth",
-          provider: "ducktape",
-          access: "expired-access",
-          refresh: "refresh-token-must-not-project",
-          expires: 1,
-        },
-      },
-    });
-    authMocks.resolveApiKeyForProfile.mockResolvedValueOnce({
-      apiKey: "fresh-access-token",
-      provider: "ducktape",
-      profileId: "ducktape:mcp",
-      profileType: "oauth",
-      credential: {
-        type: "oauth",
-        provider: "ducktape",
-        access: "fresh-access-token",
-        refresh: "refresh-token-must-not-project",
-        expires: Date.now() + 60_000,
-      },
-    });
-
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
-      mcp: {
-        servers: {
-          ducktape: {
-            transport: "streamable-http",
-            url: "https://agents.ducktape.xyz/mcp",
-            auth: "oauth",
-            oauth: { authProfileId: "ducktape:mcp" },
-            headers: {
-              Authorization: "Bearer stale-access",
-              "x-tenant": "keep",
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig);
-
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        ducktape: {
-          url: "https://agents.ducktape.xyz/mcp",
-          http_headers: {
-            Authorization: "Bearer fresh-access-token",
-            "x-tenant": "keep",
-          },
-        },
-      },
-    });
-    expect(JSON.stringify(patch)).not.toContain("refresh-token-must-not-project");
-  });
-
   it("projects MCP-native OAuth credentials into local Codex runtime config", async () => {
     authMocks.resolveMcpOAuthAccessToken.mockResolvedValueOnce("native-access-token");
 
@@ -602,7 +506,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
   });
 
   it("preserves tool filters while projecting auth-profile backed MCP bearers at runtime", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
+    authMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValueOnce({
       version: 1,
       profiles: {
         "ducktape:mcp": {
@@ -638,6 +542,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
             oauth: { authProfileId: "ducktape:mcp" },
             headers: {
               Authorization: "Bearer stale-access",
+              "x-tenant": "keep",
             },
             toolFilter: {
               include: ["proof_echo", "proof_search"],
@@ -654,6 +559,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
           url: "https://agents.ducktape.xyz/mcp",
           http_headers: {
             Authorization: "Bearer fresh-access-token",
+            "x-tenant": "keep",
           },
           enabled_tools: ["proof_echo", "proof_search"],
           disabled_tools: ["admin_delete"],

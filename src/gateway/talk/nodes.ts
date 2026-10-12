@@ -1,0 +1,19 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { NodeRegistry } from "../node-registry.js";
+
+// Talk node detection accepts either the explicit talk capability or talk.*
+// commands so older and newer node clients both enable talk routing.
+const TALK_CAPABILITY = "talk";
+const TALK_COMMAND_PREFIX = "talk.";
+
+export async function hasConnectedTalkNode(registry: NodeRegistry): Promise<boolean> {
+  return (await registry.listCurrentConnected()).some(
+    (node) =>
+      node.caps.some(
+        (capability) => normalizeOptionalLowercaseString(capability) === TALK_CAPABILITY,
+      ) ||
+      node.commands.some((command) =>
+        normalizeOptionalLowercaseString(command)?.startsWith(TALK_COMMAND_PREFIX),
+      ),
+  );
+}

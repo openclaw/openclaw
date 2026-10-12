@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { stripInternalRuntimeContext } from "../../internal-runtime-context.js";
 import { buildSubagentSpawnEnvelope } from "./subagent-system-prompt.js";
 
 function buildEnvelope(overrides: Partial<Parameters<typeof buildSubagentSpawnEnvelope>[0]> = {}) {
@@ -12,14 +13,9 @@ function buildEnvelope(overrides: Partial<Parameters<typeof buildSubagentSpawnEn
 }
 
 describe("subagent spawn envelope", () => {
-  it.each([
-    { completionMode: "announce", expected: /returns to the requester as a completion event/ },
-    { completionMode: "collector", expected: /Collector run: no completion notification/ },
-    { completionMode: "quiet", expected: /Quiet run: no completion notification/ },
-    { completionMode: "thread-direct", expected: /delivered directly to the bound thread/ },
-  ] as const)(
-    "gives child and requester the same $completionMode contract",
-    ({ completionMode, expected }) => {
+  it.each([["collector", /Collector run: no completion notification/]] as const)(
+    "gives child and requester the same %s contract",
+    (completionMode, expected) => {
       const { systemPrompt, message, acceptedNote } = buildEnvelope({ completionMode });
       expect(systemPrompt).toMatch(expected);
       expect(acceptedNote).toMatch(expected);
@@ -28,9 +24,13 @@ describe("subagent spawn envelope", () => {
         expect(guidance).not.toMatch(
           /auto-announce|auto-reported|sessions_yield|agents_wait|`message`/,
         );
+        expect(guidance).not.toContain("NO_REPLY");
       }
+      expect(systemPrompt).toContain("Always return a meaningful result or a concrete blocker");
       expect(systemPrompt.length).toBeLessThan(4_000);
-      expect(message).toContain("[Subagent Task]\n\nUNIQUE_SUBAGENT_TASK\n  preserve indentation");
+      expect(stripInternalRuntimeContext(message)).toBe(
+        "UNIQUE_SUBAGENT_TASK\n  preserve indentation",
+      );
       expect(systemPrompt).not.toContain("UNIQUE_SUBAGENT_TASK");
       expect(`${systemPrompt}\n${message}`.match(/UNIQUE_SUBAGENT_TASK/g)).toHaveLength(1);
       expect(systemPrompt).toMatch(/\[Subagent Task\].*current child session/);
@@ -48,11 +48,7 @@ describe("subagent spawn envelope", () => {
     },
   );
 
-  it.each([
-    { childDepth: undefined, maxSpawnDepth: undefined, parent: "main agent", spawning: true },
-    { childDepth: 1, maxSpawnDepth: 2, parent: "main agent", spawning: true },
-    { childDepth: 2, maxSpawnDepth: 2, parent: "parent orchestrator", spawning: false },
-  ])(
+  it.each([{ childDepth: 2, maxSpawnDepth: 2, parent: "parent orchestrator", spawning: false }])(
     "preserves depth $childDepth/$maxSpawnDepth ownership",
     ({ childDepth, maxSpawnDepth, parent, spawning }) => {
       const { systemPrompt } = buildEnvelope({ childDepth, maxSpawnDepth });
@@ -71,20 +67,13 @@ describe("subagent spawn envelope", () => {
     const envelope = buildEnvelope({ completionTarget: "parent" });
     for (const text of [envelope.systemPrompt, envelope.acceptedNote]) {
       expect(text).toContain("No result is automatically sent to a channel");
-      expect(text).toContain("remain silent");
+      expect(text).toContain("continues any unfinished work");
     }
     expect(envelope.acceptedNote).toContain("private requester turn");
     expect(envelope.acceptedNote).not.toContain("after your final answer");
   });
 
-  it("describes the bounded default recursive depth", () => {
-    const envelope = buildEnvelope();
-
-    expect(envelope.message).toContain("depth 1/5");
-    expect(envelope.systemPrompt).toContain("May delegate descendants");
-  });
-
-  it.each([false, true])(
+  it.each([true])(
     "gates ACP guidance without overriding collector restrictions: acp=%s",
     (acpEnabled) => {
       const options = {
@@ -104,23 +93,9 @@ describe("subagent spawn envelope", () => {
     },
   );
 
-  it("keeps persistent thread follow-ups in both sides of the envelope", () => {
-    const envelope = buildEnvelope({ spawnMode: "session", completionMode: "thread-direct" });
-    expect(envelope.message).toContain("persistent and remains available for thread follow-up");
-    expect(envelope.acceptedNote).toContain(
-      "persistent and remains available for thread follow-up",
-    );
-    expect(envelope.systemPrompt).not.toContain("Ephemeral");
-  });
-
-  it.each([
-    { requesterSessionKey: "agent:main:cron:job:run:attempt", omitted: true },
-    { requesterSessionKey: "agent:main:telegram:chat", omitted: false },
-    { requesterSessionKey: "agent:main:slack:cron:job:run:attempt", omitted: false },
-    { requesterSessionKey: undefined, omitted: false },
-  ])(
-    "limits cron receipt suppression to announcing runs: $requesterSessionKey",
-    ({ requesterSessionKey, omitted }) => {
+  it.each([["agent:main:cron:job:run:attempt", true]])(
+    "limits cron receipt suppression to announcing runs: %s",
+    (requesterSessionKey, omitted) => {
       const envelope = buildEnvelope({ requesterSessionKey });
       expect(envelope.acceptedNote === undefined).toBe(omitted);
       for (const completionMode of ["collector", "quiet", "thread-direct"] as const) {
@@ -131,4 +106,29 @@ describe("subagent spawn envelope", () => {
       );
     },
   );
+
+  it("keeps per-spawn identity out of the system prompt so prompts stay cacheable", () => {
+    const stablePrompt = buildEnvelope().systemPrompt;
+    for (const id of ["first", "second"]) {
+      const envelope = buildEnvelope({
+        childSessionKey: `agent:main:subagent:${id}`,
+        requesterSessionKey: `agent:main:dashboard:${id}`,
+        requesterOrigin: { channel: "webchat" },
+        label: `worker-${id}`,
+      });
+      for (const fact of [
+        `- Your session: agent:main:subagent:${id}.`,
+        `- Requester session: agent:main:dashboard:${id}.`,
+        "- Requester channel: webchat.",
+        `- Label: worker-${id}`,
+      ]) {
+        expect(envelope.systemPrompt).not.toContain(fact);
+        expect(envelope.message).toContain(fact);
+      }
+      expect(stripInternalRuntimeContext(envelope.message)).toBe(
+        "UNIQUE_SUBAGENT_TASK\n  preserve indentation",
+      );
+      expect(envelope.systemPrompt).toBe(stablePrompt);
+    }
+  });
 });

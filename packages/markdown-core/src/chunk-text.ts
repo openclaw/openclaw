@@ -1,54 +1,15 @@
+import {
+  findGraphemeChunkEnd,
+  skipWhitespaceGraphemes,
+} from "@openclaw/normalization-core/grapheme";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
+import { scanParenAwareBreakpoints } from "./text-breakpoints.js";
 
-export { avoidTrailingHighSurrogateBreak };
+export { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 
 function normalizeChunkLimit(limit: number): number {
   // String slicing truncates fractional indexes, so positive limits need an integer progress step.
   return Number.isFinite(limit) && limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
-}
-
-function resolveChunkEarlyReturn(text: string, limit: number): string[] | undefined {
-  if (!text) {
-    return [];
-  }
-  if (limit <= 0) {
-    return [text];
-  }
-  if (text.length <= limit) {
-    return [text];
-  }
-  return undefined;
-}
-
-function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhitespace: number } {
-  let lastNewline = -1;
-  let lastWhitespace = -1;
-  let depth = 0;
-
-  for (let i = 0; i < text.length; i++) {
-    const char = text.charAt(i);
-    // Parenthesized spans often contain rewritten links or file references;
-    // avoid splitting them unless the window has no safer outside break.
-    if (char === "(") {
-      depth += 1;
-      continue;
-    }
-    if (char === ")" && depth > 0) {
-      depth -= 1;
-      continue;
-    }
-    if (depth !== 0) {
-      continue;
-    }
-    if (char === "\n") {
-      lastNewline = i;
-    } else if (/\s/.test(char)) {
-      lastWhitespace = i;
-    }
-  }
-
-  return { lastNewline, lastWhitespace };
 }
 
 export type TextChunkRange = {
@@ -65,9 +26,7 @@ function findPreferredRangeEnd(text: string, start: number, end: number): number
   const slice = text.slice(start, end);
   let paragraphEnd: number | undefined;
   for (const match of slice.matchAll(/\n[\t ]*\n+/g)) {
-    if (match.index !== undefined) {
-      paragraphEnd = start + match.index + match[0].length;
-    }
+    paragraphEnd = start + match.index + match[0].length;
   }
   if (paragraphEnd !== undefined) {
     return paragraphEnd;
@@ -107,8 +66,7 @@ export function chunkTextRanges(text: string, options: ChunkTextRangesOptions): 
       options.mode === "preferred" && maxEnd < text.length
         ? findPreferredRangeEnd(text, start, maxEnd)
         : undefined;
-    const candidateEnd = preferredEnd && preferredEnd > start ? preferredEnd : maxEnd;
-    const end = avoidTrailingHighSurrogateBreak(text, start, candidateEnd);
+    const end = findGraphemeChunkEnd(text, start, maxEnd, preferredEnd);
     ranges.push({ start, end });
     start = end;
   }
@@ -122,9 +80,11 @@ export function chunkTextRanges(text: string, options: ChunkTextRangesOptions): 
  */
 export function chunkText(text: string, limit: number): string[] {
   const normalizedLimit = normalizeChunkLimit(limit);
-  const early = resolveChunkEarlyReturn(text, normalizedLimit);
-  if (early) {
-    return early;
+  if (!text) {
+    return [];
+  }
+  if (normalizedLimit <= 0 || text.length <= normalizedLimit) {
+    return [text];
   }
 
   const chunks: string[] = [];
@@ -136,20 +96,13 @@ export function chunkText(text: string, limit: number): string[] {
     }
     const windowEnd = Math.min(text.length, cursor + normalizedLimit);
     const window = text.slice(cursor, windowEnd);
-    const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(window);
+    const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(window, 0, window.length);
     // Prefer block boundaries, then spaces, then a hard size cut when no
     // readable breakpoint exists inside this window.
     const breakOffset = lastNewline > 0 ? lastNewline : lastWhitespace;
-    const end = avoidTrailingHighSurrogateBreak(
-      text,
-      cursor,
-      breakOffset > 0 ? cursor + breakOffset : windowEnd,
-    );
+    const end = findGraphemeChunkEnd(text, cursor, windowEnd, cursor + breakOffset);
     chunks.push(text.slice(cursor, end));
-    cursor = end;
-    while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
-      cursor += 1;
-    }
+    cursor = skipWhitespaceGraphemes(text, end);
   }
   return chunks;
 }

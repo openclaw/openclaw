@@ -1,4 +1,3 @@
-// Feishu plugin module implements monitor.comment notice handler behavior.
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
 import {
@@ -90,7 +89,7 @@ export function createFeishuDriveCommentNoticeHandler(params: {
   return async (data: unknown) => {
     const ingressLifecycle = params.resolveIngressLifecycle?.(data);
     if (!ingressLifecycle) {
-      await runFeishuHandler(async () => await handleNotice(data));
+      await runFeishuHandler(() => handleNotice(data));
       return;
     }
     const { lifecycle, settle } = buildFeishuFlushIngressLifecycle([

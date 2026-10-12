@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import {
   createQaScriptBlockedStatusTracker,
   createQaScriptEvidenceWriter,
@@ -215,7 +215,7 @@ function createRealtimeTalkEvidenceWriter(
         SOURCE_PATH,
         SMOKE_PATH,
         "extensions/openai/realtime-voice-provider.ts",
-        "ui/src/pages/chat/realtime-talk-webrtc.ts",
+        "ui/src/pages/chat/talk/webrtc.ts",
       ],
     },
   });
@@ -339,15 +339,6 @@ async function runRealtimeTalkLiveProof(params: {
     durationMs: Math.max(1, Date.now() - startedAt),
     status,
   };
-}
-
-export function buildRealtimeTalkLiveEvidence(params: {
-  env?: NodeJS.ProcessEnv;
-  options: RealtimeTalkLiveOptions;
-  result: RealtimeTalkProofResult;
-}): QaEvidenceSummaryJson {
-  const env = params.env ?? process.env;
-  return createRealtimeTalkEvidenceWriter(params.options, env).build(params.result);
 }
 
 export async function runRealtimeTalkLiveProducer(

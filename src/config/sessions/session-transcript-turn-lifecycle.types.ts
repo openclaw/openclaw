@@ -1,6 +1,5 @@
-import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
-import type { InternalSessionEntry as SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry, PersistedSessionRunStatus } from "./types.js";
 
 /** `null` requires a revision-less row; omitting the field skips the revision fence. */
 export type SessionLifecycleRevisionExpectation = string | null;
@@ -22,10 +21,11 @@ export type SessionTranscriptTurnExpectedState = {
   restartRecoveryRequesterAccountId: SessionRestartRecoveryState["restartRecoveryRequesterAccountId"];
   restartRecoveryRequesterSenderId: SessionRestartRecoveryState["restartRecoveryRequesterSenderId"];
   restartRecoverySameChannelThreadRequired: SessionRestartRecoveryState["restartRecoverySameChannelThreadRequired"];
+  restartRecoveryOperatorSource: SessionEntry["restartRecoveryOperatorSource"];
   restartRecoverySourceIngress: SessionRestartRecoveryState["restartRecoverySourceIngress"];
   restartRecoverySourceReplyDeliveryMode: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
   restartRecoveryTerminalRunIds: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
-  status: SessionRunStatus | undefined;
+  status: PersistedSessionRunStatus | undefined;
 };
 
 /** Lifecycle fields committed with an accepted transcript turn. */
@@ -47,6 +47,7 @@ export type SessionTranscriptTurnLifecyclePatch = {
   restartRecoveryRequesterAccountId?: SessionRestartRecoveryState["restartRecoveryRequesterAccountId"];
   restartRecoveryRequesterSenderId?: SessionRestartRecoveryState["restartRecoveryRequesterSenderId"];
   restartRecoverySameChannelThreadRequired?: SessionRestartRecoveryState["restartRecoverySameChannelThreadRequired"];
+  restartRecoveryOperatorSource?: SessionEntry["restartRecoveryOperatorSource"];
   restartRecoverySourceIngress?: SessionRestartRecoveryState["restartRecoverySourceIngress"];
   restartRecoverySourceReplyDeliveryMode?: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
   restartRecoveryForceSafeTools?: SessionEntry["restartRecoveryForceSafeTools"];
@@ -55,6 +56,6 @@ export type SessionTranscriptTurnLifecyclePatch = {
   restartRecoveryTerminalRunIds?: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
   runtimeMs?: number;
   startedAt?: number;
-  status?: SessionRunStatus;
+  status?: PersistedSessionRunStatus;
   updatedAt?: number;
 };

@@ -1,5 +1,27 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 
+export function sessionWorkspaceFileKey(
+  sessionKey: string,
+  root: string | undefined,
+  workspacePath: string,
+): string {
+  return JSON.stringify(["file", sessionKey, root ?? "", workspacePath]);
+}
+
+export function isSessionWorkspaceFileSelected(
+  activeId: string | null,
+  sessionKey: string,
+  root: string | undefined,
+  path: string,
+  workspacePath?: string,
+): boolean {
+  // Requests and Show in Files can select a row before its canonical read completes.
+  return (
+    activeId === `file:${path}` ||
+    activeId === sessionWorkspaceFileKey(sessionKey, root, workspacePath ?? path)
+  );
+}
+
 function pathBasename(value: string): string {
   const trimmed = value.replace(/[\\/]+$/, "");
   return trimmed.split(/[\\/]/).pop() || trimmed;

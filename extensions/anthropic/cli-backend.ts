@@ -1,25 +1,24 @@
-/**
- * Claude CLI backend descriptor. It configures Claude Code process arguments,
- * MCP bundling, session handling, and credential transport.
- */
 import { createHmac, randomBytes } from "node:crypto";
 import type {
   CliBackendExecuteContext,
   CliBackendPlugin,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
-import { parseClaudeCliJsonlEvent, parseClaudeCliJsonlLifecycleEvent } from "./cli-output.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
   CLAUDE_CLI_CLEAR_ENV,
   CLAUDE_CLI_MODEL_ALIASES,
   CLAUDE_CLI_SESSION_ID_FIELDS,
+} from "./cli-constants.js";
+import { parseClaudeCliJsonlEvent, parseClaudeCliJsonlLifecycleEvent } from "./cli-output.js";
+import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
   resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
+import { appendClaudeCliToolNamingGuidance } from "./cli-tool-naming.js";
 
 type ClaudeCliAuthCredential =
   | { type: "oauth"; access: string; expires: number }
@@ -148,7 +147,6 @@ function resolveClaudeCliAuthInput(
   return undefined;
 }
 
-/** Build the Claude CLI backend plugin descriptor. */
 export function buildAnthropicCliBackend(
   options: {
     ensureDynamicSystemPromptSectionsSupport?: () => Promise<void>;
@@ -178,8 +176,10 @@ export function buildAnthropicCliBackend(
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
+    hostOwnedTools: ["exec", "process"],
     toolAvailabilityEnforcement: "execution-args",
-    isolatesInstructionsWithExactTools: true,
+    transformSystemPrompt: ({ systemPrompt, openClawMcpToolNames }) =>
+      appendClaudeCliToolNamingGuidance(systemPrompt, openClawMcpToolNames),
     projectNativeToolAuthority: projectClaudeNativeToolAuthority,
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,

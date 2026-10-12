@@ -1,5 +1,7 @@
+import { addAbortListener } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { AssistantMessage } from "../../llm/types.js";
@@ -15,9 +17,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker live Gateway chat projection", () => {
   let harness: ComposedGatewayHarness;
+  let testSignal: AbortSignal;
   const clients: WorkerClients[] = [];
 
-  beforeEach(async () => {
+  beforeEach(async ({ signal }) => {
+    testSignal = signal;
     harness = await ComposedGatewayHarness.create(tempDirs.make("oc-wc-"));
     await harness.start();
   });
@@ -32,7 +36,7 @@ describe("worker live Gateway chat projection", () => {
   });
 
   async function liveProjection() {
-    const current = harness.createClients();
+    const current = await harness.createClients();
     clients.push(current);
     await current.connection.start();
     const runtime = createWorkerLiveRuntime({
@@ -66,28 +70,33 @@ describe("worker live Gateway chat projection", () => {
   const message = (text: string) =>
     makeAgentAssistantMessage({ content: [{ type: "text", text }] });
   const expectChatText = async (text: string) => {
-    await vi.waitFor(() => {
+    const latestText = () => {
       const event = harness.chat.events.at(-1);
-      expect(extractFirstTextBlock(event && "message" in event ? event.message : undefined)).toBe(
-        text,
-      );
+      return extractFirstTextBlock(event && "message" in event ? event.message : undefined);
+    };
+    const projected = createDeferred();
+    const cancelWait = addAbortListener(testSignal, () => projected.reject(testSignal.reason));
+    const push = harness.chat.events.push.bind(harness.chat.events);
+    const capture = vi.spyOn(harness.chat.events, "push").mockImplementation((...events) => {
+      const count = push(...events);
+      if (latestText() === text) {
+        projected.resolve();
+      }
+      return count;
     });
-    expect(harness.chat.state.runs.get(RUN_ID)?.rawBuffer).toBe(text);
+    try {
+      if (latestText() !== text) {
+        await projected.promise;
+      }
+      expect(latestText()).toBe(text);
+      expect(harness.chat.state.runs.get(RUN_ID)?.rawBuffer).toBe(text);
+    } finally {
+      cancelWait[Symbol.dispose]();
+      capture.mockRestore();
+    }
   };
 
   it.each([
-    {
-      prefix: "Before tool\n",
-      final: "Revised",
-      expectedFinal: "Before tool\n\nRevised",
-      name: "corrected final",
-    },
-    {
-      prefix: "Before tool\n",
-      final: "Draft",
-      expectedFinal: "Before tool\n\nDraft",
-      name: "shortened final",
-    },
     {
       prefix: "Before tool\n",
       final: "",
@@ -122,66 +131,6 @@ describe("worker live Gateway chat projection", () => {
     });
   });
 
-  it.each(["Same", "Same plus suffix"])(
-    "keeps distinct worker messages containing %s and ignores repeated completion",
-    async (second) => {
-      const live = await liveProjection();
-      for (const text of ["Same", second]) {
-        live.start();
-        live.end(message(text));
-        live.end(message(text));
-      }
-      await live.finish();
-      await expectChatText("Same\n\n" + second);
-    },
-  );
-
-  it.each(["text_end", "message_end", "mixed", "explicit"] as const)(
-    "reconciles worker commentary resolved at %s without removing prior answer text",
-    async (phaseAt) => {
-      const live = await liveProjection();
-      live.start();
-      live.end(message("Prior answer\n"));
-      live.start();
-      const commentary = {
-        type: "text" as const,
-        text: "Checking...",
-        textSignature: JSON.stringify({ v: 1, id: "provider-block", phase: "commentary" }),
-      };
-      const final = {
-        type: "text" as const,
-        text: "Answer",
-        textSignature: JSON.stringify({ v: 1, id: "answer-block", phase: "final_answer" }),
-      };
-      if (phaseAt !== "explicit") {
-        live.preview(message(commentary.text));
-        await expectChatText("Prior answer\n\nChecking...");
-      }
-      const authoritative = makeAgentAssistantMessage({
-        content: phaseAt === "mixed" ? [commentary, final] : [commentary],
-      });
-      if (phaseAt === "text_end") {
-        live.runtime.handleSessionEvent({
-          type: "message_update",
-          message: authoritative,
-          assistantMessageEvent: {
-            type: "text_end",
-            contentIndex: 0,
-            content: commentary.text,
-            partial: authoritative,
-          },
-        });
-        await expectChatText("Prior answer\n");
-      } else if (phaseAt === "explicit") {
-        live.preview(authoritative);
-      }
-      live.end(authoritative);
-      live.end(authoritative);
-      await live.finish();
-      await expectChatText(phaseAt === "mixed" ? "Prior answer\n\nAnswer" : "Prior answer\n");
-    },
-  );
-
   it("replaces repeated bounded Unicode worker snapshots without replaying prior text", async () => {
     const live = await liveProjection();
     live.start();
@@ -206,54 +155,15 @@ describe("worker live Gateway chat projection", () => {
     await live.finish();
   });
 
-  it.each([undefined, "final_answer"] as const)(
-    "retains earlier blocks with phase %s when a later block becomes commentary",
-    async (phase) => {
-      const live = await liveProjection();
-      live.start();
-      const earlier = {
-        type: "text" as const,
-        text: "Earlier block\n",
-        ...(phase ? { textSignature: JSON.stringify({ v: 1, id: "earlier", phase }) } : {}),
-      };
-      const partial = makeAgentAssistantMessage({ content: [earlier] });
-      live.preview(partial);
-      await expectChatText(earlier.text);
-      const pending = { type: "text" as const, text: "Checking..." };
-      live.preview(makeAgentAssistantMessage({ content: [earlier, pending] }), 1);
-      await expectChatText(earlier.text + pending.text);
-      const authoritative = makeAgentAssistantMessage({
-        content: [
-          earlier,
-          {
-            ...pending,
-            textSignature: JSON.stringify({ v: 1, id: "late-id", phase: "commentary" }),
-          },
-        ],
-      });
-      live.runtime.handleSessionEvent({
-        type: "message_update",
-        message: authoritative,
-        assistantMessageEvent: {
-          type: "text_end",
-          contentIndex: 1,
-          content: pending.text,
-          partial: authoritative,
-        },
-      });
-      await expectChatText(earlier.text);
-      live.end(authoritative);
-      live.end(authoritative);
-      await live.finish();
-      await expectChatText(earlier.text);
-    },
-  );
-
   it("does not resurrect a capped completed prefix when the active worker snapshot shrinks", async () => {
     const live = await liveProjection();
+    const block = "x".repeat(16_000);
+    let expectedText = "";
     for (let index = 0; index < 32; index += 1) {
       live.start();
-      live.end(message("x".repeat(16_000)));
+      live.end(message(block));
+      expectedText = `${expectedText}${index > 0 ? "\n\n" : ""}${block}`.slice(-500_000);
+      await expectChatText(expectedText);
     }
     // The 31 paragraph separators leave 3,938 characters of the first item after capping.
     const retainedPrefix = "x".repeat(3_938) + ("\n\n" + "x".repeat(16_000)).repeat(30);

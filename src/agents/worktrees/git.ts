@@ -2,37 +2,48 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { hasErrnoCode } from "../../infra/errno.js";
 import {
   createGitCommandError,
-  GIT_TIMEOUT_MS,
   enqueueGitRefMutation,
   executeGitCommand,
   executeGitCommandBytes,
+  executeGitCommandBuffered,
   normalizeGitPathForFilesystem,
   requireGitCommandOutput,
-  withForegroundGitMaintenance,
+  type GitBufferedCommandOptions,
   type GitCommandOptions,
 } from "../../infra/git-exec.js";
+import { withGitRepositoryRepair } from "../../infra/git-repository-repair.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../../infra/windows-encoding.js";
-import {
-  runCommandBuffered,
-  type BufferedCommandOptions,
-  type BufferedCommandResult,
-} from "../../process/exec.js";
+import type { BufferedCommandResult } from "../../process/exec.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
 // Materializing checkout objects gets extra time without extending other Git commands or setup.
 export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
+const REPAIRABLE_FETCH_FLAGS = new Set([
+  "--no-auto-maintenance",
+  "--refetch",
+  "--no-tags",
+  "--no-write-fetch-head",
+  "--no-recurse-submodules",
+  "--recurse-submodules=no",
+  "--stdin",
+  "--prune",
+  "--no-prune",
+]);
 
 type WorktreeListEntry = {
   path: string;
+  head?: string;
   lockedReason?: string;
+  branch?: string | null;
 };
 
 function withNoGlob(value: string | undefined): string {
@@ -84,10 +95,7 @@ export function gitEnvironment(
 export async function runGit(
   cwd: string,
   args: string[],
-  options: GitCommandOptions & {
-    /** Recheck caller authority at execution, after any shared-ref queue wait. */
-    beforeRun?: () => void;
-  } = {},
+  options: GitCommandOptions = {},
 ): Promise<GitResult> {
   if (hasGitWorkerContext()) {
     const { signal: _signal, beforeRun: _beforeRun, ...forwarded } = options;
@@ -108,23 +116,7 @@ export async function runGit(
       }),
     };
   }
-  const baseEnv = options.baseEnv ?? { ...process.env };
-  const env = gitEnvironment(options.env, args, process.platform, baseEnv);
-  // Fetch can prune refs and start maintenance; keep its follow-on writes owned.
-  const fetchesRefs = args[0] === "fetch";
-  const run = (gitArgs: string[]) => {
-    if (gitArgs === args) {
-      options.beforeRun?.();
-    }
-    return executeGitCommand(cwd, gitArgs, {
-      ...options,
-      baseEnv,
-      env,
-      input: gitArgs === args ? options.input : undefined,
-      killProcessTree: options.killProcessTree ?? (fetchesRefs && gitArgs === args),
-    });
-  };
-  return await withGitRefAdmission(cwd, args, run, options.signal);
+  return await runOwnedGitCommand(cwd, args, options, executeGitCommand);
 }
 
 /** Parent-only command execution for text consumers whose decoding runs in a worker. */
@@ -133,24 +125,73 @@ export async function runGitBytes(
   args: string[],
   options: Parameters<typeof runGit>[2] = {},
 ) {
+  return await runOwnedGitCommand(cwd, args, options, executeGitCommandBytes);
+}
+
+async function runOwnedGitCommand<
+  T extends {
+    termination: string;
+    code: number | null;
+    stdout: string | Uint8Array;
+    stderr: string | Uint8Array;
+  },
+>(
+  cwd: string,
+  args: string[],
+  options: GitCommandOptions,
+  execute: (cwd: string, args: string[], options: GitCommandOptions) => Promise<T>,
+): Promise<T> {
   const baseEnv = options.baseEnv ?? { ...process.env };
   const env = gitEnvironment(options.env, args, process.platform, baseEnv);
   return await withGitRefAdmission(
     cwd,
     args,
-    (gitArgs) => {
-      if (gitArgs === args) {
-        options.beforeRun?.();
+    async (gitArgs) => {
+      const run = () =>
+        execute(cwd, gitArgs, {
+          ...options,
+          beforeRun: gitArgs === args ? options.beforeRun : undefined,
+          baseEnv,
+          env,
+          input: gitArgs === args ? options.input : undefined,
+          // Fetch can prune refs and start maintenance; keep its follow-on writes owned.
+          killProcessTree: options.killProcessTree ?? (args[0] === "fetch" && gitArgs === args),
+        });
+      const result = await run();
+      if (gitArgs !== args || args[0] !== "fetch" || result.code !== 128) {
+        return result;
       }
-      return executeGitCommandBytes(cwd, gitArgs, {
-        ...options,
-        baseEnv,
-        env,
-        input: gitArgs === args ? options.input : undefined,
-        killProcessTree: options.killProcessTree ?? (args[0] === "fetch" && gitArgs === args),
+      // Admit our origin fetches, including the default-branch owner's canonical refspec.
+      // Unknown option values (such as --server-option origin) cannot select a remote.
+      const [remote, refspec, ...extra] = args
+        .slice(1)
+        .filter((arg) => !REPAIRABLE_FETCH_FLAGS.has(arg));
+      if (
+        remote !== "origin" ||
+        extra.length > 0 ||
+        (refspec !== undefined && !/^\+refs\/heads\/(.+):refs\/remotes\/origin\/\1$/u.test(refspec))
+      ) {
+        return result;
+      }
+      return await withGitRepositoryRepair({
+        cwd,
+        result,
+        remote: "origin",
+        pruneTracking: !args.includes("--no-prune"),
+        signal: options.signal,
+        assertCurrent: options.beforeRun,
+        retry: run,
+        run: (repairArgs, repairOptions) =>
+          executeGitCommand(cwd, repairArgs, {
+            ...options,
+            ...repairOptions,
+            baseEnv,
+            env: { ...env, ...repairOptions.env },
+          }),
       });
     },
     options.signal,
+    options.refMutationDirectory,
   );
 }
 
@@ -161,30 +202,37 @@ async function withGitRefAdmission<
   args: string[],
   run: (args: string[]) => Promise<T>,
   signal?: AbortSignal,
+  refMutationDirectory?: string,
 ): Promise<T> {
   const mutatesRefs =
     args[0] === "fetch" ||
     args[0] === "update-ref" ||
+    args[0] === "merge" ||
+    (args[0] === "worktree" && args[1] === "add" && !args.includes("--detach")) ||
+    (args[0] === "symbolic-ref" && args.length === 3 && !args[1]?.startsWith("-")) ||
     (args[0] === "branch" &&
       args.some((arg) => arg === "-d" || arg === "-D" || arg === "--delete"));
   if (!mutatesRefs) {
     return await run(args);
   }
-  const resolved = await run(["rev-parse", "--git-common-dir"]);
-  if (resolved.termination !== "exit" || resolved.code !== 0) {
-    return resolved;
+  let commonDir = refMutationDirectory;
+  if (!commonDir) {
+    const resolved = await run(["rev-parse", "--git-common-dir"]);
+    if (resolved.termination !== "exit" || resolved.code !== 0) {
+      return resolved;
+    }
+    commonDir =
+      typeof resolved.stdout === "string"
+        ? resolved.stdout
+        : decodeWindowsOutputBuffer({
+            buffer: Buffer.from(
+              resolved.stdout.buffer,
+              resolved.stdout.byteOffset,
+              resolved.stdout.byteLength,
+            ),
+            windowsEncoding: resolveWindowsConsoleEncoding(),
+          });
   }
-  const commonDir =
-    typeof resolved.stdout === "string"
-      ? resolved.stdout
-      : decodeWindowsOutputBuffer({
-          buffer: Buffer.from(
-            resolved.stdout.buffer,
-            resolved.stdout.byteOffset,
-            resolved.stdout.byteLength,
-          ),
-          windowsEncoding: resolveWindowsConsoleEncoding(),
-        });
   let entered = false;
   try {
     return await enqueueGitRefMutation(
@@ -209,7 +257,7 @@ async function withGitRefAdmission<
 export async function runGitBuffered(
   cwd: string,
   args: string[],
-  options: BufferedCommandOptions & { beforeRun?: () => void } = {},
+  options: GitBufferedCommandOptions = {},
 ): Promise<BufferedCommandResult> {
   if (hasGitWorkerContext()) {
     const { signal: _signal, beforeRun: _beforeRun, ...forwarded } = options;
@@ -229,28 +277,20 @@ export async function runGitBuffered(
     cwd,
     args,
     (gitArgs) => {
-      if (gitArgs === args) {
-        options.beforeRun?.();
-      }
-      const argv = ["git", "-C", cwd, ...gitArgs];
-      return runCommandBuffered(
-        options.killProcessTree === false ? argv : withForegroundGitMaintenance(argv),
-        {
-          ...options,
-          timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS,
-          input: gitArgs === args ? options.input : undefined,
-          baseEnv,
-          env,
-        },
-      );
+      return executeGitCommandBuffered(cwd, gitArgs, {
+        ...options,
+        beforeRun: gitArgs === args ? options.beforeRun : undefined,
+        input: gitArgs === args ? options.input : undefined,
+        baseEnv,
+        env,
+      });
     },
     options.signal,
+    options.refMutationDirectory,
   );
 }
 
-export function commandError(command: string, result: GitResult): Error {
-  return createGitCommandError(command, result);
-}
+export { createGitCommandError as commandError } from "../../infra/git-exec.js";
 
 export async function requireGit(
   cwd: string,
@@ -273,6 +313,20 @@ export async function requireGitBuffer(
   return result.stdout;
 }
 
+/** Git may return relative or Windows-native spellings for its administrative paths. */
+export async function resolveGitMetadataPath(
+  cwd: string,
+  name: string,
+  options: GitCommandOptions = {},
+): Promise<string> {
+  return path.resolve(
+    cwd,
+    normalizeGitPathForFilesystem(
+      await requireGit(cwd, ["rev-parse", "--git-path", name], options),
+    ),
+  );
+}
+
 function parseWorktreeList(output: string): WorktreeListEntry[] {
   const entries: WorktreeListEntry[] = [];
   let current: WorktreeListEntry | undefined;
@@ -291,10 +345,16 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
       current = {
         path: normalizeGitPathForFilesystem(field.slice("worktree ".length)),
       };
+    } else if (current && field.startsWith("HEAD ")) {
+      current.head = field.slice("HEAD ".length);
     } else if (current && field === "locked") {
       current.lockedReason = "";
     } else if (current && field.startsWith("locked ")) {
       current.lockedReason = field.slice("locked ".length);
+    } else if (current && field.startsWith("branch ")) {
+      current.branch = field.slice("branch ".length);
+    } else if (current && field === "detached") {
+      current.branch = null;
     }
   }
   if (current) {
@@ -323,9 +383,7 @@ export async function resolveGitRepositoryPaths(
   const commonRaw = normalizeGitPathForFilesystem(
     await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"], options),
   );
-  const commonDir = await fs.realpath(
-    path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
-  );
+  const commonDir = await fs.realpath(path.resolve(sourceRoot, commonRaw));
   const primary = (await listGitWorktrees(sourceRoot, options))[0]?.path ?? sourceRoot;
   const canonicalRoot = await fs.realpath(primary);
   return { canonicalRoot, commonDir };
@@ -356,24 +414,19 @@ export function insideGitCheckout(start: string): boolean {
 }
 
 export async function hasSelfContainedGitMetadata(checkoutRoot: string): Promise<boolean> {
-  try {
-    const marker = await fs.lstat(path.join(checkoutRoot, ".git"));
-    return marker.isDirectory();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
+  return (await lstatIfExists(path.join(checkoutRoot, ".git")))?.isDirectory() ?? false;
 }
 
 export async function worktreePathExists(target: string): Promise<boolean> {
+  return (await lstatIfExists(target)) !== undefined;
+}
+
+export async function lstatIfExists(target: string) {
   try {
-    await fs.lstat(target);
-    return true;
+    return await fs.lstat(target);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
     }
     throw error;
   }

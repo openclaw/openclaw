@@ -1,12 +1,17 @@
-// Qa Lab plugin module implements gateway rpc client behavior.
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { formatQaGatewayLogsForError } from "./gateway-log-redaction.js";
 
 type QaGatewayClientOptions = ConstructorParameters<typeof GatewayClient>[0];
+type QaGatewayHello = Parameters<NonNullable<QaGatewayClientOptions["onHelloOk"]>>[0];
+type QaGatewayReconnectPausedInfo = Parameters<
+  NonNullable<QaGatewayClientOptions["onReconnectPaused"]>
+>[0];
 
 type QaGatewayRpcRequestOptions = {
   deadlineMs?: number;
@@ -15,29 +20,20 @@ type QaGatewayRpcRequestOptions = {
 };
 
 type QaGatewayRpcClient = {
+  readonly evidenceIdentity: { protocol: number; version: string } | null;
   request(method: string, rpcParams?: unknown, opts?: QaGatewayRpcRequestOptions): Promise<unknown>;
   stop(): Promise<void>;
 };
 
-type QaGatewayConnectionGate = {
-  connected: boolean;
-  promise: Promise<void>;
-  resolve: () => void;
-  reject: (error: Error) => void;
-};
+type QaGatewayConnectionGate = ReturnType<typeof createQaGatewayConnectionGate>;
 
 const QA_GATEWAY_RPC_TIMEOUT_MS = 20_000;
 
-function createQaGatewayConnectionGate(): QaGatewayConnectionGate {
-  let resolvePromise!: () => void;
-  let rejectPromise!: (error: Error) => void;
-  const promise = new Promise<void>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
+function createQaGatewayConnectionGate() {
+  const { promise, resolve, reject } = createDeferred<void>();
   // A terminal reconnect error can arrive without an active request waiter.
   void promise.catch(() => {});
-  return { connected: false, promise, reject: rejectPromise, resolve: resolvePromise };
+  return { connected: false, promise, reject, resolve };
 }
 
 function formatQaGatewayRpcError(error: unknown, logs: () => string) {
@@ -58,19 +54,9 @@ async function waitForQaGatewayConnection(
   if (remainingMs <= 0) {
     throw qaGatewayDeadlineError();
   }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      gate.promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(qaGatewayDeadlineError()), remainingMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  await raceWithTimeout(gate.promise, remainingMs, () => {
+    throw qaGatewayDeadlineError();
+  });
 }
 
 export async function startQaGatewayRpcClient(params: {
@@ -83,6 +69,7 @@ export async function startQaGatewayRpcClient(params: {
   const wrapError = (error: unknown) => formatQaGatewayRpcError(error, params.logs);
   let stopped = false;
   let connection = createQaGatewayConnectionGate();
+  let evidenceIdentity: QaGatewayRpcClient["evidenceIdentity"] = null;
   const assertNotStopped = () => {
     if (stopped) {
       throw new Error("gateway rpc client already stopped");
@@ -99,16 +86,20 @@ export async function startQaGatewayRpcClient(params: {
     ...(params.deviceIdentity ? { sharedStateMode: "read-only" as const } : {}),
     mode: "backend",
     scopes: params.scopes ?? ["operator.admin"],
-    onHelloOk: () => {
+    onHelloOk: (hello: QaGatewayHello) => {
+      // Retain only target-observed protocol/version, never hello auth or tokens.
+      evidenceIdentity = { protocol: hello.protocol, version: hello.server.version };
       connection.connected = true;
       connection.resolve();
     },
     onClose: () => {
+      evidenceIdentity = null;
       if (!stopped && connection.connected) {
         connection = createQaGatewayConnectionGate();
       }
     },
-    onReconnectPaused: (info) => {
+    onReconnectPaused: (info: QaGatewayReconnectPausedInfo) => {
+      evidenceIdentity = null;
       const error = new Error(
         `gateway reconnect paused (${info.code}): ${info.reason}${info.detailCode ? ` [${info.detailCode}]` : ""}`,
       );
@@ -135,6 +126,9 @@ export async function startQaGatewayRpcClient(params: {
   }
 
   return {
+    get evidenceIdentity() {
+      return evidenceIdentity ? { ...evidenceIdentity } : null;
+    },
     async request(method, rpcParams, opts) {
       try {
         assertNotStopped();
@@ -143,41 +137,24 @@ export async function startQaGatewayRpcClient(params: {
           startedAt + (opts?.timeoutMs ?? QA_GATEWAY_RPC_TIMEOUT_MS),
           opts?.deadlineMs ?? Infinity,
         );
-        while (true) {
-          const requestConnection = connection;
-          await waitForQaGatewayConnection(requestConnection, expiresAt);
-          assertNotStopped();
-          const remainingMs = expiresAt - Date.now();
-          if (remainingMs <= 0) {
-            throw qaGatewayDeadlineError();
-          }
-          let requestSent = false;
-          try {
-            return await client.request(method, rpcParams ?? {}, {
-              expectFinal: opts?.expectFinal,
-              onSent: () => {
-                requestSent = true;
-              },
-              timeoutMs: remainingMs,
-            });
-          } catch (error) {
-            if (requestSent || formatErrorMessage(error) !== "gateway not connected") {
-              throw error;
-            }
-            assertNotStopped();
-            // A close can race between gate resolution and request dispatch. No frame was sent,
-            // so waiting for the next hello and retrying is safe even for non-idempotent methods.
-            if (connection === requestConnection && connection.connected) {
-              connection = createQaGatewayConnectionGate();
-            }
-          }
+        await waitForQaGatewayConnection(connection, expiresAt);
+        assertNotStopped();
+        const remainingMs = expiresAt - Date.now();
+        if (remainingMs <= 0) {
+          throw qaGatewayDeadlineError();
         }
+        // A disconnect during dispatch fails this request; never replay a possible mutation.
+        return await client.request(method, rpcParams ?? {}, {
+          expectFinal: opts?.expectFinal,
+          timeoutMs: remainingMs,
+        });
       } catch (error) {
         throw wrapError(error);
       }
     },
     async stop() {
       stopped = true;
+      evidenceIdentity = null;
       connection.reject(new Error("gateway rpc client stopped"));
       await client.stopAndWait();
     },

@@ -1,96 +1,94 @@
+import { SYNCED_PREF_KEYS, type ServerUiPrefs } from "./server-prefs-state.ts";
 import {
-  normalizeUiAppearancePreference,
-  UI_APPEARANCE_PREFERENCE_KEYS,
-} from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
-import type {
-  UsersPrefsGetResult,
-  UsersPrefsSetResult,
-} from "../../../packages/gateway-protocol/src/schema/users.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
-import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
-import { isAppearancePref, type ServerUiPrefs } from "./server-prefs-state.ts";
+  clearBackgroundPreferenceIdentity,
+  setBackgroundPreferenceIdentity,
+} from "./settings-background.ts";
 
-type ProfileAppearancePrefs = { profileId: string; scope: string; prefs: ServerUiPrefs };
+type ProfileAppearancePrefs = {
+  profileId: string;
+  scope: string;
+  prefs: ServerUiPrefs;
+};
+export type ProfilePreferencesReadOptions = {
+  isCurrent: () => boolean;
+};
 
-let profileAppearancePrefs: ProfileAppearancePrefs | null = null;
-let profilePreferencesRequestId = 0;
+// The asynchronous reader borrows this same owner, never a copied publication state.
+export type ProfilePreferencesState = {
+  appearance: ProfileAppearancePrefs | null;
+  identity: { profileId: string; scope: string } | null;
+  requestId: number;
+};
+export const profilePreferencesState: ProfilePreferencesState = {
+  appearance: null,
+  identity: null,
+  requestId: 0,
+};
+
+// Eager identity updates and the deferred reader share this owner and request generation.
+const state = profilePreferencesState;
 
 export function resolveProfilePreferenceScope(scope: string, profileId?: string | null): string {
   return profileId ? `${scope}:profile:${profileId}` : scope;
+}
+
+export function resolveProfileAppearanceProfileId(scope: string): string | null {
+  return state.identity?.scope === scope ? state.identity.profileId : null;
 }
 
 export function resolveProfileAppearancePrefs(
   scope: string,
   profileId?: string | null,
 ): ServerUiPrefs | null {
-  return profileId &&
-    profileAppearancePrefs?.profileId === profileId &&
-    profileAppearancePrefs.scope === scope
-    ? profileAppearancePrefs.prefs
+  return profileId && state.appearance?.profileId === profileId && state.appearance.scope === scope
+    ? state.appearance.prefs
     : null;
 }
 
-export function resolveProfileAppearanceProfileId(scope: string): string | null {
-  return profileAppearancePrefs?.scope === scope ? profileAppearancePrefs.profileId : null;
+export function rememberProfileAppearanceIdentity(
+  scope: string,
+  profileId: string | null,
+): boolean {
+  if (state.identity?.scope !== scope || state.identity.profileId !== profileId) {
+    state.requestId += 1;
+    state.appearance = null;
+  }
+  state.identity = profileId ? { scope, profileId } : null;
+  return setBackgroundPreferenceIdentity(scope, profileId);
+}
+
+/** A commit retires older reads without discarding the current projection. */
+export function invalidateProfileAppearanceReads(clearSnapshot = false): void {
+  state.requestId += 1;
+  if (clearSnapshot) {
+    state.appearance = null;
+  }
+}
+
+export function recordProfileAppearanceCommit(
+  scope: string,
+  profileId: string,
+  batch: ServerUiPrefs,
+): void {
+  const prefs = resolveProfileAppearancePrefs(scope, profileId);
+  if (state.identity?.scope !== scope || state.identity.profileId !== profileId || !prefs) {
+    return;
+  }
+  for (const key of SYNCED_PREF_KEYS) {
+    if (!Object.hasOwn(batch, key)) {
+      continue;
+    }
+    if (batch[key] === null) {
+      delete prefs[key];
+    } else {
+      Object.assign(prefs, { [key]: batch[key] });
+    }
+  }
 }
 
 export function resetProfileAppearancePrefs(): void {
-  profileAppearancePrefs = null;
-  profilePreferencesRequestId += 1;
-}
-
-export async function loadProfileAppearancePrefs(
-  client: GatewayBrowserClient,
-  profileId: string,
-  scope: string,
-): Promise<boolean> {
-  const requestId = ++profilePreferencesRequestId;
-  const result = await client.request<UsersPrefsGetResult>("users.prefs.get", {
-    keys: Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
-  });
-  if (requestId !== profilePreferencesRequestId || result.status !== "ok") {
-    return false;
-  }
-  const prefs: ServerUiPrefs = {};
-  for (const [key, preferenceKey] of Object.entries(UI_APPEARANCE_PREFERENCE_KEYS)) {
-    if (!isAppearancePref(key)) {
-      continue;
-    }
-    const value = normalizeUiAppearancePreference(preferenceKey, result.entries[preferenceKey]);
-    if (value !== undefined) {
-      Object.assign(prefs, { [key]: value });
-    }
-  }
-  profileAppearancePrefs = { profileId, scope, prefs };
-  return true;
-}
-
-export async function writeProfileAppearancePrefs(
-  client: GatewayBrowserClient | null,
-  batch: ServerUiPrefs,
-  canDispatch: boolean,
-): Promise<Awaited<ReturnType<RuntimeConfigCapability["runExternalMutation"]>>> {
-  if (!client || !canDispatch) {
-    return { ok: false, reason: "unavailable", error: "Profile preferences are unavailable." };
-  }
-  const entries = Object.fromEntries(
-    Object.entries(batch).flatMap(([key, value]) =>
-      isAppearancePref(key) ? [[UI_APPEARANCE_PREFERENCE_KEYS[key], value]] : [],
-    ),
-  );
-  try {
-    const result = await client.request<UsersPrefsSetResult>("users.prefs.set", { entries });
-    return result.status === "ok"
-      ? { ok: true, value: result, refresh: { ok: true } }
-      : { ok: false, reason: "rejected", error: "Profile preferences are unavailable." };
-  } catch (error) {
-    const rejected =
-      error instanceof GatewayRequestError &&
-      (error.gatewayCode === "INVALID_REQUEST" || error.gatewayCode === "FORBIDDEN");
-    return {
-      ok: false,
-      reason: rejected ? "rejected" : "error",
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
+  state.appearance = null;
+  state.identity = null;
+  state.requestId += 1;
+  clearBackgroundPreferenceIdentity();
 }

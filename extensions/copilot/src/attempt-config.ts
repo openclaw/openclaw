@@ -15,15 +15,14 @@ import {
   type AttemptParamsLike,
   type AttemptResultWithSdkSessionId,
   type CopilotAttemptOperation,
-  type CopilotSessionConfig,
   type ModelRef,
   type ModelRefInputObject,
-  type PromptErrorWithCode,
 } from "./attempt-types.js";
 import { createCopilotByokAuth, resolveCopilotAuth } from "./auth-bridge.js";
 import type { AssistantMessage, AssistantUsageSnapshot } from "./event-bridge.js";
 import { createHooksBridge } from "./hooks-bridge.js";
 import { createPermissionBridge, rejectAllPolicy } from "./permission-bridge.js";
+import type { PromptErrorWithCode } from "./prompt-error.js";
 import { resolveCopilotProvider, type ResolvedCopilotProvider } from "./provider-bridge.js";
 import { computeReplayMetadata, copilotToolMetasHavePotentialSideEffects } from "./replay-shim.js";
 import type { ClientCreateOptions, PoolKey } from "./runtime.js";
@@ -50,7 +49,6 @@ export function createResult(
     lastToolError?: AgentHarnessAttemptResult["lastToolError"];
     messagesSnapshot: AgentMessage[];
     nativeReplayInvalid?: boolean;
-    now: () => number;
     promptError: Error | undefined;
     resumeFailureRecovered?: boolean;
     sdkSessionId?: string;
@@ -145,18 +143,6 @@ export function createResult(
     ...(state.yieldAcknowledgment ? { yieldAcknowledgment: state.yieldAcknowledgment } : {}),
   };
 }
-export function createPromptError(
-  code: string,
-  message: string,
-  cause?: unknown,
-): PromptErrorWithCode {
-  const error = new Error(message) as PromptErrorWithCode;
-  error.code = code;
-  if (cause !== undefined) {
-    error.cause = cause;
-  }
-  return error;
-}
 export function createSessionConfig(
   params: AttemptParamsLike,
   sdkModelId: string,
@@ -172,7 +158,7 @@ export function createSessionConfig(
     includeAskUser: boolean;
     operation: CopilotAttemptOperation;
   },
-): CopilotSessionConfig {
+): SessionConfig {
   const settledToolFinalization = options.operation === "settled-tool-finalization";
   const permissionPolicy = settledToolFinalization
     ? rejectAllPolicy
@@ -243,7 +229,12 @@ export async function createMessageOptions(
     workspaceOnly: boolean;
   },
 ): Promise<MessageOptions> {
-  const attachments = createPromptImageAttachments(await resolvePromptImages(params, context));
+  const attachments = (await resolvePromptImages(params, context)).map((image, index) => ({
+    type: "blob" as const,
+    data: image.data,
+    mimeType: image.mimeType,
+    displayName: `prompt-image-${index + 1}`,
+  }));
   const providerHeaders = context.provider.provider?.headers;
   const requestHeaders =
     providerHeaders && Object.keys(providerHeaders).length > 0 ? { ...providerHeaders } : undefined;
@@ -253,29 +244,6 @@ export async function createMessageOptions(
     ...(requestHeaders ? { requestHeaders } : {}),
   };
 }
-function createPromptImageAttachments(
-  images: unknown[],
-): NonNullable<MessageOptions["attachments"]> {
-  return images.flatMap((image, index) => {
-    if (
-      !image ||
-      typeof image !== "object" ||
-      (image as { type?: unknown }).type !== "image" ||
-      typeof (image as { data?: unknown }).data !== "string" ||
-      typeof (image as { mimeType?: unknown }).mimeType !== "string"
-    ) {
-      return [];
-    }
-    return [
-      {
-        type: "blob" as const,
-        data: (image as { data: string }).data,
-        mimeType: (image as { mimeType: string }).mimeType,
-        displayName: `prompt-image-${index + 1}`,
-      },
-    ];
-  });
-}
 async function resolvePromptImages(
   params: AttemptParamsLike,
   context: {
@@ -284,7 +252,7 @@ async function resolvePromptImages(
     sandbox: SandboxContext | null;
     workspaceOnly: boolean;
   },
-): Promise<unknown[]> {
+) {
   const workspaceDir =
     context.effectiveCwd ??
     context.effectiveWorkspaceDir ??
@@ -382,21 +350,20 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
     resolvedApiKey: readNonEmptyString(params.resolvedApiKey),
     authProfileId: readNonEmptyString(params.authProfileId),
   });
+  const authContext = {
+    agentId: readNonEmptyString(params.agentId),
+    agentDir: readNonEmptyString(params.agentDir),
+    copilotHome: readNonEmptyString(params.copilotHome),
+  };
   const auth =
     provider.mode === "byok"
       ? createCopilotByokAuth({
-          agentId: readNonEmptyString(params.agentId),
-          agentDir: readNonEmptyString(params.agentDir),
-          workspaceDir: readNonEmptyString(params.workspaceDir),
-          copilotHome: readNonEmptyString(params.copilotHome),
+          ...authContext,
           authProfileId: provider.authProfileId,
           authProfileVersion: provider.authProfileVersion,
         })
       : resolveCopilotAuth({
-          agentId: readNonEmptyString(params.agentId),
-          agentDir: readNonEmptyString(params.agentDir),
-          workspaceDir: readNonEmptyString(params.workspaceDir),
-          copilotHome: readNonEmptyString(params.copilotHome),
+          ...authContext,
           auth: params.auth,
           resolvedApiKey: readNonEmptyString(params.resolvedApiKey),
           authProfileId: readNonEmptyString(params.authProfileId),

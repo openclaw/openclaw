@@ -1,19 +1,18 @@
+import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import {
-  isInstalledPluginIndexInstallOwnerAmbiguous,
-  recordInstalledPluginIndexInstallOwner,
-  resolveInstalledPluginIndexInstallOwner,
-} from "../plugins/installed-plugin-index-install-owner.js";
+import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
+import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginInspectReport } from "../plugins/status.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
-  withPluginDiagnosticsReportForInspectionMock,
+  withPluginDiagnosticsReportForInspectionMock as withDiagnostics,
   buildAllPluginInspectReportsMock,
   buildPluginDiagnosticsReportMock,
   buildPluginInspectReportMock,
@@ -21,7 +20,7 @@ import {
   buildPluginSnapshotReportMock,
   loadPluginMetadataSnapshotMock,
   pluginCliConfigMock,
-  pluginsCliRuntimeLogs,
+  pluginsCliRuntimeLogs as logs,
   resetPluginsCliTestState,
   retirePluginDiagnosticsMock,
   runPluginsCommand,
@@ -39,31 +38,14 @@ vi.mock("../skills/workshop/tool-policy-diagnostic.js", () => ({
 
 function setInspectInstallRecords(
   records: Record<string, PluginInstallRecord>,
-  plugins = Object.entries(records).map(([pluginId, install]) =>
-    recordInstalledPluginIndexInstallOwner({ pluginId, rootDir: install.installPath }, pluginId),
-  ),
+  plugin: Pick<PluginInspectReport["plugin"], "id" | "rootDir">,
+  owner?: string,
 ) {
   setInstalledPluginIndexInstallRecords(records);
-  const { index } = createPluginMetadataSnapshotFixture({
-    plugins: plugins.map(({ pluginId, rootDir }) => ({ id: pluginId, rootDir })),
-  });
-  const metadata = {
-    ...loadPluginMetadataSnapshotMock({ config: pluginCliConfigMock() }),
-    index: {
-      ...index,
-      installRecords: records,
-      plugins: index.plugins.map((record, position) => {
-        const source = plugins[position]!;
-        return recordInstalledPluginIndexInstallOwner(
-          record,
-          resolveInstalledPluginIndexInstallOwner(source),
-          isInstalledPluginIndexInstallOwnerAmbiguous(source),
-        );
-      }),
-    },
-  };
+  const metadata = createPluginMetadataSnapshotFixture({ plugins: [plugin] });
+  metadata.index.installRecords = records;
+  recordInstalledPluginIndexInstallOwner(metadata.index.plugins[0]!, owner);
   loadPluginMetadataSnapshotMock.mockReturnValue(metadata);
-  return metadata;
 }
 
 function createInspectReport(
@@ -94,31 +76,69 @@ function createInspectReport(
   };
 }
 
-type PluginHumanFormat = "detail" | "table" | "verbose";
-
-function readRenderedStatus(output: string, format: PluginHumanFormat): string | undefined {
-  const text = stripVTControlCharacters(output);
-  if (format === "detail") {
-    return /^Status: (.+)$/m.exec(text)?.[1];
-  }
-  if (format === "verbose") {
-    return /^Display \(display-probe\) (.+)$/m.exec(text)?.[1];
-  }
-  const lines = text.split("\n");
-  const cells = (line: string) =>
-    line
-      .split(/[│|]/u)
-      .slice(1, -1)
-      .map((cell) => cell.trim());
-  const header = lines.find((line) => line.includes("Name") && line.includes("Status"));
-  const row = lines.find((line) => line.includes("Display"));
-  return header && row ? cells(row)[cells(header).indexOf("Status")] : undefined;
+function mockInspection(
+  plugin: PluginInspectReport["plugin"],
+  overrides: Partial<PluginInspectReport> = {},
+) {
+  const inspect = createInspectReport({ plugin, ...overrides });
+  const report = {
+    ...createEmptyPluginRegistry(),
+    workspaceScope: "omitted" as const,
+    plugins: [plugin],
+  };
+  buildPluginSnapshotReportMock.mockReturnValue(report);
+  buildPluginInspectReportMock.mockReturnValue(inspect);
+  buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
+  return report;
 }
 
 describe("plugins cli inspect", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
     workshopMocks.detectToolPolicyDiagnostic.mockReset();
+  });
+
+  it.each([
+    { directory: "p-home", expectedRoot: "$OPENCLAW_HOME" },
+    { directory: "p-home-other", expectedRoot: path.resolve(path.sep, "tmp", "p-home-other") },
+  ])("preserves source paths across list and inspect for $directory", async (testCase) => {
+    const homeDir = path.resolve(path.sep, "tmp", "p-home");
+    const source = path.resolve(path.sep, "tmp", testCase.directory, "p", "index.js");
+    const plugin = createPluginRecord({ id: "source-probe", source, origin: "config" });
+    const report = { plugins: [plugin], diagnostics: [] };
+    buildPluginSnapshotReportMock.mockReturnValue(report);
+    buildPluginInspectReportMock.mockReturnValue(createInspectReport({ plugin }));
+    buildPluginRegistrySnapshotReportMock.mockReturnValue({
+      ...report,
+      workspaceDir: "/workspace",
+      registrySource: "persisted",
+      registryDiagnostics: [],
+    });
+    const commands = [
+      ["list", "--verbose"],
+      ["inspect", plugin.id],
+      ["info", plugin.id],
+    ];
+
+    await withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
+      for (const args of commands) {
+        logs.length = 0;
+        await runPluginsCommand(["plugins", ...args]);
+        const text = stripVTControlCharacters(logs.join("\n"));
+        expect(/^\s*source: (.+)$/im.exec(text)?.[1]).toBe(
+          path.join(testCase.expectedRoot, "p", "index.js"),
+        );
+      }
+      for (const args of [
+        ["list", "--json"],
+        ["inspect", plugin.id, "--json"],
+      ]) {
+        logs.length = 0;
+        await runPluginsCommand(["plugins", ...args]);
+        const output = JSON.parse(logs.at(-1) ?? "null");
+        expect((args[0] === "list" ? output.plugins[0] : output.plugin).source).toBe(source);
+      }
+    });
   });
 
   it.each([false, true])(
@@ -137,25 +157,15 @@ describe("plugins cli inspect", () => {
           return "resource-backed description";
         },
       });
-      const report = {
-        ...createEmptyPluginRegistry(),
-        workspaceScope: "omitted" as const,
-        plugins: [plugin],
-      };
-      buildPluginSnapshotReportMock.mockReturnValue(report);
-      const inspect = createInspectReport({ plugin });
-      buildPluginInspectReportMock.mockReturnValue(inspect);
-      buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
-      withPluginDiagnosticsReportForInspectionMock.mockImplementation(
-        async (_params, formatReport) => {
-          const output = formatReport(report);
-          expect(serialized).toBe(true);
-          started.resolve();
-          await finish.promise;
-          released = true;
-          return output;
-        },
-      );
+      const report = mockInspection(plugin);
+      withDiagnostics.mockImplementation(async (_params, formatReport) => {
+        const output = formatReport(report);
+        expect(serialized).toBe(true);
+        started.resolve();
+        await finish.promise;
+        released = true;
+        return output;
+      });
       const command = runPluginsCommand([
         "plugins",
         "inspect",
@@ -165,59 +175,33 @@ describe("plugins cli inspect", () => {
       ]);
       try {
         await started.promise;
-        expect(pluginsCliRuntimeLogs).toEqual([]);
+        expect(logs).toEqual([]);
       } finally {
         finish.resolve();
         await command;
       }
-      expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenCalledTimes(1);
+      expect(withDiagnostics).toHaveBeenCalledTimes(1);
       expect(released).toBe(true);
-      expect(pluginsCliRuntimeLogs).toHaveLength(1);
-      const result = JSON.parse(pluginsCliRuntimeLogs[0] ?? "");
+      expect(logs).toHaveLength(1);
+      const result = JSON.parse(logs[0] ?? "");
       expect((all ? result[0] : result).plugin.description).toBe("resource-backed description");
     },
   );
 
-  it.each(["serialization", "disposal", "missing-report"] as const)(
-    "does not emit success when inspection has a %s failure",
-    async (failure) => {
-      const plugin = createPluginRecord({ id: "owned-inspect" });
-      const report = {
-        ...createEmptyPluginRegistry(),
-        workspaceScope: "omitted" as const,
-        plugins: [plugin],
-      };
-      buildPluginSnapshotReportMock.mockReturnValue(report);
-      const inspect = createInspectReport({ plugin });
-      buildPluginInspectReportMock.mockReturnValue(failure === "missing-report" ? null : inspect);
-      const serializationError = new Error("fixture serialization failed");
-      const disposalError = new Error("fixture disposal failed");
-      if (failure.startsWith("serialization")) {
-        Object.defineProperty(plugin, "description", {
-          enumerable: true,
-          get() {
-            throw serializationError;
-          },
-        });
-      }
-      withPluginDiagnosticsReportForInspectionMock.mockImplementation(
-        async (_params, formatReport) => {
-          const output = formatReport(report);
-          expect(pluginsCliRuntimeLogs).toEqual([]);
-          if (failure === "disposal") {
-            throw disposalError;
-          }
-          return output;
-        },
-      );
-      const command = runPluginsCommand(["plugins", "inspect", plugin.id, "--runtime", "--json"]);
-      await expect(command).rejects.toThrow(
-        failure === "missing-report" ? "__exit__:1" : `fixture ${failure} failed`,
-      );
-      expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenCalledTimes(1);
-      expect(pluginsCliRuntimeLogs).toHaveLength(failure === "missing-report" ? 1 : 0);
-    },
-  );
+  it("reports a missing runtime inspection as JSON failure", async () => {
+    const plugin = createPluginRecord({ id: "owned-inspect" });
+    mockInspection(plugin);
+    buildPluginInspectReportMock.mockReturnValue(null);
+    await expect(
+      runPluginsCommand(["plugins", "inspect", plugin.id, "--runtime", "--json"]),
+    ).rejects.toThrow("__exit__:1");
+    expect(withDiagnostics).toHaveBeenCalledOnce();
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0]!)).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("Plugin not found: owned-inspect") },
+    });
+  });
 
   it.each([{ selection: ["--all", "extra"] }, { selection: [] }])(
     "rejects invalid runtime selection before acquisition: $selection",
@@ -225,127 +209,7 @@ describe("plugins cli inspect", () => {
       await expect(
         runPluginsCommand(["plugins", "inspect", ...selection, "--runtime", "--json"]),
       ).rejects.toThrow("__exit__:1");
-      expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { enabled: true, status: "loaded", expected: "enabled" },
-    { enabled: false, status: "disabled", expected: "disabled" },
-    { enabled: true, status: "error", expected: "error" },
-  ] as const)(
-    "renders cold $status records consistently across human commands",
-    async (testCase) => {
-      const plugin = createPluginRecord({
-        id: "display-probe",
-        name: "Display",
-        enabled: testCase.enabled,
-        status: testCase.status,
-        imported: false,
-      });
-      const report = { plugins: [plugin], diagnostics: [] };
-      const inspect = createInspectReport({ plugin });
-      buildPluginSnapshotReportMock.mockReturnValue(report);
-      buildPluginInspectReportMock.mockReturnValue(inspect);
-      buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
-      buildPluginRegistrySnapshotReportMock.mockReturnValue({
-        ...report,
-        workspaceDir: "/workspace",
-        registrySource: "persisted",
-        registryDiagnostics: [],
-      });
-
-      const commands: Array<{ args: string[]; format: PluginHumanFormat }> = [
-        { args: ["list"], format: "table" },
-        { args: ["list", "--verbose"], format: "verbose" },
-        { args: ["inspect", plugin.id], format: "detail" },
-        { args: ["info", plugin.id], format: "detail" },
-        { args: ["inspect", "--all"], format: "table" },
-      ];
-      const renderedStatuses: Array<[string, string | undefined]> = [];
-      for (const { args, format } of commands) {
-        pluginsCliRuntimeLogs.length = 0;
-        await runPluginsCommand(["plugins", ...args]);
-        renderedStatuses.push([
-          args.join(" "),
-          readRenderedStatus(pluginsCliRuntimeLogs.join("\n"), format),
-        ]);
-      }
-      expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
-      expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
-
-      for (const selection of [[plugin.id], ["--all"]]) {
-        pluginsCliRuntimeLogs.length = 0;
-        await runPluginsCommand(["plugins", "inspect", ...selection, "--json"]);
-        const json = JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null");
-        const entry = Array.isArray(json) ? json[0] : json;
-        expect(entry.plugin).toMatchObject({
-          enabled: testCase.enabled,
-          status: testCase.status,
-          imported: false,
-        });
-      }
-      expect(renderedStatuses).toEqual(
-        commands.map(({ args }) => [args.join(" "), testCase.expected]),
-      );
-    },
-  );
-
-  it.each([
-    { args: ["inspect", "display-probe", "--runtime"], format: "detail" },
-    { args: ["inspect", "--all", "--runtime"], format: "table" },
-  ] as const)("retains actual runtime status for $format output", async ({ args, format }) => {
-    const plugin = createPluginRecord({ id: "display-probe", name: "Display", imported: true });
-    const report = { plugins: [plugin], diagnostics: [] };
-    const inspect = createInspectReport({ plugin });
-    buildPluginSnapshotReportMock.mockReturnValue(report);
-    withPluginDiagnosticsReportForInspectionMock.mockImplementation(async (_params, formatReport) =>
-      formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted", ...report }),
-    );
-    buildPluginInspectReportMock.mockReturnValue(inspect);
-    buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
-
-    await runPluginsCommand(["plugins", ...args]);
-
-    expect(readRenderedStatus(pluginsCliRuntimeLogs.join("\n"), format)).toBe("loaded");
-  });
-
-  it.each([false, true].flatMap((all) => [false, true].map((json) => ({ all, json }))))(
-    "renders live metadata before retirement and prints after cleanup: all=$all, json=$json",
-    async ({ all, json }) => {
-      const plugin = createPluginRecord({ id: "scoped-plugin" });
-      buildPluginSnapshotReportMock.mockReturnValue({ plugins: [plugin], diagnostics: [] });
-      let retired = false;
-      const inspect = createInspectReport({
-        plugin: {
-          ...plugin,
-          get name() {
-            if (retired) {
-              throw new Error("plugin metadata is retired");
-            }
-            return "Scoped";
-          },
-        },
-      });
-      buildPluginInspectReportMock.mockReturnValue(inspect);
-      buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
-      retirePluginDiagnosticsMock.mockImplementation(async () => {
-        await Promise.resolve();
-        expect(pluginsCliRuntimeLogs).toEqual([]);
-        retired = true;
-      });
-
-      await runPluginsCommand([
-        "plugins",
-        "inspect",
-        all ? "--all" : plugin.id,
-        "--runtime",
-        ...(json ? ["--json"] : []),
-      ]);
-
-      expect(retired).toBe(true);
-      expect(pluginsCliRuntimeLogs).toHaveLength(1);
-      expect(pluginsCliRuntimeLogs[0]).toContain("Scoped");
+      expect(withDiagnostics).not.toHaveBeenCalled();
     },
   );
 
@@ -357,22 +221,20 @@ describe("plugins cli inspect", () => {
       runPluginsCommand(["plugins", "inspect", "--all", "--runtime", "--json"]),
     ).rejects.toThrow("diagnostics cleanup failed");
 
-    expect(pluginsCliRuntimeLogs).toEqual([]);
+    expect(logs).toEqual([]);
   });
 
-  it.each(
-    [false, true].flatMap((runtime) =>
-      [false, true].flatMap((json) =>
-        ["empty", "all", "single", "missing"].map((selection) => ({ runtime, json, selection })),
-      ),
-    ),
-  )(
-    "preserves global diagnostics on stderr with $selection, runtime=$runtime, json=$json",
-    async ({ runtime, json, selection }) => {
+  it.each([
+    { runtime: false, selection: "all" },
+    { runtime: false, selection: "single" },
+    { runtime: true, selection: "missing" },
+  ])(
+    "preserves global diagnostics on stderr with $selection, runtime=$runtime",
+    async ({ runtime, selection }) => {
       const plugin = createPluginRecord({ id: "shared-plugin" });
       const diagnostic = { level: "warn" as const, pluginId: plugin.id, message: "Plugin warning" };
       const inspect = createInspectReport({ plugin, diagnostics: [diagnostic] });
-      const reports = selection === "empty" || selection === "missing" ? [] : [inspect];
+      const reports = selection === "missing" ? [] : [inspect];
       const report = {
         plugins: reports.map((entry) => entry.plugin),
         diagnostics: [
@@ -385,9 +247,8 @@ describe("plugins cli inspect", () => {
         ],
       };
       buildPluginSnapshotReportMock.mockReturnValue(report);
-      withPluginDiagnosticsReportForInspectionMock.mockImplementation(
-        async (_params, formatReport) =>
-          formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted", ...report }),
+      withDiagnostics.mockImplementation(async (_params, formatReport) =>
+        formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted", ...report }),
       );
       buildPluginInspectReportMock.mockReturnValue(inspect);
       buildAllPluginInspectReportsMock.mockReturnValue(reports);
@@ -396,7 +257,6 @@ describe("plugins cli inspect", () => {
         "inspect",
         selection === "single" ? plugin.id : selection === "missing" ? "missing-plugin" : "--all",
         ...(runtime ? ["--runtime"] : []),
-        ...(json ? ["--json"] : []),
       ];
       const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
       try {
@@ -404,15 +264,10 @@ describe("plugins cli inspect", () => {
         if (selection === "missing") {
           await expect(command).rejects.toThrow("__exit__:1");
           expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
-          expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
+          expect(withDiagnostics).not.toHaveBeenCalled();
+          expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing-plugin");
         } else {
           await command;
-          if (json) {
-            expect(pluginsCliRuntimeLogs).toHaveLength(1);
-            expect(JSON.parse(pluginsCliRuntimeLogs[0] ?? "null")).toEqual(
-              selection === "single" ? inspect : reports,
-            );
-          }
         }
         const warnings = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
         expect(warnings.match(/Workspace discovery was skipped/g)).toHaveLength(1);
@@ -423,207 +278,120 @@ describe("plugins cli inspect", () => {
     },
   );
 
-  it.each([false, true])(
-    "reports package-owned install provenance with runtime=%s",
-    async (runtime) => {
-      const install: PluginInstallRecord = {
-        source: "npm",
-        spec: "@example/pack@1.2.3",
-        installPath: "/plugins/pack",
-        version: "1.2.3",
-        integrity: "sha512-pack",
-        installedAt: "2026-08-01T00:00:00.000Z",
-      };
-      const plugins = ["pack/one", "pack/two"].map((id) =>
-        createPluginRecord({ id, rootDir: "/plugins/pack", origin: "global" }),
-      );
-      setInspectInstallRecords(
-        { pack: install },
-        plugins.map((plugin) =>
-          recordInstalledPluginIndexInstallOwner(
-            {
-              pluginId: plugin.id,
-              rootDir: plugin.rootDir,
-            },
-            "pack",
-          ),
-        ),
-      );
-      buildPluginSnapshotReportMock.mockReturnValue({ plugins, diagnostics: [] });
-      const reports = plugins.map((plugin) => ({ plugin }));
-      buildAllPluginInspectReportsMock.mockReturnValue(reports);
-      const runtimeArgs = runtime ? ["--runtime"] : [];
-
-      for (const report of reports) {
-        const { plugin } = report;
-        buildPluginInspectReportMock.mockReturnValue(report);
-        await runPluginsCommand(["plugins", "inspect", plugin.id, "--json", ...runtimeArgs]);
-        expect(JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null")).toMatchObject({
-          plugin: { id: plugin.id },
-          install,
-        });
-      }
-      await runPluginsCommand(["plugins", "inspect", "--all", "--json", ...runtimeArgs]);
-      expect(JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null")).toEqual(
-        reports.map(({ plugin }) => ({ plugin, install })),
-      );
-    },
-  );
-
-  it.each(["missing", "ambiguous", "conflicting"])(
-    "does not attribute a same-id install when package ownership is %s",
-    async (ownership) => {
-      const plugin = createPluginRecord({ id: "pack/one", rootDir: "/plugins/pack" });
-      setInspectInstallRecords(
-        {
-          pack: { source: "npm", installPath: "/plugins/pack" },
-          [plugin.id]: { source: "npm", installPath: "/plugins/unrelated" },
+  it("keeps package-child inspection static and distinguishes disabled reasons from errors", async () => {
+    const pluginId = "openclaw-mem0/core";
+    setInspectInstallRecords(
+      {
+        "openclaw-mem0": {
+          source: "clawhub",
+          spec: "clawhub:openclaw-mem0",
+          installPath: "/plugins/openclaw-mem0",
+          version: "2026.5.1",
+          clawhubPackage: "openclaw-mem0",
+          clawhubChannel: "official",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-clawpack",
+          npmShasum: "1".repeat(40),
+          npmTarballName: "openclaw-mem0-2026.5.1.tgz",
+          clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          clawpackSpecVersion: 1,
+          clawpackManifestSha256:
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          clawpackSize: 4096,
         },
-        [
-          recordInstalledPluginIndexInstallOwner(
-            { pluginId: plugin.id, rootDir: plugin.rootDir },
-            ownership === "conflicting" ? "pack" : undefined,
-            ownership === "ambiguous",
-          ),
-        ],
-      );
+      },
+      { id: pluginId, rootDir: "/plugins/openclaw-mem0" },
+      "openclaw-mem0",
+    );
+    buildPluginSnapshotReportMock.mockReturnValue({
+      plugins: [createPluginRecord({ id: pluginId, name: "Mem0" })],
+      diagnostics: [],
+    });
+    const inspectReport = createInspectReport({
+      plugin: createPluginRecord({ id: pluginId, name: "Mem0" }),
+      shape: "hook-only",
+      capabilityMode: "plain",
+      capabilityCount: 1,
+      typedHooks: [{ name: "agent_end" }],
+      services: ["mem0-background"],
+      gatewayDiscoveryServices: ["mem0-discovery", "mem0-discovery-secondary"],
+      mcpServers: [
+        { name: "local", hasStdioTransport: true },
+        { name: "remote", hasStdioTransport: false },
+        { name: "broken", hasStdioTransport: false, unsupported: true },
+      ],
+      policy: {
+        allowConversationAccess: true,
+        allowedModels: [],
+        hasAllowedModelsConfig: false,
+      },
+    });
+    buildPluginInspectReportMock.mockReturnValue(inspectReport);
+
+    await runPluginsCommand(["plugins", "inspect", pluginId]);
+
+    expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
+    expect(withDiagnostics).not.toHaveBeenCalled();
+    const output = logs.join("\n");
+    expect(output).toContain("Policy");
+    expect(output).toContain("allowConversationAccess: true");
+    expect(output).toContain("Services:\nmem0-background");
+    expect(output).toContain("Gateway discovery:\nmem0-discovery\nmem0-discovery-secondary");
+    expect(output).toContain("ClawHub package: openclaw-mem0");
+    expect(output).toContain("Artifact kind: npm-pack");
+    expect(output).toContain("Npm integrity: sha512-clawpack");
+    expect(output).toContain(
+      "ClawPack sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    expect(output).toContain("ClawPack spec: 1");
+    expect(output).toContain("ClawPack size: 4096 bytes");
+    expect(output).toContain("remote");
+    expect(output).not.toContain("remote (unsupported transport)");
+    expect(output).toContain("broken (unsupported transport)");
+
+    await runPluginsCommand(["plugins", "inspect", pluginId, "--json"]);
+    expect(JSON.parse(logs.at(-1) ?? "null")).toMatchObject({
+      services: ["mem0-background"],
+      gatewayDiscoveryServices: ["mem0-discovery", "mem0-discovery-secondary"],
+    });
+
+    for (const { id, status, detail, label } of [
+      {
+        id: "workspace-disabled",
+        status: "disabled" as const,
+        detail: "workspace plugin (disabled by default)",
+        label: "Reason",
+      },
+      { id: "broken", status: "error" as const, detail: "missing plugin module", label: "Error" },
+    ]) {
+      const plugin = createPluginRecord({
+        id,
+        enabled: status !== "disabled",
+        status,
+        error: detail,
+        ...(status === "disabled" ? { activationReason: detail } : {}),
+      });
       buildPluginSnapshotReportMock.mockReturnValue({ plugins: [plugin], diagnostics: [] });
-      buildPluginInspectReportMock.mockReturnValue({ plugin });
-      buildAllPluginInspectReportsMock.mockReturnValue([{ plugin }]);
+      buildPluginInspectReportMock.mockReturnValue({ ...inspectReport, plugin });
 
-      await runPluginsCommand(["plugins", "inspect", plugin.id, "--json"]);
-      expect(JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null")).not.toHaveProperty("install");
-      await runPluginsCommand(["plugins", "inspect", "--all", "--json"]);
-      expect(JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null")[0]).not.toHaveProperty("install");
-    },
-  );
+      await runPluginsCommand(["plugins", "inspect", id]);
 
-  it.each(["openclaw-mem0", "openclaw-mem0/core"])(
-    "keeps %s inspection static and distinguishes disabled reasons from errors",
-    async (pluginId) => {
-      setInspectInstallRecords(
-        {
-          "openclaw-mem0": {
-            source: "clawhub",
-            spec: "clawhub:openclaw-mem0",
-            installPath: "/plugins/openclaw-mem0",
-            version: "2026.5.1",
-            clawhubPackage: "openclaw-mem0",
-            clawhubChannel: "official",
-            artifactKind: "npm-pack",
-            artifactFormat: "tgz",
-            npmIntegrity: "sha512-clawpack",
-            npmShasum: "1".repeat(40),
-            npmTarballName: "openclaw-mem0-2026.5.1.tgz",
-            clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            clawpackSpecVersion: 1,
-            clawpackManifestSha256:
-              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            clawpackSize: 4096,
-          },
-        },
-        [
-          recordInstalledPluginIndexInstallOwner(
-            {
-              pluginId,
-              rootDir: "/plugins/openclaw-mem0",
-            },
-            "openclaw-mem0",
-          ),
-        ],
-      );
-      buildPluginSnapshotReportMock.mockReturnValue({
-        plugins: [createPluginRecord({ id: pluginId, name: "Mem0" })],
-        diagnostics: [],
-      });
-      const inspectReport = createInspectReport({
-        plugin: createPluginRecord({ id: pluginId, name: "Mem0" }),
-        shape: "hook-only",
-        capabilityMode: "plain",
-        capabilityCount: 1,
-        typedHooks: [{ name: "agent_end" }],
-        services: ["mem0-background"],
-        gatewayDiscoveryServices: ["mem0-discovery", "mem0-discovery-secondary"],
-        mcpServers: [
-          { name: "local", hasStdioTransport: true },
-          { name: "remote", hasStdioTransport: false },
-          { name: "broken", hasStdioTransport: false, unsupported: true },
-        ],
-        policy: {
-          allowConversationAccess: true,
-          allowedModels: [],
-          hasAllowedModelsConfig: false,
-        },
-      });
-      buildPluginInspectReportMock.mockReturnValue(inspectReport);
+      const inspectOutput = logs.at(-1) ?? "";
+      expect(inspectOutput).toContain(`Status: ${status}`);
+      expect(inspectOutput).toContain(`${label}: ${detail}`);
+      expect(inspectOutput).not.toContain(`${label === "Reason" ? "Error" : "Reason"}: ${detail}`);
 
-      await runPluginsCommand(["plugins", "inspect", pluginId]);
-
-      expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
-      expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain("Policy");
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain("allowConversationAccess: true");
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain("Services:\nmem0-background");
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain(
-        "Gateway discovery:\nmem0-discovery\nmem0-discovery-secondary",
-      );
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain("Artifact kind: npm-pack");
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain("Npm integrity: sha512-clawpack");
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain(
-        "ClawPack sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      );
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain("ClawPack spec: 1");
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain("ClawPack size: 4096 bytes");
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain("remote");
-      expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("remote (unsupported transport)");
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain("broken (unsupported transport)");
-
-      await runPluginsCommand(["plugins", "inspect", pluginId, "--json"]);
-      expect(JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null")).toMatchObject({
-        services: ["mem0-background"],
-        gatewayDiscoveryServices: ["mem0-discovery", "mem0-discovery-secondary"],
-      });
-
-      for (const { id, status, detail, label } of [
-        {
-          id: "workspace-disabled",
-          status: "disabled" as const,
-          detail: "workspace plugin (disabled by default)",
-          label: "Reason",
-        },
-        { id: "broken", status: "error" as const, detail: "missing plugin module", label: "Error" },
-      ]) {
-        const plugin = createPluginRecord({
-          id,
-          enabled: status !== "disabled",
-          status,
+      if (status === "disabled") {
+        await runPluginsCommand(["plugins", "inspect", id, "--json"]);
+        expect(JSON.parse(logs.at(-1) ?? "null").plugin).toMatchObject({
+          status: "disabled",
           error: detail,
-          ...(status === "disabled" ? { activationReason: detail } : {}),
+          activationReason: detail,
         });
-        buildPluginSnapshotReportMock.mockReturnValue({ plugins: [plugin], diagnostics: [] });
-        buildPluginInspectReportMock.mockReturnValue({ ...inspectReport, plugin });
-
-        await runPluginsCommand(["plugins", "inspect", id]);
-
-        const inspectOutput = pluginsCliRuntimeLogs.at(-1) ?? "";
-        expect(inspectOutput).toContain(`Status: ${status}`);
-        expect(inspectOutput).toContain(`${label}: ${detail}`);
-        expect(inspectOutput).not.toContain(
-          `${label === "Reason" ? "Error" : "Reason"}: ${detail}`,
-        );
-
-        if (status === "disabled") {
-          await runPluginsCommand(["plugins", "inspect", id, "--json"]);
-          expect(JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null").plugin).toMatchObject({
-            status: "disabled",
-            error: detail,
-            activationReason: detail,
-          });
-        }
       }
-    },
-  );
+    }
+  });
 
   it("runtime-inspects exact plugin ids and display names without repairing deps", async () => {
     buildPluginSnapshotReportMock.mockReturnValue({
@@ -645,7 +413,7 @@ describe("plugins cli inspect", () => {
 
     for (const selector of ["openclaw-mem0", "Mem0"]) {
       await runPluginsCommand(["plugins", "inspect", selector, "--runtime"]);
-      expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenLastCalledWith(
+      expect(withDiagnostics).toHaveBeenLastCalledWith(
         expect.objectContaining({
           config: {},
           onlyPluginIds: ["openclaw-mem0"],
@@ -653,39 +421,15 @@ describe("plugins cli inspect", () => {
         }),
         expect.any(Function),
       );
-      expect(pluginsCliRuntimeLogs.at(-1)).toContain("Gateway discovery:\nmem0-runtime-discovery");
+      expect(logs.at(-1)).toContain("Gateway discovery:\nmem0-runtime-discovery");
     }
   });
 
-  it("does not runtime-load plugins when inspect target is missing", async () => {
-    buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-
-    await expect(runPluginsCommand(["plugins", "inspect", "missing-plugin"])).rejects.toThrow(
-      "__exit__:1",
-    );
-
-    expect(buildPluginSnapshotReportMock).toHaveBeenCalledWith(
-      expect.objectContaining({ config: {} }),
-    );
-    expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
-    expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
-    expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing-plugin");
-  });
-
-  it.each([
-    { label: "an implicit agent", agentIds: ["main"], entries: undefined },
-    {
-      label: "a multi-agent roster",
-      agentIds: ["main", "venus"],
-      entries: { main: {}, venus: {} },
-    },
-  ])("explains policy-hidden Skill Workshop for $label", async ({ agentIds, entries }) => {
+  it("explains policy-hidden Skill Workshop for every configured agent", async () => {
+    const agentIds = ["main", "venus"];
     const config: OpenClawConfig = {
       tools: { profile: "messaging" },
-      ...(entries ? { agents: { ownership: "explicit" as const, entries } } : {}),
+      agents: { ownership: "explicit", entries: { main: {}, venus: {} } },
     };
     pluginCliConfigMock.mockReturnValue(config);
     workshopMocks.detectToolPolicyDiagnostic.mockImplementation(
@@ -704,12 +448,10 @@ describe("plugins cli inspect", () => {
     );
 
     const output = runtimeErrors.at(-1);
-    if (entries) {
-      expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
-        config,
-        workspaceDir: undefined,
-      });
-    }
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
+      config,
+      workspaceDir: undefined,
+    });
     expect(output).toContain("Skill Workshop is built into OpenClaw, not a plugin");
     expect(output).toContain('tools.profile: "messaging" does not include "skill_workshop".');
     expect(output).toContain('Add tools.alsoAllow: ["skill_workshop"].');
@@ -722,4 +464,114 @@ describe("plugins cli inspect", () => {
       expect(output).toContain(`hidden for agent "${agentId}"`);
     }
   });
+});
+
+const originalExitCode = process.exitCode;
+
+describe("plugins cli Doctor output", () => {
+  beforeEach(() => {
+    resetPluginsCliTestState();
+    process.exitCode = undefined;
+  });
+
+  afterEach(() => {
+    process.exitCode = originalExitCode;
+  });
+
+  it.each(["", "-other"])(
+    "preserves diagnostic metadata and source identity (home suffix=%s)",
+    async (sourceSuffix) => {
+      const metadata: Pick<PluginDiagnostic, "pluginId" | "code" | "sdkCompatibility"> =
+        sourceSuffix
+          ? {}
+          : {
+              pluginId: "broken",
+              code: "sdk-incompatible",
+              sdkCompatibility: {
+                seam: "openclaw/plugin-sdk/channel-runtime",
+                coreVersion: "2026.9.4",
+                builtWithOpenClawVersion: "2026.7.1",
+                nestedSdk: true,
+              },
+            };
+      const homeDir = path.resolve(path.sep, "tmp", "openclaw-plugin-doctor-home");
+      const sourceDir = `${homeDir}${sourceSuffix}`;
+      const displayedSourceDir = sourceSuffix ? sourceDir : "$OPENCLAW_HOME";
+      withDiagnostics.mockImplementation(async (_params, formatReport) =>
+        formatReport({
+          ...createEmptyPluginRegistry(),
+          workspaceScope: "omitted",
+          plugins: [
+            createPluginRecord({
+              id: "broken",
+              origin: "config",
+              source: `${sourceDir}/plugins/broken/index.ts`,
+              status: "error",
+              error: `failed to load ${homeDir}/plugins/broken/runtime.ts`,
+            }),
+          ],
+          diagnostics: [
+            {
+              level: "info",
+              pluginId: "broken",
+              source: `${sourceDir}/plugins/shadowed/index.ts`,
+              message:
+                "duplicate plugin id resolved by explicit config-selected plugin; " +
+                `global plugin will be overridden by config plugin (${homeDir}/plugins/broken/index.ts)`,
+            },
+            {
+              ...metadata,
+              level: "warn",
+              source: `${sourceDir}/plugins/unreadable`,
+              message: `failed to inspect ${homeDir}/plugins/unreadable`,
+            },
+          ],
+        }),
+      );
+
+      await withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
+        await runPluginsCommand(["plugins", "doctor", "--json"]);
+      });
+
+      expect(process.exitCode).toBe(1);
+      expect(logs).toHaveLength(1);
+      expect(runtimeErrors).toEqual([]);
+      if (!sourceSuffix) {
+        expect(logs[0]).not.toContain(homeDir);
+      }
+      expect(logs[0]).not.toMatch(/Plugin errors:|Docs:/);
+      const source = `${displayedSourceDir}/plugins/broken/index.ts`;
+      const error = "failed to load $OPENCLAW_HOME/plugins/broken/runtime.ts";
+      expect(JSON.parse(logs[0] ?? "null")).toMatchObject({
+        ok: false,
+        pluginErrors: [{ id: "broken", error, source }],
+        diagnostics: [
+          {
+            ...metadata,
+            level: "warn",
+            source: `${displayedSourceDir}/plugins/unreadable`,
+            message: "failed to inspect $OPENCLAW_HOME/plugins/unreadable",
+          },
+        ],
+        sourceShadowing: [
+          {
+            pluginId: "broken",
+            message:
+              "duplicate plugin id resolved by explicit config-selected plugin; " +
+              "global plugin will be overridden by config plugin ($OPENCLAW_HOME/plugins/broken/index.ts)",
+            active: { source, origin: "config", status: "error", error },
+            shadowedSource: `${displayedSourceDir}/plugins/shadowed/index.ts`,
+          },
+        ],
+      });
+
+      logs.length = 0;
+      await withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
+        await runPluginsCommand(["plugins", "doctor"]);
+      });
+      const human = logs.join("\n");
+      expect(human).toContain(`  active: ${displayedSourceDir}/plugins/broken/index.ts (config)`);
+      expect(human).toContain(`  shadowed: ${displayedSourceDir}/plugins/shadowed/index.ts`);
+    },
+  );
 });

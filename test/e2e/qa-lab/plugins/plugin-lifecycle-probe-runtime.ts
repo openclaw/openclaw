@@ -1,7 +1,7 @@
 // Plugin Lifecycle Probe tests cover QA Lab plugin lifecycle evidence.
 import { spawn, spawnSync } from "node:child_process";
-/* oxlint-disable eslint/no-shadow, eslint/prefer-const, eslint/no-promise-executor-return, typescript/restrict-template-expressions, typescript/no-base-to-string -- QA probe intentionally validates loosely typed external JSON and mirrors child-process callback shapes. */
-import { randomBytes } from "node:crypto";
+/* oxlint-disable eslint/no-shadow, eslint/prefer-const, typescript/restrict-template-expressions, typescript/no-base-to-string -- QA probe intentionally validates loosely typed external JSON and mirrors child-process callback shapes. */
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,7 +42,7 @@ interface CommandOptions {
 
 interface RegistryServer {
   env: NodeJS.ProcessEnv;
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 function stateDir(env: ProbeEnv = process.env) {
@@ -294,7 +294,6 @@ function createMatrixStateEnv(resourceDir: string): MatrixEnv {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configFile,
     OPENCLAW_TEST_WORKSPACE_DIR: workspaceDir,
-    OPENCLAW_AUTH_PROFILE_SECRET_KEY: randomBytes(32).toString("hex"),
   };
 }
 
@@ -511,6 +510,7 @@ async function startNpmFixtureRegistry(
   registryRoot: string,
   packages: readonly [packageName: string, version: string, tarball: string][],
   env: MatrixEnv,
+  signal?: AbortSignal,
 ): Promise<RegistryServer> {
   const serverLog = path.join(registryRoot, "npm-registry.log");
   const serverPortFile = path.join(registryRoot, "npm-registry-port");
@@ -526,33 +526,42 @@ async function startNpmFixtureRegistry(
     {
       cwd: process.cwd(),
       env,
-      stdio: ["ignore", logFd, logFd],
+      stdio: ["ignore", logFd, logFd, "ipc"],
     },
   );
   fs.closeSync(logFd);
 
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (fs.existsSync(serverPortFile) && fs.statSync(serverPortFile).size > 0) {
-      const port = fs.readFileSync(serverPortFile, "utf8").trim();
-      return {
-        env: {
-          ...env,
-          NPM_CONFIG_REGISTRY: `http://127.0.0.1:${port}`,
-        },
-        stop() {
-          child.kill();
-        },
-      };
-    }
-    if (child.exitCode !== null) {
-      const log = fs.existsSync(serverLog) ? fs.readFileSync(serverLog, "utf8") : "";
-      throw new Error(`npm fixture registry exited early${log ? `\n${log}` : ""}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  const readiness = new AbortController();
+  const exited = once(child, "exit");
+  try {
+    const [port] = await Promise.race([
+      once(child, "message", {
+        signal: signal ? AbortSignal.any([readiness.signal, signal]) : readiness.signal,
+      }),
+      exited.then((): never => {
+        const log = fs.existsSync(serverLog) ? fs.readFileSync(serverLog, "utf8") : "";
+        throw new Error(`npm fixture registry exited early${log ? `\n${log}` : ""}`);
+      }),
+    ]);
+    assertProbe(typeof port === "number" && port > 0, "npm fixture registry omitted its port");
+    return {
+      env: {
+        ...env,
+        NPM_CONFIG_REGISTRY: `http://127.0.0.1:${port}`,
+        npm_config_registry: `http://127.0.0.1:${port}`,
+      },
+      async stop() {
+        child.kill();
+        await exited;
+      },
+    };
+  } catch (error) {
+    child.kill();
+    await exited.catch(() => undefined);
+    throw error;
+  } finally {
+    readiness.abort();
   }
-  child.kill();
-  const log = fs.existsSync(serverLog) ? fs.readFileSync(serverLog, "utf8") : "";
-  throw new Error(`timed out waiting for npm fixture registry${log ? `\n${log}` : ""}`);
 }
 
 async function runMeasured(
@@ -854,7 +863,7 @@ async function runPluginLifecycleMatrix() {
     };
     writeConfig(policyConfig, runEnv);
 
-    registry.stop();
+    await registry.stop();
     registry = await startNpmFixtureRegistry(
       registryRoot,
       [
@@ -922,11 +931,11 @@ async function runPluginLifecycleMatrix() {
     );
     process.stdout.write("Plugin lifecycle matrix passed.\n");
   } finally {
-    registry?.stop();
+    await registry?.stop();
   }
 }
 
-export const testing = { runCommand };
+export const testing = { runCommand, startNpmFixtureRegistry };
 
 const isLifecycleMatrixCli = process.argv[2] === "--lifecycle-matrix";
 

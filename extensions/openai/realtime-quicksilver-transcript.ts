@@ -1,5 +1,5 @@
+import type { RealtimeVoiceAgentConsultTranscriptEntry } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { OpenAIQuicksilverInboundEvent } from "./realtime-quicksilver-events.js";
-import type { OpenAIQuicksilverTranscriptEntry } from "./realtime-quicksilver-instructions.js";
 import {
   boundOpenAIQuicksilverContextItems,
   chunkOpenAIQuicksilverAppendText,
@@ -15,10 +15,10 @@ type PublicationTarget = { onTranscript?: TranscriptCallback; isCurrent?: () => 
 
 /** Context eviction and immutable transcript publication have separate lifetimes. */
 export class OpenAIQuicksilverTranscript {
-  private entries: OpenAIQuicksilverTranscriptEntry[] = [];
+  private entries: RealtimeVoiceAgentConsultTranscriptEntry[] = [];
   private pendingUserInput = "";
   private partialRole: "user" | "assistant" | undefined;
-  private publication: OpenAIQuicksilverTranscriptEntry[] = [];
+  private publication: RealtimeVoiceAgentConsultTranscriptEntry[] = [];
   private publicationBytes = 0;
 
   append(event: TranscriptEvent): void {
@@ -96,16 +96,13 @@ export class OpenAIQuicksilverTranscript {
     this.partialRole = undefined;
   }
 
-  consume(): {
-    context: OpenAIQuicksilverTranscriptEntry[];
-    publication: OpenAIQuicksilverTranscriptEntry[];
-  } {
+  consume() {
     const snapshot = { context: this.entries, publication: this.consumePublication() };
     this.clear();
     return snapshot;
   }
 
-  private consumePublication(): OpenAIQuicksilverTranscriptEntry[] {
+  private consumePublication(): RealtimeVoiceAgentConsultTranscriptEntry[] {
     const publication = this.publication;
     this.publication = [];
     this.publicationBytes = 0;
@@ -113,7 +110,7 @@ export class OpenAIQuicksilverTranscript {
   }
 
   publish(
-    publication: readonly OpenAIQuicksilverTranscriptEntry[],
+    publication: readonly RealtimeVoiceAgentConsultTranscriptEntry[],
     target: PublicationTarget,
   ): void {
     for (const entry of publication) {

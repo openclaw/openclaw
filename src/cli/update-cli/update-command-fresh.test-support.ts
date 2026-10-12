@@ -6,6 +6,7 @@ import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as updateGlobal from "../../infra/update-global.js";
+import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as processIdentity from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -13,12 +14,12 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
+import * as packageDestination from "./update-command-package-destination.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";
 
 export const targetMetadata = {
-  target: "2026.9.2",
   version: "2026.9.2",
   nodeEngine: null,
   schemaVersions: { state: 16, agent: 19 },
@@ -40,6 +41,7 @@ export function installFreshUpdateFixture() {
       JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
     );
     vi.stubEnv("HOME", home);
+    vi.stubEnv("OPENCLAW_PROFILE", undefined);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "profile"));
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(home, "profile", "openclaw.json"));
     vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
@@ -68,6 +70,7 @@ export function installFreshUpdateFixture() {
       discoveredRoot: fixture.root,
       installKind: "package",
       servicePlan: { rootRedirect: null, nodeRunner: fixture.managedServiceNodeRunner },
+      pkgOwnership: createSystemPackageOwnershipInspection(5_000),
     }));
     vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(false);
     vi.spyOn(databaseContext, "inspectUpdateDatabaseContexts").mockImplementation(async () => ({
@@ -77,8 +80,12 @@ export function installFreshUpdateFixture() {
       managedEnv: undefined,
     }));
     vi.spyOn(shared, "resolveGlobalManager").mockResolvedValue("npm");
-    vi.spyOn(shared, "resolveTargetVersion").mockResolvedValue("2026.9.2");
+    vi.spyOn(shared, "resolveTargetVersion").mockResolvedValue({ version: "2026.9.2" });
     vi.spyOn(updateGlobal, "createGlobalInstallEnv").mockResolvedValue({ ...process.env });
+    vi.spyOn(packageDestination, "inspectNpmGlobalDestination").mockResolvedValue({
+      kind: "empty",
+      prefix: home,
+    });
     vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockResolvedValue({
       manager: "npm",
       command: "npm",

@@ -3,12 +3,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
+import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
 
-const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
+const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -19,9 +22,10 @@ it("serves timeline and status through their bounded store operations", async ()
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-03T12:00:00"));
   const stateDir = realpathSync(mkdtempSync(path.join(tmpdir(), "logbook-card-reads-")));
-  const services: OpenClawPluginService[] = [];
+  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   const methods = new Map<string, Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>();
   const context = {
+    scheduler: createTestPluginServiceScheduler(),
     stateDir,
     config: {},
     logger: { info() {}, warn() {}, error() {}, debug() {} },
@@ -50,7 +54,8 @@ it("serves timeline and status through their bounded store operations", async ()
     runtime: {},
     session: { controls: { registerControlUiDescriptor() {} } },
     registerNodeInvokePolicy() {},
-    registerService: (service: OpenClawPluginService) => services.push(service),
+    registerService: (service: Parameters<OpenClawPluginApi["registerService"]>[0]) =>
+      services.push(service),
     registerGatewayMethod: (
       method: string,
       handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1],
@@ -84,7 +89,9 @@ it("serves timeline and status through their bounded store operations", async ()
     expect(cardCount).toHaveBeenCalledExactlyOnceWith(day);
     expect(cardPayloads).not.toHaveBeenCalled();
   } finally {
+    context.scheduler.beginClose();
     await service.stop?.(context);
+    await context.scheduler.stop();
     rmSync(stateDir, { recursive: true, force: true });
   }
 });

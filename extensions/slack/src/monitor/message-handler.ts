@@ -3,19 +3,17 @@ import {
   resolveInboundDebounceMs,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { resolveSlackAccount } from "../accounts.js";
-import type { SlackSendIdentity } from "../send.js";
 import type { SlackMessageEvent } from "../types.js";
 import { hasSlackMessageTableBlock } from "./block-text.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
-import type { SlackIngressTurnLifecycle } from "./ingress.js";
+import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 import {
   buildSlackMessageDispatchReplayKey,
   claimSlackMessageDispatchReplay,
@@ -28,7 +26,7 @@ import {
   buildSlackDebounceKey,
   buildTopLevelSlackConversationKey,
 } from "./message-handler/debounce-key.js";
-import type { PreparedSlackMessage } from "./message-handler/types.js";
+import type { PreparedSlackMessage, SlackMessageSourceOptions } from "./message-handler/types.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";
 
 const loadSlackMessagePipeline = createLazyRuntimeModule(
@@ -37,12 +35,7 @@ const loadSlackMessagePipeline = createLazyRuntimeModule(
 
 export type SlackMessageHandler = (
   message: SlackMessageEvent,
-  opts: {
-    source: "message" | "app_mention";
-    wasMentioned?: boolean;
-    relayIdentity?: SlackSendIdentity;
-    /** Non-serializable listener scope for a validated enterprise event. */
-    eventScope?: SlackEventScope;
+  opts: SlackMessageSourceOptions & {
     /** Wait until any inbound debounce flush and dispatch has completed. */
     awaitDispatch?: boolean;
     /** Durable ingress ownership carried into reply-lane adoption. */
@@ -57,16 +50,6 @@ type QueuedSlackMessageOptions = Parameters<SlackMessageHandler>[1] & {
 };
 
 const RETRYABLE_FLUSH_MAX_ATTEMPTS = 3;
-const RETRYABLE_FLUSH_RETRY_DELAY_MS = 1_000;
-const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
-
-function isRetryableSlackInboundError(error: unknown): boolean {
-  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
-    (candidate) =>
-      candidate instanceof SlackMessageDispatchRetryError ||
-      REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
-  );
-}
 
 function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonitorContext["cfg"]) {
   const text = message.text ?? "";
@@ -128,255 +111,258 @@ export function createSlackMessageHandler(params: {
             .filter((completion) => completion !== undefined);
           const retry = entries.find((entry) => entry.retry)?.retry;
           let admittedContext = retry?.runtimeContext;
-          for (let retryAttempt = retry?.attempt ?? 0; ; retryAttempt += 1) {
-            try {
-              const runtimeContext = (admittedContext ??= await ctx.readRuntimeContext());
-              admissionLifecycle.abortSignal.throwIfAborted();
-              await (async () => {
-                const flushedEntry = entries.at(-1);
-                if (flushedEntry) {
-                  const teamId = flushedEntry.opts.eventScope?.teamId;
-                  const flushedKey = buildSlackDebounceKey(
-                    flushedEntry.message,
-                    ctx.accountId,
-                    teamId,
-                  );
-                  const topLevelConversationKey = buildTopLevelSlackConversationKey(
-                    flushedEntry.message,
-                    ctx.accountId,
-                    teamId,
-                  );
-                  if (flushedKey && topLevelConversationKey) {
-                    const pendingKeys = pendingTopLevelDebounceKeys.get(topLevelConversationKey);
-                    if (pendingKeys) {
-                      pendingKeys.delete(flushedKey);
-                      if (pendingKeys.size === 0) {
-                        pendingTopLevelDebounceKeys.delete(topLevelConversationKey);
-                      }
+          try {
+            const runtimeContext = (admittedContext ??= await ctx.readRuntimeContext());
+            admissionLifecycle.abortSignal.throwIfAborted();
+            await (async () => {
+              const flushedEntry = entries.at(-1);
+              if (flushedEntry) {
+                const teamId = flushedEntry.opts.eventScope?.teamId;
+                const flushedKey = buildSlackDebounceKey(
+                  flushedEntry.message,
+                  ctx.accountId,
+                  teamId,
+                );
+                const topLevelConversationKey = buildTopLevelSlackConversationKey(
+                  flushedEntry.message,
+                  ctx.accountId,
+                  teamId,
+                );
+                if (flushedKey && topLevelConversationKey) {
+                  const pendingKeys = pendingTopLevelDebounceKeys.get(topLevelConversationKey);
+                  if (pendingKeys) {
+                    pendingKeys.delete(flushedKey);
+                    if (pendingKeys.size === 0) {
+                      pendingTopLevelDebounceKeys.delete(topLevelConversationKey);
                     }
                   }
                 }
-                // Logical-identity claims: Slack sends message + app_mention twins with
-                // distinct event_ids for one post, so the durable queue cannot dedupe
-                // them. Same-flush twins share one claim and one logical message while
-                // retaining the latest event's routing and any earlier mention.
-                const claims: SlackMessageDispatchReplayClaim[] = [];
-                const releaseClaims = (error?: unknown) => {
-                  for (const handle of claims) {
-                    handle.release(error === undefined ? {} : { error });
-                  }
-                };
-                const claimedKeys = new Map<string, number>();
-                const surviving: typeof entries = [];
-                let latestSurviving: (typeof entries)[number] | undefined;
-                for (const entry of entries) {
-                  const replayKey = buildSlackMessageDispatchReplayKey({
-                    accountId: ctx.accountId,
-                    channelId: entry.message.channel,
-                    ts: entry.message.ts,
-                    teamId: entry.opts.eventScope?.teamId,
-                  });
-                  if (!replayKey) {
-                    surviving.push(entry);
-                    latestSurviving = entry;
-                    continue;
-                  }
-                  const existingIndex = claimedKeys.get(replayKey);
-                  if (existingIndex !== undefined) {
-                    const existing = surviving[existingIndex];
-                    const merged = {
-                      ...entry,
-                      opts: {
-                        ...entry.opts,
-                        ...(existing?.opts.source === "app_mention"
-                          ? { source: "app_mention" as const }
-                          : {}),
-                        ...(existing?.opts.wasMentioned ? { wasMentioned: true } : {}),
-                      },
-                    };
-                    surviving[existingIndex] = merged;
-                    latestSurviving = merged;
-                    continue;
-                  }
-                  const claim = await claimSlackMessageDispatchReplay({
-                    guard: dispatchReplayGuard,
-                    key: replayKey,
-                    onWaiting: () => {
-                      entry.opts.turnAdoptionLifecycle?.onDispatchWaiting?.();
-                      // The logical owner already holds this message's ordering.
-                      // Let later input reach the active turn while its twin waits.
-                      admissionLifecycle.onDeferred();
-                    },
-                  }).catch((error: unknown) => {
-                    releaseClaims(error);
-                    throw error;
-                  });
-                  if (claim.kind === "claimed") {
-                    claims.push(claim.handle);
-                    claimedKeys.set(replayKey, surviving.length);
-                    surviving.push(entry);
-                    latestSurviving = entry;
-                  }
+              }
+              // Logical-identity claims: Slack sends message + app_mention twins with
+              // distinct event_ids for one post, so the durable queue cannot dedupe
+              // them. Same-flush twins share one claim and one logical message while
+              // retaining the latest event's routing and any earlier mention.
+              const claims: SlackMessageDispatchReplayClaim[] = [];
+              const releaseClaims = (error?: unknown) => {
+                for (const handle of claims) {
+                  handle.release(error === undefined ? {} : { error });
                 }
-                const commitClaims = async () => {
-                  for (const handle of claims) {
-                    await handle.commit();
+              };
+              const claimedKeys = new Map<string, number>();
+              const surviving: typeof entries = [];
+              let latestSurviving: (typeof entries)[number] | undefined;
+              for (const entry of entries) {
+                const replayKey = buildSlackMessageDispatchReplayKey({
+                  accountId: ctx.accountId,
+                  channelId: entry.message.channel,
+                  ts: entry.message.ts,
+                  teamId: entry.opts.eventScope?.teamId,
+                });
+                if (!replayKey) {
+                  surviving.push(entry);
+                  latestSurviving = entry;
+                  continue;
+                }
+                const existingIndex = claimedKeys.get(replayKey);
+                if (existingIndex !== undefined) {
+                  const existing = surviving[existingIndex];
+                  const merged = {
+                    ...entry,
+                    opts: {
+                      ...entry.opts,
+                      ...(existing?.opts.source === "app_mention"
+                        ? { source: "app_mention" as const }
+                        : {}),
+                      ...(existing?.opts.wasMentioned ? { wasMentioned: true } : {}),
+                    },
+                  };
+                  surviving[existingIndex] = merged;
+                  latestSurviving = merged;
+                  continue;
+                }
+                const claim = await claimSlackMessageDispatchReplay({
+                  guard: dispatchReplayGuard,
+                  key: replayKey,
+                  onWaiting: () => {
+                    entry.opts.turnAdoptionLifecycle?.onDispatchWaiting?.();
+                    // The logical owner already holds this message's ordering.
+                    // Let later input reach the active turn while its twin waits.
+                    admissionLifecycle.onDeferred();
+                  },
+                }).catch((error: unknown) => {
+                  releaseClaims(error);
+                  throw error;
+                });
+                if (claim.kind === "claimed") {
+                  claims.push(claim.handle);
+                  claimedKeys.set(replayKey, surviving.length);
+                  surviving.push(entry);
+                  latestSurviving = entry;
+                }
+              }
+              const commitClaims = async () => {
+                for (const handle of claims) {
+                  await handle.commit();
+                }
+              };
+              const last = latestSurviving;
+              if (!last) {
+                releaseClaims();
+                return;
+              }
+              const combinedText =
+                surviving.length === 1
+                  ? (last.message.text ?? "")
+                  : surviving
+                      .map((entry) => entry.message.text ?? "")
+                      .filter(Boolean)
+                      .join("\n");
+              const combinedMentioned = surviving.some((entry) => Boolean(entry.opts.wasMentioned));
+              const syntheticMessage: SlackMessageEvent = {
+                ...last.message,
+                text: combinedText,
+              };
+              const sourceMessageIds = surviving.flatMap((entry) =>
+                entry.message.ts ? [entry.message.ts] : [],
+              );
+              const {
+                dispatchCompletion: _completion,
+                awaitDispatch: _awaitDispatch,
+                turnAdoptionLifecycle,
+                ...lastOpts
+              } = last.opts;
+              let visibleDrop = false;
+              let settlementHandedOff = false;
+              try {
+                admissionLifecycle.abortSignal.throwIfAborted();
+                const { prepareSlackMessage, dispatchPreparedSlackMessage } =
+                  await loadSlackMessagePipeline();
+                admissionLifecycle.abortSignal.throwIfAborted();
+                const prepared = await prepareSlackMessage({
+                  ctx: runtimeContext,
+                  account: resolveSlackAccount({
+                    cfg: runtimeContext.cfg,
+                    accountId: ctx.accountId,
+                  }),
+                  message: syntheticMessage,
+                  opts: {
+                    ...lastOpts,
+                    senderAuthentication: surviving.every(
+                      (entry) => entry.opts.senderAuthentication === "verified",
+                    )
+                      ? "verified"
+                      : "asserted",
+                    wasMentioned: combinedMentioned || last.opts.wasMentioned,
+                    sourceMessageIds,
+                    abortSignal: admissionLifecycle.abortSignal,
+                    isRuntimePolicyCurrent: runtimeContext.isRuntimePolicyCurrent,
+                    onVisibleDrop: () => {
+                      visibleDrop = true;
+                    },
+                  },
+                });
+                if (!prepared) {
+                  if (visibleDrop) {
+                    // The gate already produced a sender-visible notice. Commit the
+                    // logical claim so a later message/app_mention twin cannot repeat it.
+                    await commitClaims();
+                    return;
                   }
-                };
-                const last = latestSurviving;
-                if (!last) {
+                  // Gated before dispatch: release so the surviving twin can run the
+                  // same gate; nothing visible was produced, so no duplicate risk.
                   releaseClaims();
                   return;
                 }
-                const combinedText =
-                  surviving.length === 1
-                    ? (last.message.text ?? "")
-                    : surviving
-                        .map((entry) => entry.message.text ?? "")
-                        .filter(Boolean)
-                        .join("\n");
-                const combinedMentioned = surviving.some((entry) =>
-                  Boolean(entry.opts.wasMentioned),
+                await turnAdoptionLifecycle?.onSessionRouted?.(prepared.route.sessionKey);
+                const deferredHeartbeatIntervals = [
+                  turnAdoptionLifecycle?.deferredHeartbeatIntervalMs,
+                  admissionLifecycle.deferredHeartbeatIntervalMs,
+                ].filter(
+                  (interval): interval is number =>
+                    interval !== undefined && Number.isFinite(interval) && interval > 0,
                 );
-                const syntheticMessage: SlackMessageEvent = {
-                  ...last.message,
-                  text: combinedText,
-                };
-                const { prepareSlackMessage, dispatchPreparedSlackMessage } =
-                  await loadSlackMessagePipeline();
-                const {
-                  dispatchCompletion: _completion,
-                  awaitDispatch: _awaitDispatch,
-                  turnAdoptionLifecycle,
-                  ...lastOpts
-                } = last.opts;
-                let prepared: Awaited<ReturnType<typeof prepareSlackMessage>>;
-                let visibleDrop = false;
-                let settlementHandedOff = false;
-                try {
-                  prepared = await prepareSlackMessage({
-                    ctx: runtimeContext,
-                    account: resolveSlackAccount({
-                      cfg: runtimeContext.cfg,
-                      accountId: ctx.accountId,
-                    }),
-                    message: syntheticMessage,
-                    opts: {
-                      ...lastOpts,
-                      wasMentioned: combinedMentioned || last.opts.wasMentioned,
-                      onVisibleDrop: () => {
-                        visibleDrop = true;
-                      },
-                    },
-                  });
-                  if (!prepared) {
-                    if (visibleDrop) {
-                      // The gate already produced a sender-visible notice. Commit the
-                      // logical claim so a later message/app_mention twin cannot repeat it.
-                      await commitClaims();
-                      return;
-                    }
-                    // Gated before dispatch: release so the surviving twin can run the
-                    // same gate; nothing visible was produced, so no duplicate risk.
-                    releaseClaims();
-                    return;
-                  }
-                  await turnAdoptionLifecycle?.onSessionRouted?.(prepared.route.sessionKey);
-                  // Commit at adoption (durable turn ownership), release on abandonment;
-                  // deferred turns hand settlement to the reply lane with the claim held.
-                  prepared.turnAdoptionLifecycle = {
-                    ...turnAdoptionLifecycle,
-                    admission: turnAdoptionLifecycle?.admission ?? "exclusive",
-                    abortSignal:
-                      turnAdoptionLifecycle?.abortSignal ?? admissionLifecycle.abortSignal,
-                    onAdopted: async () => {
-                      settlementHandedOff = true;
-                      await commitClaims();
-                      await turnAdoptionLifecycle?.onAdopted();
-                      await admissionLifecycle.onAdopted();
-                    },
-                    onDeferred: () => {
-                      turnAdoptionLifecycle?.onDeferred();
-                      const admissionAccepted = admissionLifecycle.onDeferred();
-                      if (admissionAccepted === false) {
-                        return false;
-                      }
-                      settlementHandedOff = true;
-                      return undefined;
-                    },
-                    onDeferredHeartbeat: () => {
-                      turnAdoptionLifecycle?.onDeferredHeartbeat?.();
-                      admissionLifecycle.onDeferredHeartbeat?.();
-                    },
-                    onAbandoned: () => {
-                      settlementHandedOff = true;
-                      releaseClaims();
-                      // Slack has no owner-local teardown gated on core claim release.
-                      void turnAdoptionLifecycle?.onAbandoned();
-                      void admissionLifecycle.onAbandoned();
-                    },
-                  };
-                  onPrepared?.(prepared);
-                  if (surviving.length > 1) {
-                    const ids = surviving
-                      .map((entry) => entry.message.ts)
-                      .filter(Boolean) as string[];
-                    if (ids.length > 0) {
-                      prepared.ctxPayload.MessageSids = ids;
-                      prepared.ctxPayload.MessageSidFirst = ids[0];
-                      prepared.ctxPayload.MessageSidLast = ids[ids.length - 1];
-                    }
-                  }
-                  await dispatchPreparedSlackMessage(prepared);
-                  if (!turnAdoptionLifecycle && !settlementHandedOff) {
+                // Commit at adoption (durable turn ownership), release on abandonment;
+                // deferred turns hand settlement to the reply lane with the claim held.
+                prepared.turnAdoptionLifecycle = {
+                  ...turnAdoptionLifecycle,
+                  admission: turnAdoptionLifecycle?.admission ?? "exclusive",
+                  abortSignal: turnAdoptionLifecycle?.abortSignal ?? admissionLifecycle.abortSignal,
+                  onAdopted: async () => {
+                    settlementHandedOff = true;
                     await commitClaims();
-                  } else if (!settlementHandedOff) {
-                    // Dispatch finished without adoption or deferral (skip/no-reply):
-                    // deliberate terminal handling, release for gate-idempotent twins.
+                    await turnAdoptionLifecycle?.onAdopted();
+                    await admissionLifecycle.onAdopted();
+                  },
+                  onDeferred: () => {
+                    turnAdoptionLifecycle?.onDeferred();
+                    const admissionAccepted = admissionLifecycle.onDeferred();
+                    if (admissionAccepted === false) {
+                      return false;
+                    }
+                    settlementHandedOff = true;
+                    return undefined;
+                  },
+                  onDeferredHeartbeat: () => {
+                    turnAdoptionLifecycle?.onDeferredHeartbeat?.();
+                    admissionLifecycle.onDeferredHeartbeat?.();
+                  },
+                  ...(deferredHeartbeatIntervals.length > 0
+                    ? { deferredHeartbeatIntervalMs: Math.min(...deferredHeartbeatIntervals) }
+                    : {}),
+                  onAbandoned: () => {
+                    settlementHandedOff = true;
                     releaseClaims();
-                  }
-                } catch (error) {
-                  releaseClaims(error);
-                  throw error;
+                    // Slack has no owner-local teardown gated on core claim release.
+                    void turnAdoptionLifecycle?.onAbandoned();
+                    void admissionLifecycle.onAbandoned();
+                  },
+                };
+                onPrepared?.(prepared);
+                if (surviving.length > 1 && sourceMessageIds.length > 0) {
+                  prepared.ctxPayload.MessageSids = sourceMessageIds;
+                  prepared.ctxPayload.MessageSidFirst = sourceMessageIds[0];
+                  prepared.ctxPayload.MessageSidLast = sourceMessageIds.at(-1);
                 }
-              })();
-              for (const completion of completions) {
-                completion.resolve();
-              }
-              break;
-            } catch (error) {
-              const runtimeContext = admittedContext;
-              if (
-                runtimeContext &&
-                retryAttempt < RETRYABLE_FLUSH_MAX_ATTEMPTS &&
-                isRetryableSlackInboundError(error) &&
-                !entries.some((entry) => entry.opts.eventScope || entry.opts.dispatchCompletion)
-              ) {
-                // Keep batch/config ownership while retrying; shutdown must cancel its backoff.
-                await sleepWithAbort(
-                  RETRYABLE_FLUSH_RETRY_DELAY_MS,
-                  admissionLifecycle.abortSignal,
-                );
-                if (error instanceof SlackMessageDispatchRetryError) {
-                  // A waiting twin released admission. Re-enter the keyed lane before
-                  // taking over, retaining its config and bounded retry budget.
-                  await Promise.all(
-                    entries.map((entry) =>
-                      debouncer.enqueue({
-                        ...entry,
-                        retry: { attempt: retryAttempt + 1, runtimeContext },
-                      }),
-                    ),
-                  );
-                  return;
+                await dispatchPreparedSlackMessage(prepared);
+                if (!turnAdoptionLifecycle && !settlementHandedOff) {
+                  await commitClaims();
+                } else if (!settlementHandedOff) {
+                  // Dispatch finished without adoption or deferral (skip/no-reply):
+                  // deliberate terminal handling, release for gate-idempotent twins.
+                  releaseClaims();
                 }
-                continue;
+              } catch (error) {
+                releaseClaims(error);
+                throw error;
               }
-              for (const completion of completions) {
-                completion.reject(error);
-              }
-              throw error;
+            })();
+            for (const completion of completions) {
+              completion.resolve();
             }
+          } catch (error) {
+            const runtimeContext = admittedContext;
+            if (
+              runtimeContext &&
+              (retry?.attempt ?? 0) < RETRYABLE_FLUSH_MAX_ATTEMPTS &&
+              error instanceof SlackMessageDispatchRetryError &&
+              !entries.some((entry) => entry.opts.eventScope || entry.opts.dispatchCompletion)
+            ) {
+              // The twin released its claim. Re-enter FIFO admission immediately;
+              // core already owns retries for session initialization failures.
+              await Promise.all(
+                entries.map((entry) =>
+                  debouncer.enqueue({
+                    ...entry,
+                    retry: { attempt: (retry?.attempt ?? 0) + 1, runtimeContext },
+                  }),
+                ),
+              );
+              return;
+            }
+            for (const completion of completions) {
+              completion.reject(error);
+            }
+            throw error;
           }
         },
       }),

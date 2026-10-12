@@ -13,7 +13,7 @@ writes it straight into the shared secret store. The value never appears in the
 chat, the session transcript, the tool result, or the model's context — the
 agent receives only entry metadata and its store SecretRef.
 
-The tool is available in primary agent sessions, not just the canonical main
+The tool is available in primary agent sessions, not just the main
 conversation. Subagent and ACP worker sessions do not receive it.
 
 It is enabled by default and governed by the normal tool policy — there is no
@@ -158,15 +158,30 @@ A stored entry is a regular shared-store entry (see
   values. The provider troubleshooting switch `OPENCLAW_SECRET_SENTINELS=off` does
   not disable protected-store sealing.
 
+Protected entries do not provide SSH or sudo passwords to subprocesses, including
+`sshpass` environment variables or `sudo -S` stdin. The egress proxy substitutes
+credentials in outbound HTTPS requests; an allowed SSH host does not enable SSH
+password authentication. `${secret:NAME}` is not an exec shell substitution syntax.
+Check that a supported consumer exists before requesting a credential.
+
+For an operator who explicitly wants a Gateway command to receive plaintext,
+[`openclaw secrets store set`](/cli/secrets) supports `--kind env` with masked
+input or `--value-file`. Such entries are agent-readable through `secrets list`
+and Gateway exec; they do not preserve the protected-secret non-disclosure promise.
+Use the inherited variable instead of copying its value into a command. Sandbox,
+node, and native harness shell execution do not receive store environment entries.
+
 Gateway-host exec captures one store snapshot on its first execution in a run.
 A credential stored before that point can be included. Afterward, additions,
 replacements, deletions, and host edits do not refresh that run's snapshot. Start
 a new run to observe them. A successful credential request does not promise that
 an already-running exec tool can use the new value.
 
-When the owning run closes, its proxy authorization and existing connections are
-revoked, including background subprocess tunnels. Bytes already handed to the
-upstream transport cannot be recalled.
+Each managed command receives its own proxy grant from that snapshot. Background
+commands retain access after the originating turn ends. Process exit, cancellation,
+timeout, or Gateway shutdown revokes the grant and closes its connections; other
+commands keep their own grants. Bytes already handed to the upstream transport
+cannot be recalled.
 
 ## Related
 

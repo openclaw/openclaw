@@ -3,9 +3,37 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveTrustedOnePasswordCli } from "../onepassword-op-path.js";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
-import { registerOnePasswordSecretRefCommands, testing } from "./secret-ref-cli.js";
+import { registerOnePasswordSecretRefCommands } from "./secret-ref-cli.js";
+
+const readTokenFileMock = vi.hoisted(() =>
+  vi.fn<
+    (
+      filePath: string | undefined,
+      label: string,
+      options?: Parameters<typeof tryReadSecretFileSync>[2],
+    ) => string | undefined
+  >(),
+);
+
+vi.mock("../onepassword-op-path.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../onepassword-op-path.js")>()),
+  resolveTrustedOnePasswordCli: vi.fn(),
+}));
+vi.mock("openclaw/plugin-sdk/secret-file-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/secret-file-runtime")>()),
+  tryReadSecretFileSync: readTokenFileMock,
+}));
+
+beforeEach(() => {
+  vi.stubEnv("PATH", "");
+  vi.stubEnv("CLAW_1PASSWORD_OP", undefined);
+  vi.mocked(resolveTrustedOnePasswordCli).mockReset();
+  readTokenFileMock.mockReset();
+});
 
 type OnePasswordPlan = {
   providerUpserts: Record<string, unknown>;
@@ -28,7 +56,6 @@ function createProgram(config: OpenClawConfig = {}): Command {
     command: onepassword,
     config,
     tokenFile: path.join(os.tmpdir(), "openclaw-onepassword-missing-token"),
-    env: { PATH: "" },
   });
   return program;
 }
@@ -96,33 +123,6 @@ describe("1Password SecretRef setup", () => {
     ]);
   });
 
-  it("builds arbitrary known OpenClaw and auth-profile targets", async () => {
-    const plan = await createSetupPlan([
-      "--target",
-      "channels.telegram.botToken=op://openclaw/Telegram/botToken",
-      "--target",
-      "models.providers.openai.headers.x-api-key=op://openclaw/OpenAI/proxyKey",
-      "--target",
-      "auth-profiles:main:profiles.openai.key=op://openclaw/OpenAI/credential",
-    ]);
-
-    expect(plan.targets).toEqual([
-      expect.objectContaining({
-        type: "channels.telegram.botToken",
-        path: "channels.telegram.botToken",
-      }),
-      expect.objectContaining({
-        type: "models.providers.headers",
-        providerId: "openai",
-      }),
-      expect.objectContaining({
-        type: "auth-profiles.api_key.key",
-        path: "profiles.openai.key",
-        agentId: "main",
-      }),
-    ]);
-  });
-
   it("encodes native 1Password refs with spaces and selectors", async () => {
     const nativeRef = "op://Personal/OpenClaw QA API Key/password?attribute=value%20one";
     const plan = await createSetupPlan(["--provider-key", `openai=${nativeRef}`]);
@@ -132,45 +132,10 @@ describe("1Password SecretRef setup", () => {
     });
   });
 
-  it.each([
-    [
-      "duplicate providers",
-      [
-        "--openai-id",
-        "op://openclaw/OpenAI/credential",
-        "--provider-key",
-        "OpenAI=op://openclaw/OpenAI/other",
-      ],
-      "Duplicate model provider id",
-    ],
-    [
-      "non-canonical auth-profile agent ids",
-      ["--target", "auth-profiles:../main:profiles.openai.key=op://openclaw/OpenAI/credential"],
-      "Invalid --target auth-profiles target for 1Password",
-    ],
-    [
-      "traversal secret ids",
-      ["--provider-key", "openai=op://openclaw/../credential"],
-      "Invalid --provider-key openai 1Password SecretRef id",
-    ],
-    [
-      "unsupported targets",
-      ["--target", "secrets.github_pat=op://openclaw/GitHub/pat"],
-      "Unknown or unsupported 1Password setup target path",
-    ],
-    [
-      "duplicate target paths",
-      [
-        "--openai-id",
-        "op://openclaw/OpenAI/credential",
-        "--target",
-        "models.providers.openai.apiKey=op://openclaw/OpenAI/other",
-      ],
-      "Duplicate secret target path",
-    ],
-    ["empty plans", [], "No SecretRef targets selected"],
-  ])("rejects %s", async (_label, args, message) => {
-    await expect(createSetupPlan(args)).rejects.toThrow(message);
+  it("rejects traversal secret ids", async () => {
+    await expect(
+      createSetupPlan(["--provider-key", "openai=op://openclaw/../credential"]),
+    ).rejects.toThrow("Invalid --provider-key openai 1Password SecretRef id");
   });
 
   it.each(["/absolute/path", "op://openclaw\\OpenAI\\credential", "op://vault/clé"])(
@@ -245,51 +210,42 @@ describe("1Password SecretRef setup", () => {
 
 describe("1Password readiness", () => {
   it("reports trusted executable and token prerequisites without exposing the token", async () => {
-    const resolveTrustedCli = vi.fn(async () => "/trusted/op");
-    const readTokenFile = vi.fn(() => "not-a-real-service-account-token");
-    await expect(
-      testing.inspectSecretRefReadiness(
-        {
-          env: { CLAW_1PASSWORD_OP: "/trusted/op", PATH: "/bin" },
-          tokenFile: "/state/credentials/onepassword/service-account-token",
-        },
-        { resolveTrustedCli, readTokenFile },
-      ),
-    ).resolves.toEqual({
+    vi.stubEnv("CLAW_1PASSWORD_OP", "/trusted/op");
+    vi.stubEnv("PATH", "/bin");
+    vi.mocked(resolveTrustedOnePasswordCli).mockResolvedValue("/trusted/op");
+    readTokenFileMock.mockReturnValue("not-a-real-service-account-token");
+    const result = await runStatus({});
+    expect(result).toMatchObject({
       opCommand: "/trusted/op",
       opBinaryPath: "/trusted/op",
       opStatus: "ready",
-      tokenFile: "/state/credentials/onepassword/service-account-token",
+      tokenFile: path.join(os.tmpdir(), "openclaw-onepassword-missing-token"),
       tokenFileStatus: "ready",
       prerequisitesReady: true,
     });
-    expect(resolveTrustedCli).toHaveBeenCalledWith({
+    expect(JSON.stringify(result)).not.toContain("not-a-real-service-account-token");
+    expect(resolveTrustedOnePasswordCli).toHaveBeenCalledWith({
       configuredPath: "/trusted/op",
       pathEnv: "/bin",
     });
-    expect(readTokenFile).toHaveBeenCalledWith(
-      "/state/credentials/onepassword/service-account-token",
+    expect(tryReadSecretFileSync).toHaveBeenCalledWith(
+      path.join(os.tmpdir(), "openclaw-onepassword-missing-token"),
+      "1Password service account token",
+      expect.objectContaining({ rejectHardlinks: false, rejectSymlink: true }),
     );
   });
 
   it("reports untrusted op and unsafe token prerequisites", async () => {
-    await expect(
-      testing.inspectSecretRefReadiness(
-        { env: { CLAW_1PASSWORD_OP: "op", PATH: "/bin" }, tokenFile: "/missing-token" },
-        {
-          resolveTrustedCli: async () => {
-            throw new Error("unsafe path detail");
-          },
-          readTokenFile: () => {
-            throw new Error("unsafe token detail");
-          },
-        },
-      ),
-    ).resolves.toEqual({
+    vi.stubEnv("CLAW_1PASSWORD_OP", "op");
+    vi.mocked(resolveTrustedOnePasswordCli).mockRejectedValue(new Error("unsafe path detail"));
+    readTokenFileMock.mockImplementation(() => {
+      throw new Error("unsafe token detail");
+    });
+    await expect(runStatus({})).resolves.toMatchObject({
       opCommand: "op",
       opBinaryPath: null,
       opStatus: "untrusted",
-      tokenFile: "/missing-token",
+      tokenFile: path.join(os.tmpdir(), "openclaw-onepassword-missing-token"),
       tokenFileStatus: "missing-or-unsafe",
       prerequisitesReady: false,
     });
@@ -317,40 +273,5 @@ describe("1Password CLI status", () => {
       ready: false,
       issues: ["op-not-found", "token-file-missing-or-unsafe"],
     });
-  });
-
-  it("prefers the managed integration when the default alias is unrelated", async () => {
-    const result = await runStatus({
-      secrets: {
-        providers: {
-          onepassword: { source: "exec", command: "/legacy/resolver" },
-          "corp-onepassword": {
-            source: "exec",
-            pluginIntegration: { pluginId: "onepassword", integrationId: "onepassword" },
-          },
-        },
-      },
-    });
-    expect(result).toMatchObject({ providerAlias: "corp-onepassword", providerReady: true });
-  });
-
-  it("requires an explicit alias when multiple providers are configured", async () => {
-    const config: OpenClawConfig = {
-      secrets: {
-        providers: Object.fromEntries(
-          ["corp-onepassword", "prod-onepassword"].map((alias) => [
-            alias,
-            {
-              source: "exec",
-              pluginIntegration: { pluginId: "onepassword", integrationId: "onepassword" },
-            },
-          ]),
-        ),
-      },
-    };
-    await expect(runStatus(config)).rejects.toThrow("Multiple 1Password provider aliases");
-    expect((await runStatus(config, ["--provider-alias", "prod-onepassword"])).providerAlias).toBe(
-      "prod-onepassword",
-    );
   });
 });

@@ -1,8 +1,57 @@
 import { describe, expect, it } from "vitest";
-import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
-import { listTrustedExternalProviderPolicyOwners } from "./provider-public-artifacts.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import {
+  createPluginCache,
+  invalidatePluginCacheMetadata,
+  withPluginCache,
+} from "./plugin-cache.js";
+import {
+  finalizePluginMetadataSnapshot,
+  projectPluginMetadataSnapshot,
+  restorePluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "./plugin-metadata.test-support.js";
+import {
+  listProviderPolicyOwners,
+  listTrustedExternalProviderPolicyOwners,
+  resolveBundledProviderPolicyOwner,
+} from "./provider-policy-owners.js";
 
-describe("provider policy declaration ownership", () => {
+const registryModes = ["mutable", "snapshot", "manifest", "projected", "restored"] as const;
+
+function withRegistry(
+  plugins: PluginManifestRecord[],
+  mode: (typeof registryModes)[number],
+  run: (registry: { plugins: readonly PluginManifestRecord[] }) => void,
+): void {
+  withPluginCache(createPluginCache(), () => {
+    if (mode === "mutable") {
+      run({ plugins });
+      return;
+    }
+    const snapshot = finalizePluginMetadataSnapshot(
+      createPluginMetadataSnapshotFixture({ plugins }),
+    );
+    if (mode === "restored") {
+      const { normalizePluginId: _normalizePluginId, ...transfer } = snapshot;
+      run(restorePluginMetadataSnapshot(structuredClone(transfer)));
+    } else if (mode === "projected") {
+      run(
+        projectPluginMetadataSnapshot(
+          snapshot,
+          plugins.map((plugin) => plugin.id),
+        ),
+      );
+    } else {
+      run(mode === "manifest" ? snapshot.manifestRegistry : snapshot);
+    }
+  });
+}
+
+describe.each(registryModes)("provider policy declaration ownership (%s)", (mode) => {
   it.each([
     [" FIXTURE-TEXT ", true],
     [" fixture-cli ", true],
@@ -43,9 +92,11 @@ describe("provider policy declaration ownership", () => {
       enumerable: false,
     });
 
-    expect(listTrustedExternalProviderPolicyOwners(query, { plugins: [owner] })).toEqual(
-      matches ? [owner] : [],
-    );
+    withRegistry([owner], mode, (registry) => {
+      expect(listTrustedExternalProviderPolicyOwners(query, registry)).toEqual(
+        matches ? [owner] : [],
+      );
+    });
   });
 
   it("does not treat empty declarations as policy ownership", () => {
@@ -57,9 +108,11 @@ describe("provider policy declaration ownership", () => {
       contracts: { embeddingProviders: [""] },
       providerAuthAliases: { empty: " " },
     });
-    for (const query of ["", " ", "empty"]) {
-      expect(listTrustedExternalProviderPolicyOwners(query, { plugins: [owner] })).toEqual([]);
-    }
+    withRegistry([owner], mode, (registry) => {
+      for (const query of ["", " ", "empty"]) {
+        expect(listTrustedExternalProviderPolicyOwners(query, registry)).toEqual([]);
+      }
+    });
   });
 
   it("orders trusted external matches stably without reordering the registry", () => {
@@ -77,11 +130,111 @@ describe("provider policy declaration ownership", () => {
     const untrusted = owner("0-owner", "/fixture/untrusted", false);
     const plugins = [last, first, untrusted, equal];
 
-    expect(listTrustedExternalProviderPolicyOwners("fixture-provider", { plugins })).toEqual([
-      first,
-      equal,
-      last,
-    ]);
-    expect(plugins).toEqual([last, first, untrusted, equal]);
+    withRegistry(plugins, mode, (registry) => {
+      const owners = listTrustedExternalProviderPolicyOwners("fixture-provider", registry);
+      expect(owners).toEqual([first, equal, last]);
+      owners.reverse();
+      owners.pop();
+      expect(listTrustedExternalProviderPolicyOwners("fixture-provider", registry)).toEqual([
+        first,
+        equal,
+        last,
+      ]);
+      expect(registry.plugins).toEqual([last, first, untrusted, equal]);
+    });
+  });
+
+  it("keeps bundled first-winner precedence separate from trusted installed ownership", () => {
+    const owner = (id: string, rootDir: string, origin: PluginManifestRecord["origin"]) =>
+      createPluginManifestRecordFixture({
+        id,
+        rootDir,
+        origin,
+        providers: ["fixture-provider"],
+        providerAuthAliases: { "fixture-alias": "fixture-provider" },
+        trustedOfficialInstall: origin === "global",
+      });
+    const installed = owner("0-installed", "/fixture/installed", "global");
+    const last = owner("z-bundled", "/fixture/last", "bundled");
+    const first = owner("a-bundled", "/fixture/first", "bundled");
+    const equal = owner("a-bundled", "/fixture/equal", "bundled");
+    withRegistry([installed, last, first, equal], mode, (registry) => {
+      expect(resolveBundledProviderPolicyOwner("fixture-alias", registry)).toEqual(first);
+      expect(listTrustedExternalProviderPolicyOwners("fixture-alias", registry)).toEqual([
+        installed,
+      ]);
+      expect(listProviderPolicyOwners("fixture-alias", registry)).toEqual([first, installed]);
+    });
+  });
+
+  it("lists a bundled owner with installation trust once", () => {
+    const owner = createPluginManifestRecordFixture({
+      id: "fixture",
+      providers: ["fixture"],
+      trustedOfficialInstall: true,
+    });
+    withRegistry([owner], mode, (registry) => {
+      expect(listProviderPolicyOwners("fixture", registry)).toEqual([owner]);
+    });
+  });
+});
+
+describe("provider policy inventory lifetime", () => {
+  it.each([false, true])("observes mutable registry edits (rebased: %s)", (rebased) => {
+    withPluginCache(createPluginCache(), () => {
+      const owner = createPluginManifestRecordFixture({
+        id: "mutable-owner",
+        origin: "global",
+        providers: ["before"],
+        providerAuthAliases: { alias: "before" },
+        trustedOfficialInstall: true,
+      });
+      const registry = rebased
+        ? createPluginMetadataSnapshotFixture({ plugins: [owner] })
+        : { plugins: [owner] };
+      const mutableOwner = registry.plugins[0]!;
+      expect(listTrustedExternalProviderPolicyOwners("alias", registry)).toEqual([mutableOwner]);
+      mutableOwner.providers = ["after"];
+      expect(listTrustedExternalProviderPolicyOwners("alias", registry)).toEqual([]);
+      expect(listTrustedExternalProviderPolicyOwners("after", registry)).toEqual([mutableOwner]);
+      mutableOwner.trustedOfficialInstall = false;
+      expect(listTrustedExternalProviderPolicyOwners("after", registry)).toEqual([]);
+    });
+  });
+
+  it("retains each narrowed generation through replacement and operation invalidation", () => {
+    const cache = createPluginCache();
+    withPluginCache(cache, () => {
+      const owner = (id: string) => ({
+        id,
+        origin: "global" as const,
+        providers: ["fixture-provider"],
+        trustedOfficialInstall: true,
+      });
+      const before = finalizePluginMetadataSnapshot(
+        createPluginMetadataSnapshotFixture({ plugins: [owner("before")] }),
+      );
+      const empty = projectPluginMetadataSnapshot(before, []);
+      for (const registry of [empty, empty.manifestRegistry]) {
+        expect(listTrustedExternalProviderPolicyOwners("fixture-provider", registry)).toEqual([]);
+      }
+      invalidatePluginCacheMetadata(cache);
+      const after = finalizePluginMetadataSnapshot(
+        createPluginMetadataSnapshotFixture({ plugins: [owner("after")] }),
+      );
+      for (const registry of [before, before.manifestRegistry]) {
+        expect(listTrustedExternalProviderPolicyOwners("fixture-provider", registry)).toEqual([
+          before.plugins[0],
+        ]);
+      }
+      for (const registry of [empty, empty.manifestRegistry]) {
+        expect(listTrustedExternalProviderPolicyOwners("fixture-provider", registry)).toEqual([]);
+      }
+      for (const registry of [after, after.manifestRegistry]) {
+        expect(listTrustedExternalProviderPolicyOwners("fixture-provider", registry)).toEqual([
+          after.plugins[0],
+        ]);
+      }
+    });
   });
 });

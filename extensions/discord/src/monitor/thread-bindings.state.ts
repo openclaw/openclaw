@@ -1,6 +1,12 @@
-// Discord plugin module implements thread bindings.state behavior.
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import {
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/outbound-echo-runtime";
+import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -9,7 +15,6 @@ import {
 import { resolveThreadBindingExpiry } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import type {
-  PersistedThreadBindingRecord,
   ThreadBindingManager,
   ThreadBindingRecord,
   ThreadBindingTargetKind,
@@ -23,47 +28,42 @@ type ThreadBindingsGlobalState = {
   reusableWebhooksByAccountChannel: Map<string, { webhookId: string; webhookToken: string }>;
   persistByAccountId: Map<string, boolean>;
   loadedBindings: boolean;
+  loadingBindings?: Promise<void>;
   loadedPersistentBindings: boolean;
   persistenceAvailable: boolean;
   lastPersistedAtMs: number;
+  mutationTail: Promise<void>;
+  accountOperationTails: WeakMap<ThreadBindingManager, Promise<void>>;
 };
 
 // Plugin hooks can load this module through a separate runtime path while core
 // imports it via ESM. Store mutable state on globalThis so both paths share one
 // registry.
 const THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.discordThreadBindingsState");
-let threadBindingsState: ThreadBindingsGlobalState | undefined;
 
 function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
   return {
-    managersByAccountId: new Map<string, ThreadBindingManager>(),
-    bindingsByThreadId: new Map<string, ThreadBindingRecord>(),
-    bindingsBySessionKey: new Map<string, Set<string>>(),
-    tokensByAccountId: new Map<string, string>(),
-    reusableWebhooksByAccountChannel: new Map<
-      string,
-      { webhookId: string; webhookToken: string }
-    >(),
-    persistByAccountId: new Map<string, boolean>(),
+    managersByAccountId: new Map(),
+    bindingsByThreadId: new Map(),
+    bindingsBySessionKey: new Map(),
+    tokensByAccountId: new Map(),
+    reusableWebhooksByAccountChannel: new Map(),
+    persistByAccountId: new Map(),
     loadedBindings: false,
     loadedPersistentBindings: false,
     persistenceAvailable: true,
     lastPersistedAtMs: 0,
+    mutationTail: Promise.resolve(),
+    accountOperationTails: new WeakMap(),
   };
 }
 
-function resolveThreadBindingsGlobalState(): ThreadBindingsGlobalState {
-  if (!threadBindingsState) {
-    const globalStore = globalThis as Record<PropertyKey, unknown>;
-    threadBindingsState =
-      (globalStore[THREAD_BINDINGS_STATE_KEY] as ThreadBindingsGlobalState | undefined) ??
-      createThreadBindingsGlobalState();
-    globalStore[THREAD_BINDINGS_STATE_KEY] = threadBindingsState;
-  }
-  return threadBindingsState;
-}
-
-const THREAD_BINDINGS_STATE = resolveThreadBindingsGlobalState();
+export const THREAD_BINDINGS_STATE = resolveGlobalSingleton(
+  THREAD_BINDINGS_STATE_KEY,
+  createThreadBindingsGlobalState,
+);
+// Source-plugin reloads retain the previous generation's shared registry.
+THREAD_BINDINGS_STATE.accountOperationTails ??= new WeakMap();
 
 export const MANAGERS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.managersByAccountId;
 export const BINDINGS_BY_THREAD_ID = THREAD_BINDINGS_STATE.bindingsByThreadId;
@@ -73,8 +73,8 @@ export const REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL =
   THREAD_BINDINGS_STATE.reusableWebhooksByAccountChannel;
 export const PERSIST_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.persistByAccountId;
 export const THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS = 15_000;
-export const THREAD_BINDINGS_NAMESPACE = "thread-bindings";
-export const THREAD_BINDINGS_MAX_ENTRIES = 10_000;
+const THREAD_BINDINGS_NAMESPACE = "thread-bindings";
+const THREAD_BINDINGS_MAX_ENTRIES = 10_000;
 
 export function rememberThreadBindingToken(params: { accountId?: string; token?: string }) {
   const normalizedAccountId = normalizeAccountId(params.accountId);
@@ -97,8 +97,15 @@ export function shouldDefaultPersist(): boolean {
   return !(process.env.VITEST || process.env.NODE_ENV === "test");
 }
 
-function openThreadBindingsStore() {
-  return getDiscordRuntime().state.openSyncKeyedStore<PersistedThreadBindingRecord>({
+export function openThreadBindingsStore() {
+  return getDiscordRuntime().state.openSyncKeyedStore<ThreadBindingRecord>({
+    namespace: THREAD_BINDINGS_NAMESPACE,
+    maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
+  });
+}
+
+export function openThreadBindingsStoreAsync() {
+  return getDiscordRuntime().state.openKeyedStore<ThreadBindingRecord>({
     namespace: THREAD_BINDINGS_NAMESPACE,
     maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
   });
@@ -114,11 +121,7 @@ export function normalizeTargetKind(
   return targetSessionKey.includes(":subagent:") ? "subagent" : "acp";
 }
 
-export function normalizeThreadId(raw: unknown): string | undefined {
-  return normalizeOptionalStringifiedId(raw);
-}
-
-export function toBindingRecordKey(params: { accountId: string; threadId: string }): string {
+export function toBindingRecordKey(params: { accountId?: string; threadId: string }): string {
   return `${normalizeAccountId(params.accountId)}:${params.threadId.trim()}`;
 }
 
@@ -126,14 +129,11 @@ export function resolveBindingRecordKey(params: {
   accountId?: string;
   threadId: string;
 }): string | undefined {
-  const threadId = normalizeThreadId(params.threadId);
+  const threadId = normalizeOptionalStringifiedId(params.threadId);
   if (!threadId) {
     return undefined;
   }
-  return toBindingRecordKey({
-    accountId: normalizeAccountId(params.accountId),
-    threadId,
-  });
+  return toBindingRecordKey({ accountId: params.accountId, threadId });
 }
 
 export function normalizePersistedBinding(
@@ -143,8 +143,8 @@ export function normalizePersistedBinding(
   if (!raw || typeof raw !== "object") {
     return null;
   }
-  const value = raw as Partial<PersistedThreadBindingRecord>;
-  const threadId = normalizeThreadId(value.threadId ?? threadIdKey);
+  const value = raw as Partial<ThreadBindingRecord>;
+  const threadId = normalizeOptionalStringifiedId(value.threadId ?? threadIdKey);
   const channelId = normalizeOptionalString(value.channelId) ?? "";
   const targetSessionKey = normalizeOptionalString(value.targetSessionKey) ?? "";
   if (!threadId || !channelId || !targetSessionKey) {
@@ -158,26 +158,14 @@ export function normalizePersistedBinding(
   const webhookId = normalizeOptionalString(value.webhookId);
   const webhookToken = normalizeOptionalString(value.webhookToken);
   const boundBy = normalizeOptionalString(value.boundBy) ?? "system";
-  const boundAt =
-    typeof value.boundAt === "number" && Number.isFinite(value.boundAt)
-      ? Math.floor(value.boundAt)
-      : Date.now();
-  const lastActivityAt =
-    typeof value.lastActivityAt === "number" && Number.isFinite(value.lastActivityAt)
-      ? Math.max(0, Math.floor(value.lastActivityAt))
-      : boundAt;
-  const idleTimeoutMs =
-    typeof value.idleTimeoutMs === "number" && Number.isFinite(value.idleTimeoutMs)
-      ? Math.max(0, Math.floor(value.idleTimeoutMs))
-      : undefined;
-  const maxAgeMs =
-    typeof value.maxAgeMs === "number" && Number.isFinite(value.maxAgeMs)
-      ? Math.max(0, Math.floor(value.maxAgeMs))
-      : undefined;
+  const boundAt = resolveOptionalIntegerOption(value.boundAt) ?? Date.now();
+  const lastActivityAt = resolveOptionalIntegerOption(value.lastActivityAt, { min: 0 }) ?? boundAt;
+  const idleTimeoutMs = resolveOptionalIntegerOption(value.idleTimeoutMs, { min: 0 });
+  const maxAgeMs = resolveOptionalIntegerOption(value.maxAgeMs, { min: 0 });
   const metadata =
     value.metadata && typeof value.metadata === "object" ? { ...value.metadata } : undefined;
 
-  const record: ThreadBindingRecord = {
+  return {
     accountId,
     channelId,
     threadId,
@@ -187,59 +175,32 @@ export function normalizePersistedBinding(
     boundBy,
     boundAt,
     lastActivityAt,
+    ...(label !== undefined ? { label } : {}),
+    ...(webhookId !== undefined ? { webhookId } : {}),
+    ...(webhookToken !== undefined ? { webhookToken } : {}),
+    ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
+    ...(maxAgeMs !== undefined ? { maxAgeMs } : {}),
+    ...(metadata !== undefined ? { metadata } : {}),
   };
-  if (label !== undefined) {
-    record.label = label;
-  }
-  if (webhookId !== undefined) {
-    record.webhookId = webhookId;
-  }
-  if (webhookToken !== undefined) {
-    record.webhookToken = webhookToken;
-  }
-  if (idleTimeoutMs !== undefined) {
-    record.idleTimeoutMs = idleTimeoutMs;
-  }
-  if (maxAgeMs !== undefined) {
-    record.maxAgeMs = maxAgeMs;
-  }
-  if (metadata !== undefined) {
-    record.metadata = metadata;
-  }
-  return record;
 }
 
 export function normalizeThreadBindingDurationMs(raw: unknown, defaultsTo: number): number {
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return defaultsTo;
-  }
-  const durationMs = Math.floor(raw);
-  if (durationMs < 0) {
-    return defaultsTo;
-  }
-  return durationMs;
+  const durationMs = resolveOptionalIntegerOption(raw);
+  return durationMs !== undefined && durationMs >= 0 ? durationMs : defaultsTo;
 }
 
 export function resolveThreadBindingIdleTimeoutMs(params: {
   record: Pick<ThreadBindingRecord, "idleTimeoutMs">;
   defaultIdleTimeoutMs: number;
 }): number {
-  const explicit = params.record.idleTimeoutMs;
-  if (typeof explicit === "number" && Number.isFinite(explicit)) {
-    return Math.max(0, Math.floor(explicit));
-  }
-  return Math.max(0, Math.floor(params.defaultIdleTimeoutMs));
+  return resolveNonNegativeIntegerOption(params.record.idleTimeoutMs, params.defaultIdleTimeoutMs);
 }
 
 export function resolveThreadBindingMaxAgeMs(params: {
   record: Pick<ThreadBindingRecord, "maxAgeMs">;
   defaultMaxAgeMs: number;
 }): number {
-  const explicit = params.record.maxAgeMs;
-  if (typeof explicit === "number" && Number.isFinite(explicit)) {
-    return Math.max(0, Math.floor(explicit));
-  }
-  return Math.max(0, Math.floor(params.defaultMaxAgeMs));
+  return resolveNonNegativeIntegerOption(params.record.maxAgeMs, params.defaultMaxAgeMs);
 }
 
 function resolveTimestampExpiry(timestamp: number, durationMs: number): number | undefined {
@@ -277,10 +238,7 @@ export function resolveThreadBindingInactivityExpiresAt(params: {
   record: Pick<ThreadBindingRecord, "lastActivityAt" | "idleTimeoutMs">;
   defaultIdleTimeoutMs: number;
 }): number | undefined {
-  const idleTimeoutMs = resolveThreadBindingIdleTimeoutMs({
-    record: params.record,
-    defaultIdleTimeoutMs: params.defaultIdleTimeoutMs,
-  });
+  const idleTimeoutMs = resolveThreadBindingIdleTimeoutMs(params);
   return resolveTimestampExpiry(params.record.lastActivityAt, idleTimeoutMs);
 }
 
@@ -288,10 +246,7 @@ export function resolveThreadBindingMaxAgeExpiresAt(params: {
   record: Pick<ThreadBindingRecord, "boundAt" | "maxAgeMs">;
   defaultMaxAgeMs: number;
 }): number | undefined {
-  const maxAgeMs = resolveThreadBindingMaxAgeMs({
-    record: params.record,
-    defaultMaxAgeMs: params.defaultMaxAgeMs,
-  });
+  const maxAgeMs = resolveThreadBindingMaxAgeMs(params);
   return resolveTimestampExpiry(params.record.boundAt, maxAgeMs);
 }
 
@@ -330,10 +285,7 @@ export function rememberReusableWebhook(record: ThreadBindingRecord) {
   if (!webhookId || !webhookToken) {
     return;
   }
-  const key = toReusableWebhookKey({
-    accountId: record.accountId,
-    channelId: record.channelId,
-  });
+  const key = toReusableWebhookKey(record);
   REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.set(key, { webhookId, webhookToken });
 }
 
@@ -353,10 +305,7 @@ export function refreshUnboundThreadWebhookIdentity(record: ThreadBindingRecord)
 }
 
 export function setBindingRecord(record: ThreadBindingRecord) {
-  const bindingKey = toBindingRecordKey({
-    accountId: record.accountId,
-    threadId: record.threadId,
-  });
+  const bindingKey = toBindingRecordKey(record);
   const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
   if (existing) {
     unlinkSessionBinding(existing.targetSessionKey, bindingKey);
@@ -380,69 +329,22 @@ export function removeBindingRecord(bindingKeyRaw: string): ThreadBindingRecord 
   return existing;
 }
 
-function shouldPersistAnyBindingState(): boolean {
-  for (const value of PERSIST_BY_ACCOUNT_ID.values()) {
-    if (value) {
-      return true;
-    }
-  }
-  return false;
+function beginBindingsLoad() {
+  THREAD_BINDINGS_STATE.loadedBindings = true;
+  BINDINGS_BY_THREAD_ID.clear();
+  BINDINGS_BY_SESSION_KEY.clear();
+  REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
+  THREAD_BINDINGS_STATE.loadedPersistentBindings = false;
 }
 
-export function shouldPersistBindingMutations(): boolean {
-  if (!THREAD_BINDINGS_STATE.persistenceAvailable) {
-    return false;
-  }
-  if (shouldPersistAnyBindingState()) {
-    return true;
-  }
-  return THREAD_BINDINGS_STATE.loadedPersistentBindings;
-}
-
-function toPersistedBindingRecord(record: ThreadBindingRecord): PersistedThreadBindingRecord {
-  const serialized = JSON.stringify(record);
-  if (!serialized) {
-    return { ...record };
-  }
-  return normalizePersistedBinding(record.threadId, JSON.parse(serialized)) ?? { ...record };
-}
-
-export function saveBindingsToDisk(params: { force?: boolean; minIntervalMs?: number } = {}) {
-  if (!params.force && !shouldPersistAnyBindingState()) {
-    return;
-  }
-  if (!THREAD_BINDINGS_STATE.persistenceAvailable) {
-    return;
-  }
-  const minIntervalMs =
-    typeof params.minIntervalMs === "number" && Number.isFinite(params.minIntervalMs)
-      ? Math.max(0, Math.floor(params.minIntervalMs))
-      : 0;
-  const now = Date.now();
-  if (
-    !params.force &&
-    minIntervalMs > 0 &&
-    THREAD_BINDINGS_STATE.lastPersistedAtMs > 0 &&
-    now - THREAD_BINDINGS_STATE.lastPersistedAtMs < minIntervalMs
-  ) {
-    return;
-  }
-  try {
-    const store = openThreadBindingsStore();
-    const persistedKeys = new Set<string>();
-    for (const [bindingKey, record] of BINDINGS_BY_THREAD_ID.entries()) {
-      store.register(bindingKey, toPersistedBindingRecord(record));
-      persistedKeys.add(bindingKey);
+function restoreBindings(entries: PluginStateEntry<ThreadBindingRecord>[]) {
+  THREAD_BINDINGS_STATE.persistenceAvailable = true;
+  THREAD_BINDINGS_STATE.loadedPersistentBindings = entries.length > 0;
+  for (const entry of entries) {
+    const normalized = normalizePersistedBinding(entry.key, entry.value);
+    if (normalized) {
+      setBindingRecord(normalized);
     }
-    for (const entry of store.entries()) {
-      if (!persistedKeys.has(entry.key)) {
-        store.delete(entry.key);
-      }
-    }
-    THREAD_BINDINGS_STATE.loadedPersistentBindings = persistedKeys.size > 0;
-    THREAD_BINDINGS_STATE.lastPersistedAtMs = now;
-  } catch {
-    THREAD_BINDINGS_STATE.persistenceAvailable = false;
   }
 }
 
@@ -450,31 +352,48 @@ export function ensureBindingsLoaded() {
   if (THREAD_BINDINGS_STATE.loadedBindings) {
     return;
   }
-  THREAD_BINDINGS_STATE.loadedBindings = true;
-  BINDINGS_BY_THREAD_ID.clear();
-  BINDINGS_BY_SESSION_KEY.clear();
-  REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
-  THREAD_BINDINGS_STATE.loadedPersistentBindings = false;
-
-  const entries = (() => {
-    try {
-      return openThreadBindingsStore().entries();
-    } catch {
-      THREAD_BINDINGS_STATE.persistenceAvailable = false;
-      return null;
-    }
-  })();
-  if (!entries) {
+  beginBindingsLoad();
+  let entries: PluginStateEntry<ThreadBindingRecord>[];
+  try {
+    entries = openThreadBindingsStore().entries();
+  } catch {
+    THREAD_BINDINGS_STATE.persistenceAvailable = false;
     return;
   }
-  THREAD_BINDINGS_STATE.persistenceAvailable = true;
-  THREAD_BINDINGS_STATE.loadedPersistentBindings = entries.length > 0;
-  for (const entry of entries) {
-    const normalized = normalizePersistedBinding(entry.key, entry.value);
-    if (!normalized) {
-      continue;
+  restoreBindings(entries);
+}
+
+async function loadBindingsAsync() {
+  let entries: PluginStateEntry<ThreadBindingRecord>[];
+  try {
+    entries = await openThreadBindingsStoreAsync().entries();
+  } catch {
+    if (!THREAD_BINDINGS_STATE.loadedBindings) {
+      beginBindingsLoad();
+      THREAD_BINDINGS_STATE.persistenceAvailable = false;
+      logVerbose("discord thread binding persistence unavailable; keeping bindings in memory");
     }
-    setBindingRecord(normalized);
+    return;
+  }
+  // A synchronous compatibility caller can initialize and mutate the registry while we wait.
+  if (THREAD_BINDINGS_STATE.loadedBindings) {
+    return;
+  }
+  beginBindingsLoad();
+  restoreBindings(entries);
+}
+
+export async function ensureBindingsLoadedAsync(): Promise<void> {
+  if (THREAD_BINDINGS_STATE.loadedBindings) {
+    return;
+  }
+  const loading = (THREAD_BINDINGS_STATE.loadingBindings ??= loadBindingsAsync());
+  try {
+    await loading;
+  } finally {
+    if (THREAD_BINDINGS_STATE.loadingBindings === loading) {
+      delete THREAD_BINDINGS_STATE.loadingBindings;
+    }
   }
 }
 
@@ -483,27 +402,16 @@ export function resolveBindingIdsForSession(params: {
   accountId?: string;
   targetKind?: ThreadBindingTargetKind;
 }): string[] {
-  const key = params.targetSessionKey.trim();
-  if (!key) {
-    return [];
-  }
-  const ids = BINDINGS_BY_SESSION_KEY.get(key);
-  if (!ids) {
-    return [];
-  }
   const out: string[] = [];
-  for (const bindingKey of ids.values()) {
+  for (const bindingKey of BINDINGS_BY_SESSION_KEY.get(params.targetSessionKey.trim()) ?? []) {
     const record = BINDINGS_BY_THREAD_ID.get(bindingKey);
-    if (!record) {
-      continue;
+    if (
+      record &&
+      (!params.accountId || record.accountId === params.accountId) &&
+      (!params.targetKind || record.targetKind === params.targetKind)
+    ) {
+      out.push(bindingKey);
     }
-    if (params.accountId && record.accountId !== params.accountId) {
-      continue;
-    }
-    if (params.targetKind && record.targetKind !== params.targetKind) {
-      continue;
-    }
-    out.push(bindingKey);
   }
   return out;
 }

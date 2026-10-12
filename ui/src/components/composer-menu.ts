@@ -1,5 +1,4 @@
-import { html, nothing } from "lit";
-import { scrollState } from "./scroll-state.ts";
+import { revealInScrollRegion } from "./scroll-state.ts";
 
 export function handleComposerMenuKeydown(
   event: KeyboardEvent,
@@ -18,14 +17,18 @@ export function handleComposerMenuKeydown(
     return true;
   }
   if (
-    !["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(event.key) ||
+    !["ArrowDown", "ArrowUp", "Home", "End", "Enter", "Tab"].includes(event.key) ||
+    (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) &&
+      (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey)) ||
     (menu.count === 0 && !menu.consumeEmpty)
   ) {
     return false;
   }
   event.preventDefault();
   if (menu.count > 0) {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if (event.key === "Home" || event.key === "End") {
+      scrollActiveOptionIntoView(menu.move(event.key === "Home" ? 0 : menu.count - 1));
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       const offset = event.key === "ArrowDown" ? 1 : menu.count - 1;
       scrollActiveOptionIntoView(menu.move((menu.index + offset) % menu.count));
     } else if (event.key === "Enter" || event.key === "Tab") {
@@ -35,55 +38,6 @@ export function handleComposerMenuKeydown(
   return true;
 }
 
-export function renderComposerMenu(options: {
-  id: string;
-  label: string;
-  className?: string;
-  trackScroll?: boolean;
-  content: unknown;
-}) {
-  return html`<div
-    id=${options.id}
-    class="slash-menu ${options.className ?? ""}"
-    role="listbox"
-    aria-label=${options.label}
-  >
-    <div class="slash-menu__scroll" ${scrollState(false, options.trackScroll)}>
-      ${options.content}
-    </div>
-  </div>`;
-}
-
-export function renderComposerMenuOption(options: {
-  id: string;
-  active: boolean;
-  select: () => void;
-  hover: () => void;
-  preserveFocus?: boolean;
-  icon: unknown;
-  iconHidden?: boolean;
-  name: unknown;
-  description: unknown;
-}) {
-  return html`<div
-    id=${options.id}
-    class="slash-menu-item ${options.active ? "slash-menu-item--active" : ""}"
-    role="option"
-    aria-selected=${options.active}
-    @mousedown=${options.preserveFocus === false ? nothing : (event: MouseEvent) => event.preventDefault()}
-    @click=${options.select}
-    @mouseenter=${options.hover}
-  >
-    <span class="slash-menu-icon" aria-hidden=${options.iconHidden ? "true" : nothing}
-      >${options.icon}</span
-    >
-    <span class="slash-menu-copy">
-      <span class="slash-menu-name">${options.name}</span>
-      <span class="slash-menu-desc">${options.description}</span>
-    </span>
-  </div>`;
-}
-
 function scrollActiveOptionIntoView(activeId: string | null): void {
   if (!activeId) {
     return;
@@ -91,16 +45,8 @@ function scrollActiveOptionIntoView(activeId: string | null): void {
   requestAnimationFrame(() => {
     const activeOption = document.getElementById(activeId);
     const scrollRegion = activeOption?.closest<HTMLElement>(".slash-menu__scroll");
-    if (!activeOption || !scrollRegion) {
-      return;
-    }
-    const menuBounds = scrollRegion.getBoundingClientRect();
-    const optionBounds = activeOption.getBoundingClientRect();
-    // scrollIntoView also moves the short-landscape composer and page.
-    if (optionBounds.top < menuBounds.top) {
-      scrollRegion.scrollTop -= menuBounds.top - optionBounds.top;
-    } else if (optionBounds.bottom > menuBounds.bottom) {
-      scrollRegion.scrollTop += optionBounds.bottom - menuBounds.bottom;
+    if (activeOption && scrollRegion) {
+      revealInScrollRegion(scrollRegion, activeOption);
     }
   });
 }

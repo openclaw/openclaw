@@ -1,102 +1,116 @@
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
+import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
-  runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
-} from "../../state/openclaw-agent-db.js";
+  isIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
+import { resolveStateDir } from "../state-dir.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-
-type SessionMemberDatabase = Pick<OpenClawAgentKyselyDatabase, "session_members">;
-
-type SessionMember = {
-  identityId: string;
-  addedBy: string;
-  addedAt: number;
-};
-
-const SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE = 400;
-
-function resolveDatabaseOptions(scope: SessionAccessScope): OpenClawAgentDatabaseOptions {
-  return toDatabaseOptions(resolveSqliteScope(scope));
-}
-
-function getSessionMemberKysely(database: Pick<OpenClawAgentDatabase, "db">) {
-  return getNodeSqliteKysely<SessionMemberDatabase>(database.db);
-}
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "./session-actor-storage-binding.js";
+import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
+import {
+  captureIncognitoSessionOperation,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
+import type { SessionMember } from "./session-membership-facts.types.js";
+import {
+  hasSessionMemberInDatabase,
+  listSessionMembersInDatabase,
+  readSessionMembersInDatabase,
+  type SessionMembersSnapshot,
+} from "./session-sharing-store.kernel.js";
+import { projectionLane } from "./session-transcript-worker-resources.js";
 
 function readSessionMembers<T>(
   scope: SessionAccessScope,
   fallback: T,
-  operation: (database: Pick<OpenClawAgentDatabase, "db">) => T,
+  operation: (database: Pick<OpenClawAgentDatabase, "agentId" | "db">, sessionKey: string) => T,
 ): T {
-  const result = withOpenClawAgentDatabaseReadOnly(operation, resolveDatabaseOptions(scope), {
-    throwOnMissingTable: true,
-  });
+  const resolved = resolveSqliteScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => operation(database, resolved.sessionKey),
+    toDatabaseOptions(resolved),
+  );
   return result.found ? result.value : fallback;
 }
 
-export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
-  return readSessionMembers(scope, [], (database) => {
-    const db = getSessionMemberKysely(database);
-    return executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_members")
-        .select(["identity_id", "added_by", "added_at"])
-        .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
-        .orderBy("identity_id"),
-    ).rows.map((row) => ({
-      identityId: row.identity_id,
-      addedBy: row.added_by,
-      addedAt: row.added_at,
-    }));
-  });
+function readMemorySessionMembers(
+  scope: SessionCollaborationScope,
+): SessionMembersSnapshot | undefined {
+  if (!isIncognitoSessionKey(scope.sessionKey)) {
+    return undefined;
+  }
+  const memory = captureSessionActorStorageOwner(scope);
+  if (!memory) {
+    return undefined;
+  }
+  const current =
+    scope.sessionKey.trim() === memory.binding.actor.target.sessionKey
+      ? getSessionActorStorageBinding(scope)!.actor.snapshot(memory.authority)
+      : memory.owner?.readSession(scope.sessionKey, memory.authority);
+  return structuredClone({ entry: current?.entry, members: current?.members ?? [] });
 }
 
-export function listSessionMembershipKeys(
-  scope: SessionAccessScope,
-  sessionKeys: readonly string[],
-  identityId: string,
-): Set<string> {
-  const normalizedIdentityId = identityId.trim();
-  const normalizedSessionKeys = [...new Set(sessionKeys.map((key) => key.trim()).filter(Boolean))];
-  if (!normalizedIdentityId || normalizedSessionKeys.length === 0) {
-    return new Set();
+export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
+  const memory = readMemorySessionMembers(scope);
+  if (memory) {
+    return memory.members;
   }
-  return readSessionMembers(scope, new Set<string>(), (database) => {
-    const db = getSessionMemberKysely(database);
-    const memberships = new Set<string>();
-    for (
-      let offset = 0;
-      offset < normalizedSessionKeys.length;
-      offset += SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE
-    ) {
-      const chunk = normalizedSessionKeys.slice(
-        offset,
-        offset + SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE,
-      );
-      const rows = executeSqliteQuerySync(
-        database.db,
-        db
-          .selectFrom("session_members")
-          .select("session_key")
-          .where("identity_id", "=", normalizedIdentityId)
-          .where("session_key", "in", chunk),
-      ).rows;
-      for (const row of rows) {
-        memberships.add(row.session_key);
-      }
+  return readSessionMembers(scope, [], listSessionMembersInDatabase);
+}
+
+/** Current management metadata and evidence share the projection worker's read snapshot. */
+export async function readSessionMembersInWorker(
+  input: SessionCollaborationScope,
+): Promise<SessionMembersSnapshot> {
+  const memory = readMemorySessionMembers(input);
+  if (memory) {
+    return memory;
+  }
+  const source = input.incognito ? undefined : captureIncognitoSessionSource(input);
+  if (source && "kind" in source) {
+    return { entry: undefined, members: [] };
+  }
+  const resolved = resolveSqliteScope(input);
+  const env = { ...(resolved.env ?? process.env) };
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const options = toDatabaseOptions({ ...resolved, env });
+  const databasePath = resolveOpenClawAgentSqlitePath(options);
+  const incognito = input.incognito ?? captureIncognitoSessionOperation(input);
+  if (incognito) {
+    const { actor, authority } = incognito;
+    if (actor.agentId !== resolved.agentId || actor.path !== databasePath) {
+      throw new Error("Membership target differs from its captured incognito actor");
     }
-    return memberships;
-  });
+    const members = await actor.sessions.sideData(
+      authority,
+      { type: "session.members.read", input: { sessionKey: resolved.sessionKey } },
+      source?.admissionSignal,
+    );
+    authority.assertCurrent();
+    actor.assertReadable();
+    return members;
+  }
+  if (isIncognitoOpenClawAgentSqlitePath(databasePath, options)) {
+    // Incognito SQLite exists only in this process and keeps its native owner.
+    return readSessionMembers(
+      { ...input, env },
+      { entry: undefined, members: [] },
+      readSessionMembersInDatabase,
+    );
+  }
+  return await withSessionStoreReaderInWorker(
+    { agentId: options.agentId, storePath: databasePath, env },
+    ({ reader, continuation }) =>
+      reader.readMembers({ sessionKey: resolved.sessionKey, env, continuation }),
+    { backing: true, dataOnly: true, lane: projectionLane },
+  );
 }
 
 export function isSessionMember(scope: SessionAccessScope, identityId: string): boolean {
@@ -104,113 +118,16 @@ export function isSessionMember(scope: SessionAccessScope, identityId: string): 
   if (!normalizedIdentityId) {
     return false;
   }
-  return readSessionMembers(scope, false, (database) => {
-    const db = getSessionMemberKysely(database);
-    return Boolean(
-      executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("session_members")
-          .select("identity_id")
-          .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
-          .where("identity_id", "=", normalizedIdentityId),
-      ),
-    );
-  });
+  const memory = readMemorySessionMembers(scope);
+  if (memory) {
+    return memory.members.some((member) => member.identityId === normalizedIdentityId);
+  }
+  return readSessionMembers(scope, false, (database, sessionKey) =>
+    hasSessionMemberInDatabase(database, sessionKey, normalizedIdentityId),
+  );
 }
 
-// Membership is bound to a live session entry, never a transcript placeholder.
-// Authorization is rechecked before these transactions, but a reset/recreate
-// can replace the row under the same key in between; the optional expected id
-// adds a caller snapshot check after the canonical node/entry check.
-function assertAuthorizedSessionInstance(
-  database: OpenClawAgentDatabase,
-  sessionKey: string,
-  expectedSessionId: string | undefined,
-): void {
-  const sessionId = readSessionEntryInstanceId(database, sessionKey);
-  if (
-    sessionId === undefined ||
-    (expectedSessionId !== undefined && sessionId !== expectedSessionId)
-  ) {
-    throw new Error("session changed before sharing mutation");
-  }
-}
-
-export function addSessionMember(
-  scope: SessionAccessScope,
-  params: { identityId: string; addedBy: string; addedAt?: number; expectedSessionId?: string },
-): { member: SessionMember; inserted: boolean } {
-  const identityId = params.identityId.trim();
-  const addedBy = params.addedBy.trim();
-  if (!identityId || !addedBy) {
-    throw new Error("session member identity and actor are required");
-  }
-  const options = resolveDatabaseOptions(scope);
-  const addedAt = params.addedAt ?? Date.now();
-  const inserted = runOpenClawAgentWriteTransaction((database) => {
-    assertAuthorizedSessionInstance(
-      database,
-      resolveSqliteScope(scope).sessionKey,
-      params.expectedSessionId,
-    );
-    const db = getSessionMemberKysely(database);
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .insertInto("session_members")
-        .values({
-          session_key: resolveSqliteScope(scope).sessionKey,
-          identity_id: identityId,
-          added_by: addedBy,
-          added_at: addedAt,
-        })
-        .onConflict((conflict) => conflict.columns(["session_key", "identity_id"]).doNothing()),
-    );
-    return (result.numAffectedRows ?? 0n) > 0n;
-  }, options);
-  return { member: { identityId, addedBy, addedAt }, inserted };
-}
-
-export function removeSessionMember(
-  scope: SessionAccessScope,
-  identityId: string,
-  expected?: Pick<SessionMember, "addedBy" | "addedAt">,
-  expectedSessionId?: string,
-): SessionMember | null {
-  const normalizedIdentityId = identityId.trim();
-  if (!normalizedIdentityId) {
-    return null;
-  }
-  const options = resolveDatabaseOptions(scope);
-  return runOpenClawAgentWriteTransaction((database) => {
-    assertAuthorizedSessionInstance(
-      database,
-      resolveSqliteScope(scope).sessionKey,
-      expectedSessionId,
-    );
-    const db = getSessionMemberKysely(database);
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("session_members")
-        .select(["identity_id", "added_by", "added_at"])
-        .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
-        .where("identity_id", "=", normalizedIdentityId),
-    );
-    if (
-      !row ||
-      (expected && (row.added_by !== expected.addedBy || row.added_at !== expected.addedAt))
-    ) {
-      return null;
-    }
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .deleteFrom("session_members")
-        .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
-        .where("identity_id", "=", normalizedIdentityId),
-    );
-    return { identityId: row.identity_id, addedBy: row.added_by, addedAt: row.added_at };
-  }, options);
-}
+export {
+  addSessionMemberInWorker as addSessionMember,
+  removeSessionMemberInWorker as removeSessionMember,
+} from "./session-sharing-store.async.js";

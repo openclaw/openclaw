@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CopilotClient } from "@github/copilot-sdk";
 import type { SessionConfig } from "@github/copilot-sdk";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type {
   AgentMessage,
   AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
@@ -350,7 +351,7 @@ async function createAttemptParams(params: {
     authProfileId: params.facts.authProfileId,
     copilotHome: params.copilotHome,
     cwd: process.cwd(),
-    hostCapabilities: createCopilotTestHostCapabilities(),
+    hostCapabilities: createCopilotTestHostCapabilities(createOpenClawCodingTools),
     messages: [userMessage],
     model: params.facts.model,
     modelId: params.facts.model.id,

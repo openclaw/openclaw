@@ -22,7 +22,6 @@ type McpApiToolDoc = {
 export type McpApiServerDoc = {
   identifier: string;
   serverName: string;
-  nodeLabel?: string;
   tools: McpApiToolDoc[];
 };
 
@@ -78,7 +77,7 @@ function renderDocComment(
     const description = `${normalizeDocLines(param.description).join(" ")}${suffix}`.trim();
     if (description) {
       lines.push(
-        ` * @param ${param.name}${param.required ? "" : "?"} ${escapeDocComment(description)}`,
+        ` * ${escapeDocComment(`@param ${param.name}${param.required ? "" : "?"} ${description}`)}`,
       );
     }
   }
@@ -216,10 +215,7 @@ export function buildMcpParamDocs(schema: unknown, depth = 0): McpApiParamDoc[] 
   });
 }
 
-function renderMcpToolSignature(
-  tool: McpApiToolDoc,
-  functionName = tool.path.at(-1) ?? tool.method,
-): string[] {
+function renderMcpToolSignature(tool: McpApiToolDoc): string[] {
   const resultType = {
     tool: "McpToolResult",
     resources_list: "McpResourcesListResult",
@@ -235,7 +231,7 @@ function renderMcpToolSignature(
   const optional = inputParams.some((param) => param.required) ? "" : "?";
   return [
     ...renderDocComment(tool.description, inputParams),
-    `function ${functionName}(`,
+    `function ${tool.path.at(-1) ?? tool.method}(`,
     `  input${optional}: ${renderInlineObjectType(tool.parameters, inputParams)}`,
     `): Promise<${resultType}>;`,
   ];
@@ -348,10 +344,14 @@ export function createMcpApiVirtualFiles(
   if (servers.length === 0) {
     return [];
   }
+  const indexServer = servers.find((server) => server.identifier === "index");
+  const separateServers = servers.filter((server) => server.identifier !== "index");
+  // Preserve MCP.index and its existing path without overwriting the root API.
   const rootContent = [
-    ...servers.map((server) => `/// <reference path="./${server.identifier}.d.ts" />`),
+    ...separateServers.map((server) => `/// <reference path="./${server.identifier}.d.ts" />`),
     "",
     renderMcpRootHeader(),
+    ...(indexServer ? ["", renderMcpServerHeader(indexServer, indexServer.tools)] : []),
   ].join("\n");
   return [
     {
@@ -360,7 +360,7 @@ export function createMcpApiVirtualFiles(
       content: rootContent,
       bytes: Buffer.byteLength(rootContent, "utf8"),
     },
-    ...servers.map((server) => {
+    ...separateServers.map((server) => {
       const content = renderMcpServerHeader(server, server.tools);
       return {
         path: `mcp/${server.identifier}.d.ts`,

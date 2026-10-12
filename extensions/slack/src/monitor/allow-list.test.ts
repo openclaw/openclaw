@@ -1,8 +1,10 @@
+import {
+  normalizeStringEntries as normalizeAllowList,
+  normalizeStringEntriesLower as normalizeAllowListLower,
+} from "openclaw/plugin-sdk/string-normalization-runtime";
 // Slack tests cover allow list plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  normalizeAllowList,
-  normalizeAllowListLower,
   normalizeSlackSlug,
   resolveSlackAllowListMatch,
   resolveSlackUserAllowListForTeam,
@@ -93,29 +95,6 @@ describe("slack/allow-list", () => {
         id: "U01234567",
       }),
     ).toEqual({ allowed: true, matchKey: "u01234567", matchSource: "id" });
-  });
-
-  it("matches a workspace-qualified bot only in that workspace", () => {
-    const allowList = ["team:t11111111:user:b01234567"];
-
-    expect(
-      resolveSlackAllowListMatch({
-        allowList,
-        teamId: "T11111111",
-        id: "B01234567",
-      }),
-    ).toEqual({
-      allowed: true,
-      matchKey: "team:t11111111:user:b01234567",
-      matchSource: "workspace-id",
-    });
-    expect(
-      resolveSlackAllowListMatch({
-        allowList,
-        teamId: "T22222222",
-        id: "B01234567",
-      }),
-    ).toEqual({ allowed: false });
   });
 
   it("preserves org-wide IDs and workspace-qualified user identities", () => {

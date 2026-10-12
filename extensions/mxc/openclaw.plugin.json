@@ -7,6 +7,26 @@
     "onStartup": false,
     "onConfigPaths": ["plugins.entries.mxc"]
   },
+  "configGroups": [
+    {
+      "id": "sandbox-execution",
+      "title": "Sandbox execution",
+      "order": 10,
+      "properties": ["mxcBinaryPath", "containment", "timeoutSeconds"]
+    },
+    {
+      "id": "sandbox-policy",
+      "title": "Sandbox policy",
+      "order": 20,
+      "properties": ["network", "mxcPolicyPaths"]
+    },
+    {
+      "id": "diagnostics",
+      "title": "Diagnostics",
+      "order": 30,
+      "properties": ["debug"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

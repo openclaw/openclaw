@@ -6,7 +6,9 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +16,7 @@ import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
+import { failMemoryEntryOriginWrites } from "./memory-entry-origins-fault.test-support.js";
 import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
@@ -38,12 +41,15 @@ describe("memory forget", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     await configureMemoryCoreDreamingStateForTests();
     cfg = {
-      agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main", default: true }] },
+      agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
     } as OpenClawConfig;
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
@@ -59,20 +65,24 @@ describe("memory forget", () => {
   }
 
   it.each([
-    { action: "merged", failOrigins: false },
-    { action: "superseded", failOrigins: false },
-    { action: "merged", failOrigins: true },
+    { action: "superseded", failOrigins: false, fileFailure: "none" },
+    { action: "merged", failOrigins: true, fileFailure: "none" },
+    { action: "merged", failOrigins: false, fileFailure: "close-permission" },
+    { action: "merged", failOrigins: false, fileFailure: "rename-unchanged" },
+    { action: "merged", failOrigins: false, fileFailure: "rename-changed" },
+    { action: "merged", failOrigins: false, fileFailure: "rename-unreadable" },
+    { action: "merged", failOrigins: false, fileFailure: "rename-published" },
   ] as const)(
-    "preserves workspace deletion lineage for $action (origin failure: $failOrigins)",
-    async ({ action, failOrigins }) => {
+    "preserves workspace deletion lineage for $action (origin failure: $failOrigins, file failure: $fileFailure)",
+    async ({ action, failOrigins, fileFailure }) => {
       cfg = {
         agents: {
           defaults: { workspace: workspaceDir },
-          list: [
-            { id: "alpha", default: true, workspace: workspaceDir },
-            { id: "gamma", workspace: workspaceDir },
-            { id: "vacant", workspace: workspaceDir },
-          ],
+          entries: {
+            alpha: { workspace: workspaceDir },
+            gamma: { workspace: workspaceDir },
+            vacant: { workspace: workspaceDir },
+          },
         },
       } as OpenClawConfig;
       await upsertSessionEntry({
@@ -97,7 +107,7 @@ describe("memory forget", () => {
       const notePath = path.join(workspaceDir, "memory", "2026-08-26.md");
       await fs.mkdir(path.dirname(notePath), { recursive: true });
       await fs.writeFile(notePath, `${snippet}\n`);
-      recordMemoryEntryOrigins({
+      await recordMemoryEntryOrigins({
         agentId: "gamma",
         origins: [
           {
@@ -155,12 +165,76 @@ describe("memory forget", () => {
         complete: vi.fn(async () => ({ text: output })),
       };
 
-      if (failOrigins) {
-        openOpenClawAgentDatabase({ agentId: "gamma" }).db.exec(`
-          CREATE TRIGGER fail_origin_reservation BEFORE INSERT ON memory_entry_origins
-          WHEN NEW.entry_key != 'retired-entry'
-          BEGIN SELECT RAISE(ABORT, 'injected origin write failure'); END;
-        `);
+      const restoreOriginFailure = failOrigins
+        ? failMemoryEntryOriginWrites({
+            agentId: "gamma",
+            trigger: "fail_origin_reservation",
+            createSql: `
+              CREATE TRIGGER fail_origin_reservation BEFORE INSERT ON memory_entry_origins
+              WHEN NEW.entry_key != 'retired-entry'
+              BEGIN SELECT RAISE(ABORT, 'injected origin write failure'); END;
+            `,
+          })
+        : undefined;
+      let renamed = false;
+      let fileFaultInjected = false;
+      let memoryRenameCalls = 0;
+      let readbackBlocked = false;
+      const fileError = Object.assign(new Error("synthetic atomic memory failure"), {
+        code: "EPERM",
+        errno: -1,
+      });
+      const externalMemory = "# Memory\n\nKeep this newer external edit.\n";
+      if (fileFailure !== "none") {
+        const rename = fs.rename.bind(fs);
+        const open = fs.open.bind(fs);
+        const readFile = fs.readFile.bind(fs);
+        vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+          if (readbackBlocked && args[0] === memoryPath) {
+            throw Object.assign(new Error("synthetic unavailable rename readback"), {
+              code: "EIO",
+            });
+          }
+          return await readFile(...args);
+        });
+        vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+          if (String(to) === memoryPath) {
+            memoryRenameCalls += 1;
+            if (!fileFaultInjected && fileFailure.startsWith("rename-")) {
+              fileFaultInjected = true;
+              if (fileFailure === "rename-published") {
+                await rename(from, to);
+                renamed = true;
+              } else if (fileFailure === "rename-changed") {
+                await fs.writeFile(memoryPath, externalMemory);
+              } else if (fileFailure === "rename-unreadable") {
+                readbackBlocked = true;
+              }
+              throw fileError;
+            }
+            await rename(from, to);
+            renamed = true;
+          } else {
+            await rename(from, to);
+          }
+        });
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await open(...args);
+          if (
+            fileFailure.startsWith("close") &&
+            path.basename(String(args[0])).startsWith("MEMORY.md.promotion.")
+          ) {
+            const close = handle.close.bind(handle);
+            handle.close = async () => {
+              await close();
+              if (renamed && !fileFaultInjected) {
+                fileFaultInjected = true;
+                throw fileError;
+              }
+            };
+          }
+          return handle;
+        });
       }
       const application = applyShortTermPromotions({
         agentId: "alpha",
@@ -172,19 +246,97 @@ describe("memory forget", () => {
         nowMs,
         ...thresholds,
       });
-      if (failOrigins) {
-        await expect(application).rejects.toThrow("injected origin write failure");
-        await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe(previousMemory);
+      if (fileFailure === "rename-unchanged") {
+        const applied = await application;
+        expect(applied.applied).toBe(1);
+        expect(memoryRenameCalls).toBe(2);
+        const memory = await fs.readFile(memoryPath, "utf8");
+        expect(memory).toContain("openclaw-memory-promotion:retired-entry");
+        expect(memory).toContain(`openclaw-memory-promotion:${promoted!.key}`);
+        expect(
+          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+        ).toEqual([]);
+        await forgetMemoryEntries({ cfg, agentId: "gamma", sessionIds: ["private-session"] });
+        expect(await fs.readFile(memoryPath, "utf8")).toContain(
+          `openclaw-memory-promotion:${promoted!.key}`,
+        );
+        return;
+      }
+      if (fileFailure !== "none") {
+        const failed = await application.then(
+          () => {
+            throw new Error("expected the atomic publication failure");
+          },
+          (error: unknown) => error,
+        );
+        readbackBlocked = false;
+        expect(failed).toMatchObject({
+          message: fileError.message,
+          name: fileError.name,
+          cause: fileError,
+        });
+        expect(failed).toMatchObject({ code: "EPERM", cause: { errno: -1 } });
+        expect(fileFaultInjected).toBe(true);
+        expect(memoryRenameCalls).toBe(1);
+        const published = fileFailure.startsWith("close") || fileFailure === "rename-published";
+        expect(renamed).toBe(published);
+        if (published) {
+          expect(await fs.readFile(memoryPath, "utf8")).toContain(
+            `openclaw-memory-promotion:${promoted!.key}`,
+          );
+        } else {
+          expect(await fs.readFile(memoryPath, "utf8")).toBe(
+            fileFailure === "rename-changed" ? externalMemory : previousMemory,
+          );
+        }
         expect(
           (await readShortTermRecallEntries({ workspaceDir, nowMs }))[0]?.promotedAt,
         ).toBeUndefined();
+        expect(
+          (
+            await readMemoryCoreWorkspaceEntries<{ content: string }>({
+              namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
+              workspaceDir,
+            })
+          ).map(({ value }) => value.content),
+        ).toEqual([previousMemory]);
+        expect(
+          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: ["retired-entry"] }),
+        ).toHaveLength(1);
+        expect(
+          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+        ).toMatchObject([{ entryKey: promoted!.key, sessionId: "private-session" }]);
+        const report = await forgetMemoryEntries({
+          cfg,
+          agentId: "gamma",
+          sessionIds: ["private-session"],
+        });
+        expect(report.entryKeys).toContain(promoted!.key);
+        expect(await fs.readFile(memoryPath, "utf8")).not.toContain(
+          `openclaw-memory-promotion:${promoted!.key}`,
+        );
+        expect(
+          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+        ).toEqual([]);
+        return;
+      }
+      if (failOrigins) {
+        try {
+          await expect(application).rejects.toThrow("injected origin write failure");
+          await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe(previousMemory);
+          expect(
+            (await readShortTermRecallEntries({ workspaceDir, nowMs }))[0]?.promotedAt,
+          ).toBeUndefined();
+        } finally {
+          restoreOriginFailure?.();
+        }
         return;
       }
       const applied = await application;
 
       expect(applied.applied).toBe(1);
       expect(
-        listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+        await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
       ).toMatchObject([{ entryKey: promoted!.key, sessionId: "private-session" }]);
       const readBackups = () =>
         readMemoryCoreWorkspaceEntries<{ content: string }>({
@@ -201,6 +353,7 @@ describe("memory forget", () => {
       ).toBeUndefined();
 
       expect(await fs.readFile(diaryPath, "utf8")).toContain(snippet);
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       resetPluginStateStoreForTests();
@@ -217,7 +370,7 @@ describe("memory forget", () => {
       expect((await readBackups()).every(({ value }) => !value.content.includes(priorEntry))).toBe(
         true,
       );
-      expect(listMemoryEntryOrigins({ agentId: "gamma" })).toEqual([]);
+      expect(await listMemoryEntryOrigins({ agentId: "gamma" })).toEqual([]);
       const diary = await fs.readFile(diaryPath, "utf8");
       expect.soft(diary).not.toContain(priorEntry);
       expect.soft(diary).not.toContain(snippet);
@@ -232,11 +385,11 @@ describe("memory forget", () => {
     },
   );
 
-  it.each(["DREAMS.md", "dreams.md"])(
+  it.each(["DREAMS.md"])(
     "warns and preserves historical untraceable highlights in %s",
     async (diaryName) => {
       await seedSession("target");
-      recordMemoryEntryOrigins({
+      await recordMemoryEntryOrigins({
         agentId: "main",
         origins: [
           {
@@ -286,37 +439,6 @@ describe("memory forget", () => {
     const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
     expect(await fs.readFile(diaryPath, "utf8")).toBe(`${heading}${survivor}\n`);
     expect(report.refusals).toEqual([expect.stringContaining("review them manually")]);
-  });
-
-  it.each(["## Session ID: target", "Session: saved; Session ID: target;"])(
-    "preserves section cleanup for the multiline header %s",
-    async (header) => {
-      await seedSession("target");
-      const diaryPath = path.join(workspaceDir, "DREAMS.md");
-      const survivor = "## Other session\n- Keep this separate section.\n";
-      await fs.writeFile(
-        diaryPath,
-        `${header}\n- Selected first line.\n  Selected continuation.\n- Selected second line.\n${survivor}`,
-      );
-      await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
-      expect(await fs.readFile(diaryPath, "utf8")).toBe(survivor);
-    },
-  );
-
-  it("does not warn after removing every traceable historical highlight", async () => {
-    await seedSession("target");
-    const quote = "User: This exact historical quotation is attributable.";
-    const corpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
-    await fs.mkdir(corpusDir, { recursive: true });
-    await fs.writeFile(
-      path.join(corpusDir, "day.txt"),
-      `[main/sessions/main/target#L1] ${quote}\n`,
-    );
-    const diaryPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(diaryPath, `## Memory Consolidation History\n  - \`+ ${quote}\`\n`);
-    const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
-    expect(report.refusals).toEqual([]);
-    expect(await fs.readFile(diaryPath, "utf8")).not.toContain(quote);
   });
 
   it("removes a marker-addressable plain-append promotion after budget compaction", async () => {

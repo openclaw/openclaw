@@ -1,6 +1,6 @@
 ---
 name: crabbox
-description: "Crabbox/Testbox remote proof: portable provider routing, untrusted isolation, Linux/macOS/Windows/WSL2, live E2E, diagnostics, cleanup."
+description: "Crabbox and Blacksmith Testbox remote testing: isolation, cross-platform E2E, diagnostics, cleanup."
 ---
 
 # Crabbox
@@ -61,6 +61,14 @@ Source trust determines which providers are allowed. It does not select one.
 - Never untrusted code on credential-hydrated Testbox.
 - Never run untrusted repo wrapper/config locally.
 - No speculative warmup. Acquire when first heavy command ready. Reuse id. Stop.
+- Use the consumer's smallest proven remote profile. Large/high-memory profiles
+  are explicit exceptions for a named command with measured memory need or a
+  controlled total-cost benefit. Record the reason before allocation; a generic
+  failure, queue delay, or timeout is not a reason to upsize. Do not raise worker
+  counts to compensate for a smaller machine.
+- For delegated Testbox sizing, select a documented workflow through
+  `--blacksmith-workflow`; direct-provider `--class`/`--type` flags do not choose
+  the Testbox runner. Change profiles with a fresh lease.
 
 Test size, expected duration, and hydration failure do not authorize a provider
 override. Omit `--provider` for normal work. Add it only when the user requests
@@ -121,6 +129,10 @@ Several commands: warm once, save id, reuse, stop.
 Rules:
 
 - One lease, one active command. No sync/reclaim during run.
+- Compound payloads: prefer `bash -c`, not `bash -lc`. Bash syntax support does
+  not require login startup; login profiles can change directories. Before
+  validation, assert the exact physical checkout and expected source/patch
+  inside the shell that runs it. A matching HEAD alone cannot prove dirty sync.
 - Native Testbox runs own sync, including reused `--id` runs. Never rely on
   `--no-sync` to preserve a remote baseline: Blacksmith has no native bypass,
   and released Crabbox versions can silently ignore the flag. An unchanged
@@ -133,6 +145,23 @@ Rules:
 - Testbox status/stop: `--id`. No status `--json`.
 - Delegated provider rejects `--fresh-pr`, `--full-resync`, `--script*`,
   `--env-helper`, capture/download flags.
+
+### Blacksmith directory downloads
+
+Blacksmith CLI 0.4.60 (verified 2026-09-19) needs a trailing `/` on the **remote
+directory argument** to enable recursive SCP; otherwise it fails with
+`not a regular file`. A local trailing slash does not help, and SCP may add `/`
+in the error text even when the caller omitted it.
+
+```sh
+mkdir -p ./downloads
+blacksmith testbox download --id <tbx_id> screenshots/ ./downloads/
+```
+
+Use an explicit destination: this writes `./downloads/screenshots/`; omitting
+it can duplicate the basename (`screenshots/screenshots/`). Reuse the task-owned
+lease and existing key path (`--ssh-private-key` when needed). Verify the downloaded
+tree and hashes; recheck this workaround after CLI upgrades.
 
 ## Untrusted AWS
 

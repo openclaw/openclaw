@@ -19,33 +19,8 @@ import {
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
 import { findPersistedAuthProfileCredential } from "./store.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
-
-function throwAuthProfileUpdateError(): never {
-  throw new Error(
-    "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-  );
-}
-
-function restoresFencedOAuthRefreshGeneration(params: {
-  profileId: string;
-  existing: AuthProfileCredential | undefined;
-  incoming: AuthProfileCredential;
-}): boolean {
-  return (
-    params.existing?.type === "oauth" &&
-    params.incoming.type === "oauth" &&
-    params.incoming.copyToAgents !== true &&
-    !isOAuthRefreshFence(params.incoming) &&
-    isOAuthRefreshFence(params.existing) &&
-    isSameOAuthRefreshGeneration({
-      profileId: params.profileId,
-      left: params.existing,
-      right: params.incoming,
-    })
-  );
-}
 
 function loadAuthProfileWriteTarget(params: {
   agentDir?: string;
@@ -65,74 +40,102 @@ function resolveAuthProfileWriteEnv(params: { stateDir?: string }): NodeJS.Proce
   return params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env;
 }
 
-function loadAuthProfileWriteAuthority(
+function loadAuthProfileWriteAuthorities(
   params: { agentDir?: string; stateDir?: string },
-  profileId: string,
-): AuthProfileCredential | undefined {
-  const target = loadAuthProfileWriteTarget(params)?.profiles[profileId];
-  if (target || !params.agentDir) {
-    return target;
+  profileIds: readonly string[],
+): ReadonlyMap<string, AuthProfileCredential | undefined> {
+  if (profileIds.length === 0) {
+    return new Map();
   }
-  if (params.stateDir) {
-    return loadPersistedSharedAuthProfileStore({
-      ...process.env,
-      OPENCLAW_STATE_DIR: params.stateDir,
-      OPENCLAW_AGENT_DIR: undefined,
-    })?.profiles[profileId];
+  const target = loadAuthProfileWriteTarget(params);
+  const missingIds = profileIds.filter((profileId) => !target?.profiles[profileId]);
+  let inherited: ReadonlyMap<string, AuthProfileCredential | undefined> | undefined;
+  if (params.agentDir && missingIds.length > 0) {
+    if (params.stateDir) {
+      const shared = loadAuthProfileWriteTarget({ stateDir: params.stateDir });
+      inherited = new Map(missingIds.map((profileId) => [profileId, shared?.profiles[profileId]]));
+    } else {
+      inherited = new Map(
+        missingIds.map((profileId) => [
+          profileId,
+          findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId }),
+        ]),
+      );
+    }
   }
-  return findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId });
+  return new Map(
+    profileIds.map((profileId) => [
+      profileId,
+      target?.profiles[profileId] ?? inherited?.get(profileId),
+    ]),
+  );
 }
 
-function supersedesOAuthRefreshGenerationObservedAtAdmission(params: {
+function needsOAuthRefreshAuthority(
+  credential: AuthProfileCredential,
+): credential is OAuthCredential {
+  return (
+    credential.type === "oauth" &&
+    credential.copyToAgents !== true &&
+    !isOAuthRefreshFence(credential)
+  );
+}
+
+function rejectsOAuthRefreshGenerationReplacement(params: {
   profileId: string;
   observed: AuthProfileCredential | undefined;
   current: AuthProfileCredential | undefined;
+  local: AuthProfileCredential | undefined;
   incoming: AuthProfileCredential;
   allowOAuthGenerationReplacement: boolean;
 }): boolean {
-  if (
-    params.incoming.type !== "oauth" ||
-    params.incoming.copyToAgents === true ||
-    isOAuthRefreshFence(params.incoming)
-  ) {
+  if (!needsOAuthRefreshAuthority(params.incoming)) {
     return false;
   }
+  let supersedes: boolean;
   if (isDeepStrictEqual(params.current, params.observed)) {
-    if (
-      params.allowOAuthGenerationReplacement ||
-      params.current === undefined ||
-      (params.current.type === "oauth" && isOAuthRefreshFence(params.current))
-    ) {
-      return false;
-    }
-    return (
-      params.current.type !== "oauth" ||
-      !isSameOAuthRefreshGeneration({
+    supersedes =
+      !params.allowOAuthGenerationReplacement &&
+      params.current !== undefined &&
+      !(params.current.type === "oauth" && isOAuthRefreshFence(params.current)) &&
+      (params.current.type !== "oauth" ||
+        !isSameOAuthRefreshGeneration({
+          profileId: params.profileId,
+          left: params.current,
+          right: params.incoming,
+        }));
+  } else if (params.observed === undefined) {
+    supersedes = params.current !== undefined;
+  } else {
+    supersedes =
+      !params.allowOAuthGenerationReplacement ||
+      params.observed.type !== "oauth" ||
+      isSameOAuthRefreshGeneration({
         profileId: params.profileId,
-        left: params.current,
+        left: params.observed,
         right: params.incoming,
-      })
-    );
-  }
-  if (params.observed === undefined) {
-    return params.current !== undefined;
-  }
-  if (!params.allowOAuthGenerationReplacement) {
-    return true;
+      });
   }
   return (
-    params.observed.type !== "oauth" ||
-    isSameOAuthRefreshGeneration({
-      profileId: params.profileId,
-      left: params.observed,
-      right: params.incoming,
-    })
+    supersedes ||
+    (params.local?.type === "oauth" &&
+      isOAuthRefreshFence(params.local) &&
+      isSameOAuthRefreshGeneration({
+        profileId: params.profileId,
+        left: params.local,
+        right: params.incoming,
+      }))
   );
 }
 
 type PersistAuthProfileBatchParams = {
   /** Revalidate the calling operation after lock acquisition, at the write boundary. */
   beforeWrite?: () => void;
+  /** Revalidate a targeted profile identity under the same transaction as the write. */
+  validateCurrentCredential?: (
+    profileId: string,
+    credential: AuthProfileCredential | undefined,
+  ) => void;
   profiles: readonly {
     profileId: string;
     credential: AuthProfileCredential;
@@ -166,24 +169,19 @@ export async function persistAuthProfileBatch(
     const result = { unrevertedProfileIds: new Set<string>() };
     return { rollback: () => result };
   }
-  const observedProfiles = new Map(
-    [...profiles.keys()].map((profileId) => [
-      profileId,
-      loadAuthProfileWriteAuthority(params, profileId),
-    ]),
-  );
+  const authorityProfileIds = [...profiles.entries()]
+    .filter(([, entry]) => needsOAuthRefreshAuthority(entry.credential))
+    .map(([profileId]) => profileId);
+  const readAuthorities = () => loadAuthProfileWriteAuthorities(params, authorityProfileIds);
+  // Capture before yielding so a queued batch cannot restore an OAuth generation consumed while waiting.
+  const observedProfiles = readAuthorities();
 
   return await withOAuthProfileLocks(
     [...profiles.entries()].flatMap(([profileId, entry]) =>
       entry.credential.type === "oauth" ? [{ profileId, provider: entry.credential.provider }] : [],
     ),
     async () => {
-      const currentAuthorities = new Map(
-        [...profiles.keys()].map((profileId) => [
-          profileId,
-          loadAuthProfileWriteAuthority(params, profileId),
-        ]),
-      );
+      const currentAuthorities = readAuthorities();
       const previousProfiles = new Map<string, AuthProfileCredential | undefined>();
       const previousOrder = new Map<string, readonly string[] | undefined>();
       const appliedProfiles = new Map<string, AuthProfileCredential>();
@@ -201,21 +199,18 @@ export async function persistAuthProfileBatch(
             loadPersistedAuthProfileStore(params.agentDir, { database }) ??
             ({ version: AUTH_STORE_VERSION, profiles: {} } satisfies AuthProfileStore);
           for (const [profileId, entry] of profiles) {
+            params.validateCurrentCredential?.(profileId, next.profiles[profileId]);
             if (!entry.replaceExisting && Object.hasOwn(next.profiles, profileId)) {
               continue;
             }
             if (
-              supersedesOAuthRefreshGenerationObservedAtAdmission({
+              rejectsOAuthRefreshGenerationReplacement({
                 profileId,
                 observed: observedProfiles.get(profileId),
                 current: currentAuthorities.get(profileId),
+                local: next.profiles[profileId],
                 incoming: entry.credential,
                 allowOAuthGenerationReplacement: params.allowOAuthGenerationReplacement === true,
-              }) ||
-              restoresFencedOAuthRefreshGeneration({
-                profileId,
-                existing: next.profiles[profileId],
-                incoming: entry.credential,
               })
             ) {
               throw new Error(
@@ -343,7 +338,9 @@ export async function persistAuthProfileBatch(
 type AuthProfileUpsertParams = {
   profileId: string;
   validateCurrentCredential?: (credential: AuthProfileCredential | undefined) => void;
+  assertCurrent?: () => void;
   preserveApiKeyMetadata?: boolean;
+  resetFailureState?: boolean;
   credential: AuthProfileCredential;
   agentDir?: string;
   stateDir?: string;
@@ -354,33 +351,36 @@ export async function upsertAuthProfileWithLock(
   params: AuthProfileUpsertParams,
 ): Promise<AuthProfileStore | null> {
   const credential = normalizeAuthProfileCredential(params.credential);
-  const observed = loadAuthProfileWriteAuthority(params, params.profileId);
+  const observed = needsOAuthRefreshAuthority(credential)
+    ? loadAuthProfileWriteAuthorities(params, [params.profileId]).get(params.profileId)
+    : undefined;
   let rejectedFencedGeneration = false;
   const update = async () => {
-    const currentAuthority = loadAuthProfileWriteAuthority(params, params.profileId);
     return await updateAuthProfileStoreWithLock({
       agentDir: params.agentDir,
       sharedStoreWrite: true,
       stateDir: params.stateDir,
+      assertCurrent: params.assertCurrent,
       saveOptions: {
         filterExternalAuthProfiles: false,
         syncExternalCli: false,
       },
-      updater: (store) => {
+      updater: (store, owner, sharedStore) => {
+        const currentAuthority =
+          store.profiles[params.profileId] ??
+          (owner && owner.databasePath !== owner.sharedDatabasePath
+            ? sharedStore?.profiles[params.profileId]
+            : undefined);
         // Consumers can reject a changed profile kind under the same lock as the write.
         params.validateCurrentCredential?.(store.profiles[params.profileId]);
         if (
-          supersedesOAuthRefreshGenerationObservedAtAdmission({
+          rejectsOAuthRefreshGenerationReplacement({
             profileId: params.profileId,
             observed,
             current: currentAuthority,
+            local: store.profiles[params.profileId],
             incoming: credential,
             allowOAuthGenerationReplacement: false,
-          }) ||
-          restoresFencedOAuthRefreshGeneration({
-            profileId: params.profileId,
-            existing: store.profiles[params.profileId],
-            incoming: credential,
           })
         ) {
           rejectedFencedGeneration = true;
@@ -397,6 +397,10 @@ export async function upsertAuthProfileWithLock(
           store.profiles[params.profileId] = { ...metadata, ...credential };
         } else {
           store.profiles[params.profileId] = credential;
+        }
+        const existingStats = store.usageStats?.[params.profileId];
+        if (params.resetFailureState && store.usageStats && existingStats) {
+          store.usageStats[params.profileId] = resetAuthProfileFailureState(existingStats);
         }
         return true;
       },
@@ -419,6 +423,8 @@ export async function upsertAuthProfileWithLockOrThrow(
 ): Promise<void> {
   const updated = await upsertAuthProfileWithLock(params);
   if (!updated) {
-    throwAuthProfileUpdateError();
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
   }
 }

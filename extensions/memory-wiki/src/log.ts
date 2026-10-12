@@ -1,9 +1,9 @@
-// Memory Wiki plugin module implements log behavior.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
-import { walkMemoryWikiDirectory } from "./bounded-walk.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 
 type MemoryWikiLogEntry = {
   type: "init" | "vault-generation" | "ingest" | "okf-import" | "compile" | "lint";
@@ -11,11 +11,6 @@ type MemoryWikiLogEntry = {
   details?: Record<string, unknown>;
 };
 
-const VAULT_GENERATION_FIELD = "vaultGeneration";
-const COMPILED_CACHE_RESERVATION_ID_FIELD = "compiledCacheReservationId";
-const COMPILED_CACHE_PUBLICATION_ID_FIELD = "compiledCachePublicationId";
-const COMPILED_CACHE_PARENT_PUBLICATION_ID_FIELD = "compiledCacheParentPublicationId";
-const COMPILED_CACHE_SOURCE_GENERATION_FIELD = "compiledCacheSourceGeneration";
 const COMPILED_SOURCE_DIRECTORIES = [
   "sources",
   "entities",
@@ -47,109 +42,73 @@ export async function appendMemoryWikiLog(
 export async function loadMemoryWikiVaultIdentity(
   vaultRoot: string,
 ): Promise<MemoryWikiVaultIdentity> {
+  const identity: MemoryWikiVaultIdentity = {
+    vaultGeneration: null,
+    compiledCacheReservationId: null,
+    compiledCachePublicationId: null,
+    compiledCacheSourceGeneration: null,
+  };
   let raw: string;
   try {
     raw = await fs.readFile(path.join(vaultRoot, ".openclaw-wiki", "log.jsonl"), "utf8");
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return {
-        vaultGeneration: null,
-        compiledCacheReservationId: null,
-        compiledCachePublicationId: null,
-        compiledCacheSourceGeneration: null,
-      };
+      return identity;
     }
     throw error;
   }
-  let vaultGeneration: string | null = null;
-  let compiledCacheReservationId: string | null = null;
-  let compiledCachePublicationId: string | null = null;
-  let compiledCacheSourceGeneration: string | null = null;
   for (const line of raw.split(/\r?\n/)) {
     try {
-      const parsed = JSON.parse(line) as MemoryWikiLogEntry;
-      const candidateVaultGeneration = parsed.details?.[VAULT_GENERATION_FIELD];
-      if (
-        !vaultGeneration &&
-        typeof candidateVaultGeneration === "string" &&
-        candidateVaultGeneration.trim()
-      ) {
-        vaultGeneration = candidateVaultGeneration.trim();
-      }
-      const candidateReservationId = parsed.details?.[COMPILED_CACHE_RESERVATION_ID_FIELD];
-      const normalizedReservationId =
-        typeof candidateReservationId === "string" && candidateReservationId.trim()
-          ? candidateReservationId.trim()
-          : undefined;
-      const candidateCompiledCachePublicationId =
-        parsed.details?.[COMPILED_CACHE_PUBLICATION_ID_FIELD];
-      if (
-        typeof candidateCompiledCachePublicationId === "string" &&
-        candidateCompiledCachePublicationId.trim()
-      ) {
-        const candidateParent = parsed.details?.[COMPILED_CACHE_PARENT_PUBLICATION_ID_FIELD];
+      const { details } = JSON.parse(line) as MemoryWikiLogEntry;
+      identity.vaultGeneration ??= normalizeOptionalString(details?.vaultGeneration) ?? null;
+      const normalizedReservationId = normalizeOptionalString(details?.compiledCacheReservationId);
+      const candidateCompiledCachePublicationId = normalizeOptionalString(
+        details?.compiledCachePublicationId,
+      );
+      if (candidateCompiledCachePublicationId) {
+        const candidateParent = details?.compiledCacheParentPublicationId;
         const normalizedParent =
-          candidateParent === null
-            ? null
-            : typeof candidateParent === "string" && candidateParent.trim()
-              ? candidateParent.trim()
-              : undefined;
-        const candidateSourceGeneration = parsed.details?.[COMPILED_CACHE_SOURCE_GENERATION_FIELD];
-        const normalizedSourceGeneration =
-          typeof candidateSourceGeneration === "string" && candidateSourceGeneration.trim()
-            ? candidateSourceGeneration.trim()
-            : undefined;
+          candidateParent === null ? null : normalizeOptionalString(candidateParent);
+        const normalizedSourceGeneration = normalizeOptionalString(
+          details?.compiledCacheSourceGeneration,
+        );
         // A commit must reference both the prior publication and a reservation
         // already present in the log; it cannot recreate either after rollback.
         if (
-          normalizedParent === compiledCachePublicationId &&
-          normalizedReservationId === compiledCacheReservationId &&
+          normalizedParent === identity.compiledCachePublicationId &&
+          normalizedReservationId === identity.compiledCacheReservationId &&
           normalizedSourceGeneration
         ) {
-          compiledCachePublicationId = candidateCompiledCachePublicationId.trim();
-          compiledCacheSourceGeneration = normalizedSourceGeneration;
+          identity.compiledCachePublicationId = candidateCompiledCachePublicationId;
+          identity.compiledCacheSourceGeneration = normalizedSourceGeneration;
         }
       } else if (normalizedReservationId) {
-        compiledCacheReservationId = normalizedReservationId;
+        identity.compiledCacheReservationId = normalizedReservationId;
       }
     } catch {
       // Audit logs may contain a partial final line after an interrupted append.
     }
   }
-  return {
-    vaultGeneration,
-    compiledCacheReservationId,
-    compiledCachePublicationId,
-    compiledCacheSourceGeneration,
-  };
+  return identity;
 }
 
 export async function resolveMemoryWikiVaultSourceGeneration(vaultRoot: string): Promise<string> {
   const files = (
     await Promise.all(
-      COMPILED_SOURCE_DIRECTORIES.map(async (relativeDir) => {
-        const entries = await walkMemoryWikiDirectory(vaultRoot, relativeDir);
-        return entries
-          .filter((entry) => entry.kind === "file" && entry.relativePath.endsWith(".md"))
-          .map((entry) => {
-            return {
-              absolutePath: path.join(vaultRoot, entry.relativePath),
-              relativePath: entry.relativePath.split(path.sep).join("/"),
-            };
-          })
-          .filter((entry) => path.basename(entry.relativePath) !== "index.md");
-      }),
+      COMPILED_SOURCE_DIRECTORIES.map((relativeDir) =>
+        listMemoryWikiPagePaths(vaultRoot, relativeDir),
+      ),
     )
   )
     .flat()
-    .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath));
+    .toSorted((left, right) => left.localeCompare(right));
   const hash = createHash("sha256");
   for (const file of files) {
-    const relativePath = Buffer.from(file.relativePath);
+    const relativePath = Buffer.from(file);
     const pathLength = Buffer.allocUnsafe(4);
     pathLength.writeUInt32BE(relativePath.byteLength);
     const contentDigest = createHash("sha256")
-      .update(await fs.readFile(file.absolutePath))
+      .update(await fs.readFile(path.join(vaultRoot, file)))
       .digest();
     hash.update(pathLength).update(relativePath).update(contentDigest);
   }
@@ -176,12 +135,8 @@ export async function loadMemoryWikiValidatedVaultIdentity(
   };
 }
 
-async function loadMemoryWikiVaultGeneration(vaultRoot: string): Promise<string | null> {
-  return (await loadMemoryWikiVaultIdentity(vaultRoot)).vaultGeneration;
-}
-
 export async function ensureMemoryWikiVaultGeneration(vaultRoot: string): Promise<string> {
-  const existing = await loadMemoryWikiVaultGeneration(vaultRoot);
+  const { vaultGeneration: existing } = await loadMemoryWikiVaultIdentity(vaultRoot);
   if (existing) {
     return existing;
   }
@@ -189,9 +144,9 @@ export async function ensureMemoryWikiVaultGeneration(vaultRoot: string): Promis
   await appendMemoryWikiLog(vaultRoot, {
     type: "vault-generation",
     timestamp: new Date().toISOString(),
-    details: { [VAULT_GENERATION_FIELD]: candidate },
+    details: { vaultGeneration: candidate },
   });
   // Concurrent initialization can append two candidates. The first durable
   // audit entry owns the vault generation, so every caller converges on it.
-  return (await loadMemoryWikiVaultGeneration(vaultRoot)) ?? candidate;
+  return (await loadMemoryWikiVaultIdentity(vaultRoot)).vaultGeneration ?? candidate;
 }
