@@ -211,7 +211,7 @@ async function autoSetup(): Promise<SystemAgentSetupAutoResult> {
           await commitSetupInferenceActivation({
             config,
             configTarget: target,
-            preserveWorkingConnection: true,
+            requireApplied: true,
             assertCurrent,
             activate: async () => undefined,
             deferCompletion: (completion) => {

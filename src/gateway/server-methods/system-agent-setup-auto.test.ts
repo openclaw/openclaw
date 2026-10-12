@@ -286,7 +286,7 @@ describe("Gateway automatic inference setup", () => {
       expect(fixture.activate).not.toHaveBeenCalled();
       expect(fixture.commit).toHaveBeenCalledWith(
         expect.objectContaining({
-          preserveWorkingConnection: true,
+          requireApplied: true,
           config: {
             plugins: {
               entries: {
