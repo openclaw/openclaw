@@ -197,7 +197,11 @@ function buildParams(
     model: deploymentName,
     input: messages,
     stream: true,
-    prompt_cache_key: resolvePromptCacheKey(options, options?.cacheRetention ?? "short"),
+    // Azure deployments support prompt caching by default; compat opts endpoints out.
+    prompt_cache_key:
+      model.compat?.supportsPromptCacheKey === false
+        ? undefined
+        : resolvePromptCacheKey(options, options?.cacheRetention ?? "short"),
     store: false,
   };
 

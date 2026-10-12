@@ -697,6 +697,8 @@ export interface OpenAIResponsesCompat {
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
+  /** Whether the provider supports OpenAI-style `prompt_cache_key`. Default: auto-detected from the endpoint; false opts out. */
+  supportsPromptCacheKey?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
   /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
