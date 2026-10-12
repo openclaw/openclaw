@@ -17,7 +17,7 @@ import {
   listExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
@@ -105,6 +105,8 @@ export async function repairLegacySessionTitles(params: {
               !recoveredFromProjections &&
               !entry.incognito &&
               !isIncognitoSessionKey(sessionKey) &&
+              // Spawn owns child labels; its first user message is a runtime task envelope.
+              !isSubagentSessionKey(sessionKey) &&
               !hasExplicitSessionName(entry)
             ) {
               keys.push(sessionKey);
