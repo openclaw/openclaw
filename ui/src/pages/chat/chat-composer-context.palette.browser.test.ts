@@ -1,8 +1,9 @@
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import "../../styles/chat/layout.css";
-import { renderContextNoticeSolid } from "./components/chat-composer-context.tsx";
+import { ContextNotice } from "./components/chat-composer-context.tsx";
 import { syncChatPickerOverlay } from "./components/chat-picker-overlay.ts";
 
 const rootStyle = document.documentElement.style;
@@ -22,12 +23,14 @@ describe("mounted context usage palette", () => {
       rootStyle.setProperty("--danger", "#dc2626");
       mountSolid(
         () =>
-          renderContextNoticeSolid({
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: percent,
-            contextTokens: 100,
+          createComponent(ContextNotice, {
+            session: {
+              key: "main",
+              kind: "direct",
+              updatedAt: null,
+              totalTokens: percent,
+              contextTokens: 100,
+            },
           }),
         { container },
       );

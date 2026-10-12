@@ -1,5 +1,5 @@
-import type { SessionEntry } from "../../../../src/config/sessions/types.js";
-import { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
+import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
+import type { SessionEntry } from "./openclaw-runtime-session.js";
 import type { MemorySessionKind } from "./types.js";
 
 type SessionEntrySummary = { sessionKey: string; entry: SessionEntry };

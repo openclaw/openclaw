@@ -284,6 +284,7 @@ describe("worker environment service provision replay", () => {
     const onActivated = vi.fn();
     const attachSession = vi.spyOn(restarted, "attachSession");
     const dispatch = createProviderReplayDispatch({
+      initialPlacements: placements.list(),
       placements,
       environments: restarted,
       resolveDevicePlacementRequirement: async () => ({
