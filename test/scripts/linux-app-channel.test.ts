@@ -77,6 +77,7 @@ type State = {
   nextId: number;
   calls: Call[];
   verifierExit: number;
+  verifierRejectSuffix?: string;
   publicDownloadCache?: Record<string, string>;
   staleAfterUpload?: StaleDownload;
   staleDownloads?: StaleDownload[];
@@ -479,7 +480,7 @@ try {
     for (const option of ["-Vm", "-x", "-p"]) {
       assert(args.includes(option) && fs.readFileSync(flag(option)).length > 0);
     }
-    if (state.verifierExit) fail("fixture signature verification refused", state.verifierExit);
+    if (state.verifierExit || (state.verifierRejectSuffix && flag("-Vm").endsWith(state.verifierRejectSuffix))) fail("fixture signature verification refused", state.verifierExit || 1);
     answer();
   } else {
     fail("Unsupported fixture command");
@@ -535,7 +536,7 @@ function runFixtureCommand(binary: string, args: string[]): string {
   return stdout;
 }
 
-function fixture(workflowRef = toolingRef, desktop = false) {
+function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
   const workflowFullRef = `${workflowRef.startsWith("release-publish/") ? "refs/tags" : "refs/heads"}/${workflowRef}`;
   const root = createTempDir("linux-channel-");
   const statePath = join(root, "state.json");
@@ -614,6 +615,7 @@ function fixture(workflowRef = toolingRef, desktop = false) {
     const names = [
       `OpenClaw-${version}-amd64.AppImage`,
       `OpenClaw-${version}-amd64.deb`,
+      ...(windows && !desktop ? [`OpenClaw-${version}-windows-x86_64.exe`] : []),
       ...(desktop
         ? [
             `OpenClaw-${version}-darwin-aarch64.dmg`,
@@ -628,6 +630,22 @@ function fixture(workflowRef = toolingRef, desktop = false) {
       return `${hash(bytes)}  ./${name}`;
     });
     writeFileSync(join(directory, "SHA256SUMS.linux-app.txt"), `${checksums.join("\n")}\n`);
+    if (windows) {
+      writeFileSync(
+        join(directory, "latest-windows.json"),
+        JSON.stringify({
+          version,
+          notes: "Fixture Windows release",
+          pub_date: "2026-09-03T12:00:00Z",
+          platforms: {
+            "windows-x86_64": {
+              signature,
+              url: `https://github.com/openclaw/openclaw/releases/download/${releaseTag}/OpenClaw-${version}-windows-x86_64.exe`,
+            },
+          },
+        }),
+      );
+    }
     if (desktop) {
       writeFileSync(
         join(directory, "latest-desktop-test.json"),
@@ -717,7 +735,7 @@ function fixture(workflowRef = toolingRef, desktop = false) {
       args.push("--public-key-config", config);
     }
     if (mode === "publish") {
-      args.push("--desktop-test", String(desktop));
+      args.push("--desktop-test", String(desktop), "--windows", String(windows));
       if (!publicOnly) {
         args.push("--assets", inputs(releaseTag), "--signature", signaturePath);
       }
@@ -958,6 +976,32 @@ it("rejects a retired alpha workflow even when finalizing a stable tag", () => {
   const f = fixture("tideclaw/alpha/2026-09-13-0400Z");
   f.addDraft(nextTag);
   failed(f.run("finalize-core", nextTag, "false"), "Alpha releases are retired;");
+  expect(f.mutations()).toEqual([]);
+});
+
+it("publishes Windows with regular Linux bundles and reuses its immutable bytes", () => {
+  const f = fixture(toolingRef, false, true);
+  succeeded(f.run("publish"));
+  expect(f.bytes("windows-stable", "latest-windows.json")).toEqual(
+    f.bytes(tag, "latest-windows.json"),
+  );
+  const metadata = JSON.parse(f.bytes("windows-stable", "latest-windows.json").toString());
+  expect(Object.keys(metadata.platforms)).toEqual(["windows-x86_64"]);
+  expect(metadata.platforms["windows-x86_64"].url).toBe(
+    `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${tag.slice(1)}-windows-x86_64.exe`,
+  );
+  expect(f.state().releases.some((release) => release.tag_name === "desktop-test")).toBe(false);
+  const writes = f.mutations().length;
+  succeeded(f.run("publish", tag, undefined, true));
+  expect(f.mutations()).toHaveLength(writes);
+});
+
+it("rejects an invalid Windows updater signature before publishing bundles", () => {
+  const f = fixture(toolingRef, false, true);
+  f.update((state) => {
+    state.verifierRejectSuffix = ".exe";
+  });
+  failed(f.run("publish"), "fixture signature verification refused");
   expect(f.mutations()).toEqual([]);
 });
 

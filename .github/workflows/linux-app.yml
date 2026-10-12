@@ -379,8 +379,8 @@ jobs:
         run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
 
   test-windows-power:
-    name: Test Windows power lifecycle
-    # Match the optional Windows desktop-test bundle runner.
+    name: Test Windows desktop
+    # Match the regular Windows installer build runner.
     runs-on: windows-2022
     timeout-minutes: 45
     steps:
@@ -394,6 +394,12 @@ jobs:
 
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "false"
 
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -410,6 +416,18 @@ jobs:
         working-directory: apps/linux/src-tauri
         run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
 
-      - name: Verify desktop sharing process ownership on Windows
+      - name: Verify Windows runtime, installer, and desktop boundaries
         working-directory: apps/linux/src-tauri
-        run: cargo +stable test --locked --bin openclaw-desktop desktop_node_process::tests::job_joins_a_real_command_wrapper_and_its_descendant -- --nocapture
+        run: cargo +stable test --locked --bin openclaw-desktop
+
+      - name: Build Windows installer without publishing
+        working-directory: apps/linux/src-tauri
+        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-windows-desktop
+          retention-days: 14
+          if-no-files-found: error
+          path: apps/linux/src-tauri/target/release/bundle/nsis/*.exe

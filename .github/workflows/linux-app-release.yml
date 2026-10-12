@@ -645,8 +645,8 @@ jobs:
           if-no-files-found: error
 
   build_windows:
-    name: Build unsigned Windows test bundle
-    if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
+    name: Build Windows installer
+    if: ${{ needs.validate_release.outputs.already_published != 'true' }}
     needs: validate_release
     runs-on: windows-2022
     timeout-minutes: 45
@@ -677,7 +677,7 @@ jobs:
             --config.ignore-scripts=false --config.engine-strict=false \
             --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
-      - name: Build Windows test bundle
+      - name: Build Windows installer
         working-directory: apps/linux/src-tauri
         shell: bash
         env:
@@ -718,15 +718,92 @@ jobs:
           path: dist/windows-app/unsigned/*.exe
           if-no-files-found: error
 
-  # Optional desktop bundles use the production updater trust root, so their
-  # selected-tag build jobs must cross the same artifact-only signing boundary.
+  # Authenticode is opt-in until Foundation signing is configured in this repository.
+  # A configured signer must succeed; updater signing never falls back to unsigned bytes.
+  sign_windows:
+    name: Authenticode-sign Windows installer
+    needs: [validate_release, build_windows]
+    if: ${{ vars.OPENCLAW_RELEASE_WINDOWS_SIGNED == 'true' && needs.build_windows.result == 'success' }}
+    runs-on: windows-2025
+    timeout-minutes: 15
+    environment: release-signing
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      signed_installer_artifact_id: ${{ steps.upload_signed.outputs.artifact-id }}
+    steps:
+      - name: Download unsigned Windows installer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.build_windows.outputs.unsigned_updater_artifact_id }}
+          path: dist/windows
+
+      - name: Validate Windows signing input
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:RELEASE_TAG.Substring(1)
+          $files = @(Get-ChildItem dist/windows -File -Recurse)
+          if ($files.Count -ne 1 -or $files[0].FullName -cne (Join-Path (Resolve-Path dist/windows).Path "OpenClaw-$version-windows-x86_64.exe")) {
+            throw "Expected exactly the selected Windows installer before signing"
+          }
+
+      - name: Azure OIDC login
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign Windows installer
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: openclaw
+          certificate-profile-name: openclaw
+          files-folder: dist/windows
+          files-folder-filter: exe
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify Foundation Authenticode signature
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:RELEASE_TAG.Substring(1)
+          $signature = Get-AuthenticodeSignature -LiteralPath "dist/windows/OpenClaw-$version-windows-x86_64.exe"
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -cne 'CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US' -or -not $signature.TimeStamperCertificate) {
+            throw "Expected a valid OpenClaw Foundation Authenticode signature"
+          }
+
+      - name: Upload Authenticode-signed installer
+        id: upload_signed
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-app-release-authenticode
+          path: dist/windows/*.exe
+          if-no-files-found: error
+
+  # Windows and optional macOS bundles use the production updater trust root.
+  # Only finalized artifacts enter this fresh signing job.
   sign_desktop:
     name: Sign finalized desktop updater bundles
-    if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
+    if: >-
+      ${{ always() && needs.build_windows.result == 'success' &&
+          (needs.validate_release.outputs.desktop_test_bundles != 'true' || needs.build_macos.result == 'success') &&
+          (vars.OPENCLAW_RELEASE_WINDOWS_SIGNED != 'true' || needs.sign_windows.result == 'success') }}
     needs:
       - validate_release
       - build_macos
       - build_windows
+      - sign_windows
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions: {}
@@ -759,19 +836,29 @@ jobs:
           "${RUNNER_TEMP}/bin/minisign" -v
 
       - name: Download finalized macOS updater archive
+        if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ needs.build_macos.outputs.unsigned_updater_artifact_id }}
           path: dist/signing-input/macos
 
       - name: Download finalized Windows updater installer
+        if: ${{ vars.OPENCLAW_RELEASE_WINDOWS_SIGNED != 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ needs.build_windows.outputs.unsigned_updater_artifact_id }}
           path: dist/signing-input/windows
 
+      - name: Download Authenticode-signed Windows updater installer
+        if: ${{ vars.OPENCLAW_RELEASE_WINDOWS_SIGNED == 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.sign_windows.outputs.signed_installer_artifact_id }}
+          path: dist/signing-input/windows
+
       - name: Sign finalized desktop updater bundles
         env:
+          DESKTOP_TEST_BUNDLES: ${{ needs.validate_release.outputs.desktop_test_bundles }}
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
           TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -787,47 +874,35 @@ jobs:
           version="${RELEASE_TAG#v}"
           macos="dist/signing-input/macos/OpenClaw-${version}-darwin-aarch64.app.tar.gz"
           windows="dist/signing-input/windows/OpenClaw-${version}-windows-x86_64.exe"
-          mapfile -d '' inputs < <(find dist/signing-input -type f -print0)
-          if [[ ! "${TAG_SHA}" =~ ^[0-9a-f]{40}$ || ${#inputs[@]} -ne 2 ||
-                ! -f "$macos" || -L "$macos" || ! -f "$windows" || -L "$windows" ]]; then
-            echo "Signing input must be exactly the validated macOS archive and Windows installer for ${RELEASE_TAG}"
+          mapfile -d '' inputs < <(find dist/signing-input -type f -print0 | sort -z)
+          expected=1
+          if [[ "$DESKTOP_TEST_BUNDLES" == true ]]; then
+            expected=2
+            [[ -f "$macos" && ! -L "$macos" ]]
+          fi
+          if [[ ! "${TAG_SHA}" =~ ^[0-9a-f]{40}$ || ${#inputs[@]} -ne "$expected" ||
+                ! -f "$windows" || -L "$windows" ]]; then
+            echo "Signing input must be exactly the admitted desktop bundles for ${RELEASE_TAG}"
             exit 1
           fi
-          macos_before=$(sha256sum "$macos")
-          windows_before=$(sha256sum "$windows")
-          "${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$macos"
-          "${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$windows"
-          # Signature verification must not inherit production signing credentials.
-          unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-          macos_after=$(sha256sum "$macos")
-          windows_after=$(sha256sum "$windows")
           verify_dir=$(mktemp -d)
           trap 'rm -rf "$verify_dir"' EXIT
           printf '%s' "$UPDATER_PUBLIC_KEY" | base64 --decode > "$verify_dir/updater.pub"
-          base64 --decode < "${macos}.sig" > "$verify_dir/macos.minisig"
-          base64 --decode < "${windows}.sig" > "$verify_dir/windows.minisig"
-          if [[ "$macos_before" != "$macos_after" || "$windows_before" != "$windows_after" ||
-                ! -s "${macos}.sig" || ! -s "${windows}.sig" ]] ||
-             ! "${RUNNER_TEMP}/bin/minisign" -Vm "$macos" -x "$verify_dir/macos.minisig" \
-               -p "$verify_dir/updater.pub" ||
-             ! "${RUNNER_TEMP}/bin/minisign" -Vm "$windows" -x "$verify_dir/windows.minisig" \
-               -p "$verify_dir/updater.pub"; then
-            echo "Signing must preserve finalized desktop updater bytes and create both signatures"
-            exit 1
-          fi
-          mkdir -p \
-            dist/desktop-test/macos/release \
-            dist/desktop-test/macos/signatures \
-            dist/desktop-test/windows/release \
-            dist/desktop-test/windows/signatures
-          cp "$macos" \
-            "dist/desktop-test/macos/release/OpenClaw-${version}-darwin-aarch64.app.tar.gz"
-          cp "${macos}.sig" \
-            "dist/desktop-test/macos/signatures/OpenClaw-${version}-darwin-aarch64.app.tar.gz.sig"
-          cp "$windows" \
-            "dist/desktop-test/windows/release/OpenClaw-${version}-windows-x86_64.exe"
-          cp "${windows}.sig" \
-            "dist/desktop-test/windows/signatures/OpenClaw-${version}-windows-x86_64.exe.sig"
+          for input in "${inputs[@]}"; do
+            before=$(sha256sum "$input")
+            "${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$input"
+            [[ "$before" == "$(sha256sum "$input")" && -s "${input}.sig" ]]
+          done
+          # Signature verification must not inherit production signing credentials.
+          unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          for input in "${inputs[@]}"; do
+            base64 --decode < "${input}.sig" > "$verify_dir/bundle.minisig"
+            "${RUNNER_TEMP}/bin/minisign" -Vm "$input" -x "$verify_dir/bundle.minisig" -p "$verify_dir/updater.pub"
+            platform=$(basename "$(dirname "$input")")
+            mkdir -p "dist/desktop-test/$platform/release" "dist/desktop-test/$platform/signatures"
+            cp "$input" "dist/desktop-test/$platform/release/"
+            cp "${input}.sig" "dist/desktop-test/$platform/signatures/"
+          done
 
       - name: Upload signed desktop updater bundles
         id: upload_signed_desktop
@@ -846,9 +921,9 @@ jobs:
           (needs.build_linux.result == 'success' &&
             needs.sign_linux.result == 'success')) &&
         (needs.validate_release.outputs.desktop_test_bundles != 'true' ||
-          (needs.build_macos.result == 'success' &&
-            needs.build_windows.result == 'success' &&
-            needs.sign_desktop.result == 'success'))
+          needs.build_macos.result == 'success') &&
+        (needs.validate_release.outputs.already_published == 'true' ||
+          (needs.build_windows.result == 'success' && needs.sign_desktop.result == 'success'))
       }}
     needs:
       - validate_release
@@ -918,7 +993,7 @@ jobs:
           path: dist/input/macos/release
 
       - name: Download signed desktop updater bundles
-        if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
+        if: ${{ needs.validate_release.outputs.already_published != 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ needs.sign_desktop.outputs.signed_desktop_artifact_id }}
@@ -935,9 +1010,9 @@ jobs:
           version="${RELEASE_TAG#v}"
           mkdir -p dist/release
           cp dist/input/linux/release/* dist/release/
+          cp dist/input/windows/release/* dist/release/
           if [[ "${DESKTOP_TEST_BUNDLES}" == "true" ]]; then
             cp dist/input/macos/release/* dist/release/
-            cp dist/input/windows/release/* dist/release/
           fi
 
           # Checksums cover only immutable downloadable bundles.
@@ -945,23 +1020,24 @@ jobs:
           cat dist/release/SHA256SUMS.linux-app.txt
 
           url_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
+          release_json=$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json body,publishedAt)
+          pub_date=$(jq -er '.publishedAt' <<< "$release_json")
+          notes=$(jq -r '.body // ""' <<< "$release_json")
+          windows_signature=$(cat "dist/input/windows/signatures/OpenClaw-${version}-windows-x86_64.exe.sig")
+          jq -n \
+            --arg version "${version}" \
+            --arg notes "${notes}" \
+            --arg pub_date "${pub_date}" \
+            --arg windows_signature "${windows_signature}" \
+            --arg windows_url "${url_base}/OpenClaw-${version}-windows-x86_64.exe" \
+            '{version: $version, notes: ($notes | .[0:2000]), pub_date: $pub_date, platforms: {"windows-x86_64": {signature: $windows_signature, url: $windows_url}}}' \
+            > dist/release/latest-windows.json
           if [[ "${DESKTOP_TEST_BUNDLES}" == "true" ]]; then
-            release_json=$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json body,publishedAt)
-            pub_date=$(jq -er '.publishedAt' <<< "$release_json")
-            notes=$(jq -r '.body // ""' <<< "$release_json")
             macos_signature=$(cat "dist/input/macos/signatures/OpenClaw-${version}-darwin-aarch64.app.tar.gz.sig")
-            windows_signature=$(cat "dist/input/windows/signatures/OpenClaw-${version}-windows-x86_64.exe.sig")
-            jq -n \
-              --arg version "${version}" \
-              --arg notes "${notes}" \
-              --arg pub_date "${pub_date}" \
-              --arg macos_signature "${macos_signature}" \
-              --arg macos_url "${url_base}/OpenClaw-${version}-darwin-aarch64.app.tar.gz" \
-              --arg windows_signature "${windows_signature}" \
-              --arg windows_url "${url_base}/OpenClaw-${version}-windows-x86_64.exe" \
-              '{version: $version, notes: ($notes | .[0:2000]), pub_date: $pub_date, platforms: {"darwin-aarch64": {signature: $macos_signature, url: $macos_url}, "windows-x86_64": {signature: $windows_signature, url: $windows_url}}}' \
-              > dist/release/latest-desktop-test.json
-            cat dist/release/latest-desktop-test.json
+            jq --arg signature "$macos_signature" \
+              --arg url "${url_base}/OpenClaw-${version}-darwin-aarch64.app.tar.gz" \
+              '.platforms["darwin-aarch64"] = {signature: $signature, url: $url}' \
+              dist/release/latest-windows.json > dist/release/latest-desktop-test.json
           fi
 
       # The control tag can target release-branch workflows. Its existing
@@ -1024,7 +1100,7 @@ jobs:
             --workflow-ref "$WORKFLOW_REF" --workflow-full-ref "$WORKFLOW_FULL_REF" \
             --request-run-id "$REQUEST_RUN_ID" --request-run-attempt "$REQUEST_RUN_ATTEMPT" \
             "${input_args[@]}" --public-key-config apps/linux/src-tauri/tauri.conf.json \
-            --desktop-test "$DESKTOP_TEST_BUNDLES" \
+            --desktop-test "$DESKTOP_TEST_BUNDLES" --windows true \
             2> >(tee "$RUNNER_TEMP/linux-publication.log" >&2) | tee "$RUNNER_TEMP/linux-publication.json"
 
       - name: Record incomplete Linux publication
