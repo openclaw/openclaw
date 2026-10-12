@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { appendSessionManagerActor } from "../../agents/sessions/session-manager-actor-append.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -156,6 +157,7 @@ async function withActor(
       drain?: Promise<void>;
       onExecuted?: () => void;
       admissionCancelled?: boolean;
+      disclosureRevoked?: boolean;
     };
     retireGeneration(this: void): void;
     nativePatch(this: void, updatedAt: number): void;
@@ -189,7 +191,11 @@ async function withActor(
         }
       },
       assertCurrent() {},
-      assertReadable() {},
+      assertReadable() {
+        if (fault.disclosureRevoked) {
+          throw new Error("Snapshot disclosure revoked");
+        }
+      },
     };
     const replica = createSessionActorReplica({
       target,
@@ -657,6 +663,61 @@ it("admits tool appends once per transaction boundary without transferring trans
     expect((await actor.read(authority)).transcript).toEqual(committed.transcript);
   });
 });
+
+it.each([false, true])(
+  "appends prepared session-manager messages without snapshot disclosure (toolResult=%s)",
+  async (toolResult) => {
+    await withActor(async ({ actor, fault, admissions }) => {
+      const initial = await actor.read(authority);
+      const sessionId = initial.entry!.sessionId;
+      fault.disclosureRevoked = true;
+      expect(() => actor.snapshot(authority)).toThrow("Snapshot disclosure revoked");
+      admissions.length = 0;
+      const result = await appendSessionManagerActor({
+        actor,
+        toolResult,
+        assertCurrent: authority.assertCurrent,
+        append: {
+          kind: "message",
+          input: {
+            scope: {
+              agentId: "main",
+              storePath:
+                actor.target.database.kind === "file"
+                  ? actor.target.database.nativeLocation
+                  : "unused",
+              sessionKey: actor.target.sessionKey,
+              sessionId,
+            },
+            cwd: "/synthetic",
+            messageJson: JSON.stringify(
+              toolResult
+                ? {
+                    role: "toolResult",
+                    toolCallId: "prepared-tool",
+                    toolName: "synthetic",
+                    content: [{ type: "text", text: "prepared result" }],
+                    isError: false,
+                    timestamp: 2,
+                  }
+                : { role: "user", content: "prepared input", timestamp: 2 },
+            ),
+          },
+        },
+      });
+      expect(result.failure).toBeUndefined();
+      expect(result.committed).toMatchObject({
+        kind: "message",
+        value: { snapshot: { ok: true } },
+      });
+      expect(admissions.map(({ stage }) => stage)).toEqual(["transaction", "commit"]);
+      fault.disclosureRevoked = false;
+      const current = actor.snapshot(authority)!;
+      expect(current.version.sequence).toBe(initial.version.sequence + 1);
+      expect(current.transcript.anchors).toHaveLength(initial.transcript.anchors.length + 1);
+    });
+  },
+);
 
 it("retains rollback state and fences unknown commits until an explicit read", async () => {
   await withActor(async ({ actor, commands, fault }) => {
