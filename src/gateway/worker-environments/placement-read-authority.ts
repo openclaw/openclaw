@@ -137,7 +137,10 @@ export function projectCachedLocalPlacementTurnClaim(
     return undefined;
   }
   const projection = structuredClone(retained.projection);
-  projection.placements.set(placement.sessionId, structuredClone(placement));
+  projection.placements = new Map(projection.placements).set(
+    placement.sessionId,
+    structuredClone(placement),
+  );
   return projection;
 }
 
