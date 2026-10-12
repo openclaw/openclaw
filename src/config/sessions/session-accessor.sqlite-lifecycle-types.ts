@@ -117,6 +117,7 @@ export type LifecycleRemovalProjectionInput = {
 export type ProjectedLifecycleCommitResult = {
   archivedTranscripts: SessionLifecycleArchivedTranscript[];
   beforeCount: number;
+  afterCount: number;
   maintenancePlans: SessionEntryMaintenancePlan[];
   removedSessionKeys: string[];
   pendingArchives: boolean;

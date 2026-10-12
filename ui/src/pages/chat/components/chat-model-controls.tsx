@@ -6,7 +6,6 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../../api/types.ts";
-import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import {
   normalizeChatModelProviderId,
@@ -35,6 +34,7 @@ import {
   isSessionRuntimePinned,
   resolveModelRuntimeEntry,
 } from "../../../lib/model-runtime-choice.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { solidTemplate } from "./chat-composer-controls.ts";
 import { ChatEffortPicker, type ChatEffortPickerParams } from "./chat-effort-picker.tsx";
@@ -46,7 +46,7 @@ import {
 } from "./chat-model-picker-options.ts";
 import { ChatModelPicker, type ChatModelPickerParams } from "./chat-model-picker.tsx";
 
-registerModelControlsEnglish();
+registerEnglishCatalog(registerModelControlsEnglish);
 
 type ChatContextWindowTarget = Pick<
   SessionsListResult["defaults"],

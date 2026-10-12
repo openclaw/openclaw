@@ -5,11 +5,25 @@
   "description": "OpenClaw ClawRouter plugin",
   "type": "module",
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*"
+    "@openclaw/plugin-sdk": "workspace:*",
+    "@solidjs/compiler": "2.0.0-rc.13",
+    "esbuild": "0.28.2"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "controlUi": "./src/control-ui.tsx",
+    "assetScripts": {
+      "build": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/clawrouter",
+      "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/clawrouter --copy",
+      "buildOutputs": [
+        "openclaw.plugin.json"
+      ]
+    }
+  },
+  "dependencies": {
+    "@solidjs/web": "2.0.0-rc.13",
+    "solid-js": "2.0.0-rc.13"
   }
 }

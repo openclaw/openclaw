@@ -15,10 +15,10 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { questionPanelIn } from "../chat/components/chat-question-card.test-support.ts";
-import type { QuestionPage } from "./question-page.tsx";
 import "./question-page-registration.ts";
 
 const tag = "openclaw-question-page";
+type QuestionPage = HTMLElementTagNameMap[typeof tag];
 
 function question(id = "question-one") {
   return {
@@ -49,7 +49,7 @@ function mount(request: GatewayRequestHandler) {
     phase: "connected",
   });
   const provider = createApplicationContextProvider({ gateway } as ApplicationContext);
-  const page = document.createElement(tag) as QuestionPage;
+  const page = document.createElement(tag);
   page.questionId = "question-one";
   provider.append(page);
   document.body.append(provider);

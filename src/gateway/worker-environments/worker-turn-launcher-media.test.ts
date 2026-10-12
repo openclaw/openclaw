@@ -7,6 +7,7 @@ import {
   createNoisyPngBuffer,
   createSolidPngBuffer,
 } from "../../../test/helpers/image-fixtures.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -646,6 +647,7 @@ describe("cloud turn media boundary", () => {
       if (closure === "unrelated") {
         await operation;
         expect(rig.launches).toHaveLength(1);
+        await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
         expect(transferSignal?.aborted).toBe(true);
         input.preparedRunAdmission.close();
       } else {

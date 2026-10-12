@@ -117,8 +117,9 @@ export async function waitForPatch(
   throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
 }
 
-/** Dispatches before a successful action can remove its own control from the DOM. */
+/** Wait for actionability, then dispatch once before the control can remove itself. */
 export async function activateSelfRemovingControl(control: Locator): Promise<void> {
+  await control.click({ trial: true });
   await control.evaluate((element) => {
     const target = element as HTMLElement & { disabled?: boolean };
     const style = getComputedStyle(target);

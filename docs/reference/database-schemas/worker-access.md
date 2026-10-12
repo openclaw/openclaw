@@ -18,6 +18,15 @@ Physical integrity admission remains valid independently of canonical readiness.
 The schema 25 migration seeds every existing node before admission; see
 [canonical writer validation](/reference/database-schemas/agent-schema-history#canonical-writer-validation).
 
+Inbound session metadata and last-route changes use closed entry operations. The
+Gateway prepares plugin-owned group and origin facts once; the writer merges
+those facts with its current entry, preserving concurrent metadata, routing
+fallbacks, creation provenance, and activity timestamps without a detached
+callback comparison. Skill snapshot persistence uses the same fixed-field path.
+Generic callbacks retain their prepare-and-compare contract, and source and
+conversation authority still apply at the mutation boundary. These operations
+change no schemas, stored formats, retention, or update behavior.
+
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
 committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,
@@ -69,8 +78,8 @@ not query refresh-lock state. These changes preserve schema versions, retention,
 stored data, and update compatibility.
 
 Remaining synchronous compatibility debt includes released conversation-binding
-and proxy-capture SDK callbacks, opaque native Web Push guards, and the public
-prepared-workspace acquisition guard. Unbound incognito usage/outcome storage
+and proxy-capture SDK callbacks and the public prepared-workspace acquisition
+guard. Unbound incognito usage/outcome storage
 still belongs to its native process-held database until the incognito actor
 cutover. Hidden GitHub credentials retain their synchronous credential-lifecycle
 owner and current effect checks. Moving these calls requires their owning
@@ -240,6 +249,39 @@ the canonical agent worker, including after native deletion preparation. Native
 inline maintenance and archive persistence still share the released opaque SDK
 deletion transaction; moving those calls requires that transaction owner's cutover.
 This changes no schemas, retention, stored bytes, or update behavior.
+
+## Live T1 and deprecated compatibility
+
+`pnpm check:database-worker-ratchet` reports live **T1** separately from
+**T1-compat** (deprecated-only synchronous compatibility). T1 remains a
+conservative inventory of bundled-reachable or unproven runtime/mixed SQL;
+T1-compat is not worker execution or a runtime speedup. The combined count still
+shows the retained synchronous implementation.
+
+An operation enters T1-compat only through the reviewed operation registry in
+`scripts/lib/database-worker-compat.mts`. Its declaration must retain
+`@deprecated`, and the source graph must have no bundled value references except
+from other reviewed compatibility boundaries. The check follows import and
+reexport aliases, including SDK barrels, and rejects escaped callbacks and
+namespace values as well as direct calls. Type-only references and pure
+reexports preserve the released SDK surface without becoming runtime callers.
+Tests remain outside this production inventory. Returned-method families and
+shared kernels stay in T1 until their complete caller boundary can be enforced;
+a deprecation marker alone does not move them to T1-compat.
+
+The same check runs from the inventory generator and the worker ratchet, including
+staged-source checks. Adding a bundled caller fails even if another T1 call is
+removed in the same change. A shared kernel stays T1 unless every native caller
+has a proven compatibility boundary; worker callers alone do not prove that.
+Boot admission, migrations, Doctor/CLI one-shots, and lock primitives retain their
+existing T2/T3 classifications.
+
+Remove a T1-compat API and its remaining synchronous kernel in the next Plugin SDK
+major, together with obsolete SDK exports and registry entries. Publish release
+notes naming the removed API and its asynchronous replacement. Until that major,
+keep the deprecated API's completion and transaction contract; migrate bundled
+callers to the owning worker operation instead of removing the compatibility
+implementation.
 
 ## Session target discovery
 
@@ -941,6 +983,8 @@ predicates, prepared message bytes, and live authority checks. Committed and
 unknown outcomes never replay. Durable commands retain the physical writer FIFO
 across snapshot selection, command settlement, and the single rebase, so another
 queued writer cannot invalidate the refused postimage before its retry enters.
+Pending-input staging selects its initial lifecycle facts after entering that
+FIFO, so an earlier terminal write cannot make a new input stale before admission.
 Transcript appends and terminal accounting use the same command owner. Message
 preparation and external hooks remain outside this reservation; each native
 transaction still settles before another command starts.
@@ -1482,11 +1526,14 @@ exact joined read because native and SDK writers can revoke rows outside owner
 publication. Released synchronous standing-grant methods retain their arguments
 and completion timing; bundled preparation uses their awaited replacements.
 
-Web Push reads, approval delivery operations, and current-subscription cleanup
-have exact worker-only entries; native preferences, subscription upsert/deletion,
-and their shared schema helper remain T1. Prepared-workspace list and mutation
-operations are worker-only, while the synchronous `find` compatibility query
-remains T1. Approval history and unguarded insert, pending-list, expiry, and
+All Web Push reads and mutations execute through the shared-state worker. The
+Gateway checks current requester and profile authority at the existing worker
+transaction grant, including opaque in-process request callbacks. The profile
+binding is resolved once inside that transaction; subscription-presence facts
+are published directly from synchronous reads and invalidated by write receipts.
+Only the shared additive-column helper also runs in offline legacy migration.
+Prepared-workspace list and mutation operations are worker-only, while the
+synchronous `find` compatibility query remains T1. Approval history and unguarded insert, pending-list, expiry, and
 allow-once consumption have exact worker-only entries; guarded native
 compatibility operations retain their existing tiers. Offline full-store reset inventory and
 archive-reset operations are T3 CLI one-shots, including dev bootstrap; Gateway
@@ -5599,6 +5646,13 @@ still read their logical agent namespaces. Recorded quarantine remains authorita
 Canonical validation receipts share that same physical admission; their certifying
 and offline repair writers publish committed replacements. Ordinary session writes
 do not expire the receipt, and rollback cannot publish an uncommitted one.
+
+Lifecycle mutations return the resulting entry count from their committed
+inserts and removals. Finalization subtracts only acknowledged retention removals;
+it does not query the count again after archive publication. A later lifecycle
+operation reads its own starting count, so unrelated writes after the earlier
+commit belong to that later operation. Doctor callbacks that can change arbitrary
+rows still count inside their transaction.
 
 Warm maintenance reads use the current age hint and one count statement without
 an explicit transaction. Capacity pressure still requests full planning, whose

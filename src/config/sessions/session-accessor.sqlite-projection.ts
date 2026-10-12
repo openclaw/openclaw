@@ -1,10 +1,7 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  deferOpenClawAgentPostCommitPublication,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
@@ -27,7 +24,6 @@ import {
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
 } from "./session-accessor.sqlite-deletion.js";
 import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
-import { readSessionEntryCount } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import { prepareLifecycleIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { projectSessionEntryLifecycleMutation } from "./session-accessor.sqlite-lifecycle-state.js";
@@ -56,7 +52,6 @@ import {
 import {
   commitSessionLifecycleProjectionInWorker,
   projectSessionEntryLifecycleMutationInWorker,
-  readSessionEntryLifecycleCountInWorker,
 } from "./session-lifecycle-projection.js";
 import { assertMaintenancePreservationCompatible } from "./store-maintenance-preserve-snapshot.js";
 import {
@@ -398,10 +393,13 @@ export async function applySessionEntryLifecycleMutation(
       captureArtifactCleanupError(error);
     }
     const archivedTranscripts = [...publishedRemovalTranscripts, ...maintenanceArchivedTranscripts];
+    // The result describes this lifecycle commit and its acknowledged retention work.
+    // Unrelated writes after COMMIT belong to their own operation's receipt.
     const afterCount =
-      reclamationOptions && execution
-        ? await readSessionEntryLifecycleCountInWorker({ database: reclamationOptions, execution })
-        : readSessionEntryCount(openOpenClawAgentDatabase(databaseOptions));
+      committed.afterCount -
+      maintenance.modelRunPruned -
+      maintenance.pruned -
+      (maintenance.capped - maintenance.capArchived);
     emitArchivedTranscriptUpdates(archivedTranscripts);
     const archivedTranscriptDirectories = uniqueStrings(
       archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),

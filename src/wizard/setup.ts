@@ -618,6 +618,14 @@ async function runSetupWizardOnce(
     await runSetupMemoryImportStep({ config: nextConfig, prompter, runtime });
   }
 
+  if (!opts.nonInteractive) {
+    const { runMemorySetupFlow } = await import("../flows/memory-setup.js");
+    nextConfig = await runMemorySetupFlow(nextConfig, prompter, {
+      agentDir: onboardingTarget.agentDir,
+      secretInputMode: opts.secretInputMode,
+    });
+  }
+
   if (opts.skipSearch) {
     await prompter.note(t("wizard.setup.skipSearch"), t("wizard.setup.searchTitle"));
   } else {

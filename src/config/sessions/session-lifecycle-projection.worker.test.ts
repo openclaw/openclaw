@@ -512,3 +512,34 @@ it("publishes the acknowledged lifecycle once after losing its worker reply", as
     }
   });
 });
+
+it("reports its committed count while the next lifecycle sees later writes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const createdKey = "agent:main:lifecycle-counted";
+    const laterKey = "agent:main:lifecycle-later";
+    await expect(
+      applySessionEntryLifecycleMutation({
+        ...f.scope,
+        skipMaintenance: true,
+        upserts: [{ sessionKey: createdKey, entry: { sessionId: "counted", updatedAt: 2 } }],
+        onLifecycleCommitted() {
+          replaceSessionEntrySync(
+            { ...f.scope, sessionKey: laterKey },
+            { sessionId: "later", updatedAt: 3 },
+          );
+        },
+      }),
+    ).resolves.toMatchObject({ beforeCount: 1, afterCount: 2 });
+    expect(f.read(laterKey)?.sessionId).toBe("later");
+    await expect(
+      applySessionEntryLifecycleMutation({
+        ...f.scope,
+        skipMaintenance: true,
+        removals: [{ sessionKey: createdKey }],
+      }),
+    ).resolves.toMatchObject({ beforeCount: 3, afterCount: 2, removedEntries: 1 });
+    expect(f.read(createdKey)).toBeUndefined();
+    expect(f.read(laterKey)?.sessionId).toBe("later");
+  });
+});

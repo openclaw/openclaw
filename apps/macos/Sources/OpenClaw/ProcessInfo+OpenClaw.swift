@@ -64,11 +64,28 @@ extension ProcessInfo {
             || environment["XCTestSessionIdentifier"] != nil
     }
 
-    var isRunningTests: Bool {
-        Self.resolveIsRunningTests(
-            environment: self.environment,
-            processName: self.processName,
-            arguments: self.arguments,
+    private static let runningTests: Bool = {
+        let process = ProcessInfo.processInfo
+        let environment = process.environment
+        let processName = process.processName
+        let arguments = process.arguments
+        // Runner identity is process-stable; avoid touching transient bundles when it is known.
+        if ProcessInfo.resolveIsRunningTests(
+            environment: environment,
+            processName: processName,
+            arguments: arguments,
+            bundleURLs: [])
+        {
+            return true
+        }
+        return ProcessInfo.resolveIsRunningTests(
+            environment: environment,
+            processName: processName,
+            arguments: arguments,
             bundleURLs: Bundle.allBundles.map(\.bundleURL) + [Bundle.main.bundleURL])
+    }()
+
+    var isRunningTests: Bool {
+        Self.runningTests
     }
 }

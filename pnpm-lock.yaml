@@ -887,10 +887,23 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/clawrouter:
+    dependencies:
+      '@solidjs/web':
+        specifier: 2.0.0-rc.13
+        version: 2.0.0-rc.13(solid-js@2.0.0-rc.13)
+      solid-js:
+        specifier: 2.0.0-rc.13
+        version: 2.0.0-rc.13
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@solidjs/compiler':
+        specifier: 2.0.0-rc.13
+        version: 2.0.0-rc.13
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   extensions/clickclack:
     dependencies:
@@ -5971,9 +5984,19 @@ packages:
       '@tsrx/core':
         optional: true
 
+  '@solidjs/compiler-darwin-arm64@2.0.0-rc.13':
+    resolution: {integrity: sha512-uG3Sa/2jNZNxoKkcHjHw3KZEEuwDrRAk9aqUU2qqJZl9GDLLI0HVW7i/Lvq9b17f5yN+fNTdNyojO8rLgHnQuQ==}
+    cpu: [arm64]
+    os: [darwin]
+
   '@solidjs/compiler-darwin-arm64@2.0.0-rc.14':
     resolution: {integrity: sha512-WiOnnVov6XfT7QG9OrgqWfoJMrUYYbjO88qMzJ09tijV6Phu+BoeK2J3I0B3IpPPrOTMQ2mXpcwdvnSLuAtWdw==}
     cpu: [arm64]
+    os: [darwin]
+
+  '@solidjs/compiler-darwin-x64@2.0.0-rc.13':
+    resolution: {integrity: sha512-jIyzyn/fYHmzikOaskiqmkc8FusXMaxl1Z6huh7lEeHaZsl9NIdzzAIxq8j/EJFByvoCyfQitggRTuubGNblpA==}
+    cpu: [x64]
     os: [darwin]
 
   '@solidjs/compiler-darwin-x64@2.0.0-rc.14':
@@ -5981,9 +6004,21 @@ packages:
     cpu: [x64]
     os: [darwin]
 
+  '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.13':
+    resolution: {integrity: sha512-cGIX7ZWTyw3Qdpd5ZqJtHdb2vQkAtZlkTgy919dMldjoRqDwQIRlqCmH35kaH/IUBlhuG224BoP4twqK9GYyGw==}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
   '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.14':
     resolution: {integrity: sha512-2d8F8x4sBae7DQHi9wholdzHir8UsHVHpPRPj4NRr4seD5rWkpIbQ3Pwk/9FMZoM4KZmCZ+6+SInQm7iGALgTw==}
     cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@solidjs/compiler-linux-x64-gnu@2.0.0-rc.13':
+    resolution: {integrity: sha512-Dnft4iic4zHsemNSBGMwOMjN4fP0DEoyfeSUWbqBk1CMsXRarLTcMKhjNQmJvL0opzjOUq0/m7/17LTe6AKpvg==}
+    cpu: [x64]
     os: [linux]
     libc: [glibc]
 
@@ -5993,14 +6028,26 @@ packages:
     os: [linux]
     libc: [glibc]
 
+  '@solidjs/compiler-wasm32-wasi@2.0.0-rc.13':
+    resolution: {integrity: sha512-nNOMOFxanzfM2wNbSXyekMtGazyOcM3ja+P7tk0NJYTAo2MYmRTY/HUDdFRDluk6Nc5aehu87I7AVMRj5l1WXw==}
+    engines: {node: '>=14.0.0'}
+
   '@solidjs/compiler-wasm32-wasi@2.0.0-rc.14':
     resolution: {integrity: sha512-cTaAmM7Ca6JisgvnqsLT9Fce4sDmonCaTvBb5eF2iEfdt8htFZ2Z9RlUEK2yG6LxCN89/K/vZLbI7giLA4HUjw==}
     engines: {node: '>=14.0.0'}
+
+  '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.13':
+    resolution: {integrity: sha512-1DT+5TgIFV5L8GdrGb+uD9ruHFVq6kJ4A/cb9amUU574TGM88B4nwy//dM57zmT99u7mej7JF91glQBnHOGhHQ==}
+    cpu: [x64]
+    os: [win32]
 
   '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.14':
     resolution: {integrity: sha512-JosTalJd6Pgb8mjNgPCEauQSOi647Vlm2mS0qvO3hYLvzcrODmrYsHIY1/DqbI1FxQdc9vUOKJ5zCHvhjlScuA==}
     cpu: [x64]
     os: [win32]
+
+  '@solidjs/compiler@2.0.0-rc.13':
+    resolution: {integrity: sha512-OveR/xhLKo8MTJO/53jgjHuBW54c6/a9B/jiSjDrBeQ3JSbODUxQ8t58WBSlHaxyowPd27TwhVkLo3zeT1YqMQ==}
 
   '@solidjs/compiler@2.0.0-rc.14':
     resolution: {integrity: sha512-eCTVcxXl1UHOisRMYg+hABwiiTkfTmSkaOFtAb8bjzeqpLlju3lo6pT2qWPfUbrvnslbNGnLZd+HZSIVgZu9VQ==}
@@ -6030,6 +6077,12 @@ packages:
         optional: true
       '@testing-library/jest-dom':
         optional: true
+
+  '@solidjs/web@2.0.0-rc.13':
+    resolution: {integrity: sha512-vI/7v/XM8B/3U/oKAzCW2VjTLFkM5IArB2DFnrjxyPRYD3FX9KAXg9QuAnPIPQHC/xvg/LgxmvoVfZUfJ96gOQ==}
+    engines: {node: '>=22.12.0'}
+    peerDependencies:
+      solid-js: ^2.0.0-rc.13
 
   '@solidjs/web@2.0.0-rc.14':
     resolution: {integrity: sha512-MhHqUoVBdgAG7EZOANx7Y5SuCFH7sBxzt9uBSYLpJxE503tqoi7pX1UhV7PWxw4LvmPe1PZkdkSOZ8BLchZkhQ==}
@@ -10119,6 +10172,10 @@ packages:
     resolution: {integrity: sha512-e0VyvkVTwVYViNovRkZ9aodhxVlyoMn7eJhVUPxZ+eK9P/7CBkxvvsBOHqFPEH416726W8tLXXXjKwqgTErrCQ==}
     engines: {node: '>= 10.0.0', npm: '>= 3.0.0'}
 
+  solid-js@2.0.0-rc.13:
+    resolution: {integrity: sha512-62bYOI4JZ15KOqL5eReKyWSwAXrGb0fbX8SDnHsbJk2UX+SzSyy1gobas2cxW/0BXcobGfQ1V6ffPyQkMIBdoQ==}
+    engines: {node: '>=22.12.0'}
+
   solid-js@2.0.0-rc.14:
     resolution: {integrity: sha512-fmaqUHgbITf18Hedur6gPnaPE4GrdPgkTbLujHqM5Vl5jxWf9rxwFh6hZMXQs+Kg1pu8KYuOMfqnuSizFQ9I6Q==}
     engines: {node: '>=22.12.0'}
@@ -14113,16 +14170,35 @@ snapshots:
       html-entities: 2.3.3
       parse5: 7.3.0
 
+  '@solidjs/compiler-darwin-arm64@2.0.0-rc.13':
+    optional: true
+
   '@solidjs/compiler-darwin-arm64@2.0.0-rc.14':
+    optional: true
+
+  '@solidjs/compiler-darwin-x64@2.0.0-rc.13':
     optional: true
 
   '@solidjs/compiler-darwin-x64@2.0.0-rc.14':
     optional: true
 
+  '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.13':
+    optional: true
+
   '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.14':
     optional: true
 
+  '@solidjs/compiler-linux-x64-gnu@2.0.0-rc.13':
+    optional: true
+
   '@solidjs/compiler-linux-x64-gnu@2.0.0-rc.14':
+    optional: true
+
+  '@solidjs/compiler-wasm32-wasi@2.0.0-rc.13':
+    dependencies:
+      '@emnapi/core': 1.11.3
+      '@emnapi/runtime': 1.11.3
+      '@napi-rs/wasm-runtime': 1.2.4(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)
     optional: true
 
   '@solidjs/compiler-wasm32-wasi@2.0.0-rc.14':
@@ -14132,8 +14208,20 @@ snapshots:
       '@napi-rs/wasm-runtime': 1.2.4(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)
     optional: true
 
+  '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.13':
+    optional: true
+
   '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.14':
     optional: true
+
+  '@solidjs/compiler@2.0.0-rc.13':
+    optionalDependencies:
+      '@solidjs/compiler-darwin-arm64': 2.0.0-rc.13
+      '@solidjs/compiler-darwin-x64': 2.0.0-rc.13
+      '@solidjs/compiler-linux-arm64-gnu': 2.0.0-rc.13
+      '@solidjs/compiler-linux-x64-gnu': 2.0.0-rc.13
+      '@solidjs/compiler-wasm32-wasi': 2.0.0-rc.13
+      '@solidjs/compiler-win32-x64-msvc': 2.0.0-rc.13
 
   '@solidjs/compiler@2.0.0-rc.14':
     optionalDependencies:
@@ -14167,6 +14255,12 @@ snapshots:
     transitivePeerDependencies:
       - '@tsrx/core'
       - supports-color
+
+  '@solidjs/web@2.0.0-rc.13(solid-js@2.0.0-rc.13)':
+    dependencies:
+      seroval: 1.6.8
+      seroval-plugins: 1.6.8(seroval@1.6.8)
+      solid-js: 2.0.0-rc.13
 
   '@solidjs/web@2.0.0-rc.14(solid-js@2.0.0-rc.14)':
     dependencies:
@@ -18676,6 +18770,13 @@ snapshots:
     dependencies:
       ip-address: 10.7.3
       smart-buffer: 4.2.0
+
+  solid-js@2.0.0-rc.13:
+    dependencies:
+      '@solidjs/signals': 2.0.0-rc.14
+      csstype: 3.2.3
+      seroval: 1.6.8
+      seroval-plugins: 1.6.8(seroval@1.6.8)
 
   solid-js@2.0.0-rc.14:
     dependencies:

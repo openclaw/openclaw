@@ -10,6 +10,7 @@ import {
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
+import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
@@ -22,6 +23,7 @@ import {
 import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import { SqliteWorkerAdmissionTimeoutError, SqliteWorkerError } from "./sqlite-worker-contract.js";
 import {
+  SQLITE_COLD_ADMISSION_PENDING,
   exchangeDatabaseAdmissions,
   exchangeSqliteDatabaseAdmissions,
   getSqliteDatabaseAdmissionUpstream,
@@ -53,6 +55,8 @@ export type SqliteWorkerAdmissionRequest = {
 type AdmissionFailureSource = "authority" | "domain" | "protocol";
 type DatabaseAuthority = {
   databasePath: string;
+  /** Only the broker can identify an initial open of its captured primary database. */
+  coldOpenPath?: string;
   assertRequest?(): void;
   assertAccess(): void;
   assertCreate?(databasePath: string): void;
@@ -223,6 +227,7 @@ function createOperationAdmission(
         return;
       }
       const decision = new Int32Array(message.decision);
+      let coldOpenPath: string | undefined;
       try {
         if (closed) {
           throw new SqliteWorkerError("SQLite worker admission is closed", "closed");
@@ -251,11 +256,19 @@ function createOperationAdmission(
           if (message.create === "admitted") {
             create = true;
           } else if (authority && assertCreate) {
+            if (
+              authority.coldOpenPath &&
+              resolveIdentityPathViaExistingAncestorSync(authority.coldOpenPath) ===
+                creationLocation
+            ) {
+              coldOpenPath = authority.coldOpenPath;
+            }
             inOwnerContext(() => {
               authority.assertRequest?.();
               authority.assertAccess();
               assertCreate(creationLocation);
             });
+            coldOpenPath = undefined;
             create = true;
           }
         }
@@ -297,8 +310,17 @@ function createOperationAdmission(
         message.port.postMessage(reply, []);
         Atomics.store(decision, 0, GRANTED);
       } catch (error) {
-        recordFailure(error, "protocol");
-        Atomics.store(decision, 0, REFUSED);
+        if (
+          error instanceof StateDatabaseAdmissionPendingError &&
+          error.databasePath === coldOpenPath
+        ) {
+          // Nothing was created: preserve the worker cold-open owner's existing
+          // bounded wait rather than poisoning this operation as a protocol failure.
+          Atomics.store(decision, 0, SQLITE_COLD_ADMISSION_PENDING);
+        } else {
+          recordFailure(error, "protocol");
+          Atomics.store(decision, 0, REFUSED);
+        }
       } finally {
         message.port.close();
         Atomics.notify(decision, 0);
