@@ -407,6 +407,7 @@ describe("createLazyGatewayCronState", () => {
 
 function createParams(overrides: Partial<OpenClawConfig> = {}) {
   return {
+    storePath: "/tmp/openclaw-cron.json",
     scheduler: createTestGatewayScheduler(),
     cfg: {
       ...overrides,

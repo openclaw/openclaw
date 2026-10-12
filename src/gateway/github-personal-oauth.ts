@@ -29,9 +29,10 @@ import {
   listUserGitHubConnectionsAsync,
   mutateUserGitHubConnection as mutateConnection,
   observeUserGitHubProfileRetirement,
-  readUserGitHubConnection,
+  prepareUserGitHubConnection,
+  readCanonicalUserGitHubConnectionAsync,
+  readPreparedUserGitHubConnection,
   readUserGitHubConnectionAsync,
-  resolvePersonalGitHubOwner,
   updateUserGitHubRefreshAsync as updateRefresh,
   type UserGitHubConnection,
   type UserGitHubConnected,
@@ -70,7 +71,7 @@ export function personalGitHubStatus(action: PersonalGitHubAction): PersonalGitH
   action.assertCurrent();
   let record: UserGitHubConnection | undefined;
   try {
-    record = readUserGitHubConnection(action.owner);
+    record = readPreparedUserGitHubConnection(action.owner);
   } catch {
     action.assertCurrent();
     return {
@@ -285,13 +286,10 @@ export function createPersonalGitHubOAuthLifecycle() {
     if (!candidate) {
       throw new Error("My GitHub authorization has no candidate.");
     }
+    const prepared = await prepareUserGitHubConnection(action.owner);
     const assertCurrent = () => {
       guard(action);
-      const record = requirePending(
-        readUserGitHubConnection(action.owner),
-        generation,
-        pending.requestId,
-      );
+      const record = requirePending(prepared.read(), generation, pending.requestId);
       if (
         record.pending.kind !== "device" ||
         record.pending.candidate?.profileId !== candidate.profileId
@@ -333,7 +331,7 @@ export function createPersonalGitHubOAuthLifecycle() {
         });
       });
       guard(action);
-      return { status: "success", personal: personalGitHubStatus(action) };
+      return { status: "success", personal: await resolvePersonalGitHubStatus(action) };
     } catch {
       guard(action);
       return { status: "failed", reason: "setup_failed" };
@@ -421,10 +419,14 @@ export function createPersonalGitHubOAuthLifecycle() {
     operationId: string,
     assertOwned: () => void,
   ): Promise<void> => {
+    const canonical = await readCanonicalUserGitHubConnectionAsync(owner);
+    if (!canonical) {
+      throw new Error("My GitHub refresh ownership changed.");
+    }
+    const prepared = await prepareUserGitHubConnection(canonical.owner);
     const readExact = () => {
       assertOwned();
-      const canonical = resolvePersonalGitHubOwner(owner);
-      const selection = canonical ? readUserGitHubConnection(canonical)?.selection : undefined;
+      const selection = prepared.read()?.selection;
       if (
         selection?.kind !== "connected" ||
         selection.profileId !== id ||

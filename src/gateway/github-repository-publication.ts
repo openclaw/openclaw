@@ -423,7 +423,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         }
         return personalStatus(row, action, action, prepared).result;
       }
-      const bound = bindPersonalGitHubPublicationSelection(action, selected, {
+      const bound = await bindPersonalGitHubPublicationSelection(action, selected, {
         idempotencyKey: input.idempotencyKey,
         hasRequest: () =>
           Boolean(
@@ -525,6 +525,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     }),
     ...createSharedGitHubPublicationReadMethods("repository"),
     preparePersonalStatus,
+    /** @deprecated Use personalStatusAsync; removed in the next Plugin SDK major. */
     personalStatus(
       action: PersonalGitHubAction,
       session: SessionIdentity,
@@ -532,6 +533,16 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       prepared: PreparedRepositoryPublicationStatus | undefined,
     ) {
       const row = readRepositoryGitHubPublication(requestId);
+      return row ? personalStatus(row, action, session, prepared) : undefined;
+    },
+    async personalStatusAsync(
+      action: PersonalGitHubAction,
+      session: SessionIdentity,
+      requestId: string,
+      prepared: PreparedRepositoryPublicationStatus | undefined,
+    ) {
+      const row = await readRepositoryGitHubPublicationAsync(requestId);
+      action.assertCurrent();
       return row ? personalStatus(row, action, session, prepared) : undefined;
     },
     async personalPending(action: PersonalGitHubAction, session: SessionIdentity) {
@@ -587,7 +598,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       if (!row.checkpoint_ref) {
         throw new Error("GitHub publication has no accepted checkpoint.");
       }
-      bindPersonalGitHubPublicationSelection(action, input);
+      await bindPersonalGitHubPublicationSelection(action, input);
       return await placements.withRepositoryWorkspaceReservation(
         action,
         async (assertReservation) =>

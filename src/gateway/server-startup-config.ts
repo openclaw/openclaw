@@ -1,6 +1,7 @@
 // Gateway startup config loads, repairs, validates, and activates runtime config
 // plus secrets snapshots before the server exposes user-facing surfaces.
 import { hasLegacyAuthProfileSourcesForStartup } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { getRuntimeAuthProfileStoreSnapshotsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
@@ -397,6 +398,7 @@ export function createRuntimeSecretsActivator(params: {
           activationParams.env ?? process.env,
         );
         activationSourceConfig = sourceConfig;
+        await prepareSharedAuthStoreOwnership(activationParams.env);
         const startupPreflight =
           activationParams.reason === "startup" || activationParams.reason === "restart-check";
         if (

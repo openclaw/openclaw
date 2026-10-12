@@ -27,7 +27,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: vi.fn(() => ({
+    loadCombinedSessionStoreForGatewayAsync: vi.fn(async () => ({
       storePath: "(test)",
       store: combinedSessionStore,
     })),
@@ -36,7 +36,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
 
 describe("reset-generation session search visibility", () => {
   afterEach(() => {
-    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGateway).mockClear();
+    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).mockClear();
     vi.mocked(engineSessions.readSessionResetRecallCutoff).mockReset();
     vi.mocked(engineSessions.readSessionResetRecallCutoff).mockResolvedValue({ state: "absent" });
     vi.mocked(engineSessions.loadArchivedSessionsAsync).mockReset();

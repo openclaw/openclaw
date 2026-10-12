@@ -6,7 +6,7 @@ import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
+import { captureRemoteModelCatalogStartupSnapshotAtBoot } from "../model-catalog/remote-overlay.js";
 import {
   LegacyPluginSdkResourceHost,
   bindLegacyPluginSdkResourceHost,
@@ -135,7 +135,7 @@ async function createGatewayKernelWithSdkHost(
   }
   const bootId = suppliedBootId ?? randomUUID();
   // Capture before bootstrap yields or creates workers; later downloads publish through adoption.
-  captureRemoteModelCatalogStartupSnapshot();
+  captureRemoteModelCatalogStartupSnapshotAtBoot();
   // Retain cancellation before bootstrap owns resources or an update replaces its chunk.
   const { cancelPreparedModelRuntimeRefresh } = await import("../agents/prepared-model-runtime.js");
   ensureOpenClawCliOnPath();

@@ -57,6 +57,11 @@ vi.mock("../../state/user-profiles.js", () => ({
   getUserProfileRole: vi.fn(() => null),
   hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
 }));
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
+  readResidentUserProfileAliases: (id: string) => new Set([id]),
+}));
 const { markPluginRegistryActive } = await import("../../plugins/registry-lifecycle.js");
 const { bindPluginRegistryRuntime } = await import("../../plugins/registry-runtime-binding.js");
 const { createPluginRuntime } = await import("../../plugins/runtime/index.js");

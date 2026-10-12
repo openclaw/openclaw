@@ -1826,8 +1826,11 @@ export default {
         const agentDir = path.join(fixture.stateDir, "agents", "main", "agent");
         const sqlitePath = path.join(agentDir, "openclaw-agent.sqlite");
         expect(await stat(sqlitePath).then((entry) => entry.isFile())).toBe(true);
+        await reloadSharedAuthStoreOwnership({
+          ...process.env,
+          OPENCLAW_STATE_DIR: fixture.stateDir,
+        });
         const store = withEnv({ OPENCLAW_STATE_DIR: fixture.stateDir }, () => {
-          reloadSharedAuthStoreOwnership();
           return loadAuthProfileStoreForRuntime(agentDir, {
             readOnly: true,
             syncExternalCli: false,

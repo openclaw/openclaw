@@ -58,7 +58,7 @@ export async function prepareInternalHooks(
   const previousGeneration = hookOwner.generation;
   const registrations: HookGeneration["registrations"] = [];
   let loadedCount = 0;
-  const selection = resolveInternalHookSelection(cfg);
+  const selection = await resolveInternalHookSelection(cfg);
   const shouldLoadHook = (entry: HookPolicyEntry) =>
     isHookLoadable({ entry, config: cfg, names: selection.names });
   const discovery = selection.configured

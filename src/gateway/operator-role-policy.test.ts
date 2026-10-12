@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   assertOperatorModelAllowed,
@@ -645,7 +645,7 @@ describe("operator role policy", () => {
     },
   );
 
-  it.each(["legacy", "prepared", "stale"] as const)(
+  it.each(["legacy", "prepared", "unknown"] as const)(
     "resolves %s assignments and denies unavailable role authority",
     async (assignment) => {
       const cfg = roleConfig();
@@ -658,20 +658,24 @@ describe("operator role policy", () => {
       }
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const profile = ensureProfileForEmail("role-assignment@example.test");
-        if (assignment === "stale") {
+        const catalog = await prepareUserProfileCatalog();
+        onTestFinished(catalog.release);
+        if (assignment === "unknown") {
           setUserProfileRole(profile.id, "retired");
         } else {
           expect(resolveOperatorRolePolicy(identifiedClient(profile.id), cfg)).toEqual(guestRole);
         }
         expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(guestRole);
-        if (assignment === "stale") {
+        if (assignment === "unknown") {
           expect(resolveOperatorRolePolicyForProfile(profile.id, roleConfig(false))).toMatchObject(
             denied,
           );
           return;
         }
         setUserProfileRole(profile.id, "maintainer");
-        expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(guestRole);
+        expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(
+          cfg.gateway?.roles?.definitions.maintainer,
+        );
         invalidateOperatorRolePolicy(profile.id);
         expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(
           cfg.gateway?.roles?.definitions.maintainer,
@@ -683,6 +687,8 @@ describe("operator role policy", () => {
   it("keeps human-derived sandbox restrictions separate from profile provenance", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("role-sandbox-creator@example.com");
+      const catalog = await prepareUserProfileCatalog();
+      onTestFinished(catalog.release);
       const cfg = roleConfig();
       const guest = cfg.gateway?.roles?.definitions.guest;
       if (!guest) {
@@ -763,6 +769,8 @@ describe("operator role policy", () => {
   it("authorizes only configured agents and rejects unidentified operators", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("role-agents@example.com");
+      const catalog = await prepareUserProfileCatalog();
+      onTestFinished(catalog.release);
       const cfg = roleConfig();
 
       expect(

@@ -9,8 +9,8 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   inspectSharedAuthStoreOwnership,
   noteCommittedSharedAuthStoreOwnership,
-  resolveSharedAuthStoreOwnership,
 } from "../agents/auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative as resolveSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.native.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   hasPendingSharedAuthCleanup,

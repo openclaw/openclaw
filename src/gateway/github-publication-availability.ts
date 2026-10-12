@@ -24,7 +24,8 @@ import { captureSessionEntryMetadataRead } from "../config/sessions/session-entr
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
+import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
@@ -455,7 +456,7 @@ export function sameGitHubPublicationWorkspace(
         current.worktree.branch === first.worktree.branch;
 }
 
-function localGitHubPublicationSessionIdentity(row: {
+type LocalGitHubPublicationRow = {
   request_id: string;
   identity_source: string;
   session_id: string;
@@ -464,43 +465,62 @@ function localGitHubPublicationSessionIdentity(row: {
   worktree_id: string;
   repository_fingerprint: string;
   branch: string;
-}) {
-  const lifecycle = readGitHubPublicationSessionLifecycle({
-    publicationKind: row.identity_source === "personal" ? "personal" : "shared",
-    requestId: row.request_id,
-  });
-  if (!lifecycle) {
-    throw new GitHubPublicationSessionChangedError();
-  }
-  return {
-    sessionId: row.session_id,
-    sessionKey: row.session_key,
-    agentId: row.agent_id,
-    lifecycleRevision: lifecycle.lifecycle_revision,
-    expected: {
-      worktreeId: row.worktree_id,
-      repositoryFingerprint: row.repository_fingerprint,
-      branch: row.branch,
-    },
-  };
-}
+};
 
-export async function readLocalGitHubPublicationWorktreeOwner(
-  row: Parameters<typeof localGitHubPublicationSessionIdentity>[0],
-) {
-  const identity = localGitHubPublicationSessionIdentity(row);
-  const owner = await readGitHubPublicationWorktreeOwner(identity);
-  return {
-    ...owner,
-    assertCurrent: () => {
-      if (
-        localGitHubPublicationSessionIdentity(row).lifecycleRevision !== identity.lifecycleRevision
-      ) {
-        throw new GitHubPublicationSessionChangedError();
-      }
-      return owner.assertCurrent();
-    },
+export async function readLocalGitHubPublicationWorktreeOwner(row: LocalGitHubPublicationRow) {
+  const context = captureOpenClawStateWorkerContext();
+  const publicationKind = row.identity_source === "personal" ? "personal" : "shared";
+  const key = JSON.stringify([`${publicationKind}-lifecycle`, row.request_id]);
+  let invalidated = false;
+  // Bind before the read: deletion receipts retire the captured lifecycle before any Git effect.
+  const release = githubPublicationReceipts.subscribeFacts((change) => {
+    if (
+      (change.kind === "unknown" && change.identity === context.admission.identity.key) ||
+      (change.kind === "committed" &&
+        change.receipt.source.identity === context.admission.identity.key &&
+        change.receipt.facts.has(key))
+    ) {
+      invalidated = true;
+    }
+  });
+  const assertLifecycleCurrent = () => {
+    context.admission.assertCurrent();
+    if (invalidated) {
+      throw new GitHubPublicationSessionChangedError();
+    }
   };
+  try {
+    const lifecycle = await readGitHubPublicationSessionLifecycleInWorker({
+      publicationKind,
+      requestId: row.request_id,
+    });
+    if (!lifecycle) {
+      throw new GitHubPublicationSessionChangedError();
+    }
+    const owner = await readGitHubPublicationWorktreeOwner({
+      sessionId: row.session_id,
+      sessionKey: row.session_key,
+      agentId: row.agent_id,
+      lifecycleRevision: lifecycle.lifecycle_revision,
+      expected: {
+        worktreeId: row.worktree_id,
+        repositoryFingerprint: row.repository_fingerprint,
+        branch: row.branch,
+      },
+    });
+    assertLifecycleCurrent();
+    return {
+      ...owner,
+      release,
+      assertCurrent: () => {
+        assertLifecycleCurrent();
+        return owner.assertCurrent();
+      },
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 export async function prepareGitHubPublicationAvailability(params: {

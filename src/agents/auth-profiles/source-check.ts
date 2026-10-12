@@ -17,6 +17,7 @@ import {
   resolveSharedAuthStoreOwnershipAsync,
   resolveSharedAuthStorePath,
 } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { coercePersistedAuthProfileStore } from "./persisted.js";
 import {
   getRuntimeAuthProfileStoreSnapshotCore,
@@ -71,6 +72,7 @@ function canonicalStoreOwnsProviderRoute(
 
 /** Synchronous Doctor/CLI and released coding-tool construction compatibility. */
 export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
+  prepareSharedAuthStoreOwnershipForNative();
   if (hasLocalAuthProfileStoreSource(agentDir) || hasAnyRuntimeAuthProfileStoreSource(agentDir)) {
     return true;
   }
@@ -220,6 +222,7 @@ export async function hasAnyAuthProfileStoreSourceAsync(
 
 /** Returns true when the requested agent dir has a local auth profile source. */
 export function hasLocalAuthProfileStoreSource(agentDir?: string): boolean {
+  prepareSharedAuthStoreOwnershipForNative();
   return (
     hasRuntimeAuthProfileStoreSource(agentDir) ||
     hasLegacyAuthProfileCredentialSource(agentDir) ||
@@ -246,6 +249,7 @@ export function hasAuthProfileStoreSourceForProvider(
   if (profileIds?.length === 0) {
     return false;
   }
+  prepareSharedAuthStoreOwnershipForNative();
   // A retired credential source is intentionally opaque to runtime. Treat it
   // as potentially owning the provider so the canonical loader can fail closed
   // with AUTH_PROFILE_MIGRATION_REQUIRED instead of falling through to env auth.

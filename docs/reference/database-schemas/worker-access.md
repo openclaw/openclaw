@@ -90,9 +90,23 @@ registry reads and write receipts. Committed replacement/removal invalidates the
 old generation before the next effect; unknown settlement clears the facts.
 Worktree cleanup consumes its already-loaded lease census. Removal locks and
 process-exit lease cleanup retain their synchronous lock-primitive boundary.
-Released synchronous auth/ModelRegistry adapters and destructive lifecycle or
-descendant-deletion guards remain explicit migration debt; this cutover does not
-change those public contracts, schemas, retention, or update behavior.
+Released synchronous auth/ModelRegistry adapters and descendant-deletion guards
+remain explicit migration debt. Agent deletion cleanup instead prepares its
+journal through the shared-state worker and checks the live lease owner and
+committed journal receipts immediately before the effect. Journal rollback does
+not publish a replacement, and unknown settlement invalidates prepared authority.
+The deletion transaction validates the captured install; supported Claw install
+writers refuse a pending deletion. Raw out-of-owner SQL during a live Gateway is
+outside the single-owner contract. These changes preserve public contracts,
+schemas, retention, and update behavior.
+
+Machine-state consumers prepare config, cron partitions, auth-store ownership,
+and onboarding outcomes through the shared-state worker. Gateway profile policy
+and display readers consume the admitted profile catalog; committed profile
+writes update that catalog before their callers resume. Agent lifecycle readers
+likewise seed facts in the worker and apply provenance and deletion-journal
+receipts. Canonical validation predicates consume admitted receipts; only schema
+admission and worker opens load a missing persisted receipt.
 
 The Gateway process is the single owner of OpenClaw databases and their state.
 Reader workers, writer workers, and main-thread projections share that ownership;

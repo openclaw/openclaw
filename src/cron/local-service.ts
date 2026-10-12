@@ -6,7 +6,7 @@ import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging/logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { CronService } from "./service.js";
-import { resolveCronJobsStorePath } from "./store.js";
+import { resolveCronJobsStorePathAsync } from "./store.js";
 
 export async function withLocalAgentCronJobsRemoved<T>(
   agentId: string,
@@ -14,7 +14,7 @@ export async function withLocalAgentCronJobsRemoved<T>(
   commit: () => Promise<T>,
 ): Promise<T> {
   const cfg = getRuntimeConfig();
-  const storePath = resolveCronJobsStorePath();
+  const storePath = await resolveCronJobsStorePathAsync();
   const scheduler = new GatewayScheduler();
   const service = new CronService({
     scheduler,

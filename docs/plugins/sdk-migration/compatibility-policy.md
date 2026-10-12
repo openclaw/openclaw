@@ -837,7 +837,11 @@ existing operations instead of reopening the state store.
 
 The released `resolveTtsPrefsPath(config)` call still returns a `string`
 synchronously, but is deprecated and emits a bounded warning when it needs
-legacy resolution. `buildTtsSystemPromptHint(config, agentId, options)` retains
+legacy resolution. It uses only the machine path already admitted by the
+asynchronous owner; before preparation, it falls back to the default path after
+checking explicit config and the environment. It never opens SQLite, and
+in-process machine-state writes update its admitted path.
+`buildTtsSystemPromptHint(config, agentId, options)` retains
 its synchronous return value; hosts pass prepared preferences to keep it free
 of state-store reads. The asynchronous `maybeApplyTtsToPayload` call continues
 to prepare preferences when none are supplied.
@@ -892,3 +896,40 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
 `openclaw/plugin-sdk/media-local-roots`. The
 `openclaw/plugin-sdk/agent-media-payload` facade and its
 `buildAgentMediaPayload(...)` projection are deprecated.
+
+### Cron store path resolution
+
+Await `resolveCronStorePathAsync(storePath?)` from
+`openclaw/plugin-sdk/cron-store-runtime` before calling `loadCronStore` or
+`saveCronStore`. The resolver reads the machine-owned cron partition through the
+shared-state worker; an explicit path still takes precedence.
+
+The `cron-store-sync-path` compatibility record retains
+`resolveCronStorePath(storePath?)` with its synchronous return value until the
+next Plugin SDK major and explicit approval of a breaking release. Legacy calls
+emit one bounded `DEP_PLUGIN_SDK` warning per plugin and capability family.
+Stored cron data, partition selection, and update behavior are unchanged.
+
+### Session transcript search views
+
+Await `loadCombinedSessionStoreForGatewayAsync(config, options)` from
+`openclaw/plugin-sdk/session-transcript-hit` when preparing a transcript search
+view. It reads the same complete session entries through the existing database
+workers and excludes incognito sessions.
+
+The synchronous `loadCombinedSessionStoreForGateway(config, options)` keeps its
+return shape for installed plugins and emits a bounded deprecation warning.
+Bundled plugins use the asynchronous replacement. The synchronous export is
+scheduled for removal in the next Plugin SDK major.
+
+### Web search provider lists
+
+Await `runtime.webSearch.listProvidersAsync({ config })` when listing available
+web-search providers. It prepares machine-owned discovery policy through the
+shared-state worker before applying the existing provider selection rules.
+
+The synchronous `runtime.webSearch.listProviders({ config })` keeps its return
+shape for installed plugins and emits one bounded `DEP_PLUGIN_SDK` warning per
+plugin and capability family. It is scheduled for removal in the next Plugin SDK
+major. Native synchronous discovery remains for offline CLI/Doctor preparation
+and this compatibility method; Gateway web-search preparation uses the async owner.

@@ -6,6 +6,7 @@ import {
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { readAgentDeletionJournalAuthorityInDatabase } from "./agent-deletion-journal-authority.worker.js";
+import { agentDeletionJournalPublication } from "./agent-deletion-journal-publication.js";
 import {
   beginAgentDeletionJournalInDatabase,
   completeAgentDeletionJournalInDatabase,
@@ -20,6 +21,7 @@ import type {
   AgentDeletionWorkerGuard,
   AgentDeletionWorkerPredicate,
 } from "./agent-deletion-worker-contract.js";
+import { agentProvenancePublication } from "./agent-provenance-publication.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "./openclaw-agent-db-lease.js";
 import { unregisterOpenClawAgentDatabases } from "./openclaw-agent-db-registry.js";
@@ -96,7 +98,11 @@ function guarded<T>(
     (database) => {
       assertLease(database, guard.lease, guard.predicate.agentId);
       assertAgentDeletionWorkerPredicate(database, guard.predicate);
-      const result = mutate(database);
+      const { result: provenance, receipt } = agentDeletionJournalPublication.capture(
+        database.db,
+        () => agentProvenancePublication.capture(database.db, () => mutate(database)),
+      );
+      const { result, receipt: provenanceReceipt } = provenance;
       assertLease(database, guard.lease, guard.predicate.agentId, "commit");
       if (publication?.journalChanged) {
         deferSqliteWorkerCommitReceipt(database.db, {
@@ -104,6 +110,8 @@ function guarded<T>(
           agentId: guard.predicate.agentId,
           operationId: guard.predicate.operationId,
           unregisterDatabases: publication.unregisterDatabases === true,
+          journalAuthority: agentDeletionJournalPublication.bound(receipt),
+          provenanceAuthority: agentProvenancePublication.bound(provenanceReceipt),
         });
       }
       return result;
@@ -120,11 +128,10 @@ export const agentDeletionOperations = {
     context.write(
       (database) => {
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const claimed = deleteAgentDeletionJournalInDatabase(
-          database,
-          input.agentId,
-          input.operationId,
-          true,
+        const { result: claimed, receipt } = agentDeletionJournalPublication.capture(
+          database.db,
+          () =>
+            deleteAgentDeletionJournalInDatabase(database, input.agentId, input.operationId, true),
         );
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         deferSqliteWorkerCommitReceipt(database.db, {
@@ -132,6 +139,7 @@ export const agentDeletionOperations = {
           agentId: input.agentId,
           operationId: input.operationId,
           claimed,
+          journalAuthority: agentDeletionJournalPublication.bound(receipt),
         });
         return claimed;
       },
@@ -156,16 +164,15 @@ export const agentDeletionOperations = {
           expectedClawInstall: input.expectedClawInstall,
         });
         ensureAgentProvenanceSchema({ database, ...context.stateOptions() });
-        const result = beginAgentDeletionJournalInDatabase(
-          database,
-          input.entry,
-          input.preserveDeleteFiles,
+        const { result, receipt } = agentDeletionJournalPublication.capture(database.db, () =>
+          beginAgentDeletionJournalInDatabase(database, input.entry, input.preserveDeleteFiles),
         );
         assertLease(database, input.lease, input.entry.agentId, "commit");
         deferSqliteWorkerCommitReceipt(database.db, {
           kind: "agent-deletion-began",
           agentId: input.entry.agentId,
           operationId: input.entry.operationId,
+          journalAuthority: agentDeletionJournalPublication.bound(receipt),
         });
         return result;
       },
@@ -336,15 +343,18 @@ export const agentDeletionOperations = {
             .set({ status: "partial", updated_at_ms: input.nowMs })
             .where("agent_id", "=", agentId),
         );
-        if (
-          result.numAffectedRows !== 1n ||
-          !handoffAgentDeletionJournalInDatabase(
-            database,
-            agentId,
-            operationId,
-            input.retryOperationId,
-          )
-        ) {
+        const { result: handedOff, receipt } = agentDeletionJournalPublication.capture(
+          database.db,
+          () =>
+            result.numAffectedRows === 1n &&
+            handoffAgentDeletionJournalInDatabase(
+              database,
+              agentId,
+              operationId,
+              input.retryOperationId,
+            ),
+        );
+        if (!handedOff) {
           throw new Error(`Failed to hand off deletion journal for agent ${agentId}.`);
         }
         assertLease(database, input.guard.lease, agentId, "commit");
@@ -353,6 +363,7 @@ export const agentDeletionOperations = {
           agentId,
           operationId,
           unregisterDatabases: false,
+          journalAuthority: agentDeletionJournalPublication.bound(receipt),
         });
         return true;
       },

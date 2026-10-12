@@ -12,7 +12,7 @@ import {
   listCandidateAuthProfileStores,
   loadCandidateAuthProfileStore,
 } from "../../agents/auth-profiles/candidate-stores.js";
-import { resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.js";
+import { resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.native.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import {

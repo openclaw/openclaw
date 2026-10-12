@@ -35,7 +35,7 @@ import {
   type RuntimeConfigWriteApplicationStatus,
 } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadCronJobsStore } from "../cron/store.js";
+import { loadCronJobsStore, resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import {
   consumeGatewayRestartIntent,
   isGatewayRestartExternallyAllowed,
@@ -1719,6 +1719,7 @@ describe("gateway hot reload model state", () => {
             ) as unknown as ReturnType<typeof hoisted.buildGatewayCronService>,
         );
         const initialCronState = createLazyGatewayCronState({
+          storePath: await resolveCronJobsStorePathFromConfigAsync(config),
           scheduler,
           cfg: config,
           deps: {} as never,
@@ -2064,6 +2065,10 @@ describe("gateway hot reload model state", () => {
       const { buildGatewayCronService } =
         await vi.importActual<typeof import("./server-cron.js")>("./server-cron.js");
       const cronState = buildGatewayCronService({
+        storePath: await resolveCronJobsStorePathFromConfigAsync(initialConfig, {
+          ...process.env,
+          OPENCLAW_STATE_DIR: fixtureDir,
+        }),
         scheduler,
         cfg: initialConfig,
         deps: {} as never,

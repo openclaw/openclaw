@@ -42,8 +42,10 @@ import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
-import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { resolveUserProfileId } from "../../state/user-profiles.js";
+import {
+  prepareUserProfileCatalog,
+  readResidentUserProfileId,
+} from "../../state/user-profile-list.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
@@ -99,8 +101,12 @@ function createWebPushRequestGuard(options: PushRequestOptions) {
     authority.assertCurrent();
     assertPolicyCurrent();
     const currentReference = client?.authenticatedUserProfile?.profileId;
-    const currentProfileId = currentReference ? resolveUserProfileId(currentReference) : undefined;
-    const originalProfileId = profileReference ? resolveUserProfileId(profileReference) : undefined;
+    const currentProfileId = currentReference
+      ? readResidentUserProfileId(currentReference)
+      : undefined;
+    const originalProfileId = profileReference
+      ? readResidentUserProfileId(profileReference)
+      : undefined;
     if (
       (currentReference && !currentProfileId) ||
       (profileReference && !originalProfileId) ||

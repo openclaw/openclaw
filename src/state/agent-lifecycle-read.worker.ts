@@ -12,7 +12,7 @@ export type AgentLifecycleStoreFacts = {
   provenance: AgentProvenance | null;
 };
 
-/** One current snapshot for the incarnation and its deletion fence; never cached as authority. */
+/** Seed one lifecycle snapshot; committed owner receipts maintain its in-process projection. */
 export function readAgentLifecycleStoreFacts(
   database: DatabaseSync,
   agentId: string,

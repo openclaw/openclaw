@@ -10,6 +10,10 @@ import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.type
 import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
 import { runWebSearch } from "./runtime.js";
 
+vi.mock("../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+}));
+
 const { resolveProviders } = vi.hoisted(() => ({
   resolveProviders: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
 }));

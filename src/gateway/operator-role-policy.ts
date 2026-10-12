@@ -12,14 +12,15 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { profileCatalogPath } from "../state/user-profile-identity.read.js";
-import { readResidentUserProfileRevision } from "../state/user-profile-list.js";
-import { getUserProfileRole } from "../state/user-profiles.js";
+import {
+  readResidentUserProfileIdentity,
+  readResidentUserProfileRevision,
+} from "../state/user-profile-list.js";
+import { UserProfileNotFoundError } from "../state/user-profiles-schema.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 
 const operatorRoleLog = createSubsystemLogger("gateway/operator-roles");
-const MAX_OPERATOR_ROLE_ASSIGNMENTS = 1_024;
-const operatorRoleAssignments = new Map<string, string | null>();
 const reportedUnknownAssignments = new Set<string>();
 type OperatorRolePolicyChange =
   | { kind: "assignment"; profileId: string }
@@ -41,31 +42,10 @@ type GatewaySessionAgentAuthorization = {
   | { actor?: never; profileId?: never; client: GatewayClient | null | undefined }
 );
 
-function readOperatorRoleAssignment(profileId: string): string | null {
-  if (operatorRoleAssignments.has(profileId)) {
-    return operatorRoleAssignments.get(profileId) ?? null;
-  }
-  const assignment = getUserProfileRole(profileId);
-  if (operatorRoleAssignments.size >= MAX_OPERATOR_ROLE_ASSIGNMENTS) {
-    const oldestProfileId = operatorRoleAssignments.keys().next().value;
-    if (oldestProfileId !== undefined) {
-      operatorRoleAssignments.delete(oldestProfileId);
-      for (const reported of reportedUnknownAssignments) {
-        if (reported.startsWith(`${oldestProfileId}:`)) {
-          reportedUnknownAssignments.delete(reported);
-        }
-      }
-    }
-  }
-  operatorRoleAssignments.set(profileId, assignment);
-  return assignment;
-}
-
-/** Drops a changed assignment so subsequent authorization reads the durable owner. */
+/** Announces a committed assignment change after the profile owner updates its catalog. */
 export function invalidateOperatorRolePolicy(profileId: string): void {
   assignmentRevision += 1;
   bumpGatewayAccessRevision();
-  operatorRoleAssignments.delete(profileId);
   for (const reported of reportedUnknownAssignments) {
     if (reported.startsWith(`${profileId}:`)) {
       reportedUnknownAssignments.delete(reported);
@@ -129,9 +109,13 @@ export function resolveOperatorRolePolicyForProfile(
   if (!cfg.gateway?.roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
     return undefined;
   }
+  const profile = profileId && !assignment ? readResidentUserProfileIdentity(profileId) : undefined;
+  if (profileId && !assignment && !profile) {
+    throw new UserProfileNotFoundError(profileId);
+  }
   return resolveOperatorRolePolicyForAssignment(
     profileId,
-    assignment ? assignment.role : profileId ? readOperatorRoleAssignment(profileId) : null,
+    assignment ? assignment.role : (profile?.role ?? null),
     cfg,
     profileId && cfg.gateway.roles.assignments?.byGithubLogin
       ? (readResidentUserProfileRevision(profileId, profileCatalogPath({}))?.githubLogin ?? null)
@@ -139,7 +123,7 @@ export function resolveOperatorRolePolicyForProfile(
   );
 }
 
-/** Transaction owners supply the authoritative row without consulting the assignment cache. */
+/** Transaction owners supply the authoritative row directly. */
 export function resolveOperatorRolePolicyForAssignment(
   profileId: string | undefined,
   assignedRole: string | null,

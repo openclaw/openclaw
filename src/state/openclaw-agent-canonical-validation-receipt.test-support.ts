@@ -7,6 +7,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   clearPersistedOpenClawAgentCanonicalValidation,
   hasPersistedOpenClawAgentCanonicalValidation,
+  loadOpenClawAgentCanonicalValidationReceipt,
   recordOpenClawAgentCanonicalValidation,
 } from "./openclaw-agent-canonical-validation-receipt.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
@@ -67,7 +68,11 @@ await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
         }, options),
       /rollback repair/u,
     );
-    // Native rollback may conservatively expire prior admission facts.
+    // A rollback may expire facts; runtime lookup stays SQL-free until the admission owner reloads.
+    const readsBeforeMiss = receiptReads;
+    hasPersistedOpenClawAgentCanonicalValidation(reader);
+    assert.equal(receiptReads, readsBeforeMiss);
+    assert.equal(loadOpenClawAgentCanonicalValidationReceipt(reader), true);
     assert.equal(hasPersistedOpenClawAgentCanonicalValidation(reader), true);
     const readsAfterRollback = receiptReads;
     runOpenClawAgentWriteTransaction(clearPersistedOpenClawAgentCanonicalValidation, options);

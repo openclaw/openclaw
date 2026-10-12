@@ -1,19 +1,19 @@
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
+import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { shouldIncludeHook } from "./config.js";
 import { resolveHookKey } from "./frontmatter.js";
 import type { HookPolicyEntry } from "./types.js";
 
 /** Capture discovery and explicit selection from one config/install snapshot. */
-export function resolveInternalHookSelection(config: OpenClawConfig): {
+export async function resolveInternalHookSelection(config: OpenClawConfig): Promise<{
   configured: boolean;
   names: Set<string> | null;
   declaredNames: Set<string>;
-} {
+}> {
   const internal = config.hooks?.internal;
   const installs =
-    readConfigMachineState<Record<string, HookInstallRecord>>("hooks.internal.installs");
+    await readConfigMachineStateAsync<Record<string, HookInstallRecord>>("hooks.internal.installs");
   const names = new Set<string>();
   const declaredNames = new Set<string>();
   let open = (internal?.load?.extraDirs ?? []).some((dir) => dir.trim().length > 0);

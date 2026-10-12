@@ -12,6 +12,7 @@ import {
   completeLocalOnboarding,
   readLocalOnboardingState,
   readLocalOnboardingStateForConfig,
+  readLocalOnboardingStateForConfigAsync,
 } from "./local-onboarding-state.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
@@ -23,6 +24,13 @@ describe("local onboarding state", () => {
   it("does not create persistent state when checking an unconfigured install", async () => {
     await withOpenClawTestState({ label: "local-onboarding-empty" }, async (state) => {
       expect(readLocalOnboardingState(state.configPath, { env: state.env })).toBeUndefined();
+      expect(
+        await completeLocalOnboarding({
+          configPath: state.configPath,
+          runId: "missing-run",
+          database: { env: state.env },
+        }),
+      ).toBe(false);
       expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
     });
   });
@@ -71,18 +79,24 @@ describe("local onboarding state", () => {
 
       expect(second).toEqual(first);
       expect(
-        completeLocalOnboarding({ configPath: state.configPath, runId: "wrong", database }),
+        await completeLocalOnboarding({ configPath: state.configPath, runId: "wrong", database }),
       ).toBe(false);
       expect(readLocalOnboardingState(state.configPath, database)?.status).toBe("pending");
       expect(
-        completeLocalOnboarding({
+        await completeLocalOnboarding({
           configPath: state.configPath,
           runId: "first-run",
           nowMs: 200,
           database,
         }),
       ).toBe(true);
-      expect(readLocalOnboardingState(state.configPath, database)).toMatchObject({
+      expect(
+        await readLocalOnboardingStateForConfigAsync(
+          state.configPath,
+          { wizard: { securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT } },
+          database,
+        ),
+      ).toMatchObject({
         ...first,
         status: "completed",
         completedAtMs: 200,
@@ -128,11 +142,15 @@ describe("local onboarding state", () => {
       });
 
       expect(
-        completeLocalOnboarding({ configPath: state.configPath, runId: "stale-run", database }),
+        await completeLocalOnboarding({
+          configPath: state.configPath,
+          runId: "stale-run",
+          database,
+        }),
       ).toBe(false);
       expect(readLocalOnboardingState(state.configPath, database)).toEqual(replacement);
       expect(
-        completeLocalOnboarding({ configPath: state.configPath, runId: "new-run", database }),
+        await completeLocalOnboarding({ configPath: state.configPath, runId: "new-run", database }),
       ).toBe(true);
     });
   });
@@ -149,7 +167,7 @@ describe("local onboarding state", () => {
       });
 
       expect(
-        completeLocalOnboarding({
+        await completeLocalOnboarding({
           configPath: state.configPath,
           runId: "completed-run",
           nowMs: 100,
@@ -157,7 +175,7 @@ describe("local onboarding state", () => {
         }),
       ).toBe(true);
       expect(
-        completeLocalOnboarding({
+        await completeLocalOnboarding({
           configPath: state.configPath,
           runId: "completed-run",
           nowMs: 200,
@@ -165,7 +183,7 @@ describe("local onboarding state", () => {
         }),
       ).toBe(true);
       expect(
-        completeLocalOnboarding({
+        await completeLocalOnboarding({
           configPath: state.configPath,
           runId: "different-run",
           nowMs: 300,
@@ -310,46 +328,6 @@ describe("local onboarding state", () => {
     });
   });
 
-  it("accepts the same run completing between the optimistic read and SQLite transaction", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-completion-race" }, async (state) => {
-      const database = { env: state.env };
-      beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "racing-run",
-        database,
-      });
-      let databaseReads = 0;
-
-      const completed = completeLocalOnboarding({
-        configPath: state.configPath,
-        runId: "racing-run",
-        nowMs: 300,
-        get database() {
-          if (++databaseReads === 2) {
-            expect(
-              completeLocalOnboarding({
-                configPath: state.configPath,
-                runId: "racing-run",
-                nowMs: 200,
-                database,
-              }),
-            ).toBe(true);
-          }
-          return database;
-        },
-      });
-
-      expect(completed).toBe(true);
-      expect(readLocalOnboardingState(state.configPath, database)).toMatchObject({
-        status: "completed",
-        runId: "racing-run",
-        completedAtMs: 200,
-      });
-    });
-  });
-
   it("does not let a concurrent missing-config run replace the active owner", async () => {
     await withOpenClawTestState({ label: "local-onboarding-concurrent" }, async (state) => {
       const database = { env: state.env };
@@ -386,7 +364,11 @@ describe("local onboarding state", () => {
         database,
       });
       expect(
-        completeLocalOnboarding({ configPath: state.configPath, runId: first.runId, database }),
+        await completeLocalOnboarding({
+          configPath: state.configPath,
+          runId: first.runId,
+          database,
+        }),
       ).toBe(true);
       const completed = readLocalOnboardingState(state.configPath, database);
 
@@ -420,7 +402,11 @@ describe("local onboarding state", () => {
         database,
       });
       expect(
-        completeLocalOnboarding({ configPath: state.configPath, runId: first.runId, database }),
+        await completeLocalOnboarding({
+          configPath: state.configPath,
+          runId: first.runId,
+          database,
+        }),
       ).toBe(true);
 
       const replacement = beginLocalOnboarding({

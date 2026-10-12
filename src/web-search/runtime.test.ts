@@ -10,6 +10,9 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
+vi.mock("../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+}));
 import {
   createOAuthAuthProfileStore,
   createWebSearchTestProvider,

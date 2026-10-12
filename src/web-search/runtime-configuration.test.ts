@@ -15,6 +15,10 @@ import {
 } from "../test-utils/web-provider-runtime.test-helpers.js";
 import { hasConfiguredWebSearchProvider, prepareWebSearchConfiguration } from "./runtime.js";
 
+vi.mock("../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+}));
+
 const { resolveRuntimeWebSearchProvidersMock } = vi.hoisted(() => ({
   resolveRuntimeWebSearchProvidersMock: vi.fn<
     () => ReturnType<typeof createWebSearchTestProvider>[]

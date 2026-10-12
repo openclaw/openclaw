@@ -280,14 +280,20 @@ import {
 } from "../cron/service/active-run-cancellation.js";
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import type { CronServiceState } from "../cron/service/state.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import type { CronJob, CronJobCreate } from "../cron/types.js";
 import { fireOnExitJob } from "./server-cron-event-dispatch.js";
 import { buildGatewayCronService as buildGatewayCronServiceRuntime } from "./server-cron.js";
 
-function buildGatewayCronService(params: Parameters<typeof buildGatewayCronServiceRuntime>[0]) {
+function buildGatewayCronService(
+  params: Omit<Parameters<typeof buildGatewayCronServiceRuntime>[0], "storePath">,
+) {
   const legacyStore = (params.cfg.cron as { store?: unknown } | undefined)?.store;
   if (typeof legacyStore !== "string") {
-    return buildGatewayCronServiceRuntime(params);
+    return buildGatewayCronServiceRuntime({
+      ...params,
+      storePath: resolveCronJobsStorePathFromConfig(params.cfg, params.env),
+    });
   }
   const env = {
     ...process.env,
@@ -296,7 +302,11 @@ function buildGatewayCronService(params: Parameters<typeof buildGatewayCronServi
   };
   // These fixtures predate the config-to-SQLite move; seed the canonical machine-state owner.
   writeConfigMachineState("cron.store", legacyStore, { env });
-  return buildGatewayCronServiceRuntime({ ...params, env });
+  return buildGatewayCronServiceRuntime({
+    ...params,
+    env,
+    storePath: resolveCronJobsStorePathFromConfig(params.cfg, env),
+  });
 }
 
 function createCronConfig(name: string): OpenClawConfig {

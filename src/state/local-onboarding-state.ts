@@ -4,9 +4,12 @@ import { normalizeAgentIdStrict } from "@openclaw/normalization-core/agent-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { readConfigMachineStateAsync } from "./config-machine-state-async.js";
 import { updateConfigMachineState } from "./config-machine-state-write.js";
 import { readConfigMachineState } from "./config-machine-state.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 
 export type LocalOnboardingState = {
   version: 1;
@@ -20,11 +23,14 @@ export type LocalOnboardingState = {
   completedAtMs?: number;
 };
 
-function stateKey(configPath: string): string {
+export function localOnboardingStateKey(configPath: string): string {
   return `onboarding.local.${sha256Hex(path.resolve(configPath))}`;
 }
 
-function normalizeState(value: unknown, configPath: string): LocalOnboardingState | undefined {
+export function normalizeLocalOnboardingState(
+  value: unknown,
+  configPath: string,
+): LocalOnboardingState | undefined {
   if (
     !isRecord(value) ||
     value.version !== 1 ||
@@ -56,11 +62,15 @@ function normalizeState(value: unknown, configPath: string): LocalOnboardingStat
   } as LocalOnboardingState;
 }
 
+/** Synchronous CLI onboarding inspection; runtime recovery uses the async reader below. */
 export function readLocalOnboardingState(
   configPath: string,
   database: OpenClawStateDatabaseOptions = {},
 ): LocalOnboardingState | undefined {
-  return normalizeState(readConfigMachineState(stateKey(configPath), database), configPath);
+  return normalizeLocalOnboardingState(
+    readConfigMachineState(localOnboardingStateKey(configPath), database),
+    configPath,
+  );
 }
 
 /** A replaced config at the same path must never inherit another installation's receipt. */
@@ -111,9 +121,9 @@ export function beginLocalOnboarding(params: {
     startedAtMs: params.nowMs ?? Date.now(),
   };
   return updateConfigMachineState<LocalOnboardingState>(
-    stateKey(params.configPath),
+    localOnboardingStateKey(params.configPath),
     (value) => {
-      const current = normalizeState(value, params.configPath);
+      const current = normalizeLocalOnboardingState(value, params.configPath);
       // Reset may replace only its previously observed receipt. A delayed
       // concurrent run must not reopen either a pending or completed owner.
       if (current && (!params.replace || current.runId !== params.expectedRunId)) {
@@ -125,37 +135,37 @@ export function beginLocalOnboarding(params: {
   );
 }
 
-/** Complete only the owning run; a stale operation cannot close its replacement. */
-export function completeLocalOnboarding(params: {
+/** Read onboarding through the shared-state worker for runtime recovery. */
+export async function readLocalOnboardingStateForConfigAsync(
+  configPath: string,
+  config: Pick<OpenClawConfig, "wizard">,
+  database: OpenClawStateDatabaseOptions = {},
+): Promise<LocalOnboardingState | undefined> {
+  const securityAcknowledgedAt = config.wizard?.securityAcknowledgedAt?.trim();
+  if (!securityAcknowledgedAt) {
+    return undefined;
+  }
+  const state = normalizeLocalOnboardingState(
+    await readConfigMachineStateAsync(localOnboardingStateKey(configPath), database),
+    configPath,
+  );
+  return state?.securityAcknowledgedAt === securityAcknowledgedAt ? state : undefined;
+}
+
+/** Complete only the owning run in the worker's serialized write transaction. */
+export async function completeLocalOnboarding(params: {
   configPath: string;
   runId: string;
   nowMs?: number;
   database?: OpenClawStateDatabaseOptions;
-}): boolean {
-  const current = readLocalOnboardingState(params.configPath, params.database);
-  if (current?.runId !== params.runId) {
-    return false;
-  }
-  if (current.status === "completed") {
-    return true;
-  }
-  let completed = false;
-  updateConfigMachineState<LocalOnboardingState>(
-    stateKey(params.configPath),
-    (value) => {
-      const latest = normalizeState(value, params.configPath);
-      if (!latest) {
-        throw new Error("Local onboarding state became invalid before completion.");
-      }
-      if (latest.runId !== params.runId) {
-        return latest;
-      }
-      completed = true;
-      return latest.status === "completed"
-        ? latest
-        : { ...latest, status: "completed", completedAtMs: params.nowMs ?? Date.now() };
-    },
-    params.database,
+}): Promise<boolean> {
+  const context = captureOpenClawStateWorkerContext(params.database);
+  const { database: _database, ...input } = params;
+  return (
+    (await runOpenClawStateWorkerOperation(
+      context,
+      (scope) => scope.execute({ type: "localOnboarding.complete", input }),
+      { existingOnly: true },
+    )) ?? false
   );
-  return completed;
 }

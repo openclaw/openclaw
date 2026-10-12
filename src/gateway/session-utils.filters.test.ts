@@ -16,7 +16,7 @@ import { buildSessionListRowMetadataContext } from "./session-utils-projection.j
 
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
-  getUserProfileDisplay: vi.fn((id: string) => ({
+  getResidentUserProfileDisplay: vi.fn((id: string) => ({
     id: id === "profile-merged-ada" ? "profile-ada" : id,
     displayName: id,
     hasAvatar: false,

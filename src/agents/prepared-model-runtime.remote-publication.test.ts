@@ -22,6 +22,7 @@ import * as pricing from "../model-catalog/pricing.js";
 import {
   captureRemoteModelCatalogSnapshot,
   captureRemoteModelCatalogStartupSnapshot,
+  captureRemoteModelCatalogStartupSnapshotAtBoot,
 } from "../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
@@ -97,6 +98,7 @@ async function setup(options: { allowGatewaySubagentBinding?: true } = {}) {
     bundledGeneratedAt: () => 100,
     readStoredCatalog: stored,
   });
+  captureRemoteModelCatalogStartupSnapshotAtBoot();
   mocks.configuredAgentIds = ["default", "other"];
   mocks.buildPreparedModelCatalogSnapshot.mockImplementation(async () => {
     const entries = Object.values(captureRemoteModelCatalogSnapshot()?.providers ?? {}).flatMap(

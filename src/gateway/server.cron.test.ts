@@ -11,7 +11,11 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type * as CronDelivery from "../cron/delivery.js";
 import { readCronRunRecordsForTests } from "../cron/run-history.test-support.js";
-import { loadCronStore, saveCronStore } from "../cron/store.js";
+import {
+  loadCronStore,
+  saveCronStore,
+  resolveCronJobsStorePathFromConfigAsync,
+} from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -180,6 +184,7 @@ async function createDirectCronState(params?: {
   ]);
   const cronState = {
     ...buildGatewayCronService({
+      storePath: await resolveCronJobsStorePathFromConfigAsync(getRuntimeConfig()),
       scheduler: createTestGatewayScheduler({
         ...createGatewaySchedulerClock().clock,
         now: () => Date.now(),

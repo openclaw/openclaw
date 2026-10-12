@@ -15,11 +15,12 @@ import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { resolveNativeWebSearchRoute } from "../../agents/native-web-search.js";
 import { hasAuthProfileForProvider } from "../../agents/tools/model-config.helpers.js";
 import { resolveWebSearchToolPolicy } from "../../agents/web-search-tool-policy.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../../config/io.plugin-metadata.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { listSearchProviderOptions } from "../../flows/search-setup.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { resolvePluginCredentialDescriptors } from "../../plugins/credential-descriptors.js";
-import { resolveManagedPluginMetadata } from "../../plugins/management-service.js";
 import type { PluginWebSearchProviderEntry } from "../../plugins/web-provider-types.js";
 import { parseConcreteConfigPathTokens } from "../../shared/dot-path.js";
 import {
@@ -84,7 +85,9 @@ export async function prepareWebSearchStatus(
     provider: request.modelProvider?.trim() || defaultModel.provider,
     model: request.modelId?.trim() || defaultModel.model,
   };
-  const metadata = resolveManagedPluginMetadata(config, process.env);
+  const activateDiscovery = await prepareBundledDiscoveryMode();
+  const metadata = await resolveConfigWidePluginMetadataSnapshotAsync({ config });
+  activateDiscovery();
   const sourceConfig = getRuntimeConfigSourceSnapshot() ?? config;
   const available = listConfiguredWebSearchProviders({ config });
   const availableIds = new Set(available.map((entry) => entry.id));

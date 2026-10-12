@@ -22,6 +22,10 @@ import {
   readUserProfileAliases,
   readUserProfileIdentity,
   readResidentUserProfileAliases,
+  readResidentUserProfileId,
+  readResidentUserProfileIdentity,
+  hasMultipleResidentSessionSharingIdentities,
+  getResidentUserProfileDisplay,
   captureResidentUserProfileAccess,
   isUserProfileCatalogReady,
   resolveUserProfileReference,
@@ -82,12 +86,20 @@ describe("resident profile display and reference catalog", () => {
     const target = ensureProfileForEmail("target@example.test", options);
     const catalog = await prepareUserProfileCatalog(options);
     releases.push(catalog.release);
+    expect(hasMultipleResidentSessionSharingIdentities(options)).toBe(true);
     const access = captureResidentUserProfileAccess(alias.id, options);
     expect(catalog.readCurrentIdentity(alias.id)?.profileId).toBe(alias.id);
     linkEmail("alias@example.test", target.id, options);
     setUserProfileRole(target.id, "reader", options);
     const admission = captureOpenClawStateWorkerContext(options).admission;
     const native = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
+    expect(readResidentUserProfileId(alias.id, options)).toBe(target.id);
+    expect(readResidentUserProfileIdentity(alias.id, options)?.role).toBe("reader");
+    expect(readResidentUserProfileAliases(target.id, options)).toEqual(
+      new Set([alias.id, target.id]),
+    );
+    expect(getResidentUserProfileDisplay(alias.id, options).id).toBe(target.id);
+    expect(hasMultipleResidentSessionSharingIdentities(options)).toBe(false);
     for (const id of [alias.id, target.id]) {
       expect(catalog.readCurrentIdentity(id)).toEqual({
         profileId: target.id,

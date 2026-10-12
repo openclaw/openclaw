@@ -40,7 +40,10 @@ import {
   resolveModelPricing,
   resolveModelPricingContext,
 } from "./pricing.js";
-import { getRemoteModelCatalogProviderOverlay } from "./remote-overlay.js";
+import {
+  captureRemoteModelCatalogStartupSnapshotAtBoot,
+  getRemoteModelCatalogProviderOverlay,
+} from "./remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "./remote-overlay.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -109,6 +112,7 @@ describe("hosted model pricing", () => {
       bundledGeneratedAt: () => 100,
       readStoredCatalog,
     });
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
   });
 
   afterEach(() => {
@@ -274,6 +278,11 @@ describe("hosted model pricing", () => {
         },
       }),
     });
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 100,
+      readStoredCatalog,
+    });
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
     const cost = resolveModelCostConfig({
       config,
       agentDir,
@@ -628,6 +637,11 @@ describe("hosted model pricing", () => {
       bundle_json: bundleJson,
     });
 
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 100,
+      readStoredCatalog,
+    });
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
     const fingerprint = resolveModelCostConfigFingerprint(configFor("https://api.openai.com/v1"));
     const withoutHostedPricing = configFor("https://api.openai.com/v1");
     withoutHostedPricing.models = {
@@ -668,6 +682,7 @@ describe("OpenRouter routing shortcut estimates", () => {
         checked_at: 200,
       }),
     });
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
   });
 
   afterEach(() => {
@@ -875,6 +890,7 @@ describe("standalone v2 pricing", () => {
         checked_at: 200,
       }),
     });
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
   });
 
   afterEach(() => {
@@ -957,6 +973,7 @@ describe("inline v2 pricing", () => {
         checked_at: 200,
       }),
     });
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
   });
 
   afterEach(() => {

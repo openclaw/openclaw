@@ -41,6 +41,7 @@ import {
   type PersistedAuthProfileStores,
 } from "./ownership.js";
 import { resolveSharedAuthStorePath as resolveSharedAuthPath } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import {
   loadPersistedAuthProfileStore,
   loadPersistedAuthProfileStoreAtDatabasePath,
@@ -935,6 +936,9 @@ export function createAuthProfileStoreRuntime(
   ): AuthProfileStore {
     if (isEnvOnlyAuthProfileRuntime()) {
       return createEmptyAuthProfileStore();
+    }
+    if (!preparedRows) {
+      prepareSharedAuthStoreOwnershipForNative(env ?? getScopedAuthProfileEnv());
     }
     const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
     const effectiveOptions = resolveRuntimeAuthProfileLoadOptions(options);

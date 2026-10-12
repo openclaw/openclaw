@@ -26,6 +26,7 @@ import {
 import {
   clearPersistedOpenClawAgentCanonicalValidation,
   hasPersistedOpenClawAgentCanonicalValidation,
+  loadOpenClawAgentCanonicalValidationReceipt,
 } from "./openclaw-agent-canonical-validation-receipt.js";
 import {
   adoptCanonicalSessionValidationSchema,
@@ -658,7 +659,7 @@ export function setOpenClawAgentDatabaseValidation(
     isOpenClawAgentCanonicalStoreEmpty(database) ||
       (!revoked &&
         !database.db.isTransaction &&
-        hasPersistedOpenClawAgentCanonicalValidation(database)),
+        loadOpenClawAgentCanonicalValidationReceipt(database)),
   );
   const entry = validatedPaths.get(resolveDatabasePathKey(database.path));
   if (

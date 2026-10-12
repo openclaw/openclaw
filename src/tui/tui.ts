@@ -1131,7 +1131,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
             if (result.exitCode === 0 && !result.signal) {
               tuiAuthLog.info(`auth child finished: ${outcome}`);
               if (!codexBin) {
-                reloadSharedAuthStoreOwnership();
+                await reloadSharedAuthStoreOwnership();
                 // The auth child persisted outside this process. Invalidate the
                 // published generation so retained local runtimes rebuild from it.
                 clearRuntimeAuthProfileStoreSnapshots();

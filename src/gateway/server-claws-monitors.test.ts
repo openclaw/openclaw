@@ -174,13 +174,13 @@ describe("Claw serving monitor cleanup", () => {
             current.replaceCron();
           }
         };
-        const originalJournal = deletionJournal.readAgentDeletionJournalAsync;
+        const originalJournal = deletionJournal.prepareAgentDeletionJournalObservation;
         const originalOwnership = clawOwnership.readClawPackageOwnership;
         const originalList = current.cron.list.bind(current.cron);
         const preparation =
           boundary === "journal"
             ? vi
-                .spyOn(deletionJournal, "readAgentDeletionJournalAsync")
+                .spyOn(deletionJournal, "prepareAgentDeletionJournalObservation")
                 .mockImplementationOnce(async (...args) => {
                   const journal = await originalJournal(...args);
                   replaceOwner();
@@ -203,7 +203,7 @@ describe("Claw serving monitor cleanup", () => {
         try {
           await expect(
             current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
-          ).rejects.toThrow(changedOwner === "operation" ? "deletion fence" : "changing");
+          ).rejects.toThrow(changedOwner === "operation" ? "no longer owns" : "changing");
           expect(quiesce).not.toHaveBeenCalled();
           expect(database.db.prepare("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
           await expect(
@@ -245,7 +245,7 @@ describe("Claw serving monitor cleanup", () => {
       try {
         await expect(
           current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
-        ).rejects.toThrow(changed === "operation" ? "deletion fence" : "cleanup state changed");
+        ).rejects.toThrow(changed === "operation" ? "no longer owns" : "cleanup state changed");
         expect(receiptReads).toBe(read);
         if (read === 1) {
           expect(database.db.prepare("SELECT 1 AS alive").get()).toEqual({ alive: 1 });

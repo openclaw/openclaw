@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readAgentLifecycleStoreFacts } from "../state/agent-lifecycle-read.kernel.js";
+import { readAgentLifecycleStoreFacts } from "../state/agent-lifecycle-read.worker.js";
 import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { seedAgentProvenance } from "../test-utils/agent-provenance.js";

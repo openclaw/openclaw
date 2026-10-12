@@ -25,7 +25,7 @@ test("models.authOrderSet keeps main priority and Reset agent-owned", async () =
   const siblingDir = resolveAgentDir(cfg, "work");
   // Select the shared owner before startup captures process-stable auth snapshots.
   writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" });
-  reloadSharedAuthStoreOwnership(process.env);
+  await reloadSharedAuthStoreOwnership(process.env);
   const provider = "fixture";
   const initialOrder = ["fixture:first"];
   const updatedOrder = ["fixture:second", "fixture:first"];

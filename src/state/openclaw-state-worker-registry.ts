@@ -55,6 +55,7 @@ import type { agentDeletionOperations } from "./agent-deletion.worker.js";
 import type { ClawAdoptionWorkerOperations } from "./claw-adoption.worker.js";
 import type { MachineStateWorkerOperations } from "./config-machine-state.worker.js";
 import type { PublicationWorkerOperations } from "./github-publication.worker-contract.js";
+import type { LocalOnboardingWorkerOperations } from "./local-onboarding-state.worker.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.kernel.js";
 import type { AgentDatabaseRegistryWorkerOperations } from "./openclaw-agent-db-contract.js";
 import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
@@ -71,6 +72,7 @@ export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBoo
   ClawProvenanceWriteOperations &
   ClawAdoptionWorkerOperations &
   MachineStateWorkerOperations &
+  LocalOnboardingWorkerOperations &
   GeneratedHtmlProvenanceOperations &
   MentionWorkerOperations &
   ConfigSnapshotWorkerOperations &
@@ -133,6 +135,8 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
   clawAdoption: () => import("./claw-adoption.worker.js").then((m) => m.clawAdoptionOperations),
   machineState: () =>
     import("./config-machine-state.worker.js").then((m) => m.machineStateOperations),
+  localOnboarding: () =>
+    import("./local-onboarding-state.worker.js").then((m) => m.localOnboardingOperations),
   agentDeletion: () => import("./agent-deletion.worker.js").then((m) => m.agentDeletionOperations),
   agentRecovery: () =>
     import("./agent-deletion-recovery.worker.js").then((m) => m.agentRecoveryOperations),

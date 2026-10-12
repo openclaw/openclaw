@@ -5,6 +5,7 @@ import {
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { agentProvenancePublication } from "./agent-provenance-publication.js";
 import type { AgentProvenance } from "./agent-provenance.types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 
@@ -34,6 +35,7 @@ export function recordAgentProvenanceInDatabase(
         }),
       ),
   );
+  agentProvenancePublication.stagePostimages(database, [provenance]);
 }
 
 export function agentProvenanceFromRow(

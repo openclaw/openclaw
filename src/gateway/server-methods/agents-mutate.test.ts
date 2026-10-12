@@ -215,6 +215,7 @@ vi.mock("../../agents/auth-profiles/path-resolve.js", async () => ({
     "../../agents/auth-profiles/path-resolve.js",
   )),
   resolveSharedAuthStoreOwnership: () => mocks.sharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership: async () => mocks.sharedAuthStoreOwnership,
   resolveSharedAuthStorePath: () => "/resolved/agents/main/agent/openclaw-agent.sqlite",
 }));
 

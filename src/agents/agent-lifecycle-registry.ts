@@ -10,17 +10,18 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   captureAgentDatabasePreparationDeletionForIdentity,
   readAgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
 import { createAgentDeletionDatabaseCleanup } from "../state/agent-deletion-cleanup.js";
 import {
-  assertAgentDeletionFinalInDatabase,
-  assertAgentDeletionLeaseFinal,
-} from "../state/agent-deletion-final-guard.js";
+  observeAgentDeletionJournal,
+  withAgentDeletionJournalPublication,
+} from "../state/agent-deletion-journal-publication.js";
+import { agentDeletionJournalPublication } from "../state/agent-deletion-journal-publication.js";
 import type {
   AgentDeletionInput,
   AgentDeletionJournalTransport,
@@ -33,10 +34,8 @@ import {
 } from "../state/agent-deletion-journal.js";
 import type { AgentDeletionWorkerPredicate } from "../state/agent-deletion-worker-contract.js";
 import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
-import {
-  readAgentLifecycleStoreFacts,
-  type AgentLifecycleStoreFacts,
-} from "../state/agent-lifecycle-read.kernel.js";
+import type { AgentLifecycleStoreFacts } from "../state/agent-lifecycle-read.worker.js";
+import { agentProvenancePublication } from "../state/agent-provenance-publication.js";
 import type { AgentProvenance } from "../state/agent-provenance.js";
 import { prepareOpenClawAgentDatabaseRegistryRemoval } from "../state/openclaw-agent-db-registry-listing.js";
 import { invalidateOpenClawAgentDatabaseValidationsForAgent } from "../state/openclaw-agent-db-validation-cache.js";
@@ -45,14 +44,9 @@ import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db-contract.js";
-import {
-  executeExistingOpenClawStateRead,
-  withExistingOpenClawStateDatabaseCurrentReadOnly,
-} from "../state/openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerLeaseContext } from "../state/openclaw-state-lease-context.js";
-import { verifyOpenClawStateLeaseOwnership } from "../state/openclaw-state-lease-storage.js";
 import {
   withOpenClawStateLeaseWorkerAdmission,
   withOpenClawStateLeasesWorkerAdmission,
@@ -63,6 +57,7 @@ import {
   captureOpenClawStateReadWorkerContext,
   captureOpenClawStateWorkerContext,
 } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
@@ -77,8 +72,6 @@ export {
 } from "./agent-deletion-errors.js";
 
 export { claimCompletedAgentDeletion } from "./agent-deletion-claim.js";
-
-const log = createSubsystemLogger("agents/lifecycle");
 
 export type AgentLifecycleBinding = Readonly<{
   agentId: string;
@@ -148,6 +141,7 @@ export function withAgentDeletion<T>(
     context,
     async (lease) =>
       withOpenClawStateLeaseWorkerAdmission(lease, statePath, async (lifetime) => {
+        const currentJournal = observeAgentDeletionJournal(id, context);
         let publishRegistryRemoval: () => void;
         let begun = false;
         let closed = false;
@@ -186,7 +180,10 @@ export function withAgentDeletion<T>(
               {
                 assertCurrent: admission.assertCurrent,
                 createAdmission: (retained) => {
-                  const created = admission.createAdmission(retained);
+                  const created = withAgentDeletionJournalPublication(
+                    admission.createAdmission,
+                    context,
+                  )(retained);
                   if (publication?.onAdmission) {
                     created.admission.observeRequests((request) =>
                       publication.onAdmission?.(request, context.admission.identity.key),
@@ -307,6 +304,7 @@ export function withAgentDeletion<T>(
                     },
                   },
                 );
+            currentJournal.seed(journal);
             if (remoteOwner) {
               invalidatePreparation();
               cancelCronRuns();
@@ -325,16 +323,7 @@ export function withAgentDeletion<T>(
                         assertCurrentHost();
                         admission.assertCurrent();
                       };
-                      return apply(additionalLease, assertLeaseCurrentHost, () =>
-                        assertAgentDeletionLeaseFinal(
-                          {
-                            ...admission.identity,
-                            leaseLabel: leaseOptions.leaseLabel ?? "state lease",
-                          },
-                          { path: statePath, env: context.environment },
-                          assertLeaseCurrentHost,
-                        ),
-                      );
+                      return apply(additionalLease, assertLeaseCurrentHost, assertLeaseCurrentHost);
                     },
                     { assertCurrent: assertCurrentHost },
                   ),
@@ -361,39 +350,8 @@ export function withAgentDeletion<T>(
             };
             const assertCurrentFinal = () => {
               assertCurrentHost();
-              const found = withExistingOpenClawStateDatabaseCurrentReadOnly(
-                ({ db }) => {
-                  assertAgentDeletionFinalInDatabase(db, { lease: lifetime.identity, predicate });
-                  return true;
-                },
-                { path: statePath, env: context.environment },
-              );
-              if (!found) {
-                throw new Error(`Agent ${id} deletion no longer owns database cleanup.`);
-              }
-              assertCurrentHost();
-            };
-            const assertNativeCurrent = (database?: OpenClawStateDatabase) => {
-              assertCurrentHost();
-              const current = database
-                ? readAgentDeletionJournalInDatabase(database, id)
-                : readAgentDeletionJournal(id, { path: statePath, env: context.environment });
-              if (!current || current.operationId !== operationId || current.cleanupCompleted) {
-                throw new Error(`Agent ${id} deletion no longer owns database cleanup.`);
-              }
-              verifyOpenClawStateLeaseOwnership({
-                ...lifetime.identity,
-                leaseLabel: "agent deletion",
-                ...(database
-                  ? { transaction: database.db }
-                  : {
-                      database: {
-                        scope: "shared" as const,
-                        options: { path: statePath, env: context.environment },
-                      },
-                    }),
-              });
-              assertCurrentHost();
+              // Begin validates the install, whose writers refuse the pending journal.
+              currentJournal.assertCurrent(operationId);
             };
             const operation: AgentDeletionOperation = {
               ...authority,
@@ -404,7 +362,7 @@ export function withAgentDeletion<T>(
               runDatabaseCleanup: createAgentDeletionDatabaseCleanup({
                 statePath,
                 workerAuthority: authority,
-                assertCurrent: assertNativeCurrent,
+                assertCurrent: assertCurrentFinal,
                 assertCurrentAsync,
                 assertAdmission: () =>
                   authority.runWithWorker((scope, guard) =>
@@ -429,30 +387,8 @@ export function withAgentDeletion<T>(
                   return id;
                 },
                 withCommit: (commit) => {
-                  let committed = false;
-                  try {
-                    runOpenClawStateWriteTransaction(
-                      (database) => {
-                        assertNativeCurrent(database);
-                        commit();
-                        committed = true;
-                      },
-                      { path: statePath, env: context.environment },
-                    );
-                  } catch (error) {
-                    if (!committed) {
-                      throw error;
-                    }
-                    // A guard-release failure cannot roll back the already-durable agent COMMIT.
-                    try {
-                      log.warn("Agent deletion committed, but releasing its state guard failed", {
-                        agentId: id,
-                        error,
-                      });
-                    } catch {
-                      // Postcommit diagnostics cannot change the durable outcome.
-                    }
-                  }
+                  assertCurrentFinal();
+                  commit();
                 },
               }),
               fenceDatabasePaths: async (paths) => {
@@ -566,6 +502,7 @@ export function withAgentDeletion<T>(
           });
         } finally {
           closed = true;
+          currentJournal.release();
         }
       }),
   );
@@ -596,6 +533,80 @@ export function assertAgentDeletionAllowsMutation(
   }
 }
 
+type LifecycleFacts = Partial<AgentLifecycleStoreFacts>;
+type LifecycleStore = {
+  context: OpenClawStateWorkerContext;
+  agents: Map<string, LifecycleFacts>;
+};
+
+// This projection has complete writer coverage through provenance and journal receipts.
+const lifecycleStores = resolveGlobalSingleton(
+  Symbol.for("openclaw.agentLifecycleStores"),
+  () => {
+    const stores = new Map<string, LifecycleStore>();
+    agentProvenancePublication.subscribeFacts((change) => {
+      for (const store of stores.values()) {
+        if (change.kind === "committed") {
+          if (change.receipt.source.identity !== store.context.admission.identity.key) {
+            continue;
+          }
+          for (const [agentId, fact] of change.receipt.facts) {
+            if (fact.kind !== "unchanged") {
+              store.agents.set(agentId, {
+                ...store.agents.get(agentId),
+                provenance:
+                  fact.kind === "postimage"
+                    ? fact.value
+                    : fact.kind === "absent"
+                      ? null
+                      : undefined,
+              });
+            }
+          }
+        } else if (
+          change.kind === "unknown" &&
+          change.identity === store.context.admission.identity.key
+        ) {
+          for (const [agentId, facts] of store.agents) {
+            store.agents.set(agentId, { ...facts, provenance: undefined });
+          }
+        }
+      }
+    });
+    agentDeletionJournalPublication.subscribeFacts((change) => {
+      for (const store of stores.values()) {
+        if (change.kind === "committed") {
+          if (change.receipt.source.identity !== store.context.admission.identity.key) {
+            continue;
+          }
+          for (const [agentId, fact] of change.receipt.facts) {
+            if (fact.kind !== "unchanged") {
+              store.agents.set(agentId, {
+                ...store.agents.get(agentId),
+                deletionBlocked:
+                  fact.kind === "postimage" ? true : fact.kind === "absent" ? false : undefined,
+              });
+            }
+          }
+        } else if (
+          change.kind === "unknown" &&
+          change.identity === store.context.admission.identity.key
+        ) {
+          for (const [agentId, facts] of store.agents) {
+            store.agents.set(agentId, { ...facts, deletionBlocked: undefined });
+          }
+        }
+      }
+    });
+    return stores;
+  },
+  (stores) => stores.clear(),
+);
+
+function knownLifecycleFacts(facts: LifecycleFacts | undefined): facts is AgentLifecycleStoreFacts {
+  return facts?.deletionBlocked !== undefined && facts.provenance !== undefined;
+}
+
 async function readLifecycleFactsInWorker(
   agentId: string,
   options: OpenClawStateDatabaseOptions,
@@ -604,22 +615,39 @@ async function readLifecycleFactsInWorker(
     path: options.database?.path ?? options.path,
     env: options.env,
   });
+  let store = lifecycleStores.get(context.admission.databasePath);
+  if (!store || store.context.admission.identity.key !== context.admission.identity.key) {
+    store = { context, agents: new Map() };
+    lifecycleStores.set(context.admission.databasePath, store);
+  } else {
+    store.context = context;
+  }
+  const prepared = store.agents.get(agentId);
+  if (knownLifecycleFacts(prepared)) {
+    return prepared;
+  }
+  const pending = prepared ?? {};
+  store.agents.set(agentId, pending);
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "agentLifecycle.read", input: agentId },
     { context, current: true },
   );
   context.admission.assertCurrent();
-  if (!reply) {
-    return { deletionBlocked: false, provenance: null };
-  }
-  if (!reply.ok) {
+  if (reply && !reply.ok) {
     throw new Error(reply.message);
   }
-  if (reply.type !== "agentLifecycle.read") {
+  if (reply && reply.type !== "agentLifecycle.read") {
     throw new Error("Unexpected agent lifecycle result");
   }
-  return reply.facts;
+  const observed = store.agents.get(agentId);
+  // A committed receipt supersedes an in-flight read, including an unknown outcome.
+  if (observed === pending) {
+    const facts = reply?.facts ?? { deletionBlocked: false, provenance: null };
+    store.agents.set(agentId, facts);
+    return facts;
+  }
+  return knownLifecycleFacts(observed) ? observed : { deletionBlocked: true, provenance: null };
 }
 
 function admitsLifecycleBinding(
@@ -651,7 +679,7 @@ export async function captureAgentLifecycleBinding(
   if (facts.deletionBlocked || !admitsLifecycleBinding(getConfig(), id, capturedOptions)) {
     return undefined;
   }
-  return Object.freeze({ agentId: id, provenance: facts.provenance });
+  return Object.freeze({ agentId: id, provenance: structuredClone(facts.provenance) });
 }
 
 /** Preparatory checks may yield; the final effect guard below remains synchronous. */
@@ -677,7 +705,7 @@ export async function matchesAgentLifecycleBindingAsync(
   );
 }
 
-/** Native/SDK and foreign writers require a current point read at the final effect boundary. */
+/** The final effect check consumes prepared owner facts and never queries SQLite. */
 export function matchesAgentLifecycleBinding(
   config: OpenClawConfig,
   binding: AgentLifecycleBinding,
@@ -687,11 +715,21 @@ export function matchesAgentLifecycleBinding(
   if (id !== binding.agentId || !admitsLifecycleBinding(config, id, options)) {
     return false;
   }
-  const facts = withExistingOpenClawStateDatabaseCurrentReadOnly(
-    ({ db }) => readAgentLifecycleStoreFacts(db, id),
-    options,
+  const pathname = path.resolve(
+    options.database?.path ??
+      options.path ??
+      resolveOpenClawStateSqlitePath(options.env ?? process.env),
   );
+  const store = lifecycleStores.get(pathname);
+  try {
+    store?.context.admission.assertCurrent();
+  } catch {
+    return false;
+  }
+  const facts = store?.agents.get(id);
   return (
-    !facts?.deletionBlocked && isDeepStrictEqual(facts?.provenance ?? null, binding.provenance)
+    knownLifecycleFacts(facts) &&
+    !facts.deletionBlocked &&
+    isDeepStrictEqual(facts.provenance, binding.provenance)
   );
 }

@@ -331,6 +331,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     },
     webSearch: {
       listProviders: vi.fn<PluginRuntime["webSearch"]["listProviders"]>(),
+      listProvidersAsync: vi.fn<PluginRuntime["webSearch"]["listProvidersAsync"]>(),
       search: vi.fn<PluginRuntime["webSearch"]["search"]>(),
     },
     channel: {

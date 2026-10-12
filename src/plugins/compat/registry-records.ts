@@ -4,6 +4,7 @@ import { ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD } from "./assistant-te
 import { AUTH_ASYNC_COMPAT_RECORD } from "./auth-async-record.js";
 import { BINDING_PERSISTENCE_COMPAT_RECORDS } from "./binding-persistence-records.js";
 import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
+import { CRON_STORE_PATH_COMPAT_RECORD } from "./cron-store-path-record.js";
 import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
 import { MENTION_INBOX_COMPAT_RECORD } from "./mention-inbox-record.js";
@@ -16,12 +17,14 @@ import {
 } from "./plugin-sdk-subpath-records.js";
 import { PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD } from "./progress-receipt-handoff-record.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
+import { SESSION_TRANSCRIPT_VIEW_COMPAT_RECORD } from "./session-transcript-view-record.js";
 import { SKILL_COMMAND_DISCOVERY_COMPAT_RECORD } from "./skill-command-discovery-record.js";
 import { SKILL_PROPOSAL_HOOKS_COMPAT_RECORD } from "./skill-proposal-hooks-record.js";
 import { SQLITE_RUNTIME_COMPAT_RECORDS } from "./sqlite-runtime-records.js";
 import { TTS_PREFERENCES_COMPAT_RECORD } from "./tts-preferences-record.js";
 import type { PluginCompatRecord } from "./types.js";
 import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
+import { WEB_SEARCH_PROVIDER_LIST_COMPAT_RECORD } from "./web-search-provider-list-record.js";
 import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
 
 const ACTIVATION_HINT_METADATA = {
@@ -39,6 +42,7 @@ export const PLUGIN_COMPAT_RECORDS = [
   AUTH_ASYNC_COMPAT_RECORD,
   ...BINDING_PERSISTENCE_COMPAT_RECORDS,
   CHANNEL_PAIRING_COMPAT_RECORD,
+  CRON_STORE_PATH_COMPAT_RECORD,
   MENTION_INBOX_COMPAT_RECORD,
   MODEL_ACCOUNT_CONNECT_COMPAT_RECORD,
   WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,
@@ -49,8 +53,10 @@ export const PLUGIN_COMPAT_RECORDS = [
   TTS_PREFERENCES_COMPAT_RECORD,
   ...AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS,
   WATCHED_SESSIONS_COMPAT_RECORD,
+  WEB_SEARCH_PROVIDER_LIST_COMPAT_RECORD,
   PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD,
   ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD,
+  SESSION_TRANSCRIPT_VIEW_COMPAT_RECORD,
   {
     code: "gateway-placement-sync-results",
     status: "deprecated",

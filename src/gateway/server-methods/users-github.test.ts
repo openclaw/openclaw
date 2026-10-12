@@ -7,6 +7,7 @@ import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import type { UsersGitHubAuthorizeStartResult } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   listGitHubDeviceAuthorizationRecords,
   listGitHubOAuthRecords,
@@ -31,6 +32,7 @@ import {
 } from "../../secrets/store/secret-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { dumpGitBackupDatabase } from "../../snapshot/git-backup-codec.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import { observeUserGitHubConnectionAuthority } from "../../state/user-github-connection-events.js";
@@ -57,6 +59,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { createGitHubOAuthLifecycle } from "../github-oauth-lifecycle.js";
+import { bindPersonalGitHubPublicationSelection } from "../github-personal-publication.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -165,6 +168,35 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       merge: () => linkEmail("alice@example.test", owner(bob)),
       disconnect: () => clients.delete(alice),
     });
+  });
+
+  it("revokes prepared publication credentials after an in-process disconnect without host reads", async () => {
+    const connection = await connect();
+    if (connection.selection.kind !== "connected") {
+      throw new Error("Expected connected GitHub account");
+    }
+    const bound = await bindPersonalGitHubPublicationSelection(
+      {
+        owner: owner(),
+        assertCurrent() {},
+        sessionId: "publication-session",
+        sessionKey: "agent:main:publication",
+        agentId: "main",
+        lifecycleRevision: null,
+      },
+      { generation: connection.generation, account: connection.selection },
+    );
+    const reads = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      expect(bound.assertCurrent().accountId).toBe(101);
+      expect(await rpc(alice, "users.github.disconnect")).toHaveBeenCalledWith(true, {
+        disconnected: true,
+      });
+      expect(() => bound.assertCurrent()).toThrow();
+      expect(reads.queries).toEqual([]);
+    } finally {
+      reads.restore();
+    }
   });
 
   it.each(["users.github.status", "tools.github.status"])(
@@ -526,6 +558,8 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       JSON.stringify({ ...connected, selection: { ...connected.selection, refreshToken: null } }),
       owner(),
     );
+    // Out-of-owner corruption is observed when the physical database is reopened.
+    closeOpenClawStateDatabaseByPath(db.location()!);
     expect(() => readUserGitHubConnection(owner())).toThrow("Personal GitHub state is invalid");
     await expect(lifecycle.personal.refresh(owner())).rejects.toThrow(
       "Personal GitHub state is invalid",

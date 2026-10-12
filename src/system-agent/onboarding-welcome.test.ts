@@ -40,7 +40,7 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 }));
 
 vi.mock("../state/local-onboarding-state.js", () => ({
-  readLocalOnboardingStateForConfig: mocks.readLocalOnboardingState,
+  readLocalOnboardingStateForConfigAsync: mocks.readLocalOnboardingState,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({ DEFAULT_WORKSPACE: "/default/workspace" }));

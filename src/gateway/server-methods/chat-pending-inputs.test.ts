@@ -164,7 +164,7 @@ describe("pending input read boundary", () => {
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const receipts = [];
-      const readDisplay = vi.spyOn(userProfileList, "getUserProfileDisplay");
+      const readDisplay = vi.spyOn(userProfileList, "getResidentUserProfileDisplay");
       try {
         for (let index = 0; index < 20; index += 1) {
           receipts.push(

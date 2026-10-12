@@ -7,6 +7,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
   hasPersistedOpenClawAgentCanonicalValidation,
+  loadOpenClawAgentCanonicalValidationReceipt,
   recordOpenClawAgentCanonicalValidation,
 } from "./openclaw-agent-canonical-validation-receipt.js";
 import { assertOpenClawAgentSchemaContains } from "./openclaw-agent-db-schema-helpers.js";
@@ -37,7 +38,7 @@ it.each(["legacy-birthtime", "missing-column"] as const)(
         database.db
           .prepare("UPDATE session_key_contract SET canonical_ready = ? WHERE id = 1")
           .run(JSON.stringify([1, "main", `${file.dev}:${file.ino}`, birthtime]));
-        expect(hasPersistedOpenClawAgentCanonicalValidation(database)).toBe(
+        expect(loadOpenClawAgentCanonicalValidationReceipt(database)).toBe(
           process.platform !== "linux" || birthtime === "0",
         );
       } else {

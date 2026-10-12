@@ -17,7 +17,7 @@ import {
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
 import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
-import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
+import { hasMultipleResidentSessionSharingIdentities } from "../../../state/user-profile-list.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import { resolveControlUiIdentity } from "../../control-ui-identity.js";
@@ -254,7 +254,7 @@ export async function sendGatewayHello(
       tickIntervalMs: TICK_INTERVAL_MS,
       attachments: resolveChatAttachmentPolicy(context.configSnapshot),
       allowedSessionVisibilities: allowedSessionVisibilities(context.configSnapshot),
-      hasMultipleSessionSharingIdentities: hasMultipleSessionSharingIdentities(),
+      hasMultipleSessionSharingIdentities: hasMultipleResidentSessionSharingIdentities(),
     },
   };
   advanceHandshakePhase("hello_payload_prepared");

@@ -41,7 +41,11 @@ export function insertGitHubPublicationSessionLifecycle(
   githubPublicationReceipts.stageRow(db, `${input.publicationKind}-lifecycle`, row);
 }
 
-/** A missing binding is unproven; a retained NULL records an originally absent revision. */
+/**
+ * A missing binding is unproven; a retained NULL records an originally absent revision.
+ * @deprecated Gateway reads use readGitHubPublicationSessionLifecycleInWorker;
+ * native access remains for worker kernels and released synchronous SDK adapters.
+ */
 export function readGitHubPublicationSessionLifecycle(
   input: PublicationIdentity,
   db: DatabaseSync = openOpenClawStateDatabase().db,

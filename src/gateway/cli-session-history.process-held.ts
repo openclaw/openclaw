@@ -142,12 +142,18 @@ async function readProcessHeldCliHistoryQuery(
     return result;
   }
   const page = result.page;
-  const [{ createCurrentUserProfileMessageProjector }, { resolveCurrentUserProfileDisplay }] =
-    await Promise.all([
-      import("./chat-display-projection.core.js"),
-      import("./current-user-profile-display.js"),
-    ]);
-  const project = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
+  const [
+    { createCurrentUserProfileMessageProjector },
+    { resolveCurrentUserProfileDisplay },
+    { getUserProfileDisplay },
+  ] = await Promise.all([
+    import("./chat-display-projection.core.js"),
+    import("./current-user-profile-display.js"),
+    import("../state/user-profile-list.js"),
+  ]);
+  const project = createCurrentUserProfileMessageProjector((id) =>
+    resolveCurrentUserProfileDisplay(id, getUserProfileDisplay),
+  );
   page.messages = await projectChatHistoryWithReplies(
     page.messages.filter((message): message is Record<string, unknown> =>
       Boolean(asOptionalRecord(message)),

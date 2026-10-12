@@ -5,7 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
-import { resolveUserProfileId } from "../../state/user-profiles.js";
+import { readResidentUserProfileId } from "../../state/user-profile-list.js";
 import { pushHandlers } from "./push.js";
 
 const mocks = vi.hoisted(() => ({
@@ -54,20 +54,18 @@ vi.mock("../../state/user-preferences.js", () => ({
 
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileSelectionAuthority: vi.fn(async (id: string) => {
-    const profileId = resolveUserProfileId(id);
+    const profileId = readResidentUserProfileId(id);
     return profileId
-      ? { profileId, isCurrent: () => resolveUserProfileId(id) === profileId }
+      ? { profileId, isCurrent: () => readResidentUserProfileId(id) === profileId }
       : undefined;
   }),
 }));
 vi.mock("../../state/user-profile-list.js", () => ({
+  readResidentUserProfileId: vi.fn((profileId: string) => profileId),
   prepareUserProfileCatalog: async () => ({
-    readCurrentIdentity: (id: string) => ({ profileId: resolveUserProfileId(id) }),
+    readCurrentIdentity: (id: string) => ({ profileId: readResidentUserProfileId(id) }),
     release: vi.fn(),
   }),
-}));
-vi.mock("../../state/user-profiles.js", () => ({
-  resolveUserProfileId: vi.fn((profileId: string) => profileId),
 }));
 
 import {
@@ -550,7 +548,7 @@ describe("push.web.subscribe handler", () => {
 describe("bound Web Push handlers", () => {
   beforeEach(() => {
     vi.mocked(setCanonicalUserPreferences).mockClear();
-    vi.mocked(resolveUserProfileId).mockImplementation((profileId) => profileId);
+    vi.mocked(readResidentUserProfileId).mockImplementation((profileId) => profileId);
     vi.mocked(clearBoundWebPushSubscription).mockReset();
     vi.mocked(clearBoundWebPushSubscription).mockResolvedValue(true);
     vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReset();
@@ -582,7 +580,7 @@ describe("bound Web Push handlers", () => {
         ...expectDefined(subscription, "bound subscription fixture"),
         userProfileId: "deleted-profile",
       });
-      vi.mocked(resolveUserProfileId).mockReturnValue(undefined);
+      vi.mocked(readResidentUserProfileId).mockReturnValue(undefined);
       const { respond, invoke } = createBoundWebPushInvokeParams(method, {
         endpoint: "https://push.example.test/subscription",
         ...(method === "push.web.preferences.set"

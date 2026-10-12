@@ -7,6 +7,7 @@ import { prepareWorktreeRunEndClose } from "../agents/worktrees/run-end-lifecycl
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
 import { commitPresence, upsertPresence } from "../infra/system-presence.js";
 import { stopGatewayDiagnosticHeartbeat } from "../logging/diagnostic.js";
@@ -222,6 +223,7 @@ export async function prepareGatewayLifecycle(params: {
     hooksConfig: initialHooksConfig,
     hookClientIpConfig: initialHookClientIpConfig,
     cronState: createLazyGatewayCronState({
+      storePath: await resolveCronJobsStorePathFromConfigAsync(cfgAtStart),
       scheduler: runtime.scheduler,
       cfg: cfgAtStart,
       deps,

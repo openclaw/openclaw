@@ -12,7 +12,7 @@ import {
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry-listing.js";
+import { listOpenClawRegisteredAgentDatabasesAsync } from "../../state/openclaw-agent-db-registry-listing.js";
 import { listAgentEntries, resolveAgentDir } from "../agent-scope.js";
 import { AUTH_STORE_VERSION, reportCommittedInlineAuthFailure } from "./constants.js";
 import { isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
@@ -114,7 +114,7 @@ export async function listCandidateAuthProfileStores(params: {
     });
   }
   sources.push(...(await collectStateRootCandidates(env)));
-  for (const registered of listOpenClawRegisteredAgentDatabases({ env })) {
+  for (const registered of await listOpenClawRegisteredAgentDatabasesAsync({ env })) {
     const agentId = normalizeAgentId(registered.agentId);
     sources.push({
       agentId,

@@ -92,7 +92,8 @@ function publishRemoteModelCatalogStartupSnapshot(
   return snapshot;
 }
 
-export function captureRemoteModelCatalogStartupSnapshot(): ActiveRemoteModelCatalog | null {
+/** Synchronous boot admission only, before the Gateway starts serving work. */
+export function captureRemoteModelCatalogStartupSnapshotAtBoot(): ActiveRemoteModelCatalog | null {
   const inherited = inheritedRemoteModelCatalogStartupSnapshot();
   if (inherited !== undefined) {
     return inherited.catalog;
@@ -108,6 +109,11 @@ export function captureRemoteModelCatalogStartupSnapshot(): ActiveRemoteModelCat
     snapshot = null;
   }
   return publishRemoteModelCatalogStartupSnapshot(snapshot);
+}
+
+/** Read the already-published startup pair without loading persistent state. */
+export function captureRemoteModelCatalogStartupSnapshot(): ActiveRemoteModelCatalog | null {
+  return inheritedRemoteModelCatalogStartupSnapshot()?.catalog ?? null;
 }
 
 /** Prepare the same first-winner startup pair without host-thread SQLite reads. */
@@ -194,18 +200,13 @@ export function publishRemoteModelCatalogSnapshot(
 
 export function getActiveRemoteModelCatalog(
   config: OpenClawConfig,
-  captureStartup = true,
 ): ActiveRemoteModelCatalog | undefined {
   if (!isRemoteModelCatalogRefreshEnabled(config)) {
     return undefined;
   }
   const scoped = remoteCatalogScope.getStore();
   const snapshot =
-    scoped !== undefined
-      ? scoped.catalog
-      : captureStartup
-        ? captureRemoteModelCatalogStartupSnapshot()
-        : inheritedRemoteModelCatalogStartupSnapshot()?.catalog;
+    scoped !== undefined ? scoped.catalog : captureRemoteModelCatalogStartupSnapshot();
   return snapshot && isRemoteCatalogSourceActive(config, snapshot.sourceUrl) ? snapshot : undefined;
 }
 

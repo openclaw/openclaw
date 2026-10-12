@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { constants, DatabaseSync } from "node:sqlite";
+import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
@@ -18,6 +18,10 @@ import {
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context.js";
 import {
+  clearUserProfileAuthLinkAsync,
+  setUserProfileAuthLinkAsync,
+} from "./user-model-account-operations.js";
+import {
   clearUserProfileAuthLink,
   connectUserModelAccount,
   listUserModelAccounts,
@@ -31,6 +35,7 @@ import {
 } from "./user-model-accounts.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { captureUserProfileModelAccountLinksAuthority } from "./user-profile-events.js";
+import { mergeCanonicalUserProfiles } from "./user-profile-writes.js";
 import { linkEmail, setAvatar } from "./user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
 import type { UserProfilesDatabase } from "./user-profiles.types.js";
@@ -138,23 +143,29 @@ describe("personal model accounts", () => {
     });
   });
 
-  it("observes foreign default-link commits on the next worker read", async () => {
+  it("refreshes cached default links after committed link and merge writes", async () => {
     const options = stateOptions();
     const alice = ensureProfileForEmail("worker-links@example.test", options);
+    const bob = ensureProfileForEmail("worker-link-target@example.test", options);
     const { authProfileId } = connectToken(alice.id, options);
     await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([
       expect.objectContaining({ provider: "anthropic", authProfileId }),
     ]);
-    const external = new DatabaseSync(options.path);
-    try {
-      external
-        .prepare(
-          "UPDATE secret_store_entries SET value = ? WHERE scope_kind = 'identity' AND scope_id = ? AND name = 'model-accounts'",
-        )
-        .run(JSON.stringify({ version: 1, links: {} }), alice.id);
-      await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([]);
-    } finally {
-      external.close();
+    await clearUserProfileAuthLinkAsync(
+      { profileId: alice.id, provider: "anthropic", assertCurrent() {} },
+      options,
+    );
+    await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([]);
+    await setUserProfileAuthLinkAsync(
+      { profileId: alice.id, provider: "anthropic", authProfileId, assertCurrent() {} },
+      options,
+    );
+    await expect(listUserProfileAuthLinksAsync(bob.id, options)).resolves.toEqual([]);
+    await mergeCanonicalUserProfiles(alice.id, bob.id, options);
+    for (const profileId of [alice.id, bob.id]) {
+      await expect(listUserProfileAuthLinksAsync(profileId, options)).resolves.toEqual([
+        expect.objectContaining({ provider: "anthropic", authProfileId }),
+      ]);
     }
   });
 
