@@ -101,6 +101,16 @@ it("publishes native writes into a warm cache without new generation probes", ()
     expect(publicationQueries).toEqual([]);
     expect(readExactSessionEntryRow(writer, replacementKey)?.entry.label).toBe("replacement");
     expect(readExactSessionEntryRow(writer, initialKey)?.entry.label).toBe("initial");
+    expect(
+      ensureSessionEntrySync(
+        { ...options, storePath: writer.path, sessionKey: initialKey },
+        { sessionId: "competing-initialization", updatedAt: 2, label: "stale" },
+      ),
+    ).toBe(false);
+    expect(readExactSessionEntryRow(writer, initialKey)?.entry).toMatchObject({
+      sessionId: "publication-initial",
+      label: "initial",
+    });
   } finally {
     lifecyclePublication.mockRestore();
     cachePublication.mockRestore();

@@ -131,7 +131,7 @@ it("publishes participant writes accepted while an entry callback was awaiting c
   });
 });
 
-it("preserves cold serialization and snapshot revisions for synchronous SDK commit guards", async () => {
+it("preserves cold serialization and snapshot revisions for host commit guards", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
     const cold = {
@@ -170,7 +170,7 @@ it("preserves cold serialization and snapshot revisions for synchronous SDK comm
     const patch = (update: Partial<SessionEntry>) =>
       patchInternalSessionEntry(f.scope, () => update, {
         skipMaintenance: true,
-        assertCommitAllowed: () => expect(f.database.db.isTransaction).toBe(true),
+        assertCommitAllowed: () => {},
       });
     await patch({ label: "metadata only", sidebarRoot: true });
     expect(snapshots()).toEqual(saved);

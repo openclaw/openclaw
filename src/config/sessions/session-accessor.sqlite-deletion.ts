@@ -1,5 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { getNativeSessionDeletionParticipant } from "../../agents/harness/native-session/deletion-participant.js";
+import {
+  createNativeSessionCommitFinalizer,
+  getNativeSessionDeletionParticipant,
+} from "../../agents/harness/native-session/deletion-participant.js";
 import {
   captureAgentHarnessSessionDeletions,
   captureAgentHarnessSessionContextResets,
@@ -9,6 +12,7 @@ import {
 import type { AgentHarnessSessionDeletionMutation } from "../../agents/harness/types.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   commitSessionInitializationRollback,
@@ -99,13 +103,20 @@ export function hasPreparedNativeSessionDeletion(): boolean {
   );
 }
 
-/** Initialization and opaque SDK callbacks retain their synchronous agent-row authority. */
+/** Only legacy opaque SDK callbacks require the synchronous transaction adapter. */
 export function preparedSessionDeletionRequiresNativeTransaction(): boolean {
-  return [...(deletions.getStore()?.values() ?? [])].some(
-    ({ target, mutations }) =>
-      target.initialization !== undefined ||
-      mutations.some((mutation) => !getNativeSessionDeletionParticipant(mutation)),
+  const required = [...(deletions.getStore()?.values() ?? [])].some(({ mutations }) =>
+    mutations.some((mutation) => !getNativeSessionDeletionParticipant(mutation)),
   );
+  if (required) {
+    warnPluginSdkDeprecation({
+      family: "native-session-binding",
+      method: "AgentHarnessSessionDeletionMutation",
+      replacement: "createNativeSessionBindingLifecycleV2 or createNativeSessionCommitFinalizer",
+      compatibility: "Opaque deletion callbacks retain synchronous session transactions.",
+    });
+  }
+  return required;
 }
 
 /** Opaque SDK mutations keep their native transaction; only owner-minted participants qualify. */
@@ -118,7 +129,9 @@ export function captureNativeSessionWorkerDeletion(entries: readonly DeletionEnt
     entry,
     prepared: deletions.getStore()?.get(sessionKey),
   }));
-  if (!captured.some(({ prepared }) => prepared?.mutations.length)) {
+  if (
+    !captured.some(({ prepared }) => prepared?.mutations.length || prepared?.target.initialization)
+  ) {
     return undefined;
   }
   const participants = [];
@@ -132,6 +145,18 @@ export function captureNativeSessionWorkerDeletion(entries: readonly DeletionEnt
         return undefined;
       }
       participants.push({ sessionKey, entry, participant });
+    }
+    const initialization = prepared.target.initialization;
+    if (initialization) {
+      const finalizer = createNativeSessionCommitFinalizer({
+        commit: () => commitSessionInitializationRollback(initialization),
+        rollback() {},
+      });
+      participants.push({
+        sessionKey,
+        entry,
+        participant: getNativeSessionDeletionParticipant(finalizer)!,
+      });
     }
   }
   return {

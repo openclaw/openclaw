@@ -1,5 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -86,7 +90,7 @@ it.each(["allowed", "transaction", "commit"] as const)(
   },
 );
 
-it("checks native mutation authority after asynchronous patch preparation", async () => {
+it("checks worker mutation authority after asynchronous patch preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
     const original = f.read();
@@ -110,7 +114,6 @@ it("checks native mutation authority after asynchronous patch preparation", asyn
           return { label: "must not persist" };
         },
         {
-          // A synchronous predicate selects the retained native writer contract.
           shouldCommit: () => true,
           workerGuard: { assertMutationAllowed },
           skipMaintenance: true,
@@ -122,3 +125,39 @@ it("checks native mutation authority after asynchronous patch preparation", asyn
     expect(f.read()).toEqual(original);
   });
 });
+
+it.each([true, false])(
+  "applies a host-guarded generation patch off the main thread (commit=%s)",
+  async (shouldCommit) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const original = f.read();
+      const allowed = vi.fn();
+      const sql = observeHostDataSql();
+      try {
+        const updated = await patchInternalSessionEntry(
+          f.scope,
+          async () => ({ sessionId: "successor", label: "updated" }),
+          {
+            assertCommitAllowed: allowed,
+            shouldCommit: () => shouldCommit,
+            skipMaintenance: true,
+          },
+        );
+        expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+        if (shouldCommit) {
+          expect(updated).toMatchObject({ sessionId: "successor", label: "updated" });
+          expect(allowed).toHaveBeenCalled();
+        } else {
+          expect(updated).toBeNull();
+          expect(allowed).not.toHaveBeenCalled();
+        }
+      } finally {
+        sql.restore();
+      }
+      expect(f.read()).toMatchObject(
+        shouldCommit ? { sessionId: "successor", label: "updated" } : original!,
+      );
+    });
+  },
+);

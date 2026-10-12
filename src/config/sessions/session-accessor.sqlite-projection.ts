@@ -90,8 +90,6 @@ export async function applySessionEntryLifecycleMutation(
     !params.allowCanonicalRepair &&
     !params.afterUpsertsInTransaction &&
     !params.afterFreshUpsertsInTransaction &&
-    !params.beforeCommitInTransaction &&
-    !params.afterCommitted &&
     supportsOpenClawAgentDatabaseExecution(databaseOptions);
   const reclamationOptions = useWorker
     ? resolveSessionReclamationDatabaseOptions(databaseOptions)
@@ -227,9 +225,12 @@ export async function applySessionEntryLifecycleMutation(
                       assertPrepared: () => {
                         preparedPreservation?.capture();
                       },
-                      assertCandidate: (candidate) =>
-                        assertPreservationCurrent(candidate.result.maintenancePlans),
+                      assertCandidate: (candidate) => {
+                        assertPreservationCurrent(candidate.result.maintenancePlans);
+                        params.beforeCommitInTransaction?.();
+                      },
                       onLifecycleCommitted: params.onLifecycleCommitted,
+                      afterCommitted: params.afterCommitted,
                       input: {
                         agentId: resolved.agentId,
                         projected,
@@ -247,6 +248,7 @@ export async function applySessionEntryLifecycleMutation(
                   assertCommitAllowed: () => {
                     assertCurrent();
                     assertPreservationCurrent();
+                    params.beforeCommitInTransaction?.();
                   },
                   onWorkerResult: (completed) => {
                     if (completed.kind === "lifecycle-projection-commit") {
@@ -271,6 +273,12 @@ export async function applySessionEntryLifecycleMutation(
                   throw new Error(
                     "SQLite lifecycle projection returned an unexpected commit result",
                   );
+                }
+                if (params.afterCommitted && execution) {
+                  await params.afterCommitted({
+                    env: Object.freeze({ ...resolved.env }),
+                    assertCurrent: () => execution.assertCurrent(),
+                  });
                 }
                 return withArchivePublication(result.value);
               }

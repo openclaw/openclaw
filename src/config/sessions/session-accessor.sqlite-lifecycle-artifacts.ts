@@ -241,9 +241,7 @@ export function readSessionLifecycleArtifactCleanup(
   expectedSource: DatabaseFileIdentity,
 ): LifecycleArtifactCleanupPlan {
   assertOpenClawAgentDatabaseIdentity(database, expectedSource);
-  const plan = planSessionLifecycleArtifactCleanup(database, params);
-  assertOpenClawAgentDatabaseIdentity(database, expectedSource);
-  return plan;
+  return planSessionLifecycleArtifactCleanup(database, params);
 }
 
 export function planSessionLifecycleArtifactCleanup(

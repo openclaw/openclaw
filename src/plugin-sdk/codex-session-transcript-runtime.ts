@@ -183,7 +183,7 @@ export function validateCodexSessionTranscriptContextVersion(
   validateSessionTranscriptContextVersion(...args);
 }
 
-/** The native evidence consumer remains lazy inside one readonly transcript snapshot. */
+/** @deprecated Worker-only synchronous reader. Use createCodexSessionContextReader on the main thread. */
 export function readCodexSessionContext<T>(
   target: SessionTranscriptRuntimeTarget,
   read: (
