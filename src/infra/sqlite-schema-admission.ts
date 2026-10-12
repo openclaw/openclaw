@@ -75,6 +75,15 @@ export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
   },
 };
 
+/** Native metadata read shared by admission and pre-admission migrations. */
+export function readSqliteTextEncoding(database: DatabaseSync): string {
+  const encoding = executeWithCachedStatement(database, "PRAGMA encoding", [], (s) => s.get());
+  if (typeof encoding?.encoding !== "string") {
+    throw new Error("SQLite did not report its text encoding");
+  }
+  return encoding.encoding;
+}
+
 /** Capture the physical catalog once; native lifecycle owners publish the resulting facts. */
 function captureSqliteSchemaFacts(
   database: DatabaseSync,
@@ -86,10 +95,7 @@ function captureSqliteSchemaFacts(
     const userVersion = Number(version?.user_version ?? 0);
     // Validate the captured header before catalog errors can mask its refusal.
     validateUserVersion?.(userVersion);
-    const encoding = executeWithCachedStatement(database, "PRAGMA encoding", [], (s) => s.get());
-    if (typeof encoding?.encoding !== "string") {
-      throw new Error("SQLite did not report its text encoding during schema admission");
-    }
+    const textEncoding = readSqliteTextEncoding(database);
     const objects = executeWithCachedStatement(
       database,
       "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
@@ -101,7 +107,7 @@ function captureSqliteSchemaFacts(
       admissionId: randomUUID(),
       revision,
       userVersion,
-      textEncoding: encoding.encoding,
+      textEncoding,
       schemaVersion,
       tables: new Set(tables.flatMap((row) => (typeof row.name === "string" ? [row.name] : []))),
       views: new Set(
