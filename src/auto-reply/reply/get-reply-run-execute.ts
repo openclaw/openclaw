@@ -472,6 +472,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       // Queued system events are prompt content in the same trusted session;
       // they do not rewrite the sender identity used by command/action auth.
       senderIsOwner: command.senderIsOwner,
+      senderIsBot: sessionCtx.SenderIsBot === true,
       traceAuthorized:
         command.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       traceLevelOverride: params.directives.traceLevel,

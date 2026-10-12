@@ -416,6 +416,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     isHeartbeat,
     inboundEventKind,
     sourceReplyDeliveryMode,
+    replyExpectation: terminalReplyExpectation,
   });
   const promptEnvelopeBase = buildReplyPromptEnvelopeBase(getPromptEnvelopeParams());
   const prefixedBodyBase = applySessionHints({

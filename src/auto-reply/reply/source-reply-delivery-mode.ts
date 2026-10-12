@@ -30,6 +30,8 @@ export type SourceReplyDeliveryModeContext = Pick<
   | "BotUsername"
   | "WasMentioned"
   | "InputProvenance"
+  | "SenderIsBot"
+  | "MentionSource"
 >;
 
 export function isUnauthorizedTextSlashCommand(ctx: SourceReplyDeliveryModeContext): boolean {
@@ -90,7 +92,33 @@ export function resolveSourceReplyDeliveryMode(params: {
     : "automatic";
 }
 
-/** Selects reply requiredness at admission, preserving configured ambient group silence. */
+/**
+ * A bot sender whose only mention is implicit (a reply to, or thread with, this
+ * agent) has not addressed it. Under group silence `allow` such a turn is
+ * optional like an unmentioned one; otherwise two agents that reply to each
+ * other's messages acknowledge each other without end.
+ */
+function isBotReplyOnlyMention(ctx: SourceReplyDeliveryModeContext): boolean {
+  return ctx.SenderIsBot === true && ctx.MentionSource === "implicit_thread";
+}
+
+/**
+ * Whether a turn opened by a bot sender was admitted with an optional reply.
+ * Such a turn may end silently, so its delivery hint does not ask for a reply
+ * and a private final is not re-prompted for delivery. Human senders keep both.
+ */
+export function isOptionalBotSenderReply(params: {
+  senderIsBot: boolean | undefined;
+  replyExpectation: ReplyExpectation | undefined;
+}): boolean {
+  return params.senderIsBot === true && params.replyExpectation === "optional";
+}
+
+/**
+ * Selects reply requiredness at admission. Group silence `allow` makes
+ * unmentioned turns, and bot turns that only implicitly mention the agent,
+ * optional; explicit mentions, commands and direct chats stay required.
+ */
 export function resolveSourceReplyExpectation(params: {
   ctx: SourceReplyDeliveryModeContext;
   cfg: OpenClawConfig;
@@ -118,7 +146,7 @@ export function resolveSourceReplyExpectation(params: {
   });
   if (
     conversationType === "group" &&
-    params.ctx.WasMentioned !== true &&
+    (params.ctx.WasMentioned !== true || isBotReplyOnlyMention(params.ctx)) &&
     resolveSilentReplySettings({
       cfg: params.cfg,
       surface: params.ctx.Surface ?? params.ctx.Provider,

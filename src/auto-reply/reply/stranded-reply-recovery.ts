@@ -12,6 +12,7 @@ import {
   shouldClassifyPrivateMessageToolFinal,
 } from "./private-message-tool-final.js";
 import type { FollowupRun } from "./queue/types.js";
+import { isOptionalBotSenderReply } from "./source-reply-delivery-mode.js";
 
 const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
 const STRANDED_REPLY_DELIVERY_FAILURE_TEXT =
@@ -41,9 +42,16 @@ export function resolveStrandedReplyRecovery(params: {
   isHeartbeat: boolean;
   isRoomEvent: boolean;
 }): StrandedReplyRecovery {
+  const context = {
+    ...params,
+    optionalBotSenderReply: isOptionalBotSenderReply({
+      senderIsBot: params.base.run.senderIsBot,
+      replyExpectation: params.base.run.terminalReplyExpectation,
+    }),
+  };
   // Host-owned payloads can still be awaiting transport when completion bookkeeping runs.
   if (
-    !shouldClassifyPrivateMessageToolFinal(params) ||
+    !shouldClassifyPrivateMessageToolFinal(context) ||
     params.payloads.some(
       (payload) =>
         isReplyPayloadTerminalContent(payload) &&
@@ -52,7 +60,7 @@ export function resolveStrandedReplyRecovery(params: {
   ) {
     return { kind: "none" };
   }
-  const classification = classifyPrivateMessageToolFinal(params);
+  const classification = classifyPrivateMessageToolFinal(context);
   if (params.base.strandedReplyRetry === true) {
     return {
       kind: "diagnostic",
