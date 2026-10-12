@@ -572,6 +572,16 @@ describe("Telegram registered action authority and input contracts", () => {
     expect(requests).toHaveLength(1);
   });
 
+  it("reports a dice roll's topic receipt so a roll into a forum topic completes its reply", async () => {
+    // Source-reply classification matches the delivered target against the run's conversation
+    // through receipt.threadId. Reporting only the bare chat makes a topic-addressed roll miss
+    // its current-source completion, and the run then sends the redundant fallback reply this
+    // action exists to suppress.
+    await expect(invoke("dice", { to: "-1001", messageThreadId: 77 })).resolves.toMatchObject({
+      details: { ok: true, receipt: { threadId: "77" } },
+    });
+  });
+
   it("rejects sending without a configured credential", async () => {
     cfg = {};
     await expect(invoke("send", { to: "123", message: "hello" })).rejects.toThrow(
