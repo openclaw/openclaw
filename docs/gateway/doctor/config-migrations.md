@@ -496,8 +496,11 @@ such files, Doctor never assigns the shared root to the agent: it writes
 nothing and warns with the root, `<root>/<agentId>`, and the
 `agents.entries.<agentId>.workspace` key to set. The same applies when both
 directories hold files. Doctor also never picks a root another agent already
-resolves to, and only warns when the roster lives in an included file. No files
-are moved or deleted.
+resolves to, and only warns when the roster lives in an included file. If a
+stored session of the agent holds a CLI-backend conversation (for example
+`claude-cli`), Doctor writes nothing and warns with the value to set: that
+conversation is tied to the current working directory and would start fresh,
+without resuming history, after the pin. No files are moved or deleted.
 
 Doctor follows the existing [include write constraints](/gateway/config-secrets-env).
 A root-level `$include`, or a repair spanning an included roster and root-owned

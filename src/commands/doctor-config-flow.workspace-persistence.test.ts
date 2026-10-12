@@ -5,6 +5,11 @@ import { readAgentRosterProperty } from "../agents/agent-roster.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { saveCronJobsStore } from "../cron/store.js";
@@ -422,6 +427,54 @@ describe("Doctor workspace persistence", () => {
           expect(resolveAgentWorkspaceDir(after, "dev")).toBe(path.join(workspace, "dev"));
         },
       );
+    });
+  });
+
+  it("leaves a converged system agent unpinned while it has a stored CLI-backend conversation", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const workspace = path.join(home, "shared-workspace");
+        await fs.mkdir(path.join(workspace, "main", "memory"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "main", "SOUL.md"), "agent persona");
+        const configPath = await writeOpenClawConfig(home, {
+          agents: {
+            ownership: "explicit",
+            defaults: { workspace, systemAgent: { agentId: "main" } },
+            entries: { main: {}, dev: {} },
+          },
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+        });
+        await upsertSessionEntryCore(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+          },
+          {
+            sessionId: "main-local",
+            updatedAt: Date.now(),
+            cliSessionBindings: { "claude-cli": { sessionId: "claude-native-1" } },
+          },
+        );
+        closeOpenClawStateDatabaseForTest();
+
+        await runInitialConfigWriteHealth(await prepareDoctorContext(configPath));
+
+        const after = (await readConfigFileSnapshot()).config;
+        expect(after.agents?.entries?.main?.workspace).toBeUndefined();
+        const launch = listConfiguredOwnerInputs(after, workspace).find(
+          (input) => input.agentId === "main",
+        );
+        expect(launch?.workspaceDir).toBe(workspace);
+        expect(
+          loadSessionEntryReadOnly({
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+          })?.cliSessionBindings?.["claude-cli"]?.sessionId,
+        ).toBe("claude-native-1");
+      });
     });
   });
 
