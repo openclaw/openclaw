@@ -27,6 +27,8 @@ import {
 } from "../infra/sqlite-files.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
+import { readAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { HistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
 import type {
   DoctorSessionSqliteMode,
@@ -186,10 +188,33 @@ export function resolveDoctorSessionSqliteTargets(params: {
     const candidates = discoversHistory
       ? resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, { env: params.env })
       : resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env });
-    const targets = candidates.map((target) => ({
+    const discovered = candidates.map((target) => ({
       target,
       sqlitePath: resolveTargetSqlitePath(target, params.env),
     }));
+    const deletedAgents =
+      params.mode === "import"
+        ? (withExistingOpenClawStateDatabaseCurrentReadOnly(
+            (database) => {
+              const deleted = new Set<string>();
+              for (const agentId of new Set(
+                discovered.map(({ target }) => normalizeAgentId(target.agentId)),
+              )) {
+                const journal = readAgentDeletionJournalInDatabase(database, agentId, "runtime");
+                if (journal?.cleanupCompleted && journal.deleteFiles) {
+                  deleted.add(agentId);
+                }
+              }
+              return deleted;
+            },
+            { env: params.env },
+          ) ?? new Set<string>())
+        : new Set<string>();
+    // A completed delete-files tombstone owns the identity even when verified import
+    // archives remain. Automatic history discovery must not recreate that agent.
+    const targets = discovered.filter(
+      ({ target }) => !deletedAgents.has(normalizeAgentId(target.agentId)),
+    );
     const isRetained = createRetainedAgentDatabaseMatcher(
       params.env,
       () => resolveConfiguredAgentDatabaseTargets(params.cfg, { env: params.env }),
