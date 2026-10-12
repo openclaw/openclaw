@@ -129,6 +129,9 @@ function collapseRepeatedFailureDetail(message: string): string {
 
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const PREFLIGHT_COMPACTION_FAILURE_PREFIX = "Preflight compaction required but failed:";
+// The refresh fence/observer owns this deadline message; failover's timeout family also includes DNS/transport failures.
+const OAUTH_REFRESH_HARD_TIMEOUT_RE =
+  /(?:^|:\s)OAuth refresh call "[^"\r\n]+" exceeded hard timeout \(\d+ms\)$/u;
 
 type ExternalRunFailureReply = Pick<ReplyPayload, "text" | "presentation"> & {
   text: string;
@@ -283,6 +286,32 @@ export function buildExternalRunFailureReply(
     authMode: failoverFacts.authMode,
   });
   if (oauthRefreshFailure) {
+    const attempts = readFallbackAttempts(error);
+    const primaryAttempt = attempts.length > 1 ? attempts[0] : undefined;
+    // Attempt diagnostics remain verbose-gated; the chain exposes only classified copy.
+    const primaryCopy = primaryAttempt
+      ? (renderAssistantRequestFailureCopy({ reason: primaryAttempt.reason }) ??
+        "OpenClaw couldn't finish this reply.")
+      : undefined;
+    const fallbackContext = primaryCopy
+      ? `Primary attempt failed: ${primaryCopy.replace(/^⚠️\s*/u, "")} ${attempts.length > 2 ? `${attempts.length - 1} fallback attempts failed. Last fallback: ` : "Fallback: "}`
+      : "";
+    const lastAttempt = attempts.at(-1);
+    if (
+      primaryAttempt &&
+      !oauthRefreshFailure.reason &&
+      lastAttempt?.provider === oauthRefreshFailure.provider &&
+      lastAttempt?.error &&
+      OAUTH_REFRESH_HARD_TIMEOUT_RE.test(lastAttempt.error)
+    ) {
+      const providerText = oauthRefreshFailure.provider
+        ? ` for ${oauthRefreshFailure.provider}`
+        : "";
+      return {
+        text: `⚠️ ${fallbackContext}Login refresh${providerText} timed out. Please try again. For details, open Settings → Logs in the Control UI or run \`openclaw logs --follow\`.`,
+        isGenericRunnerFailure: false,
+      };
+    }
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
       profileId: options?.includeAuthProfileId ? oauthRefreshFailure.profileId : undefined,
     });
@@ -294,14 +323,14 @@ export function buildExternalRunFailureReply(
     if (oauthRefreshFailure.reason) {
       return {
         text: providerLoginRecovery
-          ? `⚠️ ${providerLoginRecovery.hint} You can also re-auth with ${loginCommandMarkdown} on the gateway.`
-          : `⚠️ Model login expired on the gateway${providerText}. Re-auth with ${loginCommandMarkdown} in a terminal, then try again.`,
+          ? `⚠️ ${fallbackContext}${providerLoginRecovery.hint} You can also re-auth with ${loginCommandMarkdown} on the gateway.`
+          : `⚠️ ${fallbackContext}Model login expired on the gateway${providerText}. Re-auth with ${loginCommandMarkdown} in a terminal, then try again.`,
         ...(providerLoginRecovery ? { presentation: providerLoginRecovery.presentation } : {}),
         isGenericRunnerFailure: false,
       };
     }
     return {
-      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, ${retryLoginHint} with ${loginCommandMarkdown} in a terminal.`,
+      text: `⚠️ ${fallbackContext}Model login failed on the gateway${providerText}. Please try again. If this keeps happening, ${retryLoginHint} with ${loginCommandMarkdown} in a terminal.`,
       isGenericRunnerFailure: false,
     };
   }
