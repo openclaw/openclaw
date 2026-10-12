@@ -122,10 +122,9 @@ function failureClassifier(
       return new Response(JSON.stringify({ workflow_runs: runs }));
     }
     if (path === `/actions/runs/${latest?.id}/attempts/1/jobs`) {
-      const jobs = (options.mainJobs ?? [{ ...job, id: 20 }]).map((entry) => ({
-        ...entry,
-        run_id: latest!.id,
-      }));
+      const jobs = (options.mainJobs ?? [{ ...job, id: 20 }]).map((entry) =>
+        Object.assign({}, entry, { run_id: latest!.id }),
+      );
       return new Response(JSON.stringify({ total_count: jobs.length, jobs }));
     }
     if (path === "/actions/jobs/20/logs") {

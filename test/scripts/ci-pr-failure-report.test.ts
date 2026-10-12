@@ -52,7 +52,7 @@ function fixture(rows: ReturnType<typeof job>[], currentRun = run) {
       body = { workflow_runs: [mainRun] };
     } else if (path === "/actions/runs/200/attempts/1/jobs") {
       const jobs = [job(20, "build-artifacts", "failure"), job(21, "checks-ui", "success")].map(
-        (entry) => ({ ...entry, run_id: 200 }),
+        (entry) => Object.assign({}, entry, { run_id: 200 }),
       );
       body = { total_count: jobs.length, jobs };
     } else {
