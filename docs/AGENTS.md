@@ -1,68 +1,54 @@
 # Docs Guide
 
-This directory owns docs authoring, published link rules, and docs i18n policy.
+This directory owns docs authoring, published links, and docs i18n policy.
 
 ## Source Ownership
 
-- Maintainers author `/clawhub/**` pages in [openclaw/clawhub](https://github.com/openclaw/clawhub/tree/main/docs). `scripts/docs-sync-publish.mjs` replaces the entire publish `docs/clawhub/` tree from that source. Do not keep authored copies here.
-- This repo therefore holds no `/clawhub/**` page sources, even though `docs/docs.json` lists them in the navigation. Both link-audit modes accept those declared routes without a ClawHub checkout; undeclared routes still fail.
-- Keep OpenClaw-specific skill and plugin guidance in the owning OpenClaw docs, such as `docs/cli/skills.md` and `docs/cli/plugins.md`. That guidance covers installation, update, verification, removal, and release trust. Standalone ClawHub CLI and publishing reference belongs upstream.
-- For links into `/clawhub/**`, plain `pnpm docs:check-links` does not check fragments. To verify anchors, run `pnpm docs:check-links:anchors` with `OPENCLAW_DOCS_SYNC_CLAWHUB_REPO` pointing to the actual ClawHub source checkout. Without that source, fragments into declared mirrored routes are reported as unverified.
-- Approved release docs can own a marked `CHANGELOG/<version>.md` mirror. When changing those sources, regenerate that complete flat Markdown file in the same PR with `pnpm changelog:from-docs`, preserving the marker's ordered source list and the frozen `CHANGELOG/records/<version>.md`. `pnpm changelog:check` verifies marked mirrors; it does not convert untouched historical releases. The `openclaw-changelog-update` skill owns the commands and separate post-release publication sequence.
-- Generated `CHANGELOG/**` artifacts retain the exact migrated or mirrored bytes. Like the root changelog, they are excluded from generic formatting; use the owning generator and `pnpm changelog:check` instead.
+- Author `/clawhub/**` in [openclaw/clawhub](https://github.com/openclaw/clawhub/tree/main/docs), never here. `scripts/docs-sync-publish.mjs` replaces the publish `docs/clawhub/` tree. Link audits accept routes declared in `docs/docs.json` without that checkout; undeclared routes fail.
+- Keep OpenClaw-specific skill/plugin installation, update, verification, removal, and release-trust guidance here (`docs/cli/skills.md`, `docs/cli/plugins.md`). Standalone ClawHub CLI/publishing reference belongs upstream.
+- Plain `pnpm docs:check-links` skips ClawHub fragments. Use `pnpm docs:check-links:anchors` with `OPENCLAW_DOCS_SYNC_CLAWHUB_REPO` set to the source checkout; otherwise declared-route fragments remain unverified.
+- Approved release-doc changes regenerate the complete marked `CHANGELOG/<version>.md` mirror with `pnpm changelog:from-docs`, preserving its ordered sources and frozen `CHANGELOG/records/<version>.md`. Use `pnpm changelog:check`; it does not convert untouched history. Read the `openclaw-changelog-update` skill for generation and post-release publication.
+- Never generically format generated `CHANGELOG/**` or the root changelog; their exact migrated/mirrored bytes belong to the generator.
 
 ## Local Preview
 
-- Run `pnpm docs:dev -- --page <route>` to preview uncommitted English content using the current website UI. Repeat `--page` for more pages; the preview is bounded to 30 pages.
-- Clone `openclaw/docs` as `../openclaw-docs` beside the main checkout and run `npm ci` there first. For another checkout, pass `--site-repo <path>` or set `OPENCLAW_DOCS_SITE_REPO`.
-- The preview reads this checkout and writes only ignored `.cache/docs-preview/` output. It does not sync, translate, or publish. Re-run after edits. Use `--build-only` for artifacts without a server, or `--port <port>` to change the loopback server's default port 4173. Serving requires Python 3.
-- Website styling and renderer changes belong in `openclaw/docs`; content, navigation, redirects, and the shared publishing parser remain here.
+- Run `pnpm docs:dev -- --page <route>` for uncommitted English content in the current website UI; repeat `--page` up to 30 pages. Re-run after edits.
+- Clone `openclaw/docs` as `../openclaw-docs` beside the main checkout and run `npm ci` there. Override with `--site-repo <path>` or `OPENCLAW_DOCS_SITE_REPO`.
+- Preview writes only ignored `.cache/docs-preview/`; it does not sync, translate, or publish. See `pnpm docs:dev --help` for build-only and port options. Serving needs Python 3.
+- Website styling/renderer belong in `openclaw/docs`; content, navigation, redirects, and the shared publishing parser belong here.
 
 ## Published Link Rules
 
-- The publish pipeline pushes docs to `https://docs.openclaw.ai` from the `openclaw/docs` publishing repo, which owns the website design and UI.
-- Internal doc links in `docs/**/*.md` must stay root-relative with no `.md` or `.mdx` suffix (example: `[Config](/gateway/configuration)`).
-- Section cross-references should use anchors on root-relative paths (example: `[Hooks](/gateway/config-hooks#hooks)`).
-- Anchor IDs come from the shared publishing parser in `scripts/lib/docs-markdown.mjs`. Verify them with `pnpm docs:check-links:anchors`. Published heading IDs stay stable. Compatibility aliases never replace an existing target.
-- Use an explicit `<a id="stable-section-name" />` for a durable section link when heading wording may change. Keep existing named anchors when reorganizing content.
-- README and other GitHub-rendered docs should keep absolute docs URLs so links work outside the docs site.
-- Docs content must stay generic: no personal device names, hostnames, or local paths. Use placeholders like `user@gateway-host` and `~/path/to/skills`.
-- For tokens, API keys, and credential snippets, follow [Secret Placeholder Conventions](/reference/secret-placeholder-conventions). Keep example values obviously fake so secret scanners stay quiet.
+- `openclaw/docs` publishes `https://docs.openclaw.ai` and owns its design/UI.
+- Internal links in `docs/**/*.md` use root-relative paths without `.md`/`.mdx`, including section anchors: `[Hooks](/gateway/config-hooks#hooks)`.
+- `scripts/lib/docs-markdown.mjs` owns heading IDs; verify with `pnpm docs:check-links:anchors`. Preserve published IDs and named anchors; compatibility aliases never replace existing targets. Use `<a id="stable-section-name" />` when heading wording may change.
+- README and other GitHub-rendered docs use absolute docs URLs.
+- Keep public docs generic: no personal devices, hostnames, or local paths. Use placeholders such as `user@gateway-host` and `~/path/to/skills`.
+- Follow [Secret Placeholder Conventions](/reference/secret-placeholder-conventions); credential examples must be obviously fake.
 
 ## Docs Content Rules
 
-- When `node-version.mjs`, `package.json` engines, the Bun minimum in `src/infra/runtime-guard.ts`, or the SQLite floors in `src/infra/sqlite-runtime-version.ts` change, update the supported-versions and history tables in `docs/install/node-compatibility.md` and `docs/install/bun-compatibility.md`.
-- For docs, UI copy, and picker lists, order services and providers alphabetically. The one exception is a section that explicitly describes runtime order or auto-detection order.
-- Keep bundled plugin naming consistent with the repo-wide plugin terminology rules in the root `AGENTS.md`.
-- CI verifies JSON5 and JSON config fences that look like whole `openclaw.json` documents against the schema. `pnpm docs:check-config-examples` runs that verification. Deliberately partial or legacy snippets opt out with `validate=false` in the fence info string.
-- Generated docs, never hand-edit: `docs/plugins/reference/**`, `docs/plugins/reference.md`, and `docs/plugins/plugin-inventory.md` come from `pnpm plugins:inventory:gen`. `docs/maturity/**` comes from `pnpm maturity:render`.
-- Publishing and packaging generate the public and packaged docs map from `pnpm docs:list --headings`. Keep only the small source stub at `docs/docs_map.md`. Never commit the expanded heading mirror.
+- Runtime-floor changes in `node-version.mjs`, `package.json` engines, `src/infra/runtime-guard.ts` (Bun), or `src/infra/sqlite-runtime-version.ts` update supported-version/history tables in `docs/install/node-compatibility.md` and `docs/install/bun-compatibility.md`.
+- Alphabetize services/providers in docs, UI copy, and pickers, except explicit runtime or auto-detection order. Follow root `AGENTS.md` plugin terminology.
+- CI schema-checks JSON/JSON5 fences resembling whole `openclaw.json` files (`pnpm docs:check-config-examples`). Mark deliberately partial/legacy fences `validate=false`.
+- Never hand-edit `docs/plugins/reference/**`, `docs/plugins/reference.md`, or `docs/plugins/plugin-inventory.md`; run `pnpm plugins:inventory:gen`. For `docs/maturity/**`, see below.
+- Keep only the source stub in `docs/docs_map.md`; publishing/packaging generate the expanded map from `pnpm docs:list --headings`. Never commit the heading mirror.
 
 ## Internal Docs
 
-- Long-lived private operator docs belong in a private operator repo outside this one.
-- Repo-local internal scratch/mirror docs may live under ignored `docs/internal/`.
-- Never add `docs/internal/**` pages to `docs/docs.json` navigation or link them from public docs.
-- `scripts/docs-sync-publish.mjs` excludes and prunes `docs/internal/**` from the public `openclaw/docs` publish repo if a page is force-added later.
-- Root `docs/AGENTS.md` and `docs/CLAUDE.md` are repository instructions, not public pages. Source sync excludes and prunes them; translation finalization removes their locale copies. Public workspace templates under `docs/reference/templates/**` remain published.
-- Internal docs may mention repo paths, private app names, 1Password item names, and runbooks, but never include secret values.
+- Long-lived private operator docs belong in a private operator repo. Local scratch/mirrors may use ignored `docs/internal/`; never link them from public docs or include them in `docs/docs.json`.
+- `scripts/docs-sync-publish.mjs` excludes/prunes `docs/internal/**` and root `docs/AGENTS.md`/`docs/CLAUDE.md`; translation finalization removes locale copies of those instruction files. Public `docs/reference/templates/**` remain published.
+- Internal docs may name repo paths, private apps, 1Password items, and runbooks, never secret values.
 
 ## Maturity Scorecard Editing
 
-- `taxonomy.yaml` and `qa/maturity-scores.yaml` are the source inputs.
-- Generated maturity docs under `docs/maturity/` are projections. Do not hand-edit their score, LTS, taxonomy, QA profile, or evidence tables.
-- `scripts/qa/render-maturity-docs.ts` owns generation. Use `pnpm maturity:render` to refresh committed docs and `pnpm maturity:check` to verify them.
-- `.github/workflows/maturity-scorecard.yml` renders artifact previews and can open generated-doc PRs. `.github/workflows/openclaw-release-checks.yml` dispatches it for release QA.
-- Keep deterministic `qa-evidence.json.scorecard` data in GitHub Actions artifacts unless a maintainer explicitly asks for a sanitized committed projection.
-- Human overrides must change source state in a PR and explain the reason plus public or redacted evidence.
+- Edit `taxonomy.yaml` and `qa/maturity-scores.yaml`, never generated score, LTS, taxonomy, QA-profile, or evidence tables in `docs/maturity/`.
+- `scripts/qa/render-maturity-docs.ts` owns generation: `pnpm maturity:render` refreshes; `pnpm maturity:check` verifies.
+- `.github/workflows/maturity-scorecard.yml` renders previews/can open generated-doc PRs; `.github/workflows/openclaw-release-checks.yml` dispatches it for release QA.
+- Keep deterministic `qa-evidence.json.scorecard` in Actions artifacts unless a maintainer requests a sanitized committed projection. Human overrides change source state in a PR with reasons and public/redacted evidence.
 
 ## Docs i18n
 
-- Foreign-language docs are not maintained in this repo. The generated publish output lives in the separate `openclaw/docs` repo (often cloned locally as `../openclaw-docs`).
-- Do not add or edit localized docs under `docs/<locale>/**` here.
-- Treat OpenClaw-owned English docs in this repo plus glossary files as the source of truth. ClawHub English sources follow Source Ownership above.
-- Pipeline: update English docs here, update `docs/.i18n/glossary.<locale>.json` as needed, then let the publish-repo sync and `scripts/docs-i18n` run in `openclaw/docs`.
-- Before rerunning `scripts/docs-i18n`, add glossary entries for new technical terms, page titles, and short nav labels. Add an entry for each term that must stay in English or use a fixed translation.
-- `pnpm docs:check-i18n-glossary` is the guard for changed English doc titles and short internal doc labels.
-- Translation memory lives in generated `docs/.i18n/*.tm.jsonl` files in the publish repo.
-- See `docs/.i18n/README.md`.
+- English docs and glossary files here are authoritative (ClawHub follows Source Ownership). Never add/edit `docs/<locale>/**` here; generated translations and `docs/.i18n/*.tm.jsonl` belong in `openclaw/docs`.
+- Update English and glossary terms here before publish-repo sync/`scripts/docs-i18n`. Add entries for new technical terms, page titles, short nav labels, and terms requiring fixed translation or English spelling before rerunning translation.
+- Run `pnpm docs:check-i18n-glossary` for changed English titles/short internal labels. Read `docs/.i18n/README.md` for the pipeline.

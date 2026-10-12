@@ -76,6 +76,7 @@ async function createCommandWebhook(
     responseStatus?: number;
     holdResponse?: boolean;
     timeoutSeconds?: number;
+    oneShot?: boolean;
     runCommandJob?: CronServiceDeps["runCommandJob"];
   } = {},
 ) {
@@ -110,7 +111,17 @@ async function createCommandWebhook(
   const address = server.address() as AddressInfo;
   const { storePath } = await makeStorePath();
   const done = createDeferred<CronEvent>();
+  const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
+    async () => {},
+  );
+  const runCronFailureRepair = vi.fn<NonNullable<CronServiceDeps["runCronFailureRepair"]>>(
+    async () => {},
+  );
+  const enqueueSystemEvent = vi.fn();
   const cron = createService(storePath, {
+    sendCronFailureAlert,
+    runCronFailureRepair,
+    enqueueSystemEvent,
     runCommandJob:
       options.runCommandJob ??
       (async ({ job, abortSignal }) =>
@@ -126,6 +137,12 @@ async function createCommandWebhook(
   await cron.start();
   const job = await cron.add({
     ...buildIsolatedAgentTurnJob("command webhook"),
+    ...(options.oneShot
+      ? {
+          schedule: { kind: "at" as const, at: new Date(Date.now() + 60_000).toISOString() },
+          failureAlert: { after: 1, channel: "telegram", to: "123" },
+        }
+      : {}),
     payload: {
       kind: "command",
       argv: [process.execPath, "-e", "process.stdout.write('HOOKSCHED_PAYLOAD')"],
@@ -137,6 +154,9 @@ async function createCommandWebhook(
     cron,
     job,
     requests,
+    sendCronFailureAlert,
+    runCronFailureRepair,
+    enqueueSystemEvent,
     requestBody: bodyReceived.promise,
     finished: done.promise,
     close: async () => {
@@ -242,19 +262,21 @@ describe("CronService persists delivered status", () => {
     async ({ responseStatus, expectedStatus, clockJumpMs }) => {
       const started = createDeferred();
       const finish = createDeferred();
-      const { cron, job, requests, finished, close } = await createCommandWebhook({
-        responseStatus,
-        ...(clockJumpMs > 0
-          ? {
-              timeoutSeconds: 1,
-              runCommandJob: async () => {
-                started.resolve();
-                await finish.promise;
-                return { status: "ok", summary: "HOOKSCHED_PAYLOAD" };
-              },
-            }
-          : {}),
-      });
+      const { cron, job, requests, finished, sendCronFailureAlert, close } =
+        await createCommandWebhook({
+          oneShot: true,
+          responseStatus,
+          ...(clockJumpMs > 0
+            ? {
+                timeoutSeconds: 1,
+                runCommandJob: async () => {
+                  started.resolve();
+                  await finish.promise;
+                  return { status: "ok", summary: "HOOKSCHED_PAYLOAD" };
+                },
+              }
+            : {}),
+        });
       try {
         const run = cron.run(job.id, "force");
         if (clockJumpMs > 0) {
@@ -277,6 +299,7 @@ describe("CronService persists delivered status", () => {
           lastDelivered: responseStatus === 204,
         });
         expect(finishedEvent?.deliveryStatus).toBe(expectedStatus);
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(responseStatus === 503 ? 1 : 0);
         if (responseStatus === 503) {
           expect(cron.getJob(job.id)?.state.lastDeliveryError).toContain("HTTP 503");
           expect(finishedEvent?.deliveryError).toContain("HTTP 503");
@@ -367,7 +390,17 @@ describe("CronService persists delivered status", () => {
           },
         };
       });
-      const { cron, job, requests, finished, close } = await createCommandWebhook({
+      const {
+        cron,
+        job,
+        requests,
+        finished,
+        sendCronFailureAlert,
+        runCronFailureRepair,
+        enqueueSystemEvent,
+        close,
+      } = await createCommandWebhook({
+        oneShot: true,
         responseStatus,
         holdResponse: true,
         runCommandJob: vi.fn(async () => ({ status: "ok" as const, summary: "HOOKSCHED_PAYLOAD" })),
@@ -403,6 +436,10 @@ describe("CronService persists delivered status", () => {
           lastDeliveryStatus: responseStatus === 200 ? "delivered" : "not-delivered",
         });
         expect(cron.getJob(job.id)?.state.lastDeliveryError).toBe(event.deliveryError);
+        expect(cron.getJob(job.id)?.state.autoDisabled).toBeUndefined();
+        expect(sendCronFailureAlert).not.toHaveBeenCalled();
+        expect(runCronFailureRepair).not.toHaveBeenCalled();
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
       } finally {
         cleanup.resolve();
         await close();

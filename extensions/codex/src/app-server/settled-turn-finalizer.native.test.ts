@@ -764,7 +764,6 @@ describe.skipIf(process.platform === "win32")(
             fixture.setPhase("action");
             params.runId = "run-settled-action";
             if (hidden) {
-              params.agentId = "main";
               params.prompt =
                 "Background task completed. Use exec_command exactly once to run " +
                 "`printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt`, " +
