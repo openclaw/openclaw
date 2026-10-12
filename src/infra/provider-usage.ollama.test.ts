@@ -103,33 +103,37 @@ describe("Ollama provider usage integration", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it.each([{}, { OLLAMA_API_KEY: "ambient-cloud-key" }])(
-    "uses stored endpoint credentials for a local provider with env %j",
-    async (env) => {
-      const fetchFn = vi.fn(async () =>
-        Response.json({ included: { session: { remaining_percent: 80 } } }),
-      );
-      const summary = await loadProviderUsageSummary({
-        providers: ["ollama"],
-        config: configFor("http://10.0.0.5:11434"),
-        authStore: {
-          version: 1,
-          profiles: {
-            "ollama:endpoint": { type: "api_key", provider: "ollama", key: "endpoint-key" },
-          },
+  it.each([
+    [undefined, {}],
+    [undefined, { OLLAMA_API_KEY: "ambient-cloud-key" }],
+    ["OLLAMA_API_KEY", {}],
+    ["OLLAMA_API_KEY", { OLLAMA_API_KEY: "ambient-cloud-key" }],
+    ["ollama-local", {}],
+    ["ollama-local", { OLLAMA_API_KEY: "ambient-cloud-key" }],
+  ])("uses stored endpoint credentials with local key %s and env %j", async (apiKey, env) => {
+    const fetchFn = vi.fn(async () =>
+      Response.json({ included: { session: { remaining_percent: 80 } } }),
+    );
+    const summary = await loadProviderUsageSummary({
+      providers: ["ollama"],
+      config: configFor("http://10.0.0.5:11434", apiKey),
+      authStore: {
+        version: 1,
+        profiles: {
+          "ollama:endpoint": { type: "api_key", provider: "ollama", key: "endpoint-key" },
         },
-        env,
-        fetch: fetchFn,
-      });
-      expect(summary.providers[0]?.windows).toEqual([{ label: "Session", usedPercent: 20 }]);
-      expect(fetchFn).toHaveBeenCalledExactlyOnceWith(
-        "http://10.0.0.5:11434/api/balance",
-        expect.objectContaining({
-          headers: { Accept: "application/json", Authorization: "Bearer endpoint-key" },
-        }),
-      );
-    },
-  );
+      },
+      env,
+      fetch: fetchFn,
+    });
+    expect(summary.providers[0]?.windows).toEqual([{ label: "Session", usedPercent: 20 }]);
+    expect(fetchFn).toHaveBeenCalledExactlyOnceWith(
+      "http://10.0.0.5:11434/api/balance",
+      expect.objectContaining({
+        headers: { Accept: "application/json", Authorization: "Bearer endpoint-key" },
+      }),
+    );
+  });
 
   it("does not treat an ambient Cloud key alone as local-daemon ownership", async () => {
     const fetchFn = vi.fn();

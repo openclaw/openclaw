@@ -3,7 +3,11 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { OLLAMA_DEFAULT_API_KEY, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
-import { isLocalOllamaBaseUrl, readOllamaStringValue } from "./discovery-shared.js";
+import {
+  isLocalOllamaBaseUrl,
+  isOllamaApiKeyMarker,
+  readOllamaStringValue,
+} from "./discovery-shared.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import { resolveOllamaApiBase } from "./provider-models.js";
 
@@ -29,14 +33,11 @@ export function createOllamaUsageHooks(): Pick<
       const baseUrl = readProviderBaseUrl(provider) ?? OLLAMA_DEFAULT_BASE_URL;
       const input = provider?.apiKey;
       const local = isLocalOllamaBaseUrl(baseUrl);
-      if (input == null || (local && readOllamaStringValue(input) === "OLLAMA_API_KEY")) {
+      if (input == null || (local && isOllamaApiKeyMarker(readOllamaStringValue(input)))) {
         const candidates = (await ctx.resolveApiKeyCandidatesFromConfigAndStore?.()) ?? [];
         const token = local
           ? (candidates.find(
-              (key) =>
-                key !== ctx.env.OLLAMA_API_KEY?.trim() &&
-                key !== "OLLAMA_API_KEY" &&
-                key !== OLLAMA_DEFAULT_API_KEY,
+              (key) => key !== ctx.env.OLLAMA_API_KEY?.trim() && !isOllamaApiKeyMarker(key),
             ) ?? OLLAMA_DEFAULT_API_KEY)
           : candidates[0];
         return token ? { token } : { handled: true };
