@@ -15,6 +15,7 @@ import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
 } from "../../agents/run-termination.js";
+import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
@@ -72,6 +73,64 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(result.outcome).toMatchObject({ kind: "settled", sessionWriter: compactionTarget });
     expect(result.outcome.compaction).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "settles a tool-free response after workspace preparation (failed=%s)",
+    async (fails) => {
+      const ready = createDeferred();
+      const waiting = createDeferred();
+      const preparationError = new Error("Checkout failed; retry this session.");
+      let failure: Error | undefined;
+      const params = createMinimalRunAgentTurnParams();
+      if (!params.sessionKey) {
+        throw new Error("Expected the fixture session key");
+      }
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "A response without tools." }],
+        meta: {},
+      });
+      vi.mocked(emitAgentEvent).mockClear();
+      let completed = false;
+      const pending = runWithAgentWorkspaceReadiness(
+        {
+          sessionKey: params.sessionKey,
+          waitUntilReady: () => {
+            waiting.resolve();
+            return ready.promise;
+          },
+          assertCurrent: () => {},
+          getFailure: () => failure,
+        },
+        () => execution.executeAgentTurn(params),
+      ).finally(() => {
+        completed = true;
+      });
+      const terminals = () =>
+        vi
+          .mocked(emitAgentEvent)
+          .mock.calls.map(([event]) => event)
+          .filter(
+            (event) =>
+              event.stream === "lifecycle" &&
+              (event.data.phase === "end" || event.data.phase === "error"),
+          );
+      await Promise.race([waiting.promise, pending]);
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(completed).toBe(false);
+      expect(terminals()).toEqual([]);
+      if (fails) {
+        failure = preparationError;
+        ready.reject(preparationError);
+      } else {
+        ready.resolve();
+      }
+      await pending;
+      expect(terminals()).toHaveLength(1);
+      expect(terminals()[0]?.data).toMatchObject(
+        fails ? { phase: "error", error: preparationError.message } : { phase: "end" },
+      );
+    },
+  );
 
   it("classifies cancellation raised by the real deferred lifecycle owner", async () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(

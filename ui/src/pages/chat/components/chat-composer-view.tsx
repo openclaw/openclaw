@@ -28,7 +28,6 @@ import {
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import { GoalComposerMode, type GoalComposerController } from "./chat-composer-goal-mode.tsx";
-import { renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
 import { LitContent } from "./chat-composer-interop.tsx";
 import { HumanMentionMenuView, type HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
 import type { resolveComposerMenus } from "./chat-composer-menus.ts";
@@ -304,7 +303,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           {props.disabledBanner?.kind === "above-composer" ? disabledBanner() : undefined}
           <ComposerProgress composer={props} shown={context.showComposer} />{" "}
           <ComposerQueue composer={props} showAbortableUi={context.showAbortableUi} />
-          {renderChatGoalRecoverySolid(props.goalRecovery, props.connected)}{" "}
           <ComposerGoal
             composer={props}
             state={context.state}

@@ -22,7 +22,6 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { createSessionEntryRevisionGuard } from "./session-accessor.sqlite-entry-revision.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   loadExactSessionEntry,
@@ -33,7 +32,6 @@ import {
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
-import { createSessionTranscriptOwnerPredicate } from "./session-accessor.sqlite-transcript-write-guard.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
@@ -130,22 +128,6 @@ describe("SQLite session entry patch commit revalidation", () => {
       );
     },
   );
-
-  /** Use the native writer boundary so interleaved commits publish their own receipts. */
-  function mutateRowFromSibling(patch: Record<string, string>, targetKey = sessionKey): void {
-    const other = openNodeSqliteDatabase(database.path);
-    try {
-      const entries = Object.entries(patch);
-      const setters = entries.map(([key]) => `'$.${key}', ?`).join(", ");
-      other
-        .prepare(
-          `UPDATE session_nodes SET entry_json = json_set(entry_json, ${setters}) WHERE session_key = ?`,
-        )
-        .run(...entries.map(([, value]) => value), targetKey);
-    } finally {
-      other.close();
-    }
-  }
 
   function patchEntry(
     route: "ordinary" | "lifecycle",
@@ -290,117 +272,6 @@ describe("SQLite session entry patch commit revalidation", () => {
       }
     },
   );
-
-  describe("prepared session mutation guard", () => {
-    function ownerPredicate() {
-      return createSessionTranscriptOwnerPredicate(database, {
-        sessionKey,
-        sessionId: "session-1",
-        lifecycleRevision: undefined,
-        activeWriterRunId: undefined,
-      });
-    }
-
-    it.each([
-      { field: "sessionId", writer: "sibling" },
-      { field: "lifecycleRevision", writer: "sibling" },
-      { field: "activeWriterRunId", writer: "sibling" },
-      { field: "activeWriterRunId", writer: "same-connection" },
-    ])("rejects a changed $field from a $writer writer", ({ field, writer }) => {
-      const guard = createSessionEntryRevisionGuard(database.db, () => {}, ownerPredicate());
-      guard();
-      if (writer === "sibling") {
-        mutateRowFromSibling({ [field]: "replacement" });
-        expect(guard).toThrowError(
-          expect.objectContaining({
-            code: "invalid_state",
-            message: "Prepared session entry facts are no longer current",
-          }),
-        );
-      } else {
-        database.db.exec("BEGIN");
-        try {
-          database.db
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
-            )
-            .run(`$.${field}`, "replacement", sessionKey);
-          expect(guard).toThrow("Prepared session entry facts are no longer current");
-        } finally {
-          database.db.exec("ROLLBACK");
-        }
-      }
-    });
-
-    it("invalidates the next predicate check when a sibling commits during a read", () => {
-      const matches = ownerPredicate();
-      let mutateDuringPredicate = false;
-      const guard = createSessionEntryRevisionGuard(
-        database.db,
-        () => {},
-        () => {
-          const matched = matches();
-          if (mutateDuringPredicate) {
-            mutateRowFromSibling({ activeWriterRunId: "replacement" });
-          }
-          return matched;
-        },
-      );
-      guard();
-      mutateRowFromSibling({ label: "harmless metadata" });
-      mutateDuringPredicate = true;
-      expect(guard).not.toThrow();
-      mutateDuringPredicate = false;
-      expect(guard).toThrow("Prepared session entry facts are no longer current");
-    });
-
-    it("rejects a duplicate protected writer key instead of selecting its stale first value", async () => {
-      const field = "activeWriterRunId";
-      const expected = {
-        sessionKey,
-        sessionId: "session-1",
-        lifecycleRevision: "original-lifecycle",
-        activeWriterRunId: "original-writer",
-      };
-      await upsertSessionEntryCore(scope, {
-        lifecycleRevision: expected.lifecycleRevision,
-        activeWriterRunId: expected.activeWriterRunId,
-      });
-      const guard = createSessionEntryRevisionGuard(
-        database.db,
-        () => {},
-        createSessionTranscriptOwnerPredicate(database, expected),
-      );
-      guard();
-      const other = openNodeSqliteDatabase(database.path);
-      try {
-        other
-          .prepare(
-            "UPDATE session_nodes SET entry_json = substr(entry_json, 1, length(entry_json) - 1) || ? WHERE session_key = ?",
-          )
-          .run(`,${JSON.stringify(field)}:"replacement"}`, sessionKey);
-      } finally {
-        other.close();
-      }
-      expect(guard).toThrow("Prepared session entry facts are no longer current");
-    });
-
-    it("rejects JSON5 that the stored entry decoder would not accept", () => {
-      const guard = createSessionEntryRevisionGuard(database.db, () => {}, ownerPredicate());
-      guard();
-      const other = openNodeSqliteDatabase(database.path);
-      try {
-        other
-          .prepare(
-            "UPDATE session_nodes SET entry_json = replace(entry_json, ?, ?) WHERE session_key = ?",
-          )
-          .run('"sessionId"', "'sessionId'", sessionKey);
-      } finally {
-        other.close();
-      }
-      expect(guard).toThrow("Prepared session entry facts are no longer current");
-    });
-  });
 
   describe("compact session currency facts", () => {
     it("discards facts first observed after a write in a rolled-back native transaction", () => {

@@ -32,6 +32,13 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 ### Validation and activation
 
+Readiness checks share an overall deadline across native service inspection,
+listener checks, authenticated RPC, and HTTP readiness. A network probe's
+per-request limit does not shorten native inspection. Slow inspection still
+consumes the shared deadline, so it cannot extend the update's overall budget.
+These checks belong to the installed updater; a candidate cannot change an
+older updater's already-running readiness wait.
+
 On Windows, candidate commands verify their recorded handoff lease and their own
 PID/start identity even when the launcher process tree changes. A different
 immediate parent no longer causes a valid candidate to fail with `Candidate

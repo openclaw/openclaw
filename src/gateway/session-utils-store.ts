@@ -249,11 +249,15 @@ export async function withQualifiedGatewaySessionEntry<T>(params: {
   logicalStorePath: string;
   env?: NodeJS.ProcessEnv;
   includeMembership: boolean;
+  includeLifecycle?: boolean;
   consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
   assertConfigCurrent: () => void;
 }): Promise<T> {
   return withQualifiedGatewaySessionStoreTarget({
     ...params,
+    readOptions: {
+      lifecycleSessionKey: params.includeLifecycle ? params.target.storeKey : undefined,
+    },
     consume: (target, membership, assertSourceCurrent) => {
       const canonicalMatch = findCanonicalStoreMatch(target.store, target.storeKeys);
       // Qualification retains the selected store key even before its row exists.

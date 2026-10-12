@@ -125,7 +125,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
             });
           }
           const runId = `run-${sourceMessageIds.length}`;
-          replyOptions?.onAgentRunStart?.(runId);
+          replyOptions?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
           const manager = SessionManager.open(scope, root);
           const sourceAssistant = {
             ...makeAgentAssistantMessage({

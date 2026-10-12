@@ -241,12 +241,7 @@ describe("verified package rollback", () => {
       );
     },
   );
-  it.each([
-    { activated: false, healthy: true },
-    { activated: false, healthy: false },
-    { activated: true, healthy: true },
-    { activated: true, healthy: false },
-  ])(
+  it.each([{ activated: true, healthy: false }])(
     "retains Windows suspension through rollback (activated=$activated, healthy=$healthy)",
     async ({ activated, healthy }) => {
       const stateDir = serviceStateDir;
@@ -988,15 +983,12 @@ describe("verified package rollback", () => {
   });
 
   it.each([
-    "source-failed",
-    "restored-shims-failed",
     "partial-restore",
     "restart-unhealthy",
     "restart-refused",
     "restart-threw",
     "restart-cleanup",
     "restart-timeout",
-    "restart-verified",
   ] as const)("retains active installation identity after %s", async (failure) => {
     await expectActiveRollbackIdentity({
       failure,

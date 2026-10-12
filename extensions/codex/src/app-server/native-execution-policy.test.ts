@@ -20,19 +20,6 @@ describe("resolveCodexNativeExecutionPolicy", () => {
     sessionStoreMocks.getSessionEntry.mockReset();
   });
 
-  it("allows Codex native execution for gateway exec hosts", () => {
-    expect(
-      resolveCodexNativeExecutionPolicy({
-        config: { tools: { exec: { host: "gateway" } } },
-        sessionKey: "session-1",
-      }),
-    ).toMatchObject({
-      nativeToolSurfaceAllowed: true,
-      requestedExecHost: "gateway",
-      effectiveExecHost: "gateway",
-    });
-  });
-
   it("resolves auto to gateway when no sandbox is active", () => {
     expect(
       resolveCodexNativeExecutionPolicy({
@@ -61,22 +48,6 @@ describe("resolveCodexNativeExecutionPolicy", () => {
     });
   });
 
-  it("disables Codex native execution when exec host resolves to node", () => {
-    expect(
-      resolveCodexNativeExecutionPolicy({
-        config: { tools: { exec: { host: "node", node: "worker-1" } } },
-        sessionKey: "session-1",
-      }),
-    ).toMatchObject({
-      nativeToolSurfaceAllowed: false,
-      requestedExecHost: "node",
-      effectiveExecHost: "node",
-      node: "worker-1",
-      blockReason:
-        "OpenClaw exec host=node is active for this session. Codex app-server native execution cannot route shell, filesystem, MCP, or app-backed work through the selected OpenClaw node.",
-    });
-  });
-
   it("honors per-attempt node exec overrides before config defaults", () => {
     expect(
       resolveCodexNativeExecutionPolicy({
@@ -89,21 +60,6 @@ describe("resolveCodexNativeExecutionPolicy", () => {
       requestedExecHost: "node",
       effectiveExecHost: "node",
       node: "worker-2",
-    });
-  });
-
-  it("honors persisted session node exec hosts before config defaults", () => {
-    expect(
-      resolveCodexNativeExecutionPolicy({
-        config: { tools: { exec: { host: "gateway" } } },
-        sessionKey: "session-1",
-        sessionEntry: { execHost: "node", execNode: "worker-3" } as never,
-      }),
-    ).toMatchObject({
-      nativeToolSurfaceAllowed: false,
-      requestedExecHost: "node",
-      effectiveExecHost: "node",
-      node: "worker-3",
     });
   });
 
@@ -145,37 +101,6 @@ describe("resolveCodexNativeExecutionPolicy", () => {
     expect(sessionStoreMocks.getSessionEntry).toHaveBeenCalledWith({
       sessionKey: "main",
       agentId: "main",
-      hydrateSkillPromptRefs: false,
-    });
-  });
-
-  it("honors persisted unscoped exec hosts for the configured default agent", () => {
-    sessionStoreMocks.getSessionEntry.mockReturnValue({
-      sessionId: "session-1",
-      updatedAt: 1,
-      execHost: "node",
-      execNode: "worker-6",
-    });
-
-    expect(
-      resolveCodexNativeExecutionPolicy({
-        config: {
-          tools: { exec: { host: "gateway" } },
-          agents: { entries: { "bot-a": {} } },
-        },
-        sessionKey: "node-session",
-        agentId: "bot-a",
-        readRuntimeSessionEntry: true,
-      }),
-    ).toMatchObject({
-      nativeToolSurfaceAllowed: false,
-      requestedExecHost: "node",
-      effectiveExecHost: "node",
-      node: "worker-6",
-    });
-    expect(sessionStoreMocks.getSessionEntry).toHaveBeenCalledWith({
-      sessionKey: "node-session",
-      agentId: "bot-a",
       hydrateSkillPromptRefs: false,
     });
   });

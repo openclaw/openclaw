@@ -214,6 +214,61 @@ it("restores the Gateway after a migration refusal", async () => {
   }
 });
 
+it("restores the stopped Gateway before reporting a settled state-owner release failure", async () => {
+  const failure = new Error("settled state-owner release failed");
+  boundary.release.mockRejectedValueOnce(failure);
+  const maintenance = await begin();
+
+  await expect(maintenance!.finish({})).rejects.toBe(failure);
+  expect(boundary.close).toHaveBeenCalledOnce();
+  expect(boundary.resume).toHaveBeenCalledOnce();
+  expect(boundary.restart).toHaveBeenCalledOnce();
+  expect(boundary.health).toHaveBeenCalledOnce();
+});
+
+it.each([undefined, {}])(
+  "reports a settled state-release failure without a managed Gateway (%j)",
+  async (config) => {
+    const failure = new Error("settled state release failed");
+    const maintenance = await beginDoctorMaintenance({
+      root: null,
+      options: { repair: true, nonInteractive: true },
+      runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+    });
+    boundary.release.mockRejectedValueOnce(failure);
+    await expect(maintenance!.finish(config)).rejects.toBe(failure);
+    expect(boundary.close).toHaveBeenCalledOnce();
+    expect(boundary.restart).not.toHaveBeenCalled();
+  },
+);
+
+it("retains state custody when the resource scope cannot close", async () => {
+  const cleanupFailure = new Error("persistent resource cleanup failure");
+  boundary.close.mockRejectedValue(cleanupFailure);
+  const maintenance = await begin();
+
+  await expect(maintenance!.finish({})).rejects.toThrow(
+    "Doctor maintenance resource cleanup failed",
+  );
+  expect(boundary.close).toHaveBeenCalledTimes(2);
+  expect(boundary.release).not.toHaveBeenCalled();
+  expect(boundary.restart).not.toHaveBeenCalled();
+  expect(boundary.health).not.toHaveBeenCalled();
+  expect(maintenance!.databaseWrites).toBeUndefined();
+});
+
+it("restores the Gateway after a transient resource close failure settles on retry", async () => {
+  const transient = new Error("transient resource close failure");
+  boundary.close.mockRejectedValueOnce(transient);
+  const maintenance = await begin();
+
+  await expect(maintenance!.finish({})).rejects.toBe(transient);
+  expect(boundary.close).toHaveBeenCalledTimes(2);
+  expect(boundary.release).toHaveBeenCalledOnce();
+  expect(boundary.restart).toHaveBeenCalledOnce();
+  expect(boundary.health).toHaveBeenCalledOnce();
+});
+
 it("does not restart a Gateway already activated by config repair", async () => {
   const events: string[] = [];
   const read = boundary.read.getMockImplementation()!;

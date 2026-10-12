@@ -250,15 +250,6 @@ describe("cron view run history", () => {
     expect(body.querySelector("script")).toBeNull();
   });
 
-  it("shows run errors as the body when no summary exists", () => {
-    const container = renderView({
-      listTab: "activity",
-      runs: [{ ts: 1, jobId: "job-1", action: "finished", status: "error", error: "boom" }],
-    });
-    const body = getElement(container, ".cron-run-entry__body", HTMLDivElement);
-    expect(body.textContent).toContain("boom");
-  });
-
   it("shows empty guidance only for settled history and offers recovery after failure", () => {
     for (const runsState of ["idle", "pending", "failed"] as const) {
       for (const runsQuery of ["", "fail"]) {

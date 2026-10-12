@@ -283,6 +283,33 @@ it("composes empty and multi-session store compute without holding its actor FIF
       ],
       cacheStatus: { status: "fresh", cachedFiles: 2 },
     });
+    await expect(
+      runUsageCostWorker(prepared, {
+        kind: "sessions",
+        projection: "overview",
+        pricingFingerprint,
+        sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        overview: {
+          sessions: [first, second].map((target) => ({
+            key: target.sessionKey,
+            sessionId: target.sessionId,
+            agentId: actor.agentId,
+            updatedAt: 10_000,
+            instances: [{ sessionId: target.sessionId, sessionFile: marker(target) }],
+          })),
+          options: { limit: 1 },
+        },
+      }),
+    ).resolves.toMatchObject({
+      kind: "overview",
+      result: {
+        totals: { totalTokens: 20, totalCost: 2 },
+        sessions: [{ usage: { totalTokens: 10, totalCost: 1 } }],
+        overview: { total: 2, selectedRowCount: 2, limit: 1 },
+      },
+      cacheStatus: { status: "fresh", cachedFiles: 2 },
+    });
   }));
 
 it("refuses new compute work through a released borrow", async () => {

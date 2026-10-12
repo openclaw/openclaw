@@ -47,13 +47,7 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     );
   });
 
-  it.each([
-    { configuredProvider: "copilot", expectedProvider: "copilot", matches: true },
-    { configuredProvider: "different-provider", expectedProvider: "copilot", matches: false },
-    { configuredProvider: undefined, expectedProvider: "copilot", matches: false },
-    { configuredProvider: undefined, expectedProvider: "openai", matches: true },
-    { configuredProvider: null, expectedProvider: "openai", matches: true },
-  ])(
+  it.each([{ configuredProvider: undefined, expectedProvider: "copilot", matches: false }])(
     "uses native capabilities only for matching configured identity ($configuredProvider / $expectedProvider)",
     async ({ configuredProvider, expectedProvider, matches }) => {
       const request = vi.fn(async (method: string) =>

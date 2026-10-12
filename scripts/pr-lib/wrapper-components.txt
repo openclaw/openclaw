@@ -315,6 +315,8 @@ src/agents/worktrees/capacity.ts
 src/agents/worktrees/capacity.worker.ts
 src/agents/worktrees/checkout-apfs.ts
 src/agents/worktrees/checkout-git-config.ts
+src/agents/worktrees/checkout-inputs.ts
+src/agents/worktrees/checkout-materialize.ts
 src/agents/worktrees/checkout-policy-key.ts
 src/agents/worktrees/checkout.ts
 src/agents/worktrees/errors.ts
@@ -346,6 +348,12 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
+src/config/zod-schema.database.ts
+src/infra/postgres-sync/connection.ts
+src/infra/postgres-sync/protocol.ts
+src/infra/postgres-sync/query-compiler.ts
+src/infra/postgres-sync/transaction.ts
+src/infra/sql-connection.ts
 src/sessions/communication-admission.ts
 src/sessions/communication-policy.ts
 src/config/sessions/session-actor-command.ts
@@ -848,6 +856,7 @@ src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.contract.ts
 src/infra/deferred-plugin-migrations.ts
 src/infra/delivery-queue-cache.ts
+src/infra/delivery-queue-retention-columns.ts
 src/infra/delivery-queue-sqlite-bound.ts
 src/infra/delivery-queue-sqlite.types.ts
 src/infra/diagnostic-event-listener-presence.ts
@@ -945,6 +954,7 @@ src/infra/inline-option-token.ts
 src/infra/install-safe-path.ts
 src/infra/json-field-transfer.ts
 src/infra/json-files.ts
+src/infra/json-object-members.ts
 src/infra/kysely-sync-cache-state.ts
 src/infra/kysely-sync.ts
 src/infra/lifecycle-write-custody.ts
@@ -1314,6 +1324,7 @@ src/plugins/compat/session-persistence-records.ts
 src/plugins/compat/skill-command-discovery-record.ts
 src/plugins/compat/skill-proposal-hooks-record.ts
 src/plugins/compat/tts-preferences-record.ts
+src/plugins/compat/transcript-stats-record.ts
 src/plugins/compat/watched-sessions.ts
 src/plugins/compat/workspace-mutation-guard.ts
 src/plugins/config-activation-shared.ts
@@ -1680,6 +1691,7 @@ src/state/agent-deletion-discovery.ts
 src/state/agent-deletion-journal-history.ts
 src/state/agent-deletion-journal-recovery.kernel.ts
 src/state/agent-deletion-journal-recovery.ts
+src/state/agent-deletion-journal-status.ts
 src/state/agent-deletion-journal.read.ts
 src/state/agent-deletion-journal.ts
 src/state/agent-provenance.kernel.ts
@@ -1813,6 +1825,7 @@ src/state/openclaw-state-db-schema-repair.ts
 src/state/openclaw-state-db-schema-runtime.ts
 src/state/openclaw-state-db-schema-v12-foldin.ts
 src/state/openclaw-state-db-schema-v13-widerow.ts
+src/state/openclaw-state-db-schema-v21-columns.ts
 src/state/openclaw-state-db-schema-version.ts
 src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts
@@ -2228,6 +2241,7 @@ src/sessions/provider-review.ts
 src/sessions/transcript-anchor-page.ts
 src/sessions/transcript-display-position.ts
 src/sessions/transcript-visible-record.ts
+src/sessions/user-turn-transcript.message.ts
 src/sessions/user-turn-transcript.metadata.ts
 src/shared/assistant-display-content.ts
 src/shared/chat-content.ts
@@ -2247,5 +2261,10 @@ src/shared/text/text-projection.ts
 src/shared/text/xml-tag-at.ts
 src/shared/widget-theme.ts
 packages/markdown-core/package.json
+src/config/sessions/session-accessor.sqlite-reclamation-publication.ts
+src/config/sessions/session-entry-patch.ts
+src/config/sessions/session-lifecycle-worker-publication.ts
+src/config/sessions/session-native-binding.ts
+src/plugin-state/plugin-state-publication.ts
 src/config/sessions/transcript-recent-text.ts
 src/config/sessions/transcript-recent-window.ts

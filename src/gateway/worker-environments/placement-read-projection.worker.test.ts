@@ -435,7 +435,7 @@ describe("worker placement read projection", () => {
       const warn = vi.fn();
       const monitor = createWorkerPlacementDiskSpaceMonitor({
         placements: store,
-        runnerAvailability: { read: () => undefined },
+        runnerAvailability: { read: () => undefined, version: () => 0 },
         environments: {
           async startTunnel({ environmentId, ownerEpoch }) {
             discoverySql ??= sql.queries.slice(beforeSweep);

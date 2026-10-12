@@ -25,7 +25,6 @@ import {
 import type { PreparedSessionTranscriptModelContext } from "../../config/sessions/session-transcript-context-read.js";
 import { withSessionContextAdmission } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
-import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import {
   sameSessionTranscriptTargetBinding,
@@ -212,7 +211,6 @@ export class SessionManager extends SessionManagerBranching {
     const publish = this.persistenceTarget
       ? prepareTranscriptRewriteSync(
           this.persistenceTarget,
-          this.appendParentId,
           () => this.assertTranscriptWriteActive(),
           this.transcriptVersion,
         )
@@ -251,7 +249,6 @@ export class SessionManager extends SessionManagerBranching {
         const publish = target
           ? prepareTranscriptRewriteSync(
               target,
-              this.appendParentId,
               () => {
                 this.assertTranscriptWriteActive();
                 assertNavigation();
@@ -287,18 +284,7 @@ export class SessionManager extends SessionManagerBranching {
           throw new Error("Session transcript changed before rewrite publication");
         }
       };
-      const reader = prepareSessionManagerHydration(target, { lane: targetDiscoveryLane });
-      const facts = await reader.readMaintenance({ operation: "version" });
-      reader.assertCurrent();
-      assertCurrent();
-      const version = facts.version;
-      if (
-        !version ||
-        !loadedVersion ||
-        version.generation !== loadedVersion.generation ||
-        version.rawSeq !== loadedVersion.rawSeq ||
-        facts.appendParentId !== appendParentId
-      ) {
+      if (!loadedVersion) {
         throw new Error("Session transcript changed before rewrite publication");
       }
       const rewrite = this.prepareTranscriptRewriteView(
@@ -333,7 +319,7 @@ export class SessionManager extends SessionManagerBranching {
                     input: {
                       scope: { ...scope, storePath: admission.database.path },
                       appendParentId,
-                      version,
+                      version: loadedVersion,
                       entries,
                       sources: [...sources],
                     },

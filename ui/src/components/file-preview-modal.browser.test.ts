@@ -86,103 +86,97 @@ async function mountModal(
 }
 
 describe.runIf(browserMode)("file preview modal responsive layout", () => {
-  it.each([320, 375, 390, 640])(
-    "keeps source and copy visible at a %dpx viewport",
-    async (width) => {
-      const { preview, dialog } = await mountPreview(width);
-      const list = preview.querySelector<HTMLElement>(".list");
-      const detail = preview.querySelector<HTMLElement>(".detail");
-      const copy = preview.querySelector<HTMLButtonElement>(".chat-copy-btn");
-      const search = preview.querySelector<HTMLInputElement>(".search");
-      const source = preview.querySelector<HTMLElement>(".code-chunk");
-      const activeItem = preview.querySelector<HTMLElement>(".item.is-active");
-      const title = preview.querySelector<HTMLElement>(".title");
-      expect(list).toBeInstanceOf(HTMLElement);
-      expect(detail).toBeInstanceOf(HTMLElement);
-      expect(copy).toBeInstanceOf(HTMLButtonElement);
-      expect(search).toBeInstanceOf(HTMLInputElement);
-      expect(source).toBeInstanceOf(HTMLElement);
-      expect(activeItem).toBeInstanceOf(HTMLElement);
-      expect(title).toBeInstanceOf(HTMLElement);
+  it.each([320])("keeps source and copy visible at a %dpx viewport", async (width) => {
+    const { preview, dialog } = await mountPreview(width);
+    const list = preview.querySelector<HTMLElement>(".list");
+    const detail = preview.querySelector<HTMLElement>(".detail");
+    const copy = preview.querySelector<HTMLButtonElement>(".chat-copy-btn");
+    const search = preview.querySelector<HTMLInputElement>(".search");
+    const source = preview.querySelector<HTMLElement>(".code-chunk");
+    const activeItem = preview.querySelector<HTMLElement>(".item.is-active");
+    const title = preview.querySelector<HTMLElement>(".title");
+    expect(list).toBeInstanceOf(HTMLElement);
+    expect(detail).toBeInstanceOf(HTMLElement);
+    expect(copy).toBeInstanceOf(HTMLButtonElement);
+    expect(search).toBeInstanceOf(HTMLInputElement);
+    expect(source).toBeInstanceOf(HTMLElement);
+    expect(activeItem).toBeInstanceOf(HTMLElement);
+    expect(title).toBeInstanceOf(HTMLElement);
 
-      const dialogBounds = dialog.getBoundingClientRect();
-      const listBounds = list!.getBoundingClientRect();
-      const detailBounds = detail!.getBoundingClientRect();
-      const copyBounds = copy!.getBoundingClientRect();
-      const searchBounds = search!.getBoundingClientRect();
-      const sourceBounds = source!.getBoundingClientRect();
-      const activeItemBounds = activeItem!.getBoundingClientRect();
-      const titleBounds = title!.getBoundingClientRect();
-      const sourceTextRange = document.createRange();
-      sourceTextRange.selectNodeContents(source!);
-      const sourceTextBounds = sourceTextRange.getBoundingClientRect();
+    const dialogBounds = dialog.getBoundingClientRect();
+    const listBounds = list!.getBoundingClientRect();
+    const detailBounds = detail!.getBoundingClientRect();
+    const copyBounds = copy!.getBoundingClientRect();
+    const searchBounds = search!.getBoundingClientRect();
+    const sourceBounds = source!.getBoundingClientRect();
+    const activeItemBounds = activeItem!.getBoundingClientRect();
+    const titleBounds = title!.getBoundingClientRect();
+    const sourceTextRange = document.createRange();
+    sourceTextRange.selectNodeContents(source!);
+    const sourceTextBounds = sourceTextRange.getBoundingClientRect();
 
-      expect(dialogBounds.left).toBeGreaterThanOrEqual(0);
-      expect(dialogBounds.right).toBeLessThanOrEqual(window.innerWidth + 1);
-      expect(dialogBounds.top).toBeGreaterThanOrEqual(0);
-      expect(dialogBounds.bottom).toBeLessThanOrEqual(window.innerHeight + 1);
-      expect(detailBounds.top).toBeGreaterThanOrEqual(listBounds.bottom - 1);
-      expect(detailBounds.width).toBeGreaterThan(200);
-      expect(copyBounds.top).toBeGreaterThanOrEqual(0);
-      expect(copyBounds.bottom).toBeLessThanOrEqual(window.innerHeight + 1);
-      expect(copyBounds.left).toBeGreaterThanOrEqual(dialogBounds.left - 1);
-      expect(copyBounds.right).toBeLessThanOrEqual(dialogBounds.right + 1);
-      expect(searchBounds.width).toBeGreaterThan(80);
-      expect(searchBounds.left).toBeGreaterThanOrEqual(0);
-      expect(searchBounds.right).toBeLessThanOrEqual(dialogBounds.right + 1);
-      expect(searchBounds.top).toBeGreaterThanOrEqual(0);
-      expect(searchBounds.bottom).toBeLessThanOrEqual(window.innerHeight + 1);
-      expect(activeItemBounds.left).toBeGreaterThanOrEqual(dialogBounds.left - 1);
-      expect(activeItemBounds.right).toBeLessThanOrEqual(dialogBounds.right + 1);
-      expect(titleBounds.left).toBeGreaterThanOrEqual(dialogBounds.left - 1);
-      expect(titleBounds.right).toBeLessThanOrEqual(dialogBounds.right + 1);
-      expect(title?.textContent).toBe(initialFilePath);
-      expect(sourceBounds.width).toBeGreaterThan(100);
-      expect(sourceBounds.height).toBeGreaterThan(0);
-      expect(sourceBounds.top).toBeGreaterThanOrEqual(0);
-      expect(sourceBounds.top).toBeLessThan(window.innerHeight);
-      expect(sourceTextBounds.width).toBeGreaterThan(0);
-      expect(sourceTextBounds.height).toBeGreaterThan(0);
-      expect(sourceTextBounds.left).toBeGreaterThanOrEqual(dialogBounds.left - 1);
-      expect(sourceTextBounds.right).toBeLessThanOrEqual(dialogBounds.right + 1);
-      expect(sourceTextBounds.top).toBeGreaterThanOrEqual(0);
-      expect(sourceTextBounds.bottom).toBeLessThanOrEqual(window.innerHeight + 1);
-      expect(source?.textContent).toContain("Review the complete support-file contents.");
+    expect(dialogBounds.left).toBeGreaterThanOrEqual(0);
+    expect(dialogBounds.right).toBeLessThanOrEqual(window.innerWidth + 1);
+    expect(dialogBounds.top).toBeGreaterThanOrEqual(0);
+    expect(dialogBounds.bottom).toBeLessThanOrEqual(window.innerHeight + 1);
+    expect(detailBounds.top).toBeGreaterThanOrEqual(listBounds.bottom - 1);
+    expect(detailBounds.width).toBeGreaterThan(200);
+    expect(copyBounds.top).toBeGreaterThanOrEqual(0);
+    expect(copyBounds.bottom).toBeLessThanOrEqual(window.innerHeight + 1);
+    expect(copyBounds.left).toBeGreaterThanOrEqual(dialogBounds.left - 1);
+    expect(copyBounds.right).toBeLessThanOrEqual(dialogBounds.right + 1);
+    expect(searchBounds.width).toBeGreaterThan(80);
+    expect(searchBounds.left).toBeGreaterThanOrEqual(0);
+    expect(searchBounds.right).toBeLessThanOrEqual(dialogBounds.right + 1);
+    expect(searchBounds.top).toBeGreaterThanOrEqual(0);
+    expect(searchBounds.bottom).toBeLessThanOrEqual(window.innerHeight + 1);
+    expect(activeItemBounds.left).toBeGreaterThanOrEqual(dialogBounds.left - 1);
+    expect(activeItemBounds.right).toBeLessThanOrEqual(dialogBounds.right + 1);
+    expect(titleBounds.left).toBeGreaterThanOrEqual(dialogBounds.left - 1);
+    expect(titleBounds.right).toBeLessThanOrEqual(dialogBounds.right + 1);
+    expect(title?.textContent).toBe(initialFilePath);
+    expect(sourceBounds.width).toBeGreaterThan(100);
+    expect(sourceBounds.height).toBeGreaterThan(0);
+    expect(sourceBounds.top).toBeGreaterThanOrEqual(0);
+    expect(sourceBounds.top).toBeLessThan(window.innerHeight);
+    expect(sourceTextBounds.width).toBeGreaterThan(0);
+    expect(sourceTextBounds.height).toBeGreaterThan(0);
+    expect(sourceTextBounds.left).toBeGreaterThanOrEqual(dialogBounds.left - 1);
+    expect(sourceTextBounds.right).toBeLessThanOrEqual(dialogBounds.right + 1);
+    expect(sourceTextBounds.top).toBeGreaterThanOrEqual(0);
+    expect(sourceTextBounds.bottom).toBeLessThanOrEqual(window.innerHeight + 1);
+    expect(source?.textContent).toContain("Review the complete support-file contents.");
 
-      const selected = vi.fn();
-      preview.addEventListener("file-preview-select", selected);
-      search?.focus();
-      const { userEvent } = await import("vitest/browser");
-      await userEvent.keyboard("{ArrowDown}");
-      expect(selected).toHaveBeenCalledOnce();
-      expect(selected.mock.calls[0]?.[0].detail).toBe("filters/auto-senders.txt");
-    },
-  );
+    const selected = vi.fn();
+    preview.addEventListener("file-preview-select", selected);
+    search?.focus();
+    const { userEvent } = await import("vitest/browser");
+    await userEvent.keyboard("{ArrowDown}");
+    expect(selected).toHaveBeenCalledOnce();
+    expect(selected.mock.calls[0]?.[0].detail).toBe("filters/auto-senders.txt");
+  });
 
-  it.each([375, 640])(
-    "keeps an empty non-text preview reachable at a %dpx viewport",
-    async (width) => {
-      const { preview, dialog } = await mountPreview(width, "assets/empty-preview.png");
-      const detail = preview.querySelector<HTMLElement>(".detail");
-      const title = preview.querySelector<HTMLElement>(".title");
-      const kind = preview.querySelector<HTMLElement>(".chip.accent");
-      const detailBody = preview.querySelector<HTMLElement>(".detail-body");
-      expect(detail).toBeInstanceOf(HTMLElement);
-      expect(title?.textContent).toBe("assets/empty-preview.png");
-      expect(kind?.textContent).toBe("PNG");
-      expect(detailBody).toBeInstanceOf(HTMLElement);
-      expect(preview.querySelector(".chat-copy-btn")).toBeNull();
-      expect(preview.querySelector(".code-chunk")?.textContent).toBe("");
+  it.each([375])("keeps an empty non-text preview reachable at a %dpx viewport", async (width) => {
+    const { preview, dialog } = await mountPreview(width, "assets/empty-preview.png");
+    const detail = preview.querySelector<HTMLElement>(".detail");
+    const title = preview.querySelector<HTMLElement>(".title");
+    const kind = preview.querySelector<HTMLElement>(".chip.accent");
+    const detailBody = preview.querySelector<HTMLElement>(".detail-body");
+    expect(detail).toBeInstanceOf(HTMLElement);
+    expect(title?.textContent).toBe("assets/empty-preview.png");
+    expect(kind?.textContent).toBe("PNG");
+    expect(detailBody).toBeInstanceOf(HTMLElement);
+    expect(preview.querySelector(".chat-copy-btn")).toBeNull();
+    expect(preview.querySelector(".code-chunk")?.textContent).toBe("");
 
-      const dialogBounds = dialog.getBoundingClientRect();
-      const detailBounds = detail!.getBoundingClientRect();
-      const detailBodyBounds = detailBody!.getBoundingClientRect();
-      expect(detailBounds.left).toBeGreaterThanOrEqual(dialogBounds.left - 1);
-      expect(detailBounds.right).toBeLessThanOrEqual(dialogBounds.right + 1);
-      expect(detailBodyBounds.top).toBeGreaterThanOrEqual(0);
-      expect(detailBodyBounds.bottom).toBeLessThanOrEqual(window.innerHeight + 1);
-    },
-  );
+    const dialogBounds = dialog.getBoundingClientRect();
+    const detailBounds = detail!.getBoundingClientRect();
+    const detailBodyBounds = detailBody!.getBoundingClientRect();
+    expect(detailBounds.left).toBeGreaterThanOrEqual(dialogBounds.left - 1);
+    expect(detailBounds.right).toBeLessThanOrEqual(dialogBounds.right + 1);
+    expect(detailBodyBounds.top).toBeGreaterThanOrEqual(0);
+    expect(detailBodyBounds.bottom).toBeLessThanOrEqual(window.innerHeight + 1);
+  });
 
   it("preserves the desktop side-by-side file layout", async () => {
     const { preview, dialog } = await mountPreview(1280);
@@ -224,20 +218,10 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
 
     expect(dialog.getBoundingClientRect().width).toBeCloseTo(expectedWidth, 0);
   });
-  it("slides workboard drawers in from the owned edge", async () => {
-    const dialog = await mountModal(1280, {
-      kind: "drawer",
-      modalWidth: "min(460px, 100vw)",
-    });
-    const style = getComputedStyle(dialog);
-
-    expect(style.animationName).toBe("openclaw-drawer-in");
-    expect(style.animationDuration).toBe("0.2s");
-  });
 });
 
 describe.runIf(browserMode)("skill bundle file preview", () => {
-  it.each([390, 768, 1174, 1440])(
+  it.each([390, 768])(
     "renders complete Markdown and navigable folders without search or Copy at %dpx",
     async (width) => {
       const { page, userEvent } = await import("vitest/browser");

@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ClientOptions } from "openai";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 
 const openAiMockState = vi.hoisted(() => ({
-  configs: [] as unknown[],
+  configs: [] as ClientOptions[],
   params: [] as unknown[],
   requestOptions: [] as unknown[],
 }));
@@ -18,7 +19,7 @@ vi.mock("openai", () => ({
       }),
     };
 
-    constructor(config: unknown) {
+    constructor(config: ClientOptions) {
       openAiMockState.configs.push(config);
     }
   },
@@ -142,8 +143,9 @@ describe("OpenAI Responses provider", () => {
     },
   );
 
-  it("constructs the SDK client with the host guarded fetch", async () => {
-    const hostFetch: typeof fetch = async () => new Response(null, { status: 500 });
+  it("routes the SDK fetch through the host guard without changing the request or response", async () => {
+    const hostResponse = new Response("synthetic rejection", { status: 500 });
+    const hostFetch = vi.fn<typeof fetch>(async () => hostResponse);
     configureAiTransportHost({ buildModelFetch: () => hostFetch });
 
     const result = await streamOpenAIResponses(model(), context, {
@@ -152,8 +154,18 @@ describe("OpenAI Responses provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect(openAiMockState.configs).toHaveLength(1);
-    expect((openAiMockState.configs[0] as { fetch?: unknown }).fetch).toBe(hostFetch);
     expect(openAiMockState.configs[0]).toMatchObject({ maxRetries: 0 });
+    const request = new Request("https://api.openai.com/v1/responses", {
+      method: "POST",
+      body: JSON.stringify({ input: "synthetic request" }),
+    });
+    const init = {
+      headers: { authorization: "Bearer sentinel-key" },
+      signal: new AbortController().signal,
+    };
+    expect(await openAiMockState.configs[0]?.fetch?.(request, init)).toBe(hostResponse);
+    expect(hostFetch).toHaveBeenCalledExactlyOnceWith(request, init);
+    expect(hostResponse.bodyUsed).toBe(false);
   });
 
   it("fails closed before constructing an OpenAI client for another provider without an endpoint", async () => {
@@ -190,7 +202,9 @@ describe("OpenAI Responses provider", () => {
   });
 
   it("keeps Cloudflare composed upstream auth opaque in SDK headers", async () => {
-    const hostFetch: typeof fetch = async () => new Response(null, { status: 500 });
+    const hostResponse = new Response(null, { status: 500 });
+    const hostFetch = vi.fn<typeof fetch>(async () => hostResponse);
+    const apiKey = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
     configureAiTransportHost({ buildModelFetch: () => hostFetch });
 
     await streamOpenAIResponses(
@@ -199,19 +213,26 @@ describe("OpenAI Responses provider", () => {
         baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
       }),
       context,
-      { apiKey: "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end" },
+      { apiKey },
     ).result();
 
-    const config = openAiMockState.configs[0] as {
-      apiKey?: string;
-      defaultHeaders?: Record<string, string | null>;
-      fetch?: unknown;
-    };
-    expect(config.apiKey).toBe("oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end");
-    expect(config.defaultHeaders?.["cf-aig-authorization"]).toBe(
-      "Bearer oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
-    );
-    expect(config.fetch).toBe(hostFetch);
+    const config = openAiMockState.configs[0];
+    assert.isDefined(config);
+    expect(config).toMatchObject({
+      apiKey,
+      baseURL: "https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
+      defaultHeaders: {
+        Authorization: null,
+        "cf-aig-authorization": `Bearer ${apiKey}`,
+      },
+    });
+    const request = new Request(`${config.baseURL}/responses`, {
+      headers: {
+        "cf-aig-authorization": `Bearer ${apiKey}`,
+      },
+    });
+    expect(await config.fetch?.(request)).toBe(hostResponse);
+    expect(hostFetch).toHaveBeenCalledExactlyOnceWith(request, undefined);
   });
 
   it("clamps small output limits and disables implicit SDK retries", async () => {

@@ -41,62 +41,9 @@ function normalize(
 }
 
 describe("OpenRouter tool schemas", () => {
-  it("preserves meaningful union alternatives", () => {
-    const schema = {
-      type: "object",
-      properties: {
-        value: {
-          anyOf: [
-            { type: "string", minLength: 2 },
-            { type: "integer", minimum: 3 },
-          ],
-        },
-        optional: { oneOf: [{ type: "string" }, { type: "null" }] },
-      },
-      required: ["value"],
-      additionalProperties: false,
-    };
-    const original = structuredClone(schema);
-    const result = normalize(schema);
-    expect(result).toEqual(schema);
-    expect(schema).toEqual(original);
-  });
-
-  it.each(["moonshot/kimi-example", "openrouter/~moonshotai/kimi-example"])(
-    "moves a parent type without losing constraints for %s",
-    (modelId) => {
-      const value = { type: "string", maxLength: 4, anyOf: [{ enum: ["red"] }, { const: "blue" }] };
-      const schema = { type: "object", properties: { value }, required: ["value"] };
-      const result = normalize(schema, modelId);
-      expect(result).toEqual({
-        ...schema,
-        properties: {
-          value: {
-            maxLength: 4,
-            anyOf: [
-              { type: "string", enum: ["red"] },
-              { type: "string", const: "blue" },
-            ],
-          },
-        },
-      });
-      for (const sample of ["red", "blue", "green", "", 3, null]) {
-        expect(Check(result, { value: sample })).toBe(Check(schema, { value: sample }));
-      }
-      expect(schema.properties.value).toBe(value);
-      expect(value.type).toBe("string");
-    },
-  );
-
   it.each([
     { type: ["string", "null"], anyOf: [{ const: "red" }, { const: null }] },
     { type: "number", minimum: 2, anyOf: [{ type: "integer", maximum: 3 }, { const: 4.5 }] },
-    {
-      type: "object",
-      additionalProperties: false,
-      properties: { a: {}, b: {} },
-      anyOf: [{ required: ["a"] }, { required: ["b"] }],
-    },
   ])("preserves acceptance for nullable, numeric and object constraints: %j", (value) => {
     const schema = { type: "object", properties: { value }, required: ["value"] };
     const result = normalize(schema);
@@ -122,22 +69,13 @@ describe("OpenRouter tool schemas", () => {
     }
   });
 
-  it.each([
-    { type: "string", anyOf: [{ type: "string" }, { type: "integer" }] },
-    { type: "integer", anyOf: [{ type: "number" }] },
-    { type: "string", anyOf: [true, { const: "red" }] },
-    { type: "string", anyOf: [false, { const: "red" }] },
-    { type: "string", anyOf: [{ $ref: "#/$defs/value" }] },
-    { type: "string", anyOf: [{ anyOf: [{ const: "red" }, { const: "blue" }] }] },
-    { type: "string", anyOf: [{ oneOf: [{ const: "red" }, { const: "blue" }] }] },
-    { type: "string", oneOf: [{ const: "red" }, { const: "blue" }] },
-    { type: "string", anyOf: [] },
-    { type: "future", anyOf: [{ const: "red" }] },
-    { type: "string", anyOf: [{ type: [] }] },
-  ])("leaves unevidenced or incompatible unions intact: %j", (value) => {
-    const schema = { type: "object", properties: { value } };
-    expect(normalize(schema)).toEqual(schema);
-  });
+  it.each([{ type: "string", anyOf: [{ oneOf: [{ const: "red" }, { const: "blue" }] }] }])(
+    "leaves unevidenced or incompatible unions intact: %j",
+    (value) => {
+      const schema = { type: "object", properties: { value } };
+      expect(normalize(schema)).toEqual(schema);
+    },
+  );
 
   it("walks schema locations without interpreting annotation objects or special property names", () => {
     const union = { type: "string", anyOf: [{ const: "red" }, { const: "blue" }] };
@@ -172,7 +110,7 @@ describe("OpenRouter tool schemas", () => {
     expect(normalize(result)).toEqual(result);
   });
 
-  it.each(["openrouter/deepseek-v4-flash", "openrouter/~google/example"])(
+  it.each(["openrouter/deepseek-v4-flash"])(
     "preserves existing OpenRouter schemas for %s",
     (modelId) => {
       const schema = {

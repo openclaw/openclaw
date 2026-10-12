@@ -2,10 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { scheduler } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import {
-  readResolvedSessionEntriesInWorker,
-  resolveSessionEntryAccessTarget,
-} from "../../config/sessions/session-accessor.entry.js";
+import { readResolvedSessionEntriesInWorker } from "../../config/sessions/session-accessor.entry.js";
 import type { ResolvedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -19,6 +16,10 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import {
+  sessionChanges,
+  sessionChangeScopeAffectsStoredRows,
+} from "../../sessions/session-row-changes.js";
 import type { WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
 import { WorktreeRemovalLockError } from "./removal-errors.js";
 import { IDLE_GC_MS } from "./service.js";
@@ -36,6 +37,8 @@ export function createManagedWorktreeOwnerPolicy(
     ownerId: string;
     scope: string;
     entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt" | "worktree">;
+    target: ResolvedSessionEntryAccessTarget;
+    hasChanged: () => boolean;
     lifecycleHeld?: boolean;
   }>();
   const state = (
@@ -51,9 +54,13 @@ export function createManagedWorktreeOwnerPolicy(
       return "other";
     }
     try {
-      const target =
-        prepared?.target ??
-        resolveSessionEntryAccessTarget({ cfg, sessionKey: ownerId }, { projection: "worktree" });
+      const cleanup = cleanupOwner.getStore();
+      const ownsCleanup = cleanup?.ownerId === ownerId;
+      const target = prepared?.target ?? (ownsCleanup ? cleanup.target : undefined);
+      // Outside a prepared census or cleanup lifetime there are no current owner facts.
+      if (!target || (ownsCleanup && cleanup.hasChanged())) {
+        return "active";
+      }
       const entry = target.entry;
       const activityAt = Math.max(entry?.lastInteractionAt ?? 0, entry?.updatedAt ?? 0);
       if (entry?.archivedAt === undefined && activityAt > 0 && now() - activityAt <= IDLE_GC_MS) {
@@ -61,8 +68,6 @@ export function createManagedWorktreeOwnerPolicy(
       }
       const scope = resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId });
       const identities = [target.canonicalKey, ownerId, entry?.sessionId];
-      const cleanup = cleanupOwner.getStore();
-      const ownsCleanup = cleanup?.ownerId === ownerId;
       if (
         ownsCleanup &&
         (cleanup.scope !== scope ||
@@ -119,7 +124,7 @@ export function createManagedWorktreeOwnerPolicy(
       return "active";
     }
   };
-  // Census facts live for one pass; synchronous mutation guards always reread the narrow row.
+  // Census facts are advisory; cleanup reads once and invalidates on committed owner changes.
   return {
     prepareOwners: async (records) => {
       preparedOwners = new Map();
@@ -183,35 +188,56 @@ export function createManagedWorktreeOwnerPolicy(
         return await run((mutation) => mutation());
       }
       const ownerId = record.ownerId;
-      const target =
-        preparedOwners.get(ownerId) ??
-        (await readResolvedSessionEntriesInWorker({ cfg, sessionKeys: [ownerId] }, "worktree")).get(
+      const expected = preparedOwners.get(ownerId);
+      let target = expected;
+      let changed = false;
+      const stop = sessionChanges.subscribeFacts((change) => {
+        if (
+          sessionChangeScopeAffectsStoredRows(change) &&
+          ("all" in change ||
+            !target ||
+            change.sessionKey === ownerId ||
+            change.sessionKey === target.canonicalKey)
+        ) {
+          changed = true;
+        }
+      });
+      try {
+        target = (
+          await readResolvedSessionEntriesInWorker({ cfg, sessionKeys: [ownerId] }, "worktree")
+        ).get(ownerId);
+        signal?.throwIfAborted();
+        if (!target) {
+          throw new WorktreeRemovalLockError(
+            "busy",
+            "worktree owner could not be read for cleanup",
+          );
+        }
+        const initial = expected ?? target;
+        const scope = resolveSessionStorePathCore(cfg.session?.store, { agentId: initial.agentId });
+        const entry = initial.entry;
+        const owner = {
           ownerId,
+          scope,
+          target,
+          hasChanged: () => changed,
+          entry: entry && { ...entry, worktree: entry.worktree && { ...entry.worktree } },
+        };
+        const identities = [target.canonicalKey, ownerId, owner.entry?.sessionId];
+        // The registry claim protects Git work; final guards consume this receipt-invalidated view.
+        return await cleanupOwner.run(owner, () =>
+          run((mutation, options) =>
+            runExclusiveSessionLifecycleMutation("worktree-cleanup", {
+              scope,
+              identities,
+              signal: options?.settle ? undefined : signal,
+              run: () => cleanupOwner.run({ ...owner, lifecycleHeld: true }, mutation),
+            }),
+          ),
         );
-      signal?.throwIfAborted();
-      if (!target) {
-        throw new WorktreeRemovalLockError("busy", "worktree owner could not be read for cleanup");
+      } finally {
+        stop();
       }
-      const scope = resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId });
-      const entry = target.entry;
-      const owner = {
-        ownerId,
-        scope,
-        entry: entry && { ...entry, worktree: entry.worktree && { ...entry.worktree } },
-      };
-      const identities = [target.canonicalKey, ownerId, owner.entry?.sessionId];
-      // The registry removal claim fences checkout consumers during Git work.
-      // Session admission is held only while claiming and publishing that lifecycle.
-      return await cleanupOwner.run(owner, () =>
-        run((mutation, options) =>
-          runExclusiveSessionLifecycleMutation("worktree-cleanup", {
-            scope,
-            identities,
-            signal: options?.settle ? undefined : signal,
-            run: () => cleanupOwner.run({ ...owner, lifecycleHeld: true }, mutation),
-          }),
-        ),
-      );
     },
   };
 }

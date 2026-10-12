@@ -854,6 +854,9 @@ describe("exact SQLite session batches", () => {
         }
         return parameter;
       });
+      if (!(childQuery.readDatabase instanceof DatabaseSync)) {
+        throw new Error("Expected a SQLite connection for the query-plan assertion");
+      }
       const plan = childQuery.readDatabase
         .prepare(`EXPLAIN QUERY PLAN ${childQuery.sql}`)
         .all(...parameters)

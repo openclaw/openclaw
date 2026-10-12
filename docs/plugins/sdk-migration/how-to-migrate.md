@@ -138,7 +138,8 @@ content and recorded GitHub effects remain intact.
 Deprecated publication methods retain their TypeScript signatures to make the
 migration discoverable, but fail explicitly at invocation. Actual legacy use emits
 one warning per plugin and the `github-publication` family per Gateway process,
-through the shared SDK warning helper. Unknown direct SDK consumers share one
+through the shared SDK warning helper. The warning states that the method no
+longer performs publication work and names its replacement. Unknown direct SDK consumers share one
 bounded family warning. These methods will be **removed in the next Plugin SDK
 major**. Personal OAuth compatibility methods described above retain their existing
 completion behavior. No schema, stored-data, retention, or update migration is required.
@@ -619,6 +620,30 @@ at their existing effect boundary.
 The synchronous `listSessionEntries` API is deprecated until the next Plugin SDK
 major. Its existing arguments and complete-entry behavior remain available for
 compatibility, with a one-time deprecation warning on legacy use.
+
+## Await transcript statistics
+
+Use `await readTranscriptStatsAsync(scope)` from
+`openclaw/plugin-sdk/session-store-runtime` for one transcript, or
+`await readTranscriptStatsBatchReadOnlyAsync(scopes)` from
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` for a batch. Durable reads
+run through the existing session worker. Batch results retain input order and
+duplicate IDs, return zero counts for missing transcripts in existing stores,
+and return `null` for unavailable stores without creating them.
+
+`readTranscriptStatsSync` and `readTranscriptStatsBatchReadOnlySync` retain their
+released signatures until the next Plugin SDK major. Legacy calls on the main
+thread emit a shared session-store deprecation warning; kernels already running
+inside database workers can keep their synchronous reads without a warning.
+
+Use `await statSessionEntry(path, options)` from
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` to read transcript file
+metadata through the worker. `statSessionEntrySync` remains available until the
+next Plugin SDK major; passing already prepared transcript statistics to it
+only projects those values and does not query SQLite. `buildSessionEntry`
+also reads durable snapshots in the worker when an `onTranscriptMessage`
+observer is supplied, then invokes the observer on the caller with the original
+messages and timestamps.
 
 ## Prepare session entry changes
 
