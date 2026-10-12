@@ -94,9 +94,15 @@ describe("memory setup", () => {
     { selected: "openai", model: "text-embedding-3-small", fallback: "none" as const },
     { selected: "gemini", model: "gemini-embedding-001", fallback: "none" as const },
     { selected: "gemini", model: "gemini-embedding-2-preview", fallback: "openai" as const },
+    {
+      selected: "openai",
+      model: "text-embedding-3-small",
+      fallback: "none" as const,
+      agentMultimodal: true,
+    },
   ])(
     "preserves multimodal config for incompatible $selected/$model/$fallback",
-    async ({ selected, model, fallback }) => {
+    async ({ selected, model, fallback, agentMultimodal }) => {
       const chosen = adapter(selected);
       chosen.supportsMultimodalEmbeddings = ({ model: candidateModel }) =>
         selected === "gemini" && candidateModel === "gemini-embedding-2-preview";
@@ -107,11 +113,23 @@ describe("memory setup", () => {
             provider: "gemini",
             model: "gemini-embedding-2-preview",
             fallback,
-            multimodal: { enabled: true, modalities: ["image"] },
+            ...(agentMultimodal
+              ? {}
+              : { multimodal: { enabled: true, modalities: ["image" as const] } }),
             query: { maxResults: 7 },
           },
         },
-        agents: { entries: { main: { memory: { search: { enabled: false } } } } },
+        agents: {
+          entries: {
+            main: {
+              memory: {
+                search: agentMultimodal
+                  ? { multimodal: { enabled: true, modalities: ["image"] } }
+                  : { enabled: false },
+              },
+            },
+          },
+        },
       };
       const original = structuredClone(config);
       const prompt = prompter({ selects: [selected, "existing"], texts: [model] });

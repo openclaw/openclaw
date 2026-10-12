@@ -266,13 +266,14 @@ export async function runMemorySetupFlow(
     enabled: true,
     remote: remoteForSave,
   };
+  const candidateConfig = { ...config, memory: { ...config.memory, search: candidateSearch } };
   try {
     const { resolveMemorySearchConfig } = await import("../agents/memory-search.js");
     // Validate shared defaults without letting a per-agent override mask incompatibility.
-    resolveMemorySearchConfig(
-      { ...config, agents: undefined, memory: { ...config.memory, search: candidateSearch } },
-      "main",
-    );
+    resolveMemorySearchConfig({ ...candidateConfig, agents: undefined }, "main");
+    for (const agentId of Object.keys(config.agents?.entries ?? {})) {
+      resolveMemorySearchConfig(candidateConfig, agentId);
+    }
   } catch {
     await prompter.note(
       "The selected provider, model, or fallback is not compatible with the retained memory settings. Check the memory search configuration and try again.",
@@ -364,5 +365,5 @@ export async function runMemorySetupFlow(
   ) {
     return config;
   }
-  return { ...config, memory: { ...config.memory, search: candidateSearch } };
+  return candidateConfig;
 }
