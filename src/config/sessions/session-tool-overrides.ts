@@ -38,11 +38,13 @@ export function normalizeSessionToolOverrides(
   const mcpToolsDeny = normalizeMcpToolDenials(raw.mcpToolsDeny);
   const mcpServers = normalizeBooleanMap(raw.mcpServers);
   const skills = normalizeBooleanMap(raw.skills);
+  // Keep both booleans. An explicit enable must persist the same way skills
+  // and mcpServers do; only non-booleans are dropped. Deny remains false.
   const normalized: SessionToolOverrides = {
     ...(mcpServers ? { mcpServers } : {}),
     ...(mcpToolsDeny ? { mcpToolsDeny } : {}),
     ...(skills ? { skills } : {}),
-    ...(raw.webSearch === false ? { webSearch: false } : {}),
+    ...(typeof raw.webSearch === "boolean" ? { webSearch: raw.webSearch } : {}),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
