@@ -123,9 +123,16 @@ describe("gateway board provider lifecycle", () => {
     expect(provider.snapshot$.value).toEqual(snapshot);
   });
 
-  it.each(["manual refresh", "reconnect", "board change"] as const)(
-    "stops definitive unavailable polling until %s without discarding its snapshot",
-    async (resume) => {
+  it.each(
+    (["UNAVAILABLE", "INVALID_REQUEST"] as const).flatMap((code) =>
+      (["manual refresh", "reconnect", "board change"] as const).map((resume) => ({
+        code,
+        resume,
+      })),
+    ),
+  )(
+    "stops definitive $code polling until $resume without discarding its snapshot",
+    async ({ code, resume }) => {
       vi.useFakeTimers();
       const initial = {
         sessionKey: "agent:main:unavailable",
@@ -135,8 +142,9 @@ describe("gateway board provider lifecycle", () => {
       };
       const recovered = { ...initial, revision: 2 };
       const unavailable = new GatewayProtocolRequestError({
-        code: "UNAVAILABLE",
-        message: "Session dashboard unavailable",
+        code,
+        message:
+          code === "INVALID_REQUEST" ? 'Unknown agent id "main"' : "Session dashboard unavailable",
         retryable: false,
       });
       const request = vi.fn().mockResolvedValueOnce(initial).mockRejectedValue(unavailable);

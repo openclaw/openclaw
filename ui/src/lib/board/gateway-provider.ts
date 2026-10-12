@@ -404,11 +404,13 @@ export class GatewayBoardProvider implements BoardProvider {
         }
         if (
           error instanceof GatewayProtocolRequestError &&
-          error.gatewayCode === "UNAVAILABLE" &&
+          (error.gatewayCode === "UNAVAILABLE" || error.gatewayCode === "INVALID_REQUEST") &&
           !error.retryable
         ) {
-          // A definitive rejection consumes this refresh. Only a newer event,
-          // connection generation, or explicit refresh can request another one.
+          // A definitive rejection consumes this refresh: resending the same params
+          // (for example an agent the Gateway no longer configures) cannot succeed.
+          // Only a newer event, connection generation, or explicit refresh can
+          // request another one.
           this.refreshRequested =
             this.stateGeneration !== stateGeneration || this.userRefreshRequested;
           continue;
