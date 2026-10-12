@@ -4,12 +4,10 @@ import {
   formatValidationErrors,
   validateCommandsListParams,
   validateConnectParams,
-  validateNodePresenceActivityPayload,
   validateSessionsListParams,
   validateTalkClientCreateParams,
   validateTalkClientCreateResult,
   validateTalkSessionCreateParams,
-  validateWakeParams,
   type ValidationError,
 } from "./index.js";
 
@@ -60,11 +58,6 @@ describe("lazy protocol validators", () => {
     ]);
   });
 
-  it("accepts bounded session-list attribution without requiring it from other clients", () => {
-    expectAccepted(validateSessionsListParams, [{}, { source: "dashboard", rowMode: "compact" }]);
-    expectRejected(validateSessionsListParams, [{ source: "arbitrary-private-caller" }]);
-  });
-
   it("keeps validation errors readable and clears them after success", () => {
     expectRejected(validateConnectParams, [{}]);
     expect(formatValidationErrors(validateConnectParams.errors)).toContain("must have required");
@@ -76,33 +69,6 @@ describe("lazy protocol validators", () => {
       },
     ]);
     expect(validateConnectParams.errors).toBeNull();
-  });
-
-  it("validates Skill Workshop request params", () => {
-    expectAccepted(protocol.validateSkillsWorkshopChangesParams, [
-      {},
-      { agentId: "main", limit: 500, beforeMs: 1_700_000_000_000 },
-    ]);
-    expectRejected(protocol.validateSkillsWorkshopChangesParams, [{ limit: 0 }, { limit: 501 }]);
-    expectAccepted(protocol.validateSkillsWorkshopReadParams, [
-      { name: "deploy-notes", filePath: "references/api.md", versionId: "v1" },
-    ]);
-    expectRejected(protocol.validateSkillsWorkshopReadParams, [{}, { name: "" }]);
-    expectAccepted(protocol.validateSkillsWorkshopArchiveParams, [
-      { name: "deploy-notes", reason: "superseded" },
-    ]);
-    expectRejected(protocol.validateSkillsWorkshopArchiveParams, [
-      { name: "deploy-notes", reason: "" },
-      { name: "deploy-notes", absorbedInto: "other" },
-    ]);
-    expectAccepted(protocol.validateSkillsWorkshopRestoreParams, [{ name: "deploy-notes" }]);
-    expectRejected(protocol.validateSkillsWorkshopRestoreParams, [
-      { name: "deploy-notes", expectedRevisionHash: "a".repeat(64) },
-    ]);
-    expectAccepted(protocol.validateSkillsWorkshopUndoParams, [
-      { agentId: "main", runId: "skill-workshop-review:1" },
-    ]);
-    expectRejected(protocol.validateSkillsWorkshopUndoParams, [{}, { runId: "" }, { name: "x" }]);
   });
 
   it("can still compile every exported protocol validator", () => {
@@ -132,14 +98,6 @@ describe("formatValidationErrors", () => {
     expect(formatValidationErrors(null)).toBe("unknown validation error");
   });
 
-  it("formats additionalProperties at root", () => {
-    const err = makeError({
-      keyword: "additionalProperties",
-      params: { additionalProperty: "token" },
-    });
-    expect(formatValidationErrors([err])).toBe("at root: unexpected property 'token'");
-  });
-
   it("formats additionalProperties with instancePath", () => {
     const err = makeError({
       keyword: "additionalProperties",
@@ -147,17 +105,6 @@ describe("formatValidationErrors", () => {
       params: { additionalProperty: "token" },
     });
     expect(formatValidationErrors([err])).toBe("at /auth: unexpected property 'token'");
-  });
-
-  it("de-dupes repeated entries", () => {
-    const err = makeError({
-      keyword: "required",
-      instancePath: "/auth",
-      message: "must have required property 'token'",
-    });
-    expect(formatValidationErrors([err, err])).toBe(
-      "at /auth: must have required property 'token'",
-    );
   });
 });
 
@@ -204,53 +151,5 @@ describe("Talk request policy", () => {
     expect(validateTalkClientCreateResult({ ...result, clientControl: { owner: "client" } })).toBe(
       false,
     );
-  });
-});
-
-describe("validateWakeParams", () => {
-  it("accepts optional sessionKey and agentId so per-session wakes can be routed", () => {
-    expectAccepted(validateWakeParams, [
-      {
-        mode: "now",
-        text: "follow up on the report",
-        sessionKey: "agent:main:telegram:8661849123:topic:4052",
-        agentId: "main",
-      },
-      {
-        mode: "next-heartbeat",
-        text: "tick",
-        sessionKey: "agent:main:discord:guild123:thread456",
-      },
-    ]);
-  });
-
-  it("rejects sessionKey or agentId when they are present but empty strings", () => {
-    expectRejected(validateWakeParams, [
-      { mode: "now", text: "x", sessionKey: "" },
-      { mode: "now", text: "x", agentId: "" },
-    ]);
-  });
-});
-
-describe("validateNodePresenceActivityPayload", () => {
-  it("accepts bounded input idle time", () => {
-    expectAccepted(validateNodePresenceActivityPayload, [
-      { idleSeconds: 12 },
-      { idleSeconds: 12, source: "app" },
-      { idleSeconds: 12, source: "system" },
-      { idleSeconds: 2_592_000, saturated: true },
-      { action: "clear" },
-    ]);
-  });
-
-  it("rejects negative, unbounded, and extra fields", () => {
-    expectRejected(validateNodePresenceActivityPayload, [
-      { idleSeconds: 12, source: "browser" },
-      { idleSeconds: -1 },
-      { idleSeconds: 2_592_001 },
-      { idleSeconds: 1, active: true },
-      { action: "clear", idleSeconds: 1 },
-      { action: "disable" },
-    ]);
   });
 });

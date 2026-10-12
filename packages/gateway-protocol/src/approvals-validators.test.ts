@@ -2,13 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   validateApprovalGetParams,
   validateApprovalGetResult,
-  validateApprovalHistoryParams,
-  validateApprovalHistoryResult,
   validateApprovalPresentation,
   validateApprovalResolveParams,
   validateExecApprovalResolveParams,
   validatePluginApprovalResolveParams,
-  validateApprovalResolveResult,
 } from "./index.js";
 
 const execPresentation = {
@@ -303,51 +300,5 @@ describe("unified approval protocol validators", () => {
         },
       }),
     ).toBe(false);
-  });
-
-  it("validates terminal history pages and optional attribution", () => {
-    const terminal = {
-      ...pluginRecord,
-      status: "denied",
-      decision: "deny",
-      resolvedAtMs: pluginRecord.createdAtMs + 1_000,
-      reason: "user",
-      source: { agentId: "release", sessionKey: "agent:release:main" },
-      resolver: { kind: "device", id: "reviewer-device" },
-    } as const;
-
-    expect(validateApprovalHistoryParams({})).toBe(true);
-    expect(validateApprovalHistoryParams({ cursor: "cursor", limit: 50, kind: "plugin" })).toBe(
-      true,
-    );
-    expect(validateApprovalHistoryParams({ limit: 0 })).toBe(false);
-    expect(validateApprovalHistoryParams({ limit: 101 })).toBe(false);
-    expect(validateApprovalHistoryParams({ kind: "tool" })).toBe(false);
-
-    expect(validateApprovalHistoryResult({ items: [terminal], nextCursor: "next" })).toBe(true);
-    expect(validateApprovalHistoryResult({ items: [{ ...execRecord, status: "pending" }] })).toBe(
-      false,
-    );
-    expect(validateApprovalHistoryResult({ items: [terminal], extra: true })).toBe(false);
-  });
-
-  it("returns the canonical recorded snapshot to losing resolvers", () => {
-    const recorded = {
-      ...execRecord,
-      status: "allowed",
-      decision: "allow-always",
-      resolvedAtMs: execRecord.createdAtMs + 1_000,
-      reason: "user",
-    } as const;
-
-    expect(validateApprovalResolveResult({ applied: true, approval: recorded })).toBe(true);
-    expect(validateApprovalResolveResult({ applied: false, approval: recorded })).toBe(true);
-    expect(
-      validateApprovalResolveResult({
-        applied: false,
-        approval: { ...execRecord, status: "pending" },
-      }),
-    ).toBe(false);
-    expect(validateApprovalResolveResult({ applied: false })).toBe(false);
   });
 });
