@@ -60,7 +60,9 @@ describe("Activity recap freshness after transcript writes", () => {
       }
     });
     await start();
-    return withinTest(published.promise, testSignal);
+    await withinTest(published.promise, testSignal);
+    // The publication probe reads fixture state synchronously; detach it before SQL observation.
+    changed.mockReset();
   };
 
   beforeEach(async ({ signal }) => {

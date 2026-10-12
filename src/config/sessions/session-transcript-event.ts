@@ -11,6 +11,7 @@ import {
   captureLifecycleDatabaseScope,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
+  type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import {
   assertLockedTranscriptWriteAllowed,
@@ -85,7 +86,7 @@ export async function appendPreparedTranscriptEvent(
 
 /** Raw and guarded event appends share the canonical transcript writer operation. */
 export async function appendTranscriptEventInWorker(params: {
-  scope: ReturnType<typeof captureLifecycleDatabaseScope>;
+  scope: ResolvedTranscriptScope & { env: NodeJS.ProcessEnv; path: string };
   event: TranscriptEvent;
   appendIntent?: TranscriptEventAppendOptions["appendIntent"];
   fence?: SessionTranscriptWriteScope;
