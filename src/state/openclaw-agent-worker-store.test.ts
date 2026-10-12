@@ -918,9 +918,7 @@ describe("pooled agent publication owner (captured source)", () => {
       expect(closing).toContainEqual({
         status: "rejected",
         reason: expect.objectContaining({
-          errors: expect.arrayContaining([
-            expect.objectContaining({ message: "controlled worker lease cleanup failure" }),
-          ]),
+          message: "controlled worker lease cleanup failure",
         }),
       });
       expect(readLeases()).toEqual(retainedLeases);
