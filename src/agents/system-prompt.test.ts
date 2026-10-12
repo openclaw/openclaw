@@ -835,14 +835,11 @@ describe("system prompt memory and runtime cache boundary", () => {
         },
       },
       [
-        [
-          "Subagents stay sandboxed without elevated/host access;",
-          "User can toggle with /elevated on|off|ask|full.",
-        ],
-        ["Current elevated level:"],
+        ["Subagents stay sandboxed without elevated/host access;"],
+        ["Current elevated level:", "Elevated exec is", "User can toggle with /elevated"],
       ],
-      [["Current elevated level: ask"]],
-      [["Current elevated level: full"]],
+      [["Current elevated level: ask", "User can toggle with /elevated on|off|ask|full."]],
+      [["Current elevated level: full", "User can toggle with /elevated on|off|ask|full."]],
     ],
   ])(
     "keeps %s after stable authority guidance",

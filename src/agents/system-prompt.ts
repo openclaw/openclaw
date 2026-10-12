@@ -792,23 +792,6 @@ export function buildAgentSystemPrompt(params: {
           : params.sandboxInfo.hostBrowserAllowed === false
             ? "Host browser control: blocked."
             : "",
-        elevated?.allowed
-          ? "Elevated exec is available for this session."
-          : elevated
-            ? "Elevated exec is unavailable for this session."
-            : "",
-        elevated?.allowed
-          ? `User can toggle with /elevated on|off|ask${elevated.fullAccessAvailable ? "|full" : ""}.`
-          : "",
-        elevated?.allowed
-          ? `You may also send /elevated on|off|ask${elevated.fullAccessAvailable ? "|full" : ""} when needed.`
-          : "",
-        elevated?.fullAccessAvailable === false
-          ? `Auto-approved /elevated full is unavailable here (${fullAccessBlockedReasonLabel}).`
-          : "",
-        elevated && !elevated.allowed
-          ? "Do not tell the user to switch to /elevated full in this session."
-          : "",
       ],
       ...bootstrapSystemPromptSections,
       "## Workspace Files (injected)",
@@ -843,6 +826,26 @@ export function buildAgentSystemPrompt(params: {
       hasSessionsSpawn,
     }),
     ...subagentDelegationPreferenceSection,
+    // Per-run elevated facts change between run types (normal turn vs
+    // sessions_yield/announce re-entry); their guidance belongs below the
+    // cache boundary so the stable prefix stays byte-identical across turns.
+    elevated?.allowed
+      ? "Elevated exec is available for this session."
+      : elevated
+        ? "Elevated exec is unavailable for this session."
+        : "",
+    elevated?.allowed
+      ? `User can toggle with /elevated on|off|ask${elevated.fullAccessAvailable ? "|full" : ""}.`
+      : "",
+    elevated?.allowed
+      ? `You may also send /elevated on|off|ask${elevated.fullAccessAvailable ? "|full" : ""} when needed.`
+      : "",
+    elevated?.fullAccessAvailable === false
+      ? `Auto-approved /elevated full is unavailable here (${fullAccessBlockedReasonLabel}).`
+      : "",
+    elevated && !elevated.allowed
+      ? "Do not tell the user to switch to /elevated full in this session."
+      : "",
     params.sandboxInfo?.enabled && elevated
       ? elevated.allowed && elevated.fullAccessAvailable
         ? `Current elevated level: ${elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
