@@ -12,7 +12,7 @@ import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatQuestionCard } from "./components/chat-question-card.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
@@ -36,7 +36,7 @@ describe("composer typing lifecycle", () => {
     textarea.dispatchEvent(new Event("select"));
     expect(onTypingChange).toHaveBeenLastCalledWith(true, draft, 0);
     textarea.setSelectionRange(draft.length, draft.length);
-    textarea.dispatchEvent(new KeyboardEvent("keyup", { key: "End" }));
+    textarea.dispatchEvent(new KeyboardEvent("keyup", { key: "End", bubbles: true }));
     expect(onTypingChange).toHaveBeenLastCalledWith(true, draft, draft.length);
   });
 

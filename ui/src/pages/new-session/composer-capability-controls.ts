@@ -8,7 +8,7 @@ import {
   renderChatComposerPlusMenu,
   type ChatComposerCapabilityMenuProps,
   type ChatComposerPlusMenuView,
-} from "../chat/components/chat-composer-plus-menu.ts";
+} from "../chat/components/chat-composer-plus-menu.tsx";
 import type { NewSessionVisibility } from "./create-params.ts";
 
 registerNewSessionSetupEnglish();

@@ -142,6 +142,8 @@ describe("tryNativeRequireJavaScriptModule", () => {
       probePath,
       `import assert from "node:assert/strict";
 import fs from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { tryNativeRequireJavaScriptModule as load, tryNativeRequireModule as loadSource } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
 const modulePath = ${JSON.stringify(modulePath)};
@@ -172,6 +174,14 @@ const source = loadSource(sdkPath, { aliasMap: {} });
 assert.equal(source.ok, true);
 assert.deepEqual(source.moduleExport.state, { value: "source", preferred: "javascript" });
 assert.equal(source.moduleExport.state, (await import(pathToFileURL(sdkPath).href)).state);
+// Jiti alias maps spell Windows targets with forward slashes; "/./" is the portable non-native spelling.
+const aliasedSdkPath = modulePath + ".aliased-sdk.cjs";
+fs.writeFileSync(aliasedSdkPath, "module.exports = { instance: {} };\\n");
+fs.writeFileSync(modulePath + ".aliased.cjs", 'module.exports = require("fixture-sdk");\\n');
+const aliased = loadSource(modulePath + ".aliased.cjs", {
+  aliasMap: { "fixture-sdk": path.dirname(aliasedSdkPath) + "/./" + path.basename(aliasedSdkPath) },
+});
+assert.equal(aliased.moduleExport, createRequire(import.meta.url)(aliasedSdkPath));
 console.log("native path + source SDK process identity; native JavaScript precedence; missing target/dependency controls passed");
 `,
     );

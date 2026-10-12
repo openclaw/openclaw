@@ -191,7 +191,8 @@ export async function prepareCodexAttemptTurnRequest(
       enabled: fastMode === "ultrafast" && turnAppServer.enableUltrafast !== false,
       serviceTier: turnStartParams.serviceTier,
       model: turnStartParams.model ?? model,
-      modelProvider,
+      // ChatGPT sign-in and user-home threads omit the native provider after resume.
+      modelProvider: modelProvider ?? effectiveRuntimeProviderId,
       client: turnClient,
       timeoutMs: Math.min(params.timeoutMs, 2500),
       signal: runAbortController.signal,

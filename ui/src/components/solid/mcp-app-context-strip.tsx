@@ -219,3 +219,18 @@ export const McpAppContextStrip = defineSolidBridge<McpAppContextStripProps>(
     },
   },
 );
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-mcp-app-context-strip": McpAppContextStripElement;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-mcp-app-context-strip": HTMLAttributes<McpAppContextStripElement> &
+        Properties<McpAppContextStripElement>;
+    }
+  }
+}

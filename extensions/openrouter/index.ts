@@ -51,7 +51,10 @@ import {
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
-const OPENROUTER_CACHE_TTL_MODEL_FAMILY = /^(?:anthropic|deepseek|moonshot(?:ai)?|z-?ai)\//;
+// Upstream families with OpenRouter prompt caching, so pruning waits out the cache TTL.
+// OpenRouter documents implicit Gemini caching only for the 2.5 series and newer.
+const OPENROUTER_CACHE_TTL_MODEL_FAMILY =
+  /^(?:(?:anthropic|deepseek|moonshot(?:ai)?|x-ai|z-?ai)\/|google\/gemini-(?:2\.5|3))/;
 const MAX_PROMPT_MODEL_ID_DISPLAY_CHARS = 256;
 
 // Configured rows keep their sizing and opt-outs, but the OpenRouter model

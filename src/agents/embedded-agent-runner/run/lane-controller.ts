@@ -374,7 +374,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             runId: params.runId,
           },
           params,
-          () => {
+          (signal) => {
+            params = { ...params, abortSignal: signal };
+            options.setParams(params);
             assertPlacementCurrent = resolveSessionPlacementTurnSettlementAssertion();
             return task();
           },
