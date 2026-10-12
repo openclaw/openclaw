@@ -35,6 +35,7 @@ import {
   resolveVisibleMessagePositions,
   resolveTranscriptBoundaryWindow,
 } from "./session-accessor.sqlite-reset-window.js";
+import { readActivePathEntryRelationFromProjection } from "./session-accessor.sqlite-transcript-anchor.js";
 import {
   createVisibleMessageCursor,
   encodeVisibleMessageCursor,
@@ -158,28 +159,6 @@ export function everySessionTranscriptUserInputFrom(
   return preparedProjection ? read(preparedProjection) : withCurrentProjectionSnapshot(scope, read);
 }
 
-/** Read one active identity using the caller's existing admitted snapshot. */
-export function readActiveTranscriptEntryIdentityInSnapshot(
-  projection: CurrentTranscriptProjection,
-  entryId: string,
-) {
-  const db = getActiveTranscriptKysely(projection.database);
-  return executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    db
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
-        join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
-      )
-      .select(["identity.seq", "identity.parent_id as parentId"])
-      .where("identity.session_id", "=", projection.resolved.sessionId)
-      .where("identity.event_id", "=", entryId)
-      .limit(1),
-  );
-}
-
 /** Classifies one entry against the authoritative active path and leaf. */
 export function readSessionTranscriptActivePathEntryRelation(
   scope: SessionTranscriptReadScope,
@@ -191,16 +170,6 @@ export function readSessionTranscriptActivePathEntryRelation(
     (projection) => readActivePathEntryRelationFromProjection(projection, entryId),
     options,
   );
-}
-
-export function readActivePathEntryRelationFromProjection(
-  projection: CurrentTranscriptProjection,
-  entryId: string | null,
-): "exact" | "ancestor" | "off-path" {
-  if (projection.state.leafEventId === entryId || entryId === null) {
-    return projection.state.leafEventId === entryId ? "exact" : "off-path";
-  }
-  return readActiveTranscriptEntryIdentityInSnapshot(projection, entryId) ? "ancestor" : "off-path";
 }
 
 /** Reads a bounded context tail, preserving control facts but excluding display-only messages. */

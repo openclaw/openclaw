@@ -3365,11 +3365,12 @@ successor. Binding renewal continues during queue waits, drains before transacti
 entry, and stays quiesced through settlement. Separate shared-state and agent receipts
 prevent a binding deletion receipt from publishing a successful session deletion.
 Unknown outcomes block reuse of that native generation and never replay the write.
-ACP finalizers become eligible only after acknowledged agent COMMIT. Initialization
-rollback and opaque released SDK mutations retain native planning and transactions:
-their synchronous authority callbacks may reread the same agent database. Their
-authority checks stay live through the native transaction; initialization is consumed
-only after COMMIT. Ordinary host-minted binding participants retain the worker route,
+ACP finalizers and initialization rollback become eligible only after acknowledged
+agent COMMIT. Initialization rollback uses the existing commit-only worker participant,
+including initializers without a stored binding. Opaque released SDK mutations retain
+native planning and transactions: their synchronous authority callbacks may reread
+the same agent database. Their authority checks stay live through the native transaction.
+Ordinary host-minted binding participants retain the worker route,
 and incognito retains its native owner.
 The existing cross-database crash window, schemas, retention, and update behavior
 are unchanged; no migration is required.

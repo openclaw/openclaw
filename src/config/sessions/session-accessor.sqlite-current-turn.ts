@@ -1,8 +1,10 @@
-import { readActiveTranscriptEntryIdentityInSnapshot } from "./session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import { readTranscriptEventAtSeqInTransaction } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
-import { readActiveTranscriptEntryAnchorFromProjection } from "./session-accessor.sqlite-transcript-anchor.js";
+import {
+  readActiveTranscriptEntryAnchorFromProjection,
+  readActiveTranscriptEntryIdentityInSnapshot,
+} from "./session-accessor.sqlite-transcript-anchor.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
