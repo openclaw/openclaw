@@ -1,3 +1,4 @@
+import { splitSystemPromptRelocatableBoundary } from "@openclaw/ai/internal/shared";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
   buildActiveNodeContextText,
@@ -83,6 +84,8 @@ export async function prepareCliTurnPromptContext(
   params: Parameters<typeof buildCliTurnAppendContext>[0] & {
     prompt: string;
     privateContext: boolean;
+    backendId: string;
+    runtimeFactsInTurn?: boolean;
     deliveryGuidance?: string;
     prependContext: readonly (string | undefined)[];
     hookResult?: ResolvedPromptBuildHookResult;
@@ -93,7 +96,12 @@ export async function prepareCliTurnPromptContext(
   promptContext?: CliBackendPromptContext;
   promptForHooks?: string;
 }> {
-  let systemPrompt = params.systemPrompt;
+  // The local Claude plugin delivers current facts privately, outside its reusable system prompt.
+  const runtimeFacts =
+    params.runtimeFactsInTurn || (params.backendId === "claude-cli" && params.privateContext)
+      ? splitSystemPromptRelocatableBoundary(params.systemPrompt)
+      : undefined;
+  let systemPrompt = runtimeFacts?.remainingPrompt ?? params.systemPrompt;
   let prependContext = "";
   // Optional context failures must not erase this turn's delivery instructions.
   let appendContext = params.deliveryGuidance ?? "";
@@ -103,7 +111,8 @@ export async function prepareCliTurnPromptContext(
       .join("\n\n");
     const preparedAppendContext = await buildCliTurnAppendContext({
       ...params,
-      context: [...params.context, params.deliveryGuidance],
+      systemPrompt,
+      context: [runtimeFacts?.relocatable, ...params.context, params.deliveryGuidance],
     });
     prependContext = preparedPrependContext;
     appendContext = preparedAppendContext;

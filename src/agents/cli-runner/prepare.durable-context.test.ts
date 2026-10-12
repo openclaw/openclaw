@@ -211,6 +211,59 @@ describe("CLI durable session context", () => {
     },
   );
 
+  it.each([
+    { backendId: "claude-cli", transport: "plugin", relocate: true },
+    { backendId: "claude-cli", transport: "process", relocate: false },
+    { backendId: "test-cli", transport: "plugin", relocate: false },
+  ])(
+    "preserves current Runtime facts for $backendId $transport sessions",
+    async ({ backendId, transport, relocate }) => {
+      const backend = {
+        ...buildDefaultTestCliBackend(),
+        id: backendId,
+        modelProvider: "test-cli",
+        config: { ...buildDefaultTestCliBackend().config, systemPromptWhen: "always" as const },
+        ...(transport === "plugin"
+          ? {
+              prepareExecution: () => ({
+                async *execute() {
+                  yield { type: "result", subtype: "success", result: "complete" };
+                },
+              }),
+            }
+          : {}),
+      };
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [backend],
+      });
+      const prepare = async (key: string) => {
+        const context = await fixture.prepare({
+          provider: backendId,
+          sessionKey: key,
+          skillsSnapshot: { prompt: "", skills: [] },
+        });
+        cleanups.push(() => context.preparedBackend.cleanup?.());
+        return context;
+      };
+      const first = await prepare("agent:main:first");
+      const second = await prepare("agent:main:second");
+      if (relocate) {
+        expect(second.systemPrompt).toBe(first.systemPrompt);
+        expect(first.systemPrompt).not.toContain("Runtime: ");
+        expect(first.promptContext?.appendContext).toContain("Runtime: agent=main");
+        expect(first.promptContext?.appendContext).toContain("session=agent:main:first");
+        expect(second.promptContext?.appendContext).toContain("session=agent:main:second");
+        expect(first.params.prompt).toBe("latest ask");
+        expect(second.contextEngineTurnPrompt).toBe("latest ask");
+      } else {
+        expect(first.systemPrompt).toContain("session=agent:main:first");
+        expect(second.systemPrompt).toContain("session=agent:main:second");
+        expect(second.systemPrompt).not.toBe(first.systemPrompt);
+      }
+    },
+  );
+
   it("builds fresh-session caller-memory prompts from hook-mutated prompts", async () => {
     const { dir, sessionTarget } = fixture.session;
     const manager = SessionManager.open(sessionTarget, dir);

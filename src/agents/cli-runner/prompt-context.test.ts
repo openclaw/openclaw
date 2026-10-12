@@ -9,6 +9,7 @@ it.each([false, true])(
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-09T14:59:59Z"));
     const params = {
       agentId: "main",
+      backendId: "fixture-cli",
       backend: { command: "fixture-cli", systemPromptArg: "--system-prompt" },
       systemPrompt: "Stable instructions.",
       prompt: "What is today's date?",
