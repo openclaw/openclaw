@@ -18,8 +18,9 @@ const busy = vi.hoisted(() => ({ roots: new Set<string>(), code: "EBUSY" }));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const rm: typeof actual.promises.rm = async (target, options) => {
-    if ([...busy.roots].some((root) => String(target).startsWith(root))) {
-      throw Object.assign(new Error(`${busy.code}: resource busy or locked, rm '${target}'`), {
+    const pathname = String(target);
+    if ([...busy.roots].some((root) => pathname.startsWith(root))) {
+      throw Object.assign(new Error(`${busy.code}: resource busy or locked, rm '${pathname}'`), {
         code: busy.code,
       });
     }
