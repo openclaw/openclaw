@@ -20,7 +20,7 @@ type SessionDisplayModelRow = Pick<
   key: string;
 };
 
-export function resolveSessionDisplayDefaults(cfg: OpenClawConfig, agentId?: string): ModelRef {
+function resolveSessionDisplayDefaults(cfg: OpenClawConfig, agentId?: string): ModelRef {
   const primary =
     (agentId
       ? resolveAgentModelPrimaryValue(resolveAgentConfig(cfg, agentId)?.model)
