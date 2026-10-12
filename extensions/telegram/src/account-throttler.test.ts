@@ -549,11 +549,12 @@ describe("releaseAccountThrottler", () => {
   });
 
   it("stops timers and settles queued sends on release", async () => {
-    const realSetInterval = globalThis.setInterval;
-    const realClearInterval = globalThis.clearInterval;
+    vi.useFakeTimers();
+    const fakeSetInterval = globalThis.setInterval;
+    const fakeClearInterval = globalThis.clearInterval;
     const live = new Set<ReturnType<typeof setInterval>>();
     globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
-      const handle = realSetInterval(...args);
+      const handle = fakeSetInterval(...args);
       live.add(handle);
       return handle;
     }) as typeof setInterval;
@@ -561,7 +562,7 @@ describe("releaseAccountThrottler", () => {
       if (handle !== undefined) {
         live.delete(handle);
       }
-      return realClearInterval(handle);
+      return fakeClearInterval(handle);
     }) as typeof clearInterval;
 
     try {
@@ -584,23 +585,80 @@ describe("releaseAccountThrottler", () => {
         account.transformer(prev, "sendMessage", { chat_id: 42, text }, undefined);
 
       const first = send("first");
-      await vi.waitFor(() => expect(entered).toEqual(["first"]));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(entered).toEqual(["first"]);
+      expect(live.size).toBeGreaterThan(0);
       const queued = send("queued");
       // Attach the rejection handler before releasing so the drop never lands
       // as an unhandled rejection.
       const queuedRejection = expect(queued).rejects.toThrow(/stopped/i);
-      releaseFirst();
-      await first;
-
-      expect(live.size).toBeGreaterThan(0);
-      await releaseAccountThrottler("settle-release");
+      // Releasing stops the owned limiter and drops its waiting jobs; the
+      // in-flight send stays parked on the gate so stopping cannot deadlock.
+      const releasing = releaseAccountThrottler("settle-release");
+      await vi.advanceTimersByTimeAsync(0);
       await queuedRejection;
+      releaseFirst();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await first;
+      await releasing;
       expect(live.size).toBe(0);
       await expect(send("after-release")).rejects.toThrow(/released/i);
       expect(getOrCreateAccountThrottler("settle-release")).not.toBe(account);
     } finally {
-      globalThis.setInterval = realSetInterval;
-      globalThis.clearInterval = realClearInterval;
+      globalThis.setInterval = fakeSetInterval;
+      globalThis.clearInterval = fakeClearInterval;
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects queued group sends and new work once the account is retired", async () => {
+    vi.useFakeTimers();
+    try {
+      const account = getOrCreateAccountThrottler("group-retire");
+      const entered: string[] = [];
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const prev = vi.fn(async (_method: string, payload: unknown) => {
+        const request = payload as { text?: string };
+        entered.push(request.text ?? "");
+        if (entered.length === 1) {
+          await firstGate;
+        }
+        return { ok: true, result: request.text ?? "" };
+      }) as unknown as TelegramPreviousCall;
+      const send = (text: string) =>
+        callLooseSendMessage(account.transformer, prev, { chat_id: "-100123", text });
+      const chatAction = (action: string) =>
+        (
+          account.transformer as (
+            prev: TelegramPreviousCall,
+            method: "sendChatAction",
+            payload: Record<string, unknown>,
+            signal: undefined,
+          ) => ReturnType<TelegramTransform>
+        )(prev, "sendChatAction", { chat_id: "-100123", action }, undefined);
+
+      const first = send("first");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(entered).toEqual(["first"]);
+      const queued = send("queued");
+      const queuedRejection = expect(queued).rejects.toThrow(/released/i);
+      // Retirement settles scheduler lanes synchronously; the owned limiter's
+      // stop() then waits for the in-flight send, so keep the gate closed
+      // until the queued rejection is observed.
+      const releasing = releaseAccountThrottler("group-retire");
+      await queuedRejection;
+      releaseFirst();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await first;
+      await releasing;
+      await expect(send("after-release")).rejects.toThrow(/released/i);
+      await expect(chatAction("typing")).rejects.toThrow(/released/i);
+      expect(getOrCreateAccountThrottler("group-retire")).not.toBe(account);
+    } finally {
+      vi.useRealTimers();
     }
   });
 
