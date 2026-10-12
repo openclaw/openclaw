@@ -1,13 +1,11 @@
 // Control UI tests cover scalar identity and nullable enum behavior.
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   renderNumberInputFixture,
   renderTextInputFixture,
   renderSelectFixture,
   renderAnalyzedFormFixture,
-} from "../test-helpers/config-form-fixtures.ts";
-import { renderNumberInput, renderTextInput } from "./config-form.node.scalar.ts";
+} from "../test-helpers/config-form-fixtures.tsx";
 import { analyzeConfigSchema, type JsonSchema } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
@@ -19,6 +17,30 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 describe("config form scalar integrity", () => {
+  it("separates boolean help from its default description", () => {
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        runtime: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              default: true,
+              description: "Controls runtime processing.",
+            },
+          },
+        },
+      },
+    });
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { runtime: { enabled: false } },
+      onPatch: vi.fn(),
+    });
+    expect(container.textContent).toContain("Controls runtime processing. Default: true");
+  });
+
   it("keeps a focused in-flight edit through a snapshot identity refresh", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -112,13 +134,14 @@ describe("config form scalar integrity", () => {
     const onRemove = vi.fn();
 
     renderNumberInputFixture(container, {
-      schema: { type: "integer", default: 3 },
+      schema: { type: "integer", default: 3, description: "Controls retry attempts." },
       value: 9,
       path: ["retries"],
       onPatch,
       onRemove,
     });
     expect(container.textContent).toContain("Default: 3");
+    expect(container.textContent).toContain("Controls retry attempts. Default: 3");
     const numberInput = expectElement(
       container.querySelector<HTMLInputElement>("input[type='number']"),
       "number input",
@@ -246,16 +269,15 @@ describe("config form scalar integrity", () => {
         disabled: false,
         onPatch,
       };
-      render(
-        kind === "mixed"
-          ? renderTextInput({
-              ...params,
-              schema: { anyOf: [{ type: "string" }, { type: "number" }] },
-              inputType: "text",
-            })
-          : renderNumberInput({ ...params, schema: { type: "integer" } }),
-        container,
-      );
+      if (kind === "mixed") {
+        renderTextInputFixture(container, {
+          ...params,
+          schema: { anyOf: [{ type: "string" }, { type: "number" }] },
+          inputType: "text",
+        });
+      } else {
+        renderNumberInputFixture(container, { ...params, schema: { type: "integer" } });
+      }
       const input = expectElement(
         container.querySelector<HTMLInputElement>(
           `input[type='${kind === "mixed" ? "text" : "number"}']`,

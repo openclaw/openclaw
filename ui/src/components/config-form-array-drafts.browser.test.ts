@@ -1,8 +1,11 @@
-import { render, type ReactiveElement } from "lit";
 import { describe, expect, it } from "vitest";
 import { updateConfigFormValue } from "../lib/config/config-draft-model.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
-import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
+import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import {
+  renderAnalyzedFormFixture,
+  disposeConfigFormFixture,
+} from "../test-helpers/config-form-fixtures.tsx";
 import { analyzeConfigSchema, type JsonSchema } from "./config-form.ts";
 import baseStyles from "../styles/base.css?inline";
 
@@ -42,7 +45,7 @@ function mountForm(
     state,
     container,
     close: () => {
-      render(null, container);
+      disposeConfigFormFixture(container);
       container.remove();
     },
   };
@@ -68,7 +71,9 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
       );
       try {
         const inputs = () =>
-          Array.from(container.querySelectorAll<HTMLInputElement>(".cfg-array input"));
+          Array.from(
+            container.querySelectorAll<HTMLInputElement>(".cfg-array input.settings-input"),
+          );
         const second = inputs()[1]!;
         await page.elementLocator(second).fill("x");
         expect(second.getAttribute("aria-invalid")).toBe("true");
@@ -145,7 +150,9 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
           kind === "object"
             ? "openclaw-config-form-structured-draft"
             : "openclaw-config-form-collection-draft";
-        const draft = Array.from(container.querySelectorAll<ReactiveElement>(hostSelector)).at(-1)!;
+        const draft = Array.from(
+          container.querySelectorAll<SolidBridgeElement<object>>(hostSelector),
+        ).at(-1)!;
         await draft.updateComplete;
         const details = draft.querySelector("details") ?? draft.closest("details");
         if (details && !details.open) {

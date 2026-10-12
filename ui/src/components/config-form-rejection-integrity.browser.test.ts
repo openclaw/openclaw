@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 // Control UI tests cover nested config edit rejection and draft preservation.
-import { renderObjectFixture, renderArrayFixture } from "../test-helpers/config-form-fixtures.ts";
-import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
+import { renderObjectFixture, renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
+import type { ConfigFormCollectionDraft } from "./config-form-collection-draft.tsx";
 
 type ConfigFormStructuredDraftElement = HTMLElement & {
   updateComplete: Promise<unknown>;

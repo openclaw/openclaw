@@ -1,10 +1,10 @@
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import {
   renderAnalyzedFormFixture,
   renderTextInputFixture,
-} from "../test-helpers/config-form-fixtures.ts";
-import { analyzeConfigSchema, renderNode } from "./config-form.ts";
+  renderNodeFixture,
+} from "../test-helpers/config-form-fixtures.tsx";
+import { analyzeConfigSchema } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -28,19 +28,16 @@ describe("config form primitive union integrity", () => {
       const analysis = analyzeConfigSchema({
         anyOf: [{ type: "string" }, { type: "object", additionalProperties: {} }],
       });
-      render(
-        renderNode({
-          schema: analysis.schema!,
-          value: initial,
-          path: ["messages", "usageTemplate"],
-          hints: {},
-          unsupported: new Set(analysis.unsupportedPaths),
-          disabled: false,
-          maskSensitive,
-          onPatch,
-        }),
-        container,
-      );
+      renderNodeFixture(container, {
+        schema: analysis.schema!,
+        value: initial,
+        path: ["messages", "usageTemplate"],
+        hints: {},
+        unsupported: new Set(analysis.unsupportedPaths),
+        disabled: false,
+        maskSensitive,
+        onPatch,
+      });
       const editor = expectElement(
         container.querySelector<HTMLTextAreaElement>("textarea"),
         "typed inline-object editor",
@@ -67,20 +64,17 @@ describe("config form primitive union integrity", () => {
         properties: { credentials: { type: "object", properties: { token: credential } } },
       });
       const renderValue = (token: unknown) =>
-        render(
-          renderNode({
-            schema: analysis.schema!,
-            value: { credentials: { token } },
-            path: [],
-            hints: { "credentials.token": { sensitive: true } },
-            unsupported: new Set(analysis.unsupportedPaths),
-            disabled: false,
-            rawAvailable: false,
-            maskSensitive: true,
-            onPatch,
-          }),
-          container,
-        );
+        renderNodeFixture(container, {
+          schema: analysis.schema!,
+          value: { credentials: { token } },
+          path: [],
+          hints: { "credentials.token": { sensitive: true } },
+          unsupported: new Set(analysis.unsupportedPaths),
+          disabled: false,
+          rawAvailable: false,
+          maskSensitive: true,
+          onPatch,
+        });
 
       renderValue(undefined);
       const input = expectElement(

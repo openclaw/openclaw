@@ -1,15 +1,19 @@
 import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
+import type WaOption from "@awesome.me/webawesome/dist/components/option/option.js";
 import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
+import type WaSelect from "@awesome.me/webawesome/dist/components/select/select.js";
 import type WaSwitch from "@awesome.me/webawesome/dist/components/switch/switch.js";
 import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
 import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { JSX } from "@solidjs/web";
+import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.js";
 import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
 import type { MascotMood } from "../components/mascot-pose.ts";
+import type { SelectPicker } from "../components/select-picker.ts";
 import type { MessageActionDetails } from "../pages/chat/components/chat-message-markdown.types.ts";
 export type { JSX } from "@solidjs/web";
 
@@ -30,6 +34,18 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "wa-select": HTMLAttributes<WaSelect> & { "prop:value": WaSelect["value"] };
+      "wa-option": HTMLAttributes<WaOption> & {
+        value: WaOption["value"];
+        "prop:label": WaOption["label"];
+        "prop:selected": WaOption["selected"];
+      };
+      // Each caller validates the picker option/callback pairing before the DOM boundary.
+      "openclaw-select-picker": HTMLAttributes<SelectPicker> & { "prop:params": unknown };
+      "openclaw-update-run-view": HTMLAttributes<HTMLElement> & {
+        "prop:run": UpdateRunRecord | null;
+        "prop:connected": boolean;
+      };
       "openclaw-plugin-view": HTMLAttributes<HTMLElement> & {
         "prop:surface": "tool-result";
         "prop:props": ControlUiSurfaceProps["tool-result"];
@@ -54,6 +70,8 @@ declare module "@solidjs/web" {
       };
       "wa-tab": HTMLAttributes<WaTab> & {
         panel: string;
+        active?: boolean;
+        disabled?: boolean;
         "prop:active"?: boolean;
         "prop:tabIndex"?: number;
       };

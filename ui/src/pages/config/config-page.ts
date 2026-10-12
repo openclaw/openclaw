@@ -1,10 +1,5 @@
-import { consume } from "@lit/context";
-import { initialState, Task, TaskStatus } from "@lit/task";
+/* oxlint-disable max-lines -- TODO: split the inherited config-page controller after the rendering cutover. */
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import "../../styles/config.css";
-import { html, nothing, type PropertyValues } from "lit";
-import { property, state } from "lit/decorators.js";
-import { html as staticHtml, literal } from "lit/static-html.js";
 import type {
   PluginsListResult,
   SessionsCatalogListResult,
@@ -12,12 +7,10 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
+import type { ApplicationContext } from "../../app/context-types.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { resetServerUiPref, selectThemeSettings } from "../../app/server-prefs-controls.ts";
 import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
 import * as serverUiPrefs from "../../app/server-prefs-reconcile.ts";
@@ -38,27 +31,23 @@ import {
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
   setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
-import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
-import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
+import { getLobsterdex } from "../../components/lobster-dex.ts";
+import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
+import { i18n, isSupportedLocale, type Locale } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
   canReadSystemInfo,
   readSystemInfo,
   SYSTEM_INFO_POLL_INTERVAL_MS,
 } from "../../lib/system-info.ts";
-import {
-  GatewayPageController,
-  type GatewayPageChange,
-} from "../../lit/gateway-page-controller.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { PollController } from "../../lit/poll-controller.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
@@ -67,8 +56,6 @@ import {
 } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { isUnknownSystemInfoMethodError } from "../connection/system-info.ts";
-import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
-import { ConfigRouteScrollController } from "./config-route-scroll-controller.ts";
 import {
   configSectionKeysForPage,
   configSelectionFromSearch,
@@ -81,37 +68,17 @@ import {
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
 import { localPresentationProps } from "./local-presentation-props.ts";
-import { renderMcp, renderMcpIntro } from "./mcp.ts";
-import "./meeting-capture.ts";
-import "./memory-page.ts";
-import { memorySettingsSchema } from "./memory-schema.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
-import { renderSecurity, type SecurityOverview } from "./security.ts";
+import type { SecurityOverview } from "./security.tsx";
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
-import "./session-storage.ts";
-import { TabIconSettingsController } from "./tab-icon-settings-controller.ts";
-import "./talk-page.ts";
-import { renderUpdatesPage } from "./updates-page.ts";
-import {
-  createConfigViewState,
-  renderConfig,
-  type ConfigProps,
-  type ConfigViewState,
-} from "./view.ts";
+import { createConfigViewState } from "./view-state.ts";
+import type { ConfigProps, ConfigViewState } from "./view-types.ts";
 
-registerSettingsEnglish();
+registerEnglishCatalog(registerSettingsEnglish);
 
-export type { ConfigPageId } from "./config-sections.ts";
-
-type SessionObserverModelsResult = {
-  gateway: ApplicationContext["gateway"];
-  client: GatewayBrowserClient;
-  agentId: string;
-  models: ModelCatalogEntry[];
-};
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 
 function createMediaDeviceState(): Omit<
@@ -129,26 +96,6 @@ function createMediaDeviceState(): Omit<
     loaded: false,
     requestsPermission: false,
   };
-}
-
-function renderConfigPageSubtitle(pageId: ConfigPageId) {
-  switch (pageId) {
-    case "appearance":
-      return html`${t("configView.appearance.intro")}
-      ${renderLearnMoreLink("https://docs.openclaw.ai/web/control-ui")}`;
-    case "mcp":
-      return renderMcpIntro();
-    case "security":
-      return html`${t("quickSettings.security.intro")}
-      ${renderLearnMoreLink("https://docs.openclaw.ai/gateway/security")}`;
-    case "talk":
-      return html`${t("talkPage.intro")}
-      ${renderLearnMoreLink("https://docs.openclaw.ai/nodes/talk")}`;
-    case "updates":
-      return t("updates.page.intro");
-    default:
-      return subtitleForRoute(pageId);
-  }
 }
 
 export function extractQuickSettingsSecurity(root: Record<string, unknown>): SecurityOverview {
@@ -192,207 +139,165 @@ function applyTextScale(value: unknown) {
   );
 }
 
-export class ConfigPage extends OpenClawLightDomElement {
-  @consume({ context: applicationContext, subscribe: true })
-  private context!: ApplicationContext;
-
-  @property({ attribute: "page-id" }) pageId: ConfigPageId = "advanced";
-  @property({ attribute: false }) routeData: ConfigRouteData | null = null;
-
-  @state() private settings = loadSettings();
-  @state() private hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
-  @state() private systemInfo: SystemInfoResult | null = null;
-  @state() private systemInfoUnavailable = false;
-  @state() private sessionObserverModels: ModelCatalogEntry[] = [];
-  @state() private sessionObserverModelsUnavailable = false;
+/** Coordinates page-local drafts and requests; config and preference writes stay with their owners. */
+export class ConfigPageController {
+  pageId: ConfigPageId = "advanced";
+  routeData: ConfigRouteData | null = null;
+  private host: HTMLElement | null = null;
+  private connected = false;
+  private settings = loadSettings();
+  private hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
+  private systemInfo: SystemInfoResult | null = null;
+  private systemInfoUnavailable = false;
+  private sessionObserverModels: ModelCatalogEntry[] = [];
+  private sessionObserverModelsUnavailable = false;
+  private hiddenSessionCatalogLabels: ReadonlyMap<string, string> = EMPTY_SESSION_CATALOG_LABELS;
+  private installedSessionSourcePluginIds: Set<string> | null = null;
+  private sessionSourcePluginsLoading = false;
+  private formModes: Partial<Record<ConfigPageId, ConfigProps["formMode"]>> = {};
+  private selections: Partial<Record<ConfigPageId, ConfigSelection>> = {};
+  private customThemeImport = themeImport.INITIAL_CUSTOM_THEME_IMPORT_STATE;
+  private readonly customThemeImportOwner = new themeImport.CustomThemeImportOwner((next) => {
+    this.customThemeImport = next;
+    this.invalidate();
+  });
+  private configViewState: ConfigViewState = createConfigViewState();
+  private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private updateStatusClient: GatewayBrowserClient | null = null;
   private mediaDeviceWatch: (() => void) | null = null;
   private readonly mediaDevices = {
     microphone: createMediaDeviceState(),
     camera: createMediaDeviceState(),
   };
   private cameraSelectionRequest = 0;
-  private readonly tabIconSettings = new TabIconSettingsController(this, {
-    getContext: () => this.context,
-    isActive: () => this.pageId === "appearance",
-    getPreference: () => this.settings.tabIcon,
-    setPreference: (tabIcon) => this.applySettings({ tabIcon }),
-  });
-  @state() private formModes: Partial<Record<ConfigPageId, ConfigProps["formMode"]>> = {};
-  @state() private selections: Partial<Record<ConfigPageId, ConfigSelection>> = {};
-  @state() private customThemeImport = themeImport.INITIAL_CUSTOM_THEME_IMPORT_STATE;
-  private readonly customThemeImportOwner = new themeImport.CustomThemeImportOwner((next) => {
-    this.customThemeImport = next;
-  });
-  private configViewState: ConfigViewState = createConfigViewState();
-  private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
-  private updateStatusClient: GatewayBrowserClient | null = null;
-  private readonly systemInfoPolling = new PollController(
-    this,
-    SYSTEM_INFO_POLL_INTERVAL_MS,
-    () => {
-      if (this.systemInfoTask.status !== TaskStatus.PENDING) {
-        void this.systemInfoTask.run();
-      }
-    },
-    false,
-    "visible",
-  );
-  private readonly updateCountdownPolling = new PollController(
-    this,
-    1_000,
-    () => this.requestUpdate(),
-    false,
-  );
-  private readonly systemInfoTask = new Task(this, {
-    autoRun: false,
-    // Null is an explicit visibility/capability invalidation for the current source.
-    args: () => [this.gateway.gateway, this.systemInfoRequestClient()] as const,
-    task: ([gateway, client], { signal }) =>
-      gateway && client
-        ? readSystemInfo(gateway, signal).then((sample) => sample.value)
-        : initialState,
-    onComplete: (systemInfo) => {
-      this.systemInfo = systemInfo;
-      this.systemInfoPolling.stop();
-      this.systemInfoPolling.start();
-      // Status polling must not restart a slow catalog read. Changed owners
-      // still replace pending work through the model task's reactive args.
-      if (this.sessionObserverModelsTask.status !== TaskStatus.PENDING) {
-        void this.sessionObserverModelsTask.run();
-      }
-    },
-    onError: (error) => {
-      if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
-        this.systemInfo = null;
-        this.systemInfoUnavailable = true;
-        this.systemInfoPolling.stop();
-      }
-    },
-  });
-  private readonly sessionObserverModelsTask: Task<
-    readonly [ApplicationContext["gateway"] | null, GatewayBrowserClient | null, string | null],
-    SessionObserverModelsResult
-  > = new Task(this, {
-    args: () =>
-      [
-        this.gateway.gateway,
-        this.systemInfo ? this.systemInfoRequestClient() : null,
-        this.context?.settingsAgentSelection.state.selectedId ?? null,
-      ] as const,
-    task: async ([gateway, client, agentId], { signal }) => {
-      if (!gateway || !client || !agentId) {
-        this.resetSessionObserverModels(!agentId);
-        return initialState;
-      }
-      const previous = this.sessionObserverModelsTask.value;
-      if (
-        previous?.gateway !== gateway ||
-        previous.client !== client ||
-        previous.agentId !== agentId
-      ) {
-        this.resetSessionObserverModels();
-      }
-      // Keep same-owner options visible during refresh; the shared store owns
-      // cache freshness/coalescing and Task fences publication after retirement.
-      const { models } = await loadModelCatalog(client, { agentId, preparedOnly: true, signal });
-      return { gateway, client, agentId, models };
-    },
-    onComplete: ({ models }) => {
-      this.sessionObserverModels = models;
-      this.sessionObserverModelsUnavailable = false;
-    },
-    onError: () => this.resetSessionObserverModels(true),
-  });
-  private readonly sessionSourcePluginsTask = new Task(this, {
-    args: () => {
-      const gateway = this.context?.gateway.snapshot;
-      return [
-        this.gateway.gateway,
-        this.pageId === "appearance" &&
-        canCallGatewayMethod(gateway, "plugins.list", "operator.read")
-          ? gateway?.client
-          : null,
-      ] as const;
-    },
-    task: async ([, client], { signal }) => {
-      if (!client) {
-        return null;
-      }
-      const result = await client.request<PluginsListResult>("plugins.list", {}, { signal });
-      return new Set(
-        result.plugins.filter((plugin) => plugin.installed).map((plugin) => plugin.id),
-      );
-    },
-  });
-  private readonly hiddenSessionCatalogLabelsTask = new Task(this, {
-    args: () => {
-      const gateway = this.context?.gateway.snapshot;
-      const hiddenCatalogIds = [...this.hiddenSessionCatalogIds].toSorted();
-      const client =
-        this.pageId === "appearance" &&
-        hiddenCatalogIds.length > 0 &&
-        canCallGatewayMethod(gateway, "sessions.catalog.list", "operator.read")
-          ? gateway?.client
-          : null;
-      return [
-        client,
-        this.context?.settingsAgentSelection.state.selectedId ?? null,
-        hiddenCatalogIds.join("\0"),
-      ] as const;
-    },
-    task: async ([client, agentId], { signal }) => {
-      if (!client) {
-        return EMPTY_SESSION_CATALOG_LABELS;
-      }
-      try {
-        const result = await client.request<SessionsCatalogListResult>(
-          "sessions.catalog.list",
-          {
-            ...(agentId ? { agentId } : {}),
-            metadataOnly: true,
-          },
-          { signal },
-        );
-        return new Map(result.catalogs.map((catalog) => [catalog.id, catalog.label]));
-      } catch {
-        // Recovery must remain available when catalog discovery is unsupported or offline.
-        return EMPTY_SESSION_CATALOG_LABELS;
-      }
-    },
-  });
-  private readonly routeTargetScroll = new ConfigRouteScrollController(this);
-  private readonly gateway = new GatewayPageController(this, {
-    getGateway: () => this.context?.gateway,
-    invalidateRequests: () => this.invalidateSystemInfoRequest(),
-    onSnapshot: (change) => this.handleGatewaySnapshot(change),
-    onPageActivation: () => this.syncSystemInfoPolling(),
-  });
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watchStore(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig) => this.synchronizeRuntimeConfig(runtimeConfig),
-    )
-    .watchStore(() => this.context?.overlays)
-    .watchStore(() => this.context?.config)
-    .watchStore(() => this.context?.settingsAgentSelection)
-    .watchStore(() => (this.pageId === "appearance" ? this.context?.agentSelection : null))
-    .watchStore(() => (this.pageId === "appearance" ? this.context?.agents : null))
-    .watchStore(() => (this.pageId === "appearance" ? this.context?.agentIdentity : null))
-    .watchStore(() => this.context?.nativeDeviceSettings ?? undefined)
-    .watchStore(() => this.context?.nativeNotifications ?? undefined)
-    .watchStore(() => this.context?.webPush)
-    .watchStore(
-      () => this.context?.theme,
-      () => {
-        this.settings = this.customThemeImportOwner.adoptSettings(
-          this.settings,
-          loadSettings(),
-          this.context.theme.serverSelection,
-        );
-      },
+  private systemInfoAbort: AbortController | null = null;
+  private modelsAbort: AbortController | null = null;
+  private pluginsAbort: AbortController | null = null;
+  private labelsAbort: AbortController | null = null;
+  private previousGateway: ApplicationContext["gateway"] | null = null;
+  private previousClient: GatewayBrowserClient | null = null;
+  private previousHello: unknown;
+  private previousPhase: string | null = null;
+  private modelsAgent: string | null = null;
+  private pluginsClient: GatewayBrowserClient | null = null;
+  private labelsKey = "";
+  private poll: ReturnType<typeof setInterval> | undefined;
+  private countdown: ReturnType<typeof setInterval> | undefined;
+  private routeInitialized = false;
+  private targetBlockId: string | null = null;
+  private scrollFrame: number | null = null;
+
+  constructor(
+    private context: ApplicationContext,
+    private readonly invalidate: () => void,
+    private readonly observe: () => unknown = () => undefined,
+  ) {}
+
+  get nowMs() {
+    this.observe();
+    return Date.now();
+  }
+
+  get application() {
+    return this.context;
+  }
+  get browserLinksEnabled() {
+    this.observe();
+    return this.settings.openLinksInControlUiBrowser === true;
+  }
+  get configObject() {
+    this.observe();
+    const state = this.context.runtimeConfig.state;
+    return asConfigRecord(state.configForm ?? state.configSnapshot?.config) ?? {};
+  }
+  get mutationDisabled() {
+    this.observe();
+    return this.isCuratedConfigMutationDisabled();
+  }
+  get updateBusy() {
+    this.observe();
+    return this.isUpdateBusy();
+  }
+
+  connect(host: HTMLElement) {
+    this.host = host;
+    this.connected = true;
+    this.settings = loadSettings();
+    this.hiddenSessionCatalogsChanged();
+    window.addEventListener(
+      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+      this.hiddenSessionCatalogsChanged,
     );
+    document.addEventListener("visibilitychange", this.visibilityChanged);
+    window.addEventListener("focus", this.visibilityChanged);
+    this.customThemeImportOwner.connect(
+      this.context.gateway.connection.gatewayUrl,
+      this.context.theme.serverSelection,
+    );
+    this.mediaDeviceWatch = observeRealtimeTalkDevices(() => {
+      void this.refreshMediaDevices("microphone", false);
+      void this.refreshMediaDevices("camera", false);
+    });
+    this.synchronize();
+  }
+
+  dispose() {
+    this.connected = false;
+    window.removeEventListener(
+      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+      this.hiddenSessionCatalogsChanged,
+    );
+    document.removeEventListener("visibilitychange", this.visibilityChanged);
+    window.removeEventListener("focus", this.visibilityChanged);
+    this.customThemeImportOwner.retireImport();
+    this.retireMediaPermissionRequests();
+    this.mediaDeviceWatch?.();
+    this.mediaDeviceWatch = null;
+    clearInterval(this.poll);
+    clearInterval(this.countdown);
+    this.abortRequests();
+    if (this.scrollFrame !== null) {
+      cancelAnimationFrame(this.scrollFrame);
+      this.scrollFrame = null;
+    }
+    this.host = null;
+    this.runtimeConfigSource = null;
+    this.resetConfigViewState();
+  }
+
+  updateRoute(pageId: ConfigPageId, routeData: ConfigRouteData | null) {
+    if (this.routeInitialized && pageId === this.pageId && routeData === this.routeData) {
+      return;
+    }
+    this.routeInitialized = true;
+    if (this.pageId === "appearance" && pageId !== "appearance") {
+      this.customThemeImportOwner.retireImport();
+      this.retireMediaPermissionRequests();
+    }
+    this.abortRequests();
+    this.pageId = pageId;
+    this.routeData = routeData;
+    const selection = routeData
+      ? normalizeConfigSelection(pageId, routeData.section, null)
+      : configSelectionFromSearch(pageId, globalThis.location?.search ?? "");
+    this.selections = { ...this.selections, [pageId]: selection };
+    if (this.scrollFrame !== null) {
+      cancelAnimationFrame(this.scrollFrame);
+      this.scrollFrame = null;
+    }
+    this.targetBlockId =
+      routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
+    this.synchronize();
+    this.invalidate();
+  }
+
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
+    this.synchronize();
+    this.invalidate();
+  };
+  private readonly visibilityChanged = () => {
+    this.synchronize();
   };
 
   private retireMediaPermissionRequests() {
@@ -401,66 +306,91 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
   }
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.hiddenSessionCatalogsChanged();
-    window.addEventListener(
-      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
-      this.hiddenSessionCatalogsChanged,
-    );
-    this.customThemeImportOwner.connect(
-      this.context.gateway.connection.gatewayUrl,
+  private abortRequests() {
+    this.systemInfoAbort?.abort();
+    this.systemInfoAbort = null;
+    this.modelsAbort?.abort();
+    this.modelsAbort = null;
+    this.pluginsAbort?.abort();
+    this.pluginsAbort = null;
+    this.labelsAbort?.abort();
+    this.labelsAbort = null;
+    this.modelsAgent = null;
+    this.pluginsClient = null;
+    this.labelsKey = "";
+  }
+
+  /** Reads current owners after each publication, never copies their state into a store. */
+  synchronize() {
+    if (!this.connected) {
+      return;
+    }
+    const gateway = this.context.gateway;
+    const snapshot = gateway.snapshot;
+    const connectionChanged =
+      gateway !== this.previousGateway ||
+      snapshot.client !== this.previousClient ||
+      snapshot.hello !== this.previousHello ||
+      snapshot.phase !== this.previousPhase;
+    if (connectionChanged) {
+      this.abortRequests();
+      this.systemInfo = null;
+      this.systemInfoUnavailable = false;
+      this.sessionObserverModels = [];
+      this.sessionObserverModelsUnavailable = false;
+      this.resetConfigViewState();
+      this.updateStatusClient = null;
+      this.previousGateway = gateway;
+      this.previousClient = snapshot.client;
+      this.previousHello = snapshot.hello;
+      this.previousPhase = snapshot.phase;
+    }
+    this.customThemeImportOwner.synchronizeScope(
+      gateway.connection.gatewayUrl,
       this.context.theme.serverSelection,
     );
-    this.settings = loadSettings();
-    // Passive refresh only: the media rows already own the permission prompt
-    // behind their own controls, and a hardware change must never turn into an
-    // unasked-for browser dialog on a settings page.
-    this.mediaDeviceWatch = observeRealtimeTalkDevices(() => {
-      void this.refreshMediaDevices("microphone", false);
-      void this.refreshMediaDevices("camera", false);
-    });
-    this.syncRouteData();
-  }
-
-  override disconnectedCallback() {
-    window.removeEventListener(
-      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
-      this.hiddenSessionCatalogsChanged,
+    this.synchronizeRuntimeConfig(this.context.runtimeConfig);
+    this.settings = this.customThemeImportOwner.adoptSettings(
+      this.settings,
+      loadSettings(),
+      this.context.theme.serverSelection,
     );
-    this.customThemeImportOwner.retireImport();
-    this.retireMediaPermissionRequests();
-    this.mediaDeviceWatch?.();
-    this.mediaDeviceWatch = null;
-    this.systemInfoPolling.stop();
-    this.updateCountdownPolling.stop();
-    this.runtimeConfigSource = null;
-    this.resetConfigViewState();
-    this.updateStatusClient = null;
-    this.subscriptions.clear();
-    super.disconnectedCallback();
-  }
-
-  override willUpdate(changed: PropertyValues) {
-    if (changed.get("pageId") === "appearance" && this.pageId !== "appearance") {
-      this.customThemeImportOwner.retireImport();
-      this.retireMediaPermissionRequests();
+    const client = this.systemInfoRequestClient();
+    if (!client) {
+      clearInterval(this.poll);
+      this.poll = undefined;
+      this.systemInfoAbort?.abort();
+      this.systemInfoAbort = null;
+      this.modelsAbort?.abort();
+      this.modelsAbort = null;
+    } else if (connectionChanged || !this.systemInfo || !this.poll) {
+      this.startSystemInfoPolling();
+      void this.refreshSystemInfo();
+    } else {
+      void this.refreshSessionObserverModels();
     }
-    if (changed.has("pageId") || changed.has("routeData")) {
-      this.syncRouteData();
+    this.syncAppearanceRequests();
+    const updateClient =
+      this.pageId === "updates" && canCallGatewayMethod(snapshot, "update.status", "operator.admin")
+        ? snapshot.client
+        : null;
+    if (updateClient !== this.updateStatusClient) {
+      this.updateStatusClient = updateClient;
+      if (updateClient) {
+        void this.context.overlays.refreshUpdateStatus();
+      }
     }
-  }
-
-  override updated(changed: PropertyValues) {
-    const pageChanged = changed.has("pageId") && changed.get("pageId") !== undefined;
-    if (pageChanged) {
-      this.invalidateSystemInfoRequest();
+    const campaign = this.context.overlays.snapshot.updateSchedule?.campaign;
+    const ticking =
+      this.pageId === "updates" &&
+      (campaign?.state === "countdown" || campaign?.state === "waiting-for-idle");
+    if (ticking && !this.countdown) {
+      this.countdown = setInterval(this.invalidate, 1_000);
     }
-    this.syncSystemInfoPolling();
-    this.syncUpdateStatusRefresh();
-    this.syncUpdateCountdownPolling();
-    // Device labels stay hidden until the user grants media permission; each
-    // picker requests its permission explicitly when opened.
+    if (!ticking) {
+      clearInterval(this.countdown);
+      this.countdown = undefined;
+    }
     if (this.pageId === "appearance") {
       for (const kind of ["microphone", "camera"] as const) {
         if (!this.mediaDevices[kind].loaded) {
@@ -468,7 +398,233 @@ export class ConfigPage extends OpenClawLightDomElement {
           void this.refreshMediaDevices(kind, false);
         }
       }
+      if (snapshot.phase === "connected") {
+        void this.context.agentIdentity.ensure([this.context.agentSelection.state.selectedId]);
+      }
     }
+  }
+
+  afterCommit() {
+    if (!this.targetBlockId || this.scrollFrame !== null) {
+      return;
+    }
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = null;
+      const target = [...(this.host?.querySelectorAll<HTMLElement>("[id]") ?? [])].find(
+        (element) => element.id === this.targetBlockId,
+      );
+      if (!target) {
+        return;
+      }
+      target.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "start" });
+      this.targetBlockId = null;
+    });
+  }
+
+  private startSystemInfoPolling() {
+    clearInterval(this.poll);
+    this.poll = setInterval(() => {
+      void this.refreshSystemInfo();
+    }, SYSTEM_INFO_POLL_INTERVAL_MS);
+  }
+
+  private systemInfoRequestClient(): GatewayBrowserClient | null {
+    if (
+      !this.connected ||
+      document.visibilityState === "hidden" ||
+      this.pageId !== "appearance" ||
+      this.systemInfoUnavailable ||
+      !canReadSystemInfo(this.context.gateway.snapshot)
+    ) {
+      return null;
+    }
+    return this.context.gateway.snapshot.client;
+  }
+
+  private async refreshSystemInfo() {
+    const client = this.systemInfoRequestClient();
+    if (!client || this.systemInfoAbort) {
+      return;
+    }
+    const abort = new AbortController();
+    this.systemInfoAbort = abort;
+    try {
+      const sample = await readSystemInfo(this.context.gateway, abort.signal);
+      if (abort.signal.aborted || this.systemInfoRequestClient() !== client) {
+        return;
+      }
+      this.systemInfo = sample.value;
+      this.startSystemInfoPolling();
+      void this.refreshSessionObserverModels(true);
+    } catch (error) {
+      if (abort.signal.aborted) {
+        return;
+      }
+      if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
+        this.systemInfo = null;
+        this.systemInfoUnavailable = true;
+      }
+    } finally {
+      if (this.systemInfoAbort === abort) {
+        this.systemInfoAbort = null;
+      }
+      if (!abort.signal.aborted) {
+        this.invalidate();
+      }
+    }
+  }
+
+  private async refreshSessionObserverModels(force = false) {
+    const client = this.systemInfo ? this.systemInfoRequestClient() : null;
+    const agentId = this.context.settingsAgentSelection.state.selectedId;
+    if (!client || !agentId) {
+      this.modelsAbort?.abort();
+      this.modelsAbort = null;
+      this.sessionObserverModels = [];
+      this.sessionObserverModelsUnavailable = !agentId;
+      return;
+    }
+    if (this.modelsAgent === agentId && (this.modelsAbort || !force)) {
+      return;
+    }
+    const changed = this.modelsAgent !== agentId;
+    this.modelsAbort?.abort();
+    const abort = new AbortController();
+    this.modelsAbort = abort;
+    this.modelsAgent = agentId;
+    if (changed) {
+      this.sessionObserverModels = [];
+      this.sessionObserverModelsUnavailable = false;
+    }
+    try {
+      const { models } = await loadModelCatalog(client, {
+        agentId,
+        preparedOnly: true,
+        signal: abort.signal,
+      });
+      if (
+        abort.signal.aborted ||
+        this.systemInfoRequestClient() !== client ||
+        this.context.settingsAgentSelection.state.selectedId !== agentId
+      ) {
+        return;
+      }
+      this.sessionObserverModels = models;
+      this.sessionObserverModelsUnavailable = false;
+    } catch {
+      if (!abort.signal.aborted) {
+        this.sessionObserverModels = [];
+        this.sessionObserverModelsUnavailable = true;
+      }
+    } finally {
+      if (this.modelsAbort === abort) {
+        this.modelsAbort = null;
+      }
+      if (!abort.signal.aborted) {
+        this.invalidate();
+      }
+    }
+  }
+
+  private syncAppearanceRequests() {
+    const snapshot = this.context.gateway.snapshot;
+    const active = this.pageId === "appearance";
+    const pluginsClient =
+      active && canCallGatewayMethod(snapshot, "plugins.list", "operator.read")
+        ? snapshot.client
+        : null;
+    if (pluginsClient !== this.pluginsClient) {
+      this.pluginsAbort?.abort();
+      this.pluginsAbort = null;
+      this.pluginsClient = pluginsClient;
+      this.installedSessionSourcePluginIds = null;
+      this.sessionSourcePluginsLoading = Boolean(pluginsClient);
+      if (pluginsClient) {
+        const abort = new AbortController();
+        this.pluginsAbort = abort;
+        void pluginsClient
+          .request<PluginsListResult>("plugins.list", {}, { signal: abort.signal })
+          .then((result) => {
+            if (!abort.signal.aborted) {
+              this.installedSessionSourcePluginIds = new Set(
+                result.plugins.filter((plugin) => plugin.installed).map((plugin) => plugin.id),
+              );
+            }
+          })
+          .catch(() => undefined)
+          .finally(() => {
+            if (!abort.signal.aborted) {
+              this.sessionSourcePluginsLoading = false;
+              this.invalidate();
+            }
+          });
+      }
+    }
+    const agentId = this.context.settingsAgentSelection.state.selectedId;
+    const labelsClient =
+      active &&
+      this.hiddenSessionCatalogIds.size > 0 &&
+      canCallGatewayMethod(snapshot, "sessions.catalog.list", "operator.read")
+        ? snapshot.client
+        : null;
+    const key = labelsClient
+      ? `${agentId}\0${[...this.hiddenSessionCatalogIds].toSorted().join("\0")}`
+      : "";
+    if (key !== this.labelsKey) {
+      this.labelsAbort?.abort();
+      this.labelsAbort = null;
+      this.labelsKey = key;
+      this.hiddenSessionCatalogLabels = EMPTY_SESSION_CATALOG_LABELS;
+      if (labelsClient) {
+        const abort = new AbortController();
+        this.labelsAbort = abort;
+        void labelsClient
+          .request<SessionsCatalogListResult>(
+            "sessions.catalog.list",
+            { ...(agentId ? { agentId } : {}), metadataOnly: true },
+            { signal: abort.signal },
+          )
+          .then((result) => {
+            if (!abort.signal.aborted) {
+              this.hiddenSessionCatalogLabels = new Map(
+                result.catalogs.map((catalog) => [catalog.id, catalog.label]),
+              );
+            }
+          })
+          .catch(() => undefined)
+          .finally(() => {
+            if (!abort.signal.aborted) {
+              this.invalidate();
+            }
+          });
+      }
+    }
+  }
+
+  private get tabIconProps() {
+    const context = this.context;
+    const id = context.agentSelection.state.selectedId;
+    const agent = context.agents.state.agentsList?.agents.find((entry) => entry.id === id);
+    const unlocked = getLobsterdex();
+    return {
+      tabIcon: this.settings.tabIcon,
+      lobsterdexEnabled: context.theme.branding.lobsterdex,
+      tabIconAgentAvatar: agent
+        ? resolveAgentAvatarUrl(agent, context.agentIdentity.get(id))
+        : null,
+      tabIconLobsters: LOBSTER_PET_PALETTES.filter((palette) => unlocked.has(palette.id)),
+      setTabIconMode: (preference: NonNullable<UiSettings["tabIcon"]>) => {
+        if (
+          preference.startsWith("lobster:") &&
+          (!context.theme.branding.lobsterdex ||
+            !LOBSTER_PET_PALETTES.some((palette) => palette.id === preference.slice(8)) ||
+            !getLobsterdex().has(preference.slice(8)))
+        ) {
+          return;
+        }
+        this.applySettings({ tabIcon: preference });
+      },
+    };
   }
 
   private async refreshMediaDevices(kind: "microphone" | "camera", requestPermission: boolean) {
@@ -480,7 +636,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     device.loading = true;
     device.requestsPermission = requestPermission;
     device.error = null;
-    this.requestUpdate();
+    this.invalidate();
     try {
       const discover =
         kind === "microphone" ? discoverRealtimeTalkInputs : discoverRealtimeTalkCameras;
@@ -500,46 +656,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     } finally {
       device.loading = false;
       device.requestsPermission = false;
-      this.requestUpdate();
-    }
-  }
-
-  private syncRouteData() {
-    const selection = this.routeData
-      ? normalizeConfigSelection(this.pageId, this.routeData.section, null)
-      : configSelectionFromSearch(this.pageId, globalThis.location?.search ?? "");
-    this.selections = { ...this.selections, [this.pageId]: selection };
-    const targetBlockId =
-      this.routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
-    this.routeTargetScroll.setTarget(targetBlockId);
-  }
-
-  private syncUpdateCountdownPolling() {
-    const campaign = this.context?.overlays.snapshot.updateSchedule?.campaign;
-    if (
-      this.pageId === "updates" &&
-      (campaign?.state === "countdown" || campaign?.state === "waiting-for-idle")
-    ) {
-      this.updateCountdownPolling.start();
-      return;
-    }
-    this.updateCountdownPolling.stop();
-  }
-
-  private syncUpdateStatusRefresh() {
-    const gateway = this.context.gateway.snapshot;
-    const client =
-      this.pageId === "updates" &&
-      gateway.phase === "connected" &&
-      canCallGatewayMethod(gateway, "update.status", "operator.admin")
-        ? gateway.client
-        : null;
-    if (client === this.updateStatusClient) {
-      return;
-    }
-    this.updateStatusClient = client;
-    if (client) {
-      void this.context.overlays.refreshUpdateStatus();
+      this.invalidate();
     }
   }
 
@@ -571,78 +688,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private resetConfigViewState() {
     // Revealed secrets and raw caches never cross a capability/source epoch.
     this.configViewState = createConfigViewState();
-  }
-
-  private handleGatewaySnapshot({
-    snapshot,
-    initial,
-    sourceChanged,
-    clientChanged,
-  }: GatewayPageChange) {
-    this.customThemeImportOwner.synchronizeScope(
-      this.context.gateway.connection.gatewayUrl,
-      this.context.theme.serverSelection,
-    );
-    if (initial || sourceChanged) {
-      this.systemInfoPolling.stop();
-      this.resetConfigViewState();
-      this.updateStatusClient = null;
-    }
-    if (initial || sourceChanged || clientChanged) {
-      this.systemInfo = null;
-      this.systemInfoUnavailable = false;
-      this.resetSessionObserverModels();
-    } else if (snapshot.phase !== "connected") {
-      this.systemInfo = null;
-    }
-    if (snapshot.phase === "connected" && snapshot.hello) {
-      this.systemInfoUnavailable = !canReadSystemInfo(snapshot);
-      if (this.systemInfoUnavailable) {
-        this.invalidateSystemInfoRequest();
-        this.systemInfo = null;
-      }
-    }
-    this.syncSystemInfoPolling(clientChanged);
-    this.syncUpdateStatusRefresh();
-  }
-
-  private syncSystemInfoPolling(forceRefresh = false) {
-    if (!this.systemInfoRequestClient()) {
-      this.systemInfoPolling.stop();
-      if (this.systemInfoTask.status === TaskStatus.PENDING) {
-        void this.systemInfoTask.run([null, null]);
-      }
-      return;
-    }
-    if (this.systemInfoPolling.start() || forceRefresh) {
-      void this.systemInfoTask.run();
-    }
-  }
-
-  private invalidateSystemInfoRequest() {
-    void this.systemInfoTask.run([null, null]);
-    void this.sessionObserverModelsTask.run([null, null, null]);
-    this.resetSessionObserverModels();
-  }
-
-  private systemInfoRequestClient(): GatewayBrowserClient | null {
-    const gateway = this.gateway.gateway;
-    if (
-      !this.isConnected ||
-      document.visibilityState === "hidden" ||
-      this.pageId !== "appearance" ||
-      this.context.gateway !== gateway ||
-      !canReadSystemInfo(gateway?.snapshot) ||
-      this.systemInfoUnavailable
-    ) {
-      return null;
-    }
-    return gateway?.snapshot.client ?? null;
-  }
-
-  private resetSessionObserverModels(unavailable = false) {
-    this.sessionObserverModels = [];
-    this.sessionObserverModelsUnavailable = unavailable;
+    this.invalidate();
   }
 
   private setActiveSection(section: string | null) {
@@ -650,6 +696,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       ...this.selections,
       [this.pageId]: { activeSection: section, activeSubsection: null },
     };
+    this.invalidate();
   }
 
   private setActiveSubsection(section: string | null) {
@@ -660,6 +707,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         activeSubsection: section,
       },
     };
+    this.invalidate();
   }
 
   private applySettings(patch: Partial<UiSettings>, selectedTheme?: ThemeName) {
@@ -670,6 +718,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     // theme.refresh() also republishes non-theme appearance prefs (text
     // scale, lobster pet visits/sounds) to app-host subscribers.
     this.context.theme.refresh();
+    this.invalidate();
   }
 
   private setLocale(locale: Locale | undefined) {
@@ -679,6 +728,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
     this.settings = patchSettings({ locale });
     void i18n.setLocale(locale);
+    this.invalidate();
   }
 
   private currentSyncedPref<K extends ResettableServerUiPrefKey>(key: K) {
@@ -719,6 +769,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       }
     } else {
       this.context.theme.refresh();
+      this.invalidate();
     }
   }
 
@@ -746,7 +797,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     const request = ++this.cameraSelectionRequest;
     const videoDeviceId = deviceId.trim() || undefined;
     this.mediaDevices.camera.error = null;
-    this.requestUpdate();
+    this.invalidate();
     try {
       await switchActiveRealtimeTalkCameras(videoDeviceId);
       if (request !== this.cameraSelectionRequest) {
@@ -760,7 +811,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     } catch (error) {
       if (request === this.cameraSelectionRequest) {
         this.mediaDevices.camera.error = formatUiError(error);
-        this.requestUpdate();
+        this.invalidate();
       }
     }
   }
@@ -809,17 +860,11 @@ export class ConfigPage extends OpenClawLightDomElement {
     );
   }
 
-  private renderAdvancedConfig(configObject: Record<string, unknown>) {
+  get configProps(): ConfigProps {
+    this.observe();
+    const configObject = this.configObject;
     const runtimeConfig = this.context.runtimeConfig;
     const configState = runtimeConfig.state;
-    if (this.pageId === "updates") {
-      return renderUpdatesPage({
-        context: this.context,
-        configObject,
-        configBusy: this.isCuratedConfigMutationDisabled(),
-        updateBusy: this.isUpdateBusy(),
-      });
-    }
     const includeSections = configSectionKeysForPage(this.pageId);
     // Advanced shows everything without a curated home elsewhere.
     const excludeSections =
@@ -831,7 +876,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       currentSelection.activeSubsection,
     );
     const activeSection = this.pageId === "mcp" ? "mcp" : selection.activeSection;
-    const browserPanelAvailable = isBrowserPanelAvailable(this.context.gateway.snapshot);
     const activeSubsection = this.pageId === "mcp" ? null : selection.activeSubsection;
     const gatewayConfig = asConfigRecord(configObject.gateway);
     const controlUiConfig = asConfigRecord(gatewayConfig?.controlUi);
@@ -849,19 +893,13 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.isUpdateBusy() ||
       this.context.overlays.snapshot.updateStatusRefreshing ||
       !hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null);
-    const sectionTag =
-      this.pageId === "communications" && activeSection === "transcripts"
-        ? literal`openclaw-meeting-capture-settings`
-        : this.pageId === "ai-agents" && activeSection === "session"
-          ? literal`openclaw-session-storage-settings`
-          : undefined;
     const withConfigMutation =
       <Args extends unknown[]>(mutate: (...args: Args) => void) =>
       (...args: Args) => {
         this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
         mutate(...args);
       };
-    const props: ConfigProps = {
+    return {
       onAppearanceChange: (patch) => this.applySettings(patch),
       raw: configState.configRaw,
       originalRaw: configState.configRawOriginal,
@@ -890,8 +928,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       onRawChange: withConfigMutation((next) => runtimeConfig.setRaw(next)),
       onFormModeChange: (mode) => {
         this.formModes = { ...this.formModes, [this.pageId]: mode };
+        this.invalidate();
       },
-      onViewStateChange: () => this.requestUpdate(),
+      onViewStateChange: () => this.invalidate(),
       onFormPatch: withConfigMutation((path, value) => runtimeConfig.patchForm(path, value)),
       onFormRemove: withConfigMutation((path) => runtimeConfig.removeFormValue(path)),
       onSectionChange: (section) => this.setActiveSection(section),
@@ -942,7 +981,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       onImportCustomTheme: () => void this.importCustomTheme(),
       onClearCustomTheme: () => this.clearCustomTheme(),
       onOpenCustomThemeImport: () => this.customThemeImportOwner.open(),
-      ...this.tabIconSettings.props,
+      ...this.tabIconProps,
       textScale: this.settings.textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
       textScaleOverridden: this.settings.textScale !== undefined,
       setTextScale: (value) =>
@@ -953,10 +992,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       sidebarLiveActivity:
         this.settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
       hiddenSessionCatalogIds: this.hiddenSessionCatalogIds,
-      hiddenSessionCatalogLabels:
-        this.hiddenSessionCatalogLabelsTask.status === TaskStatus.COMPLETE
-          ? (this.hiddenSessionCatalogLabelsTask.value ?? EMPTY_SESSION_CATALOG_LABELS)
-          : EMPTY_SESSION_CATALOG_LABELS,
+      hiddenSessionCatalogLabels: this.hiddenSessionCatalogLabels,
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
       ...localPresentationProps(this.settings, (patch) => this.applySettings(patch)),
       forceShowAdvanced: this.pageId === "advanced",
@@ -984,7 +1020,7 @@ export class ConfigPage extends OpenClawLightDomElement {
           })
           .then((saved) => {
             if (saved) {
-              void this.systemInfoTask.run();
+              void this.refreshSystemInfo();
             }
           });
       },
@@ -1010,11 +1046,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       resetChatFollowUpMode: () => this.resetSyncedPref("chatFollowUpMode"),
       catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
       pluginsHref: pathForRoute("plugin-settings", this.context.basePath),
-      installedSessionSourcePluginIds:
-        this.sessionSourcePluginsTask.status === TaskStatus.COMPLETE
-          ? this.sessionSourcePluginsTask.value
-          : null,
-      sessionSourcePluginsLoading: this.sessionSourcePluginsTask.status === TaskStatus.PENDING,
+      installedSessionSourcePluginIds: this.installedSessionSourcePluginIds,
+      sessionSourcePluginsLoading: this.sessionSourcePluginsLoading,
       microphone: {
         ...this.mediaDevices.microphone,
         selectedDeviceId: this.settings.realtimeTalkInputDeviceId ?? "",
@@ -1034,23 +1067,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: this.pageId === "advanced" ? undefined : titleForRoute(this.pageId),
       showSectionDocs: this.pageId !== "communications",
-      renderSection: sectionTag
-        ? (editor) => staticHtml`<${sectionTag}
-              .mutationDisabled=${this.isCuratedConfigMutationDisabled()}
-              .advancedExpanded=${
-                this.routeData?.advanced === true ||
-                this.routeData?.targetBlockId === `config-section-${activeSection}`
-              }
-              .editor=${editor}
-            ></${sectionTag}>`
-        : undefined,
-      sectionPrelude:
-        activeSection === "browser" && browserPanelAvailable && !hasNativeBrowserBridge()
-          ? renderBrowserLinkPreferencesRow({
-              enabled: this.settings.openLinksInControlUiBrowser === true,
-              onChange: (enabled) => this.applySettings({ openLinksInControlUiBrowser: enabled }),
-            })
-          : undefined,
       showRootTab: !includeSections?.length,
       includeSections: includeSections ? [...includeSections] : undefined,
       excludeSections,
@@ -1068,90 +1084,6 @@ export class ConfigPage extends OpenClawLightDomElement {
         void this.context.webPush.run({ kind: "set", scope: "user", preferences }),
       onWebPushSetDevicePreferences: (preferences) =>
         void this.context.webPush.run({ kind: "set", scope: "device", preferences }),
-    };
-    const renderSectionEditor = (section: string, label: string, schema = props.schema) =>
-      renderConfig({
-        ...props,
-        schema,
-        activeSection: section,
-        activeSubsection: null,
-        showModeToggle: false,
-        embeddedEditor: true,
-        navRootLabel: label,
-      });
-    if (this.pageId === "mcp") {
-      return renderMcp({
-        configObject,
-        pluginsHref: pathForRoute("plugins", this.context.basePath),
-        editor: renderSectionEditor("mcp", "MCP"),
-      });
-    }
-    if (this.pageId === "memory") {
-      return html`<openclaw-memory-settings
-        .configObject=${configObject}
-        .mutationDisabled=${this.isCuratedConfigMutationDisabled()}
-        .pluginsHref=${pathForRoute("plugins", this.context.basePath)}
-        .memoryImportHref=${pathForRoute("memory-import", this.context.basePath)}
-        .routeData=${this.routeData}
-        .buildEditor=${() =>
-          renderSectionEditor("memory", t("tabs.memory"), memorySettingsSchema(props.schema))}
-      ></openclaw-memory-settings>`;
-    }
-    if (this.pageId === "talk") {
-      return html`<openclaw-talk-settings
-        .configObject=${configObject}
-        .mutationDisabled=${this.isCuratedConfigMutationDisabled()}
-        .buildEditor=${() => renderSectionEditor("talk", t("tabs.talk"))}
-      ></openclaw-talk-settings>`;
-    }
-    if (this.pageId === "security") {
-      const runtimeState = runtimeConfig.state;
-      const configBusy = this.isCuratedConfigMutationDisabled();
-      return renderSecurity({
-        security: extractQuickSettingsSecurity(configObject),
-        configBusy,
-        canPairDevice:
-          runtimeState.connected &&
-          hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
-        onPairMobile: () => void this.context.overlays.openDevicePairSetup(),
-        onBrowserEnabledToggle: (enabled) => {
-          if (enabled) {
-            runtimeConfig.removeFormValue(["browser", "enabled"]);
-            return;
-          }
-          runtimeConfig.patchForm(["browser", "enabled"], false);
-        },
-        onToolProfileChange: (profile) => {
-          runtimeConfig.patchForm(["tools", "profile"], profile);
-        },
-        editor: renderConfig({ ...props, embeddedEditor: true }),
-      });
-    }
-    return renderConfig(props);
-  }
-
-  override render() {
-    const configState = this.context.runtimeConfig.state;
-    const configObject =
-      asConfigRecord(configState.configForm ?? configState.configSnapshot?.config) ?? {};
-    const body = this.renderAdvancedConfig(configObject);
-    return html`
-      ${
-        this.pageId === "memory"
-          ? nothing
-          : html`
-              ${renderSettingsPageHeader({
-                title: titleForRoute(this.pageId),
-                subtitle: renderConfigPageSubtitle(this.pageId),
-              })}
-            `
-      }
-      ${renderSettingsWorkspace(body)}
-    `;
+    } satisfies ConfigProps;
   }
 }
-
-if (!customElements.get("openclaw-config-page")) {
-  customElements.define("openclaw-config-page", ConfigPage);
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

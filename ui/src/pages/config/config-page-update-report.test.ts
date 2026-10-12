@@ -1,12 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
-import { ConfigPage } from "./config-page.ts";
+import { mountConfigPage } from "./config-page.test-support.ts";
 
 afterEach(() => {
+  cleanupSolid();
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
@@ -50,9 +52,7 @@ describe("ConfigPage update failure reporting", () => {
     },
   ])(
     "gates report clicks for $label with a stale method catalog",
-    ({ profileId, scope, connected, allowed }) => {
-      const page = new ConfigPage();
-      const state = page as unknown as { context: ApplicationContext };
+    async ({ profileId, scope, connected, allowed }) => {
       const reportUpdateFailure = vi.fn(async () => undefined);
       const run = createUpdateRunFixture({
         phase: "finished",
@@ -60,8 +60,7 @@ describe("ConfigPage update failure reporting", () => {
         reason: "build-failed",
         finishedAtMs: 500,
       });
-      page.pageId = "updates";
-      state.context = {
+      const context = {
         config: {
           current: { assistantIdentity: { name: "OpenClaw" }, serverVersion: "2026.8.1" },
         },
@@ -108,13 +107,16 @@ describe("ConfigPage update failure reporting", () => {
           runUpdate: vi.fn(),
         },
       } as unknown as ApplicationContext;
-      const container = document.createElement("div");
-      render(page.render(), container);
+      const { container } = mountConfigPage(context, { pageId: "updates" });
+      flush();
 
-      const report = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Report update failure",
-      );
-      expect(report).toBeDefined();
+      const report = await waitForSolid(() => {
+        const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+          (candidate) => candidate.textContent?.trim() === "Report update failure",
+        );
+        expect(button).toBeDefined();
+        return button!;
+      });
       expect(report?.disabled).toBe(!allowed);
       report?.click();
       expect(reportUpdateFailure).toHaveBeenCalledTimes(allowed ? 1 : 0);

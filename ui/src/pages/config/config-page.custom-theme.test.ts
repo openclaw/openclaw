@@ -8,7 +8,7 @@ import { loadSettings, patchSettings, type UiSettings } from "../../app/settings
 import type { ThemeName } from "../../app/theme.ts";
 import { createImportedCustomThemeFixture } from "../../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { ConfigPage } from "./config-page.ts";
+import { ConfigPageController } from "./config-page.ts";
 import type { CustomThemeImportOwner } from "./custom-theme-import-owner.ts";
 import * as customTheme from "./custom-theme-import.ts";
 
@@ -27,11 +27,10 @@ type CustomThemeImportState = {
   customThemeImportOwner: CustomThemeImportOwner;
   retireCustomThemeImportForConfigMutation: () => void;
   synchronizeCustomThemeGatewayScope: (scope: string) => void;
-  willUpdate: (changed: Map<PropertyKey, unknown>) => void;
 };
 
 function createCustomThemePage(settings: Partial<UiSettings> = {}) {
-  const page = new ConfigPage();
+  const page = new ConfigPageController({} as ApplicationContext, () => {});
   const state = page as unknown as CustomThemeImportState;
   const gatewayUrl = "ws://gateway.test";
   state.context = {
@@ -189,13 +188,12 @@ describe("ConfigPage custom theme import ownership", () => {
   it("retires an import when navigation leaves Appearance", async () => {
     const pending = deferred<ImportedCustomTheme>();
     importCustomThemeFromUrl.mockReturnValueOnce(pending.promise);
-    const { state } = createCustomThemePage();
+    const { page, state } = createCustomThemePage();
     state.pageId = "appearance";
     state.setCustomThemeImportUrl("first");
     const pendingImport = state.importCustomTheme();
 
-    state.pageId = "security";
-    state.willUpdate(new Map([["pageId", "appearance"]]));
+    page.updateRoute("security", null);
     pending.resolve(customThemeFixture("First", "first"));
     await pendingImport;
 
@@ -344,7 +342,7 @@ describe("ConfigPage custom theme import ownership", () => {
     state.setCustomThemeImportUrl("first");
     const pendingImport = state.importCustomTheme();
 
-    page.disconnectedCallback();
+    page.dispose();
     first.resolve(customThemeFixture("First", "first"));
     await pendingImport;
 

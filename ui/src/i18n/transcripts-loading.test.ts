@@ -39,7 +39,7 @@ afterAll(async () => {
 describe("transcript English loading", () => {
   it.each([
     { surface: "library", load: () => import("../pages/meetings/view.tsx") },
-    { surface: "settings", load: () => import("../pages/config/meeting-capture.ts") },
+    { surface: "settings", load: () => import("../pages/config/meeting-capture.tsx") },
   ])("keeps startup labels and loads complete fallback copy from $surface", async ({ load }) => {
     const manager = createI18nManagerForTesting(async () => ({ common: { health: "Gesundheit" } }));
     const capture = SETTINGS_SEARCH_TARGETS.meetingCapture;

@@ -1,20 +1,19 @@
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
-import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
 import {
-  analyzeConfigSchema,
-  renderConfigForm as renderConfigFormBase,
-  type JsonSchema,
-} from "./config-form.ts";
+  renderAnalyzedFormFixture,
+  renderConfigFormFixture,
+} from "../test-helpers/config-form-fixtures.tsx";
+import type { ConfigFormProps } from "./config-form.shared.ts";
+import { analyzeConfigSchema, type JsonSchema } from "./config-form.ts";
 
 function renderConfigForm(
-  props: Omit<Parameters<typeof renderConfigFormBase>[0], "onShowAdvanced"> & {
+  props: Omit<ConfigFormProps, "onShowAdvanced"> & {
     onShowAdvanced?: () => void;
   },
 ) {
-  return renderConfigFormBase({ showAdvanced: true, onShowAdvanced: () => {}, ...props });
+  return { showAdvanced: true, onShowAdvanced: () => {}, ...props };
 }
 
 function object(properties: Record<string, JsonSchema>): JsonSchema {
@@ -44,7 +43,7 @@ const rootSchema = object({
 });
 const rootAnalysis = analyzeConfigSchema(rootSchema);
 let container: HTMLDivElement;
-let onPatch: ReturnType<typeof vi.fn<Parameters<typeof renderConfigFormBase>[0]["onPatch"]>>;
+let onPatch: ReturnType<typeof vi.fn<ConfigFormProps["onPatch"]>>;
 beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
@@ -228,7 +227,8 @@ describe("config form renderer", () => {
     const revealed = new Set<string>();
     let value: Record<string, unknown> = {};
     const draw = () =>
-      render(
+      renderConfigFormFixture(
+        container,
         renderConfigForm({
           schema: analysis.schema,
           unsupportedPaths: analysis.unsupportedPaths,
@@ -245,7 +245,6 @@ describe("config form renderer", () => {
             draw();
           },
         }),
-        container,
       );
     const token = () =>
       expectElement(
@@ -493,7 +492,8 @@ describe("config form renderer", () => {
         cron: object({ enabled: { type: "boolean" } }),
       }),
     );
-    render(
+    renderConfigFormFixture(
+      container,
       renderConfigForm({
         schema: analysis.schema,
         uiHints: { "cron.enabled": { label: "Automations Enabled", placeholder: "Default: On" } },
@@ -501,7 +501,6 @@ describe("config form renderer", () => {
         value: {},
         onPatch,
       }),
-      container,
     );
 
     expect(container.querySelector('.settings-toggle__input[role="switch"]')).toBeNull();

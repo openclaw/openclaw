@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import "../../styles.css";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
-import { renderAppearance } from "./config-view.test-support.ts";
+import { renderAppearance } from "./config-view.test-support.tsx";
 
 describe("chat appearance preferences", () => {
   beforeAll(async () => {
