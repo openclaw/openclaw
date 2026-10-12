@@ -645,8 +645,6 @@ for the weekly burst separately from PR and main admission.
 
 The same workflow file also runs Barnacle's `auto-response` job. GitHub creates one run per subscribing workflow before job `if:` admission, and ClawSweeper's own comments and labels arrive as ordinary events, so one shared listener starts one run per event instead of two. The `auto-response` job keeps Barnacle's original event set (issue opened/edited/labeled, comment created, pull request opened/edited/synchronize/reopened/labeled/unlabeled), credentials, trusted base checkout, and its own per-item concurrency group. The file path stays fixed because ClawSweeper's direct queue intake verifies the OIDC `workflow_ref` of `clawsweeper-dispatch.yml`.
 
-It also owns comment admission for Security Review. The `security-review-command` job admits only comments that mention an approval command (including deletions, which the `dispatch` job ignores), confirms the command with the shared approval parser, and dispatches `security-review.yml` for that pull request. See [Security review](/ci/pipeline) for the approval contract.
-
 Dispatch API calls retry rate-limit failures for up to five attempts with quadratic backoff. Other API errors stop immediately, and exhausted retries preserve the final API exit code. Dispatch callers warn and continue on failure rather than reporting a successful dispatch.
 
 The workflow has three lanes:

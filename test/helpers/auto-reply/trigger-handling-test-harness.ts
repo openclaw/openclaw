@@ -83,10 +83,16 @@ vi.doMock("../../../src/agents/embedded-agent-runner/runs.js", () => ({
     embeddedAgentMocks.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
 }));
 
-vi.doMock("../../../src/agents/embedded-agent-runner/active-run-projections.js", () => ({
-  resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
-    embeddedAgentMocks.resolveActiveEmbeddedRunSessionId(...args),
-}));
+vi.doMock(
+  "../../../src/agents/embedded-agent-runner/active-run-projections.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../src/agents/embedded-agent-runner/active-run-projections.js")
+    >()),
+    resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
+      embeddedAgentMocks.resolveActiveEmbeddedRunSessionId(...args),
+  }),
+);
 
 const providerUsageMocks = vi.hoisted(() => ({
   loadProviderUsageSummary: vi.fn().mockResolvedValue({
