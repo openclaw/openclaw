@@ -392,6 +392,19 @@ describe("per-turn send budget", () => {
     expect(softNotice(second)).toBeUndefined();
   });
 
+  it("does not let a throwing send hold the cap slot", async () => {
+    // The cap admits on committed + pending, so a reservation the throw path failed to
+    // release would block the next send even though nothing was committed.
+    mocks.runMessageAction.mockReset();
+    mocks.runMessageAction.mockRejectedValueOnce(new Error("send requires text or media"));
+    const tool = createBudgetTool({ maxPerTurn: 1 });
+    await expect(send(tool, "boom")).rejects.toThrow("send requires text or media");
+    stubSend();
+    const second = await send(tool, "after failure");
+    expect(second.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
   it("does not count broadcast fan-out", async () => {
     stubSend({ kind: "broadcast" });
     const tool = createBudgetTool();
