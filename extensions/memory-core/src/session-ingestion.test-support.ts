@@ -84,10 +84,7 @@ export function hashStagedContent(
   return createHash("sha256").update(JSON.stringify(content)).digest("hex");
 }
 
-export async function withSessionAdmissionReadBudget<T>(
-  operation: () => Promise<T>,
-  maximum: number,
-): Promise<T> {
+export async function withoutHostSessionAdmissionReads<T>(operation: () => Promise<T>): Promise<T> {
   let metadataReads = 0;
   const observation = observeHostDataSql((sql, database) => {
     if (
@@ -99,9 +96,6 @@ export async function withSessionAdmissionReadBudget<T>(
     }
   });
   const result = await operation().finally(observation.restore);
-  expect(metadataReads).toBeLessThanOrEqual(maximum);
-  if (maximum > 0) {
-    expect(metadataReads).toBeGreaterThan(0);
-  }
+  expect(metadataReads).toBe(0);
   return result;
 }
