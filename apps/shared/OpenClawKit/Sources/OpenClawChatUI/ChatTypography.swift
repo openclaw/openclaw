@@ -7,7 +7,19 @@ import UIKit
 #endif
 
 enum OpenClawChatTypography {
-    static let bodySize: CGFloat = 17
+    // The 17 pt system body is too large for a dense transcript on a phone, and leaves the smallest
+    // Dynamic Type setting at 14 pt, the Control UI's default chat size. Chat sizes shrink by one ratio;
+    // sizes that would fall under 11 pt stop there. Dynamic Type still scales the result.
+    #if os(iOS)
+    static let scale: CGFloat = 13.5 / 17.0
+    #else
+    static let scale: CGFloat = 1
+    #endif
+    static let bodySize: CGFloat = 17 * scale
+
+    static func scaled(_ size: CGFloat) -> CGFloat {
+        max(size * self.scale, min(size, 11))
+    }
 
     static var headline: Font {
         display(size: 17, weight: .semibold, relativeTo: .headline)
@@ -35,7 +47,7 @@ enum OpenClawChatTypography {
     }
 
     static var body: Font {
-        body(size: self.bodySize, weight: .regular, relativeTo: .body)
+        body(size: 17, weight: .regular, relativeTo: .body)
     }
 
     static var formControl: Font {
@@ -80,7 +92,7 @@ enum OpenClawChatTypography {
 
     static func body(size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle) -> Font {
         #if os(iOS)
-        Font.custom(self.bodyPostScriptName, size: size, relativeTo: textStyle).weight(weight)
+        Font.custom(self.bodyPostScriptName, size: self.scaled(size), relativeTo: textStyle).weight(weight)
         #elseif os(macOS)
         Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle).weight(weight)
         #else
@@ -90,7 +102,7 @@ enum OpenClawChatTypography {
 
     static func display(size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle) -> Font {
         #if os(iOS)
-        Font.custom(self.displayPostScriptName, size: size, relativeTo: textStyle).weight(weight)
+        Font.custom(self.displayPostScriptName, size: self.scaled(size), relativeTo: textStyle).weight(weight)
         #elseif os(macOS)
         Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle).weight(weight)
         #else
@@ -101,7 +113,7 @@ enum OpenClawChatTypography {
     static func mono(size: CGFloat, weight: Font.Weight = .regular, relativeTo textStyle: Font.TextStyle) -> Font {
         #if os(iOS)
         let name = weight == .semibold ? Self.monoSemiBoldPostScriptName : Self.monoPostScriptName
-        return Font.custom(name, size: size, relativeTo: textStyle)
+        return Font.custom(name, size: Self.scaled(size), relativeTo: textStyle)
         #elseif os(macOS)
         return Font.custom(self.macMonospacedSystemFontName(size: size), size: size, relativeTo: textStyle)
             .weight(weight)

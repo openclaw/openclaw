@@ -66,6 +66,16 @@ private struct SlashPanelHeightKey: PreferenceKey {
     }
 }
 
+/// The card takes its natural height, at least the resting height. The draft row stretches, so any
+/// room the minimum leaves sits under a short draft, and rows above the draft use it first.
+private struct CleanComposerRestingHeight: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(minHeight: CleanChatComposerMetrics.restingMinHeight, alignment: .bottom)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 /// Evaluates part of the composer in its own body. Debug builds keep every nested `some View` temporary on
 /// the stack, and the whole composer evaluated in one body nearly fills the 1 MB main-thread stack of a device.
 struct ChatComposerSection<Content: View>: View {
@@ -728,7 +738,7 @@ struct OpenClawChatComposer: View {
             }
         }
         #if os(iOS)
-        .frame(minHeight: CleanChatComposerMetrics.restingMinHeight, alignment: .bottom)
+        .modifier(CleanComposerRestingHeight())
         #else
             .padding(.horizontal, self.isDesktopLayout ? 0 : 6)
             .padding(.vertical, self.isDesktopLayout ? 0 : 2)
@@ -1289,6 +1299,18 @@ extension OpenClawChatComposer {
 
     private var composerPadding: CGFloat {
         self.style == .onboarding ? 5 : (self.composerChrome == .clean ? 4 : 6)
+    }
+
+    #if os(iOS)
+    func focusDraft() {
+        guard self.isComposerEnabled else { return }
+        self.isFocused = true
+    }
+    #endif
+
+    /// A third of a text line above the draft, so the first line does not sit on the border.
+    var draftTopInset: CGFloat {
+        CleanChatComposerMetrics.editorBlockInset + self.scaledBodyLineHeight * OpenClawChatTypography.scale / 3
     }
 
     var textMinHeight: CGFloat {
