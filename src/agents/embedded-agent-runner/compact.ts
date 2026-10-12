@@ -396,6 +396,7 @@ export async function compactEmbeddedAgentSessionDirect(
         // Delegate input may carry unknown fields; only the consumed claim grants this fact.
         transcriptBytePreflightAuthority: transcriptBytePreflightClaim ? true : undefined,
         assertTranscriptBytePreflightActive: transcriptBytePreflightClaim?.assertActive,
+        transcriptByteOperatorAuthority: transcriptBytePreflightClaim?.operatorAuthority,
         transcriptByteCompactionPersistence:
           transcriptBytePreflightClaim?.withCompactionPersistence,
         transcriptByteCompactionPersistenceAsync:

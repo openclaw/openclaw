@@ -1,6 +1,7 @@
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { resolveCodexAgentHarnessNativeCompaction } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
 import type {
@@ -16,6 +17,7 @@ export type TranscriptByteCompactionPersistenceAsync = CompactionAppendPersisten
 export type TranscriptBytePreflightClaim = {
   authority: TranscriptBytePreflightAuthority;
   assertActive: () => Promise<void>;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   sessionTarget: Partial<SessionTranscriptRuntimeTarget>;
   withCompactionPersistence?: TranscriptByteCompactionPersistence;
   withCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync;
@@ -41,6 +43,7 @@ export function setTranscriptBytePreflightClaim(
   assertActive: TranscriptBytePreflightClaim["assertActive"],
   withCompactionPersistence?: TranscriptByteCompactionPersistence,
   withCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ): () => void {
   if (!runtimeContext || !authority) {
     return () => {};
@@ -49,6 +52,7 @@ export function setTranscriptBytePreflightClaim(
   const claim = {
     authority,
     assertActive,
+    operatorAuthority,
     ...(withCompactionPersistence ? { withCompactionPersistence } : {}),
     ...(withCompactionPersistenceAsync ? { withCompactionPersistenceAsync } : {}),
     sessionTarget: {

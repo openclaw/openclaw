@@ -14,6 +14,7 @@ import {
   requireActivePluginRegistry,
   withPluginRegistrationContext,
 } from "../../plugins/runtime.js";
+import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { getRegisteredAgentHarness, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
 import {
@@ -164,218 +165,271 @@ export function registerCodexHostByteModelTests(fixture: {
       expect(forgedAssertion).not.toHaveBeenCalled();
     });
 
-    it.each(["unlocked", "locked", "revoked", "replaced-writer"] as const)(
-      "gates host summary model egress for %s history",
-      async (scenario) => {
-        const locked = scenario === "locked";
-        let sourceActive = true;
-        registerCodexByteCompactionHarness();
-        const config: OpenClawConfig = {
-          agents: {
-            defaults: {
-              compaction: {
-                model: "deepseek/deepseek-flash",
-                provider: "synthetic-provider",
-                maxActiveTranscriptBytes: "20mb",
-              },
+    it.each([
+      "unlocked",
+      "locked",
+      "revoked",
+      "replaced-writer",
+      "operator-allowed",
+      "operator-denied",
+      "model-permission-removed",
+    ] as const)("gates host summary model egress for %s history", async (scenario) => {
+      const locked = scenario === "locked";
+      let sourceActive = true;
+      let summaryAllowed = scenario !== "operator-denied";
+      const operatorScenario =
+        scenario.startsWith("operator-") || scenario === "model-permission-removed";
+      const policyListeners = new Set<() => void>();
+      let bindingsAtPermissionRemoval: number | undefined;
+      const assertSourceActive = () => {
+        if (!sourceActive) {
+          throw new Error("summary source revoked");
+        }
+      };
+      const operatorAuthority = operatorScenario
+        ? createAdmittedRunOperatorAuthority({
+            profileId: "summary-operator",
+            scopes: ["operator.write"],
+            assertCurrent: assertSourceActive,
+            modelPolicy: {
+              models: [{ provider: "openai", model: "gpt-5.5" }],
+              allows: (model) => model.provider === "openai" || summaryAllowed,
+            },
+            onModelPolicyChanged: (listener) => {
+              policyListeners.add(listener);
+              return () => policyListeners.delete(listener);
+            },
+          })
+        : undefined;
+      registerCodexByteCompactionHarness();
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            compaction: {
+              model: "deepseek/deepseek-flash",
+              provider: "synthetic-provider",
+              maxActiveTranscriptBytes: "20mb",
             },
           },
-        };
-        ensureAuthProfileStoreMock.mockReturnValue({
-          version: 1,
-          profiles: {
-            "openai:source": { type: "api_key", provider: "openai", key: "synthetic-source-key" },
+        },
+      };
+      ensureAuthProfileStoreMock.mockReturnValue({
+        version: 1,
+        profiles: {
+          "openai:source": { type: "api_key", provider: "openai", key: "synthetic-source-key" },
+        },
+      });
+      getApiKeyForModelMock.mockImplementation(async (auth) => ({
+        apiKey:
+          auth?.profileId === "openai:source" ? "synthetic-source-key" : "synthetic-summary-key",
+        mode: "api-key",
+        source: "test harness",
+        profileId: auth?.profileId,
+      }));
+      const params = fixture.wrappedArgs({
+        config,
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+        modelSelectionLocked: locked,
+        authProfileId: "openai:source",
+        authProfileIdSource: "user",
+        runtimeAuthPlan: {
+          providerForAuth: "openai",
+          modelId: "gpt-5.5",
+          selectedAuthMode: "api-key",
+          forwardedAuthProfileId: "openai:source",
+          forwardedAuthProfileSource: "user",
+          modelRoute: {
+            provider: "openai",
+            modelId: "gpt-5.5",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            authRequirement: "api-key",
+            requestTransportOverrides: "none",
+            runtimePolicy: { compatibleIds: ["codex"] },
           },
+        },
+        trigger: "budget",
+        forcePreflight: true,
+        preflightRequired: true,
+        preflightCompactionTrigger: "transcript_bytes",
+      });
+      const target = {
+        agentId: expectDefined(params.sessionTarget?.agentId, "test agent id"),
+        sessionId: params.sessionId,
+        sessionKey: expectDefined(params.sessionKey, "test session key"),
+        storePath: expectDefined(params.sessionTarget?.storePath, "test store path"),
+      };
+      await upsertSessionEntryCore(target, {
+        sessionId: params.sessionId,
+        updatedAt: 1,
+        agentHarnessId: "codex",
+        modelSelectionLocked: locked,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      });
+      const [{ guardSessionManager }, { resolveEmbeddedAgentStream }, { createAgentSession }] =
+        await Promise.all([
+          import("../session-tool-result-guard-wrapper.js"),
+          import("./stream-resolution.js"),
+          import("../sessions/sdk.js"),
+        ]);
+      const sessionManager = SessionManager.inMemory(fixture.workspaceDir());
+      for (const content of ["Review the checklist.", "Compare options.", "Keep the notes."]) {
+        await sessionManager.appendMessageAsync({ role: "user", content, timestamp: 1 });
+      }
+      vi.mocked(guardSessionManager).mockReturnValue(sessionManager);
+      limitHistoryTurnsMock.mockImplementation((messages) => messages);
+      const stream = vi.fn<StreamFn>((model) => {
+        const events = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          events.push({
+            type: "done",
+            reason: "stop",
+            message: createAssistant(model, [
+              { type: "text", text: "Kept the checklist, options and notes." },
+            ]),
+          });
+          events.end();
         });
-        getApiKeyForModelMock.mockImplementation(async (auth) => ({
-          apiKey:
-            auth?.profileId === "openai:source" ? "synthetic-source-key" : "synthetic-summary-key",
-          mode: "api-key",
-          source: "test harness",
-          profileId: auth?.profileId,
-        }));
-        const params = fixture.wrappedArgs({
-          config,
+        return events;
+      });
+      vi.mocked(resolveEmbeddedAgentStream).mockReturnValue({
+        streamFn: stream,
+        strategy: "session-custom",
+      });
+      vi.mocked(createAgentSession).mockImplementation(async ({ model }) => {
+        if (!model) {
+          throw new Error("Expected prepared compaction model");
+        }
+        return createTestSession({
+          model: { ...testModel, ...model },
+          sessionManager,
+          settingsManager: SettingsManager.inMemory({
+            compaction: { enabled: false, reserveTokens: 1024, keepRecentTokens: 1 },
+            retry: { enabled: false },
+          }),
+          resourceLoader: createResourceLoader(),
+        });
+      });
+      const compactEngine = vi.fn<ContextEngine["compact"]>((input) =>
+        delegateCompactionToRuntime(input),
+      );
+      resolveContextEngineMock.mockResolvedValue({
+        info: { id: "legacy", name: "Legacy", version: "1.0.0" },
+        compact: compactEngine,
+      } as never);
+      maybeCompactAgentHarnessSessionMock.mockResolvedValue({ ok: true, compacted: true });
+      if (
+        scenario === "revoked" ||
+        scenario === "replaced-writer" ||
+        scenario === "model-permission-removed"
+      ) {
+        hookRunner.hasHooks.mockImplementation((name) => name === "before_compaction");
+        hookRunner.runBeforeCompaction.mockImplementationOnce(async () => {
+          if (scenario === "revoked") {
+            sourceActive = false;
+          } else if (scenario === "model-permission-removed") {
+            bindingsAtPermissionRemoval = policyListeners.size;
+            summaryAllowed = false;
+            for (const listener of policyListeners) {
+              listener();
+            }
+          } else {
+            await patchSessionEntryCore(target, (entry) => ({
+              ...entry,
+              activeWriterRunId: "replacement-writer",
+            }));
+          }
+        });
+      }
+
+      const result = await fixture
+        .compact()(params, {
+          transcriptBytePreflightHarness: "codex",
+          assertActive: assertSourceActive,
+          sourceAuthority: { assertActive: assertSourceActive, operatorAuthority },
+        })
+        .catch((error: unknown) => {
+          if (
+            !["revoked", "replaced-writer", "operator-denied", "model-permission-removed"].includes(
+              scenario,
+            )
+          ) {
+            throw error;
+          }
+          return {
+            ok: false,
+            compacted: false,
+            reason: error instanceof Error ? error.message : String(error),
+          };
+        });
+
+      if (
+        ["revoked", "replaced-writer", "operator-denied", "model-permission-removed"].includes(
+          scenario,
+        )
+      ) {
+        if (scenario === "model-permission-removed") {
+          expect(bindingsAtPermissionRemoval).toBe(1);
+        }
+        expect(result).toMatchObject({ ok: false, compacted: false });
+        expect(result.reason).toContain(
+          scenario === "revoked"
+            ? "summary source revoked"
+            : scenario === "replaced-writer"
+              ? "writer"
+              : "operator role cannot use this model",
+        );
+        expect(stream).not.toHaveBeenCalled();
+        expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+        expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+        return;
+      }
+      expect(result, result.reason).toMatchObject({ ok: true, compacted: true });
+      const engineConfig = compactEngine.mock.calls[0]?.[0].runtimeContext?.config;
+      expect(engineConfig).not.toHaveProperty("agents.defaults.compaction.provider");
+      if (locked) {
+        expect(engineConfig).not.toHaveProperty("agents.defaults.compaction.model");
+      } else {
+        expect(engineConfig).toHaveProperty(
+          "agents.defaults.compaction.model",
+          "deepseek/deepseek-flash",
+        );
+      }
+      expect(stream).toHaveBeenCalledOnce();
+      expect(vi.mocked(resolveEmbeddedAgentStream).mock.calls.at(-1)?.[0].resolvedApiKey).toBe(
+        locked ? "synthetic-source-key" : "synthetic-summary-key",
+      );
+      expect(stream.mock.calls[0]?.[0]).toMatchObject(
+        locked
+          ? { provider: "openai", id: "gpt-5.5" }
+          : { provider: "deepseek", id: "deepseek-flash" },
+      );
+      expect(
+        sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
+      ).toMatchObject({ summary: "Kept the checklist, options and notes." });
+      expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledOnce();
+      expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
           provider: "openai",
           model: "gpt-5.5",
           agentHarnessId: "codex",
-          modelSelectionLocked: locked,
           authProfileId: "openai:source",
-          authProfileIdSource: "user",
-          runtimeAuthPlan: {
-            providerForAuth: "openai",
-            modelId: "gpt-5.5",
-            selectedAuthMode: "api-key",
-            forwardedAuthProfileId: "openai:source",
-            forwardedAuthProfileSource: "user",
-            modelRoute: {
-              provider: "openai",
-              modelId: "gpt-5.5",
-              api: "openai-responses",
-              baseUrl: "https://api.openai.com/v1",
-              authRequirement: "api-key",
-              requestTransportOverrides: "none",
-              runtimePolicy: { compatibleIds: ["codex"] },
-            },
-          },
-          trigger: "budget",
-          forcePreflight: true,
-          preflightRequired: true,
-          preflightCompactionTrigger: "transcript_bytes",
-        });
-        const target = {
-          agentId: expectDefined(params.sessionTarget?.agentId, "test agent id"),
-          sessionId: params.sessionId,
-          sessionKey: expectDefined(params.sessionKey, "test session key"),
-          storePath: expectDefined(params.sessionTarget?.storePath, "test store path"),
-        };
-        await upsertSessionEntryCore(target, {
-          sessionId: params.sessionId,
-          updatedAt: 1,
-          agentHarnessId: "codex",
-          modelSelectionLocked: locked,
-          providerOverride: "openai",
-          modelOverride: "gpt-5.5",
-        });
-        const [{ guardSessionManager }, { resolveEmbeddedAgentStream }, { createAgentSession }] =
-          await Promise.all([
-            import("../session-tool-result-guard-wrapper.js"),
-            import("./stream-resolution.js"),
-            import("../sessions/sdk.js"),
-          ]);
-        const sessionManager = SessionManager.inMemory(fixture.workspaceDir());
-        for (const content of ["Review the checklist.", "Compare options.", "Keep the notes."]) {
-          await sessionManager.appendMessageAsync({ role: "user", content, timestamp: 1 });
-        }
-        vi.mocked(guardSessionManager).mockReturnValue(sessionManager);
-        limitHistoryTurnsMock.mockImplementation((messages) => messages);
-        const stream = vi.fn<StreamFn>((model) => {
-          const events = createAssistantMessageEventStream();
-          queueMicrotask(() => {
-            events.push({
-              type: "done",
-              reason: "stop",
-              message: createAssistant(model, [
-                { type: "text", text: "Kept the checklist, options and notes." },
-              ]),
-            });
-            events.end();
-          });
-          return events;
-        });
-        vi.mocked(resolveEmbeddedAgentStream).mockReturnValue({
-          streamFn: stream,
-          strategy: "session-custom",
-        });
-        vi.mocked(createAgentSession).mockImplementation(async ({ model }) => {
-          if (!model) {
-            throw new Error("Expected prepared compaction model");
-          }
-          return createTestSession({
-            model: { ...testModel, ...model },
-            sessionManager,
-            settingsManager: SettingsManager.inMemory({
-              compaction: { enabled: false, reserveTokens: 1024, keepRecentTokens: 1 },
-              retry: { enabled: false },
-            }),
-            resourceLoader: createResourceLoader(),
-          });
-        });
-        const compactEngine = vi.fn<ContextEngine["compact"]>((input) =>
-          delegateCompactionToRuntime(input),
-        );
-        resolveContextEngineMock.mockResolvedValue({
-          info: { id: "legacy", name: "Legacy", version: "1.0.0" },
-          compact: compactEngine,
-        } as never);
-        maybeCompactAgentHarnessSessionMock.mockResolvedValue({ ok: true, compacted: true });
-        if (scenario === "revoked" || scenario === "replaced-writer") {
-          hookRunner.hasHooks.mockImplementation((name) => name === "before_compaction");
-          hookRunner.runBeforeCompaction.mockImplementationOnce(async () => {
-            if (scenario === "revoked") {
-              sourceActive = false;
-            } else {
-              await patchSessionEntryCore(target, (entry) => ({
-                ...entry,
-                activeWriterRunId: "replacement-writer",
-              }));
-            }
-          });
-        }
-
-        const result = await fixture
-          .compact()(params, {
-            transcriptBytePreflightHarness: "codex",
-            assertActive: () => {
-              if (!sourceActive) {
-                throw new Error("summary source revoked");
-              }
-            },
-          })
-          .catch((error: unknown) => {
-            if (scenario !== "revoked" && scenario !== "replaced-writer") {
-              throw error;
-            }
-            return {
-              ok: false,
-              compacted: false,
-              reason: error instanceof Error ? error.message : String(error),
-            };
-          });
-
-        if (scenario === "revoked" || scenario === "replaced-writer") {
-          expect(result).toMatchObject({ ok: false, compacted: false });
-          expect(result.reason).toContain(
-            scenario === "revoked" ? "summary source revoked" : "writer",
-          );
-          expect(stream).not.toHaveBeenCalled();
-          expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(
-            false,
-          );
-          expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
-          return;
-        }
-        expect(result, result.reason).toMatchObject({ ok: true, compacted: true });
-        const engineConfig = compactEngine.mock.calls[0]?.[0].runtimeContext?.config;
-        expect(engineConfig).not.toHaveProperty("agents.defaults.compaction.provider");
-        if (locked) {
-          expect(engineConfig).not.toHaveProperty("agents.defaults.compaction.model");
-        } else {
-          expect(engineConfig).toHaveProperty(
-            "agents.defaults.compaction.model",
-            "deepseek/deepseek-flash",
-          );
-        }
-        expect(stream).toHaveBeenCalledOnce();
-        expect(vi.mocked(resolveEmbeddedAgentStream).mock.calls.at(-1)?.[0].resolvedApiKey).toBe(
-          locked ? "synthetic-source-key" : "synthetic-summary-key",
-        );
-        expect(stream.mock.calls[0]?.[0]).toMatchObject(
-          locked
-            ? { provider: "openai", id: "gpt-5.5" }
-            : { provider: "deepseek", id: "deepseek-flash" },
-        );
-        expect(
-          sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
-        ).toMatchObject({ summary: "Kept the checklist, options and notes." });
-        expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledOnce();
-        expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            provider: "openai",
-            model: "gpt-5.5",
-            agentHarnessId: "codex",
-            authProfileId: "openai:source",
-          }),
-          expectedNativeCompactionOptions("after_context_engine"),
-        );
-        expect(loadSessionEntryReadOnly(target)).toMatchObject({
-          agentHarnessId: "codex",
-          modelSelectionLocked: locked,
-          providerOverride: "openai",
-          modelOverride: "gpt-5.5",
-        });
-        expect(config.agents?.defaults?.compaction?.model).toBe("deepseek/deepseek-flash");
-      },
-    );
+        }),
+        {
+          ...expectedNativeCompactionOptions("after_context_engine"),
+          sourceAuthority: { assertActive: expect.any(Function), operatorAuthority },
+        },
+      );
+      expect(loadSessionEntryReadOnly(target)).toMatchObject({
+        agentHarnessId: "codex",
+        modelSelectionLocked: locked,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      });
+      expect(config.agents?.defaults?.compaction?.model).toBe("deepseek/deepseek-flash");
+    });
   });
 }

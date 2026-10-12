@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import {
   createDiagnosticTraceContext,
@@ -9,6 +10,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { resolveUserPath } from "../../utils.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { describeFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
@@ -50,6 +52,7 @@ export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSess
   requestedRouteResolution?: "resolved";
   transcriptBytePreflightAuthority?: true;
   assertTranscriptBytePreflightActive?: () => Promise<void>;
+  transcriptByteOperatorAuthority?: AdmittedRunOperatorAuthority;
   transcriptByteCompactionPersistence?: TranscriptByteCompactionPersistence;
   transcriptByteCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync;
   sandbox?: SandboxContext | null;
@@ -57,6 +60,7 @@ export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSess
 
 export async function prepareDirectCompactionAttempt(
   params: PreparedCompactEmbeddedAgentSessionParams,
+  bindModelExecution?: (model: ProviderModelRef) => void,
 ) {
   const startedAt = Date.now();
   const diagId = params.diagId?.trim() || createDirectCompactionDiagId();
@@ -98,6 +102,7 @@ export async function prepareDirectCompactionAttempt(
     boundHarnessRuntime: params.agentHarnessId,
     preparedRuntimePlan: params.runtimePlan,
   });
+  bindModelExecution?.({ provider, model: modelId });
   // Keep the configured provider for harness policy, while auth/model loading below can
   // route OpenAI compaction through Codex OAuth when that runtime owns the session credentials.
   // Ensure the policy-selected harness plugin so selection can pick implicit codex.

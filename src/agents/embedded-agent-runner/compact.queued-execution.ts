@@ -360,6 +360,7 @@ export async function executeQueuedContextEngineCompaction(input: {
               },
               host.withCompactionPersistence,
               host.withCompactionPersistenceAsync,
+              host.sourceAuthority.operatorAuthority,
             );
             return withOwnedSessionTranscriptWrites(writeContext, () =>
               contextEngine.compact(backendParams),

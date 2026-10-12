@@ -6,6 +6,7 @@ import {
   getAsyncWorkSignal,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { bindOperatorModelExecution } from "../admitted-run-context.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import { executePreparedCompactionSession } from "./compaction-session-execution.js";
 import {
@@ -33,11 +34,28 @@ export async function compactEmbeddedAgentSessionDirectOnce(
   const cleanupWork = new AsyncWorkScope();
   const cleanupContext = cleanupWork.run(() => AsyncLocalStorage.snapshot());
   let cleanup: PreparedCompactionCleanup | undefined;
+  let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
+  const closeFromModelPolicy = () => context(() => work.beginClose(modelExecution?.signal.reason));
   const runAttempt = async () => {
-    const preparation = await prepareDirectCompactionAttempt({
-      ...params,
-      abortSignal: work.signal,
-    });
+    const preparation = await prepareDirectCompactionAttempt(
+      {
+        ...params,
+        abortSignal: work.signal,
+        assertTranscriptBytePreflightActive: params.assertTranscriptBytePreflightActive
+          ? async () => {
+              await params.assertTranscriptBytePreflightActive?.();
+              modelExecution?.assertCurrent();
+            }
+          : undefined,
+      },
+      (model) => {
+        modelExecution = bindOperatorModelExecution(params.transcriptByteOperatorAuthority, model);
+        modelExecution?.signal.addEventListener("abort", closeFromModelPolicy, { once: true });
+        if (modelExecution?.signal.aborted) {
+          closeFromModelPolicy();
+        }
+      },
+    );
     if (!preparation.ok) {
       return preparation.result;
     }
@@ -92,6 +110,8 @@ export async function compactEmbeddedAgentSessionDirectOnce(
           );
         } finally {
           cancellationSignal?.removeEventListener("abort", closeWork);
+          modelExecution?.signal.removeEventListener("abort", closeFromModelPolicy);
+          modelExecution?.release();
         }
       }
     }
