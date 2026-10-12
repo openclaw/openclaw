@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { databaseEngineAdapters } from "./adapters.js";
 
-vi.mock("../postgres-sync/connection.js", () => ({ PostgresSyncConnection: vi.fn() }));
+vi.mock("../postgres-sync/connection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../postgres-sync/connection.js")>()),
+  PostgresSyncConnection: vi.fn(),
+}));
 afterEach(() => vi.resetAllMocks());
 
 describe("PostgreSQL adapter open failures", () => {

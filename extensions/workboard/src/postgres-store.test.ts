@@ -11,7 +11,6 @@ import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-wo
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { Client } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { PostgresSyncConnection } from "../../../src/infra/postgres-sync/connection.js";
 import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createWorkboardDatabase } from "./sqlite-store-schema.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
@@ -55,7 +54,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     const owner = createWorkboardDatabase(dbPath, undefined, postgresInput);
     owners.push(owner);
     const db = owner.db;
-    if (!(db instanceof PostgresSyncConnection)) {
+    if (db instanceof DatabaseSync) {
       throw new Error("Experimental workboard open did not select PostgreSQL");
     }
     schemas.add(db.schema);

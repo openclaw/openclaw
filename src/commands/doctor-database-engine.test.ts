@@ -5,7 +5,10 @@ import {
   noteDatabaseEngines,
 } from "./doctor-database-engine.js";
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
+vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
+  note: vi.fn(),
+}));
 
 beforeEach(() => vi.mocked(note).mockClear());
 

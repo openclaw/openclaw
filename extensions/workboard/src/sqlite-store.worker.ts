@@ -159,7 +159,11 @@ export function createSqliteWorkerBackend(
         const kernel = connections.get(command.input.connection)?.kernel;
         const value =
           !readOnly && kernel
-            ? runEngineWorkerWrite(input, () => execute(command), kernel.withWriteTransaction)
+            ? runEngineWorkerWrite(
+                input,
+                () => execute(command),
+                (operation) => kernel.withWriteTransaction(operation),
+              )
             : execute(command);
         return { ok: true, value };
       } catch (error) {
