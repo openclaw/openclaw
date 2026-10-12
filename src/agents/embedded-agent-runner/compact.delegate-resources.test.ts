@@ -261,10 +261,8 @@ vi.mock("./stream-resolution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./stream-resolution.js")>();
   return {
     ...actual,
-    resolveEmbeddedAgentStream: (
-      params: Parameters<typeof actual.resolveEmbeddedAgentStream>[0],
-    ) => {
-      const resolved = actual.resolveEmbeddedAgentStream(params);
+    selectEmbeddedAgentStream: (params: Parameters<typeof actual.selectEmbeddedAgentStream>[0]) => {
+      const resolved = actual.selectEmbeddedAgentStream(params);
       const streamFn: StreamFn = (model) => {
         const current = fixture();
         if (current.mode.startsWith("reload")) {
