@@ -97,6 +97,8 @@ beforeAll(async () => {
   };
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
+  // Real Gateway startup owns shared state before serving loopback requests.
+  openOpenClawStateDatabase();
   await ensureMcpLoopbackServer();
 });
 
