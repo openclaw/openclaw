@@ -413,6 +413,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
   const streamExtraParamsOverride = {
     ...attempt.streamParams,
     fastMode: attempt.fastMode,
+    // Memory extraction must see the original history, not a provider summary.
+    ...(attempt.trigger === "memory"
+      ? { anthropicServerCompaction: false, responsesServerCompaction: false }
+      : {}),
   };
   const selectedAuth = attempt.runtimePlan?.auth;
   const auth = selectedAuth?.selectedAuthMode
