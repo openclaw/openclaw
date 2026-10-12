@@ -15,7 +15,8 @@
       ],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-user_profiles.postgres.sql"
+      "file": "fragment-user_profiles.postgres.sql",
+      "runtimeFile": "fragment-user_profiles.runtime.postgres.sql"
     },
     {
       "id": "skill_library_entries",
@@ -28,7 +29,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-skill_library_entries.postgres.sql"
+      "file": "fragment-skill_library_entries.postgres.sql",
+      "runtimeFile": "fragment-skill_library_entries.runtime.postgres.sql"
     },
     {
       "id": "operator_approval_standing_grants",
@@ -41,7 +43,8 @@
       ],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-operator_approval_standing_grants.postgres.sql"
+      "file": "fragment-operator_approval_standing_grants.postgres.sql",
+      "runtimeFile": "fragment-operator_approval_standing_grants.runtime.postgres.sql"
     },
     {
       "id": "worker_environment_session_attachments",
@@ -53,7 +56,8 @@
       ],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-worker_environment_session_attachments.postgres.sql"
+      "file": "fragment-worker_environment_session_attachments.postgres.sql",
+      "runtimeFile": "fragment-worker_environment_session_attachments.runtime.postgres.sql"
     },
     {
       "id": "user_background_images",
@@ -65,7 +69,8 @@
         "user_profiles"
       ],
       "activation": "first-use",
-      "file": "fragment-user_background_images.postgres.sql"
+      "file": "fragment-user_background_images.postgres.sql",
+      "runtimeFile": "fragment-user_background_images.runtime.postgres.sql"
     },
     {
       "id": "local_workspace_projections",
@@ -75,7 +80,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-local_workspace_projections.postgres.sql"
+      "file": "fragment-local_workspace_projections.postgres.sql",
+      "runtimeFile": "fragment-local_workspace_projections.runtime.postgres.sql"
     },
     {
       "id": "update_runs",
@@ -88,7 +94,8 @@
       ],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-update_runs.postgres.sql"
+      "file": "fragment-update_runs.postgres.sql",
+      "runtimeFile": "fragment-update_runs.runtime.postgres.sql"
     },
     {
       "id": "session_repository_workspaces",
@@ -98,7 +105,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-session_repository_workspaces.postgres.sql"
+      "file": "fragment-session_repository_workspaces.postgres.sql",
+      "runtimeFile": "fragment-session_repository_workspaces.runtime.postgres.sql"
     },
     {
       "id": "github_repository_publication_requests",
@@ -111,7 +119,8 @@
       ],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-github_repository_publication_requests.postgres.sql"
+      "file": "fragment-github_repository_publication_requests.postgres.sql",
+      "runtimeFile": "fragment-github_repository_publication_requests.runtime.postgres.sql"
     },
     {
       "id": "github_publication_session_lifecycles",
@@ -121,7 +130,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-github_publication_session_lifecycles.postgres.sql"
+      "file": "fragment-github_publication_session_lifecycles.postgres.sql",
+      "runtimeFile": "fragment-github_publication_session_lifecycles.runtime.postgres.sql"
     },
     {
       "id": "github_personal_publication_requests",
@@ -134,7 +144,8 @@
       ],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-github_personal_publication_requests.postgres.sql"
+      "file": "fragment-github_personal_publication_requests.postgres.sql",
+      "runtimeFile": "fragment-github_personal_publication_requests.runtime.postgres.sql"
     },
     {
       "id": "cron_job_runtime_authorities",
@@ -144,7 +155,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-cron_job_runtime_authorities.postgres.sql"
+      "file": "fragment-cron_job_runtime_authorities.postgres.sql",
+      "runtimeFile": "fragment-cron_job_runtime_authorities.runtime.postgres.sql"
     },
     {
       "id": "cron_run_trigger_state_retirements",
@@ -156,7 +168,8 @@
         "cron_run_receipts"
       ],
       "activation": "first-use",
-      "file": "fragment-cron_run_trigger_state_retirements.postgres.sql"
+      "file": "fragment-cron_run_trigger_state_retirements.postgres.sql",
+      "runtimeFile": "fragment-cron_run_trigger_state_retirements.runtime.postgres.sql"
     },
     {
       "id": "execution_identity_contexts",
@@ -168,7 +181,8 @@
       ],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-execution_identity_contexts.postgres.sql"
+      "file": "fragment-execution_identity_contexts.postgres.sql",
+      "runtimeFile": "fragment-execution_identity_contexts.runtime.postgres.sql"
     },
     {
       "id": "mcp_oauth_pending_authorizations",
@@ -178,7 +192,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-mcp_oauth_pending_authorizations.postgres.sql"
+      "file": "fragment-mcp_oauth_pending_authorizations.postgres.sql",
+      "runtimeFile": "fragment-mcp_oauth_pending_authorizations.runtime.postgres.sql"
     },
     {
       "id": "node_worker_launch_containers",
@@ -188,7 +203,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-node_worker_launch_containers.postgres.sql"
+      "file": "fragment-node_worker_launch_containers.postgres.sql",
+      "runtimeFile": "fragment-node_worker_launch_containers.runtime.postgres.sql"
     },
     {
       "id": "node_worker_launch_boots",
@@ -200,7 +216,8 @@
         "node_worker_launches"
       ],
       "activation": "first-use",
-      "file": "fragment-node_worker_launch_boots.postgres.sql"
+      "file": "fragment-node_worker_launch_boots.postgres.sql",
+      "runtimeFile": "fragment-node_worker_launch_boots.runtime.postgres.sql"
     },
     {
       "id": "node_worker_launch_cleanup",
@@ -212,7 +229,8 @@
         "node_worker_launches"
       ],
       "activation": "first-use",
-      "file": "fragment-node_worker_launch_cleanup.postgres.sql"
+      "file": "fragment-node_worker_launch_cleanup.postgres.sql",
+      "runtimeFile": "fragment-node_worker_launch_cleanup.runtime.postgres.sql"
     },
     {
       "id": "node_worker_launch_process_scopes",
@@ -224,7 +242,8 @@
         "node_worker_launches"
       ],
       "activation": "first-use",
-      "file": "fragment-node_worker_launch_process_scopes.postgres.sql"
+      "file": "fragment-node_worker_launch_process_scopes.postgres.sql",
+      "runtimeFile": "fragment-node_worker_launch_process_scopes.runtime.postgres.sql"
     },
     {
       "id": "node_worker_launches",
@@ -236,7 +255,8 @@
       ],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-node_worker_launches.postgres.sql"
+      "file": "fragment-node_worker_launches.postgres.sql",
+      "runtimeFile": "fragment-node_worker_launches.runtime.postgres.sql"
     },
     {
       "id": "node_worker_prepared_workspaces",
@@ -246,7 +266,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-node_worker_prepared_workspaces.postgres.sql"
+      "file": "fragment-node_worker_prepared_workspaces.postgres.sql",
+      "runtimeFile": "fragment-node_worker_prepared_workspaces.runtime.postgres.sql"
     },
     {
       "id": "node_worker_turns",
@@ -261,7 +282,8 @@
         "node_worker_launches"
       ],
       "activation": "first-use",
-      "file": "fragment-node_worker_turns.postgres.sql"
+      "file": "fragment-node_worker_turns.postgres.sql",
+      "runtimeFile": "fragment-node_worker_turns.runtime.postgres.sql"
     },
     {
       "id": "operator_approval_execution_identities",
@@ -271,7 +293,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-operator_approval_execution_identities.postgres.sql"
+      "file": "fragment-operator_approval_execution_identities.postgres.sql",
+      "runtimeFile": "fragment-operator_approval_execution_identities.runtime.postgres.sql"
     },
     {
       "id": "web_push_approval_deliveries",
@@ -283,7 +306,8 @@
       ],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-web_push_approval_deliveries.postgres.sql"
+      "file": "fragment-web_push_approval_deliveries.postgres.sql",
+      "runtimeFile": "fragment-web_push_approval_deliveries.runtime.postgres.sql"
     },
     {
       "id": "execution_decision_facts",
@@ -296,7 +320,8 @@
       ],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-execution_decision_facts.postgres.sql"
+      "file": "fragment-execution_decision_facts.postgres.sql",
+      "runtimeFile": "fragment-execution_decision_facts.runtime.postgres.sql"
     },
     {
       "id": "execution_owner_lifecycle_bindings",
@@ -306,7 +331,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-execution_owner_lifecycle_bindings.postgres.sql"
+      "file": "fragment-execution_owner_lifecycle_bindings.postgres.sql",
+      "runtimeFile": "fragment-execution_owner_lifecycle_bindings.runtime.postgres.sql"
     },
     {
       "id": "outbound_message_execution_bindings",
@@ -318,7 +344,8 @@
       ],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-outbound_message_execution_bindings.postgres.sql"
+      "file": "fragment-outbound_message_execution_bindings.postgres.sql",
+      "runtimeFile": "fragment-outbound_message_execution_bindings.runtime.postgres.sql"
     },
     {
       "id": "outbound_message_progress",
@@ -331,7 +358,8 @@
       ],
       "dependencies": [],
       "activation": "first-use",
-      "file": "fragment-outbound_message_progress.postgres.sql"
+      "file": "fragment-outbound_message_progress.postgres.sql",
+      "runtimeFile": "fragment-outbound_message_progress.runtime.postgres.sql"
     },
     {
       "id": "agent_provenance",
@@ -341,7 +369,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "version-additive",
-      "file": "fragment-agent_provenance.postgres.sql"
+      "file": "fragment-agent_provenance.postgres.sql",
+      "runtimeFile": "fragment-agent_provenance.runtime.postgres.sql"
     },
     {
       "id": "cron_run_receipts",
@@ -354,7 +383,8 @@
       ],
       "dependencies": [],
       "activation": "version-additive",
-      "file": "fragment-cron_run_receipts.postgres.sql"
+      "file": "fragment-cron_run_receipts.postgres.sql",
+      "runtimeFile": "fragment-cron_run_receipts.runtime.postgres.sql"
     },
     {
       "id": "config_revision_keys",
@@ -364,7 +394,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "version-additive",
-      "file": "fragment-config_revision_keys.postgres.sql"
+      "file": "fragment-config_revision_keys.postgres.sql",
+      "runtimeFile": "fragment-config_revision_keys.runtime.postgres.sql"
     },
     {
       "id": "secret_store_entries",
@@ -376,7 +407,8 @@
       ],
       "dependencies": [],
       "activation": "version-additive",
-      "file": "fragment-secret_store_entries.postgres.sql"
+      "file": "fragment-secret_store_entries.postgres.sql",
+      "runtimeFile": "fragment-secret_store_entries.runtime.postgres.sql"
     },
     {
       "id": "projects",
@@ -386,7 +418,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "version-additive",
-      "file": "fragment-projects.postgres.sql"
+      "file": "fragment-projects.postgres.sql",
+      "runtimeFile": "fragment-projects.runtime.postgres.sql"
     },
     {
       "id": "worktree_templates",
@@ -396,7 +429,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "version-additive",
-      "file": "fragment-worktree_templates.postgres.sql"
+      "file": "fragment-worktree_templates.postgres.sql",
+      "runtimeFile": "fragment-worktree_templates.runtime.postgres.sql"
     },
     {
       "id": "user_preferences",
@@ -406,7 +440,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "version-additive",
-      "file": "fragment-user_preferences.postgres.sql"
+      "file": "fragment-user_preferences.postgres.sql",
+      "runtimeFile": "fragment-user_preferences.runtime.postgres.sql"
     },
     {
       "id": "device_pair_setup_completions",
@@ -416,7 +451,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "version-additive",
-      "file": "fragment-device_pair_setup_completions.postgres.sql"
+      "file": "fragment-device_pair_setup_completions.postgres.sql",
+      "runtimeFile": "fragment-device_pair_setup_completions.runtime.postgres.sql"
     },
     {
       "id": "github_publication_requests",
@@ -428,7 +464,8 @@
       ],
       "dependencies": [],
       "activation": "version-additive",
-      "file": "fragment-github_publication_requests.postgres.sql"
+      "file": "fragment-github_publication_requests.postgres.sql",
+      "runtimeFile": "fragment-github_publication_requests.runtime.postgres.sql"
     },
     {
       "id": "device_pairing_join_codes",
@@ -438,7 +475,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "version-additive",
-      "file": "fragment-device_pairing_join_codes.postgres.sql"
+      "file": "fragment-device_pairing_join_codes.postgres.sql",
+      "runtimeFile": "fragment-device_pairing_join_codes.runtime.postgres.sql"
     },
     {
       "id": "skill_workshop_changes",
@@ -450,7 +488,8 @@
       ],
       "dependencies": [],
       "activation": "version-additive",
-      "file": "fragment-skill_workshop_changes.postgres.sql"
+      "file": "fragment-skill_workshop_changes.postgres.sql",
+      "runtimeFile": "fragment-skill_workshop_changes.runtime.postgres.sql"
     },
     {
       "id": "worker_environment_ssh_fallback_ports",
@@ -460,7 +499,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "version-additive",
-      "file": "fragment-worker_environment_ssh_fallback_ports.postgres.sql"
+      "file": "fragment-worker_environment_ssh_fallback_ports.postgres.sql",
+      "runtimeFile": "fragment-worker_environment_ssh_fallback_ports.runtime.postgres.sql"
     },
     {
       "id": "worker_session_placement_moves",
@@ -470,7 +510,8 @@
       "indexes": [],
       "dependencies": [],
       "activation": "version-additive",
-      "file": "fragment-worker_session_placement_moves.postgres.sql"
+      "file": "fragment-worker_session_placement_moves.postgres.sql",
+      "runtimeFile": "fragment-worker_session_placement_moves.runtime.postgres.sql"
     }
   ],
   "pendingPromotion": [

@@ -97,6 +97,11 @@ In particular, `user_background_images` depends on `user_profiles`; its cascadin
 foreign key is retained and installed only after both tables exist. Generating a
 fragment does not activate PostgreSQL shared-state runtime support.
 
+Each state artifact also has a `.runtime.postgres.sql` variant, named by the
+manifest's `runtimeFile`. Runtime DDL omits transaction wrappers and fixed schema
+qualification; the owning connection supplies the namespace and transaction.
+The standalone `.postgres.sql` artifacts retain their explicit schema wrappers.
+
 Both engines use the same shared-state schema version (currently 21). Every
 future version change must supply both engines' forward migration and catalog
 equivalence proof together. JSON stays canonical: a query/index projection is

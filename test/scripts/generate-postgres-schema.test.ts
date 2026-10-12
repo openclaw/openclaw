@@ -53,16 +53,37 @@ describe("PostgreSQL schema generation", () => {
     expect(sql).toMatch(/[^\n]\n$/);
   });
 
+  it("renders eager and lazy state DDL inside the connection owner's namespace and transaction", async () => {
+    const { files, report } = await generatePostgresSchemas(root);
+    for (const file of [
+      "state.runtime.postgres.sql",
+      ...report.fragments.map((item) => item.runtimeFile),
+    ]) {
+      expect(files[file], file).not.toMatch(/^(?:BEGIN|COMMIT|SET|CREATE SCHEMA)\b/m);
+      expect(files[file], file).not.toContain('"openclaw_state".');
+    }
+    expect(files["state.runtime.postgres.sql"]).toContain('CREATE TABLE "schema_meta" (');
+    const backgrounds = report.fragments.find((item) =>
+      item.tables.includes("user_background_images"),
+    )!;
+    expect(files[backgrounds.runtimeFile]).toContain('CREATE TABLE "user_background_images" (');
+    expect(files[backgrounds.runtimeFile]).toContain('REFERENCES "user_profiles"');
+    expect(files["state.runtime.postgres.sql"]).not.toContain(
+      'CREATE TABLE "user_background_images"',
+    );
+  });
+
   it("accounts for every canonical SQLite object and generates identical bytes twice", async () => {
     const generated = await generatePostgresSchemas(root);
     expect((await generatePostgresSchemas(root)).files).toEqual(generated.files);
     expect(Object.keys(generated.files).toSorted()).toEqual(
       [
         "agent.postgres.sql",
-        ...generated.report.fragments.map((fragment) => fragment.file),
+        ...generated.report.fragments.flatMap((fragment) => [fragment.file, fragment.runtimeFile]),
         "manifest.json",
         "portability-report.md",
         "state.postgres.sql",
+        "state.runtime.postgres.sql",
       ].toSorted(),
     );
     expect(
