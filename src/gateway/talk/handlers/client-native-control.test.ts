@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextEventLoopTurn, setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { ACTIVE_EMBEDDED_RUNS } from "../../../agents/embedded-agent-runner/run-state.js";
@@ -9,6 +10,7 @@ import {
 import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/runs.test-support.js";
 import * as workspace from "../../../agents/workspace.js";
 import { readSessionTranscriptMessageEvents } from "../../../config/sessions/session-accessor.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { flushClientVoiceSessionWrites } from "../../../talk/client-voice-session.js";
 import {
@@ -29,6 +31,37 @@ import {
 
 describe("native Talk through the public OpenAI plugin registration", () => {
   installNativePluginTestHooks();
+
+  it("consults after the voice offer work scope closes while the session stays open", async () => {
+    const observedSignal = createDeferredCore<AbortSignal | undefined>();
+    upstream.runEmbeddedAgent.mockImplementation(async (params) => {
+      observedSignal.resolve(getAsyncWorkSignal());
+      return await withRegisteredNativeEmbeddedRun(params, () => ({
+        payloads: [{ text: "Consult completed after voice setup." }],
+        meta: { durationMs: 0 },
+      }));
+    });
+    await withNativePlugin(async (fixture) => {
+      const offerWork = new AsyncWorkScope();
+      const { socket, callback } = await offerWork.track(async () => ({
+        ...(await connectNativeSession(fixture)),
+        callback: AsyncLocalStorage.snapshot(),
+      }));
+      // Real socket callbacks inherit the offer's async context, then arrive
+      // after HTTP setup has settled without closing the voice session.
+      await offerWork.drain();
+      expect(offerWork.signal.aborted).toBe(true);
+      callback(() => socket.serverEvent(nativeDelegation("after-offer", "Report status.")));
+      const signal = await observedSignal.promise;
+      expect(signal).toBeDefined();
+      expect(signal?.aborted).toBe(false);
+      expect(signal).not.toBe(offerWork.signal);
+      await vi.waitFor(() =>
+        expect(socket.sent.join("\n")).toContain("Consult completed after voice setup."),
+      );
+      expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
+    });
+  });
 
   it("reports setup rejection before a backend registration exists", async () => {
     const preparation = vi

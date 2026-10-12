@@ -13,8 +13,7 @@ import {
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import {
   GatewayDrainingError,
-  runOutsideGatewayRootWorkAdmission,
-  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import {
   buildRunUserTurnIdempotencyKey,
@@ -301,7 +300,9 @@ export function createTalkClientAgentConsultRunner(params: {
     const talkConfig = normalizeTalkSection(params.config.talk);
     // A voice turn outlives offer setup and must drain under its own root,
     // while new turns still respect suspension and restart admission.
-    const admission = runOutsideGatewayRootWorkAdmission(tryBeginGatewayRootWorkAdmission);
+    const admission = tryBeginGatewayIndependentRootWorkAdmission("talk-agent-consult", {
+      detachedWork: true,
+    });
     if (!admission) {
       throw new GatewayDrainingError();
     }
