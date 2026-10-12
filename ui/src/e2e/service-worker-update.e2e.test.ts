@@ -472,10 +472,25 @@ describe("Control UI service-worker production update E2E", () => {
           expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
             client: { buildId: buildA },
           });
-          await page.getByRole("button", { name: "Discard", exact: true }).click();
         }
         const reloaded = page.waitForEvent("domcontentloaded");
-        await resume();
+        if (mode === "config") {
+          await page.getByRole("button", { name: "Discard", exact: true }).click();
+        }
+        try {
+          await resume();
+        } catch (error) {
+          // Discard can let the first foreground check reload before this trigger returns.
+          if (
+            mode !== "config" ||
+            !(error instanceof Error) ||
+            !error.message.includes(
+              "Execution context was destroyed, most likely because of a navigation",
+            )
+          ) {
+            throw error;
+          }
+        }
         await reloaded;
         await expect
           .poll(async () => (await gateway.getRequests("connect")).at(-1)?.params)
