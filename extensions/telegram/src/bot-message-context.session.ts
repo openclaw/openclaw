@@ -16,8 +16,8 @@ import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/secur
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
+import type { BuildTelegramInboundContextPayloadParams } from "./bot-message-context.session.types.js";
 import type {
-  BuildTelegramInboundContextPayloadParams,
   TelegramMediaRef,
   TelegramMessageContextSessionRuntimeOverrides,
 } from "./bot-message-context.types.js";
