@@ -104,6 +104,12 @@ export function configureSqliteReadOnlyPragmas(db: DatabaseSync): void {
   db.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
 }
 
+/** Private snapshots publish one standalone file even when their source used WAL. */
+export function configureSqliteSnapshotPragmas(db: DatabaseSync): void {
+  setSqliteBusyTimeout(db, 30_000);
+  db.exec("PRAGMA trusted_schema = OFF; PRAGMA journal_mode = DELETE;");
+}
+
 // auto_vacuum only takes effect when set before the first page is written.
 // Existing databases require an offline VACUUM owned by doctor/maintenance.
 function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {

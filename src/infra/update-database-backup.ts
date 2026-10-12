@@ -15,20 +15,16 @@ import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   ensureDurableDirectory,
   requireDirectorySync,
-  sha256File,
   syncDirectory,
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { formatErrorMessageWithCode } from "./errors.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
-import { copySqliteFile } from "./sqlite-file-copy.js";
 import { isSqliteSnapshotFile } from "./sqlite-file-header.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
-import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { measureUpdateStateFiles } from "./update-candidate-io.js";
 import { UpdateStateDatabaseOwnerSchema } from "./update-candidate-paths.js";
 import type { UpdateStateInspectionProgress } from "./update-candidate-state.diagnostics.js";
@@ -131,50 +127,6 @@ async function inspectRestorableDatabaseFiles(
     throw new Error("Update database journal state changed during stopped backup.");
   }
   return identities;
-}
-
-/** The stopped native driver needs a rollback image, not another startup integrity audit. */
-async function captureStoppedDatabase(
-  sourcePath: string,
-  snapshotPath: string,
-  identity: BigIntStats,
-) {
-  if (identity.size === 0n) {
-    throw new Error(`SQLite snapshot source must not be empty: ${sourcePath}`);
-  }
-  const publication = await copySqliteFile(sourcePath, snapshotPath, identity);
-  // Native cloning creates an independent inode; unsupported filesystems use the same byte copy.
-  // Only this backup child can write the image before its receipt is published.
-  const database = openNodeSqliteDatabase(snapshotPath);
-  let userVersion: number;
-  try {
-    database.exec(
-      "PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; PRAGMA journal_mode = DELETE;",
-    );
-    userVersion = readSqliteUserVersion(database);
-    database.prepare("SELECT name FROM sqlite_schema LIMIT 1").get();
-  } finally {
-    database.close();
-  }
-  const handle = await fs.open(snapshotPath, "r+");
-  try {
-    const before = await handle.stat({ bigint: true });
-    if (!sameFileIdentity(publication, before) || before.size !== identity.size) {
-      throw new Error(`SQLite snapshot file changed: ${snapshotPath}`);
-    }
-    // The persisted restore contract requires this digest. Hash once, after journal normalization.
-    const content = await sha256File(handle);
-    await handle.sync();
-    if (
-      !sameFileMutationFingerprint(before, await handle.stat({ bigint: true })) ||
-      !sameFileMutationFingerprint(before, await fs.lstat(snapshotPath, { bigint: true }))
-    ) {
-      throw new Error(`SQLite snapshot file changed while reading: ${snapshotPath}`);
-    }
-    return { userVersion, sha256: content.digest, sizeBytes: content.bytes };
-  } finally {
-    await handle.close();
-  }
 }
 
 async function checkDatabaseBackupSpace(directory: string, files: readonly string[]) {
@@ -330,7 +282,8 @@ export async function createUpdateDatabaseBackupInProcess(
   const identities = await inspectRestorableDatabaseFiles(inventory.present);
   const warnings = await checkDatabaseBackupSpace(directory, inventory.present);
   const { buildBackupArchivePath } = await import("../commands/backup-shared.js");
-  const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
+  const { createStoppedSqliteSnapshot, createVerifiedSqliteSnapshot } =
+    await import("./sqlite-snapshot.js");
   const databases: UpdateDatabaseBackup["databases"] = [];
   const sourceGenerations: UpdateDatabaseBackup["sourceGenerations"] = Object.fromEntries(
     inventory.missing.map((file) => [file, null]),
@@ -360,7 +313,11 @@ export async function createUpdateDatabaseBackupInProcess(
       (identities.get(`${sourcePath}-wal`)?.size ?? 0n) === 0n;
     const before = input.stopped ? undefined : readGeneration(sourcePath);
     const snapshot = stopped
-      ? await captureStoppedDatabase(sourcePath, snapshotPath, identities.get(sourcePath)!)
+      ? await createStoppedSqliteSnapshot({
+          sourcePath,
+          targetPath: snapshotPath,
+          sourceIdentity: identities.get(sourcePath)!,
+        })
       : await createVerifiedSqliteSnapshot({
           sourcePath,
           targetPath: snapshotPath,
