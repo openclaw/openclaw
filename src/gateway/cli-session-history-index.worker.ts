@@ -19,6 +19,7 @@ import {
 } from "./cli-session-history-index.coverage.js";
 import { extractComparableText } from "./cli-session-history-index.text.js";
 import {
+  cliAssistantAggregateOwnsCanonicalAttachments,
   createCliAssistantCoverage,
   isCliAssistantAggregateMessage,
   isNativeToolResultMessage,
@@ -284,7 +285,11 @@ export class CliSessionHistoryIndex {
           const row = this.row(message, id, seq);
           return {
             row,
-            aggregate: isCliAssistantAggregateMessage(message, row.role ?? undefined),
+            // Attachment-owning rows stay in the ordinal index. Coverage only
+            // compares normalized text and would otherwise drop the audio card.
+            aggregate:
+              isCliAssistantAggregateMessage(message, row.role ?? undefined) &&
+              !cliAssistantAggregateOwnsCanonicalAttachments(message),
           };
         });
       runSqliteImmediateTransactionSync(this.database, () => {

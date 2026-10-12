@@ -845,4 +845,127 @@ describe("cli session history covered aggregates", () => {
     expect(JSON.stringify(merged)).toContain("tool_result");
     expect(JSON.stringify(merged)).toContain("The answer is 4.");
   });
+
+  it("keeps a covered cli-assistant aggregate that owns managed audio", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:55.700Z");
+    const managedAudioUrl = "/api/chat/media/outgoing/main/checking/full";
+    const audio = { type: "audio", url: managedAudioUrl, openUrl: managedAudioUrl };
+    const localUser = { role: "user", content: "status", timestamp: timestamp - 1 };
+    const localAggregate = {
+      role: "assistant",
+      content: [{ type: "text", text: "Checking.\nDone." }, audio],
+      timestamp,
+      idempotencyKey: "cli-assistant:audio",
+    };
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localUser, localAggregate],
+      importedMessages: [
+        {
+          role: "user",
+          content: "status",
+          timestamp: timestamp - 1,
+          ...claudeMeta("user-audio"),
+        },
+        segment("Checking.", "audio-interim", timestamp),
+        segment("Done.", "audio-final", timestamp + 1),
+      ],
+    });
+
+    expect(merged).toContainEqual(localAggregate);
+    expect(JSON.stringify(merged)).toContain("Checking.");
+    expect(JSON.stringify(merged)).toContain("Done.");
+  });
+
+  it.each([
+    [
+      "display content",
+      {
+        openclawDisplayContent: [
+          { type: "text", text: "Checking.\nDone." },
+          {
+            type: "audio",
+            url: "/api/chat/media/outgoing/main/checking/full",
+            openUrl: "/api/chat/media/outgoing/main/checking/full",
+          },
+        ],
+      },
+    ],
+    [
+      "persisted media",
+      {
+        __openclaw: {
+          media: [
+            {
+              kind: "audio",
+              contentType: "audio/mpeg",
+              url: "/api/chat/media/outgoing/main/checking/full",
+            },
+          ],
+        },
+      },
+    ],
+    [
+      "delivery media urls",
+      {
+        openclawDelivery: { mediaUrls: ["/api/chat/media/outgoing/main/checking/full"] },
+      },
+    ],
+  ])("keeps a covered aggregate whose canonical attachment is %s", (_label, attachmentFields) => {
+    const timestamp = Date.parse("2026-03-26T16:29:55.700Z");
+    const localAggregate = {
+      role: "assistant",
+      content: [{ type: "text", text: "Checking.\nDone." }],
+      timestamp,
+      idempotencyKey: "cli-assistant:audio",
+      ...attachmentFields,
+    };
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [
+        { role: "user", content: "status", timestamp: timestamp - 1 },
+        localAggregate,
+      ],
+      importedMessages: [
+        {
+          role: "user",
+          content: "status",
+          timestamp: timestamp - 1,
+          ...claudeMeta("user-audio"),
+        },
+        segment("Checking.", "audio-interim", timestamp),
+        segment("Done.", "audio-final", timestamp + 1),
+      ],
+    });
+
+    expect(merged).toContainEqual(localAggregate);
+  });
+
+  it("still drops a covered aggregate whose only extra block is internal reasoning", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:55.700Z");
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [
+        { role: "user", content: "status", timestamp: timestamp - 1 },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Checking.\nDone." },
+            { type: "thinking", thinking: "Look at the notes." },
+          ],
+          timestamp,
+          idempotencyKey: "cli-assistant:thinking",
+        },
+      ],
+      importedMessages: [
+        {
+          role: "user",
+          content: "status",
+          timestamp: timestamp - 1,
+          ...claudeMeta("user-thinking"),
+        },
+        segment("Checking.", "thinking-interim", timestamp),
+        segment("Done.", "thinking-final", timestamp + 1),
+      ],
+    });
+
+    expect(idempotencyKeys(merged)).not.toContain("cli-assistant:thinking");
+  });
 });

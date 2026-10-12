@@ -3,6 +3,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isToolResultBlock } from "../chat/tool-content.js";
+import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
+import {
+  hasAssistantDisplayableNonTextContent,
+  hasTranscriptMediaFacts,
+} from "./chat-display-projection.helpers.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 const CLI_ASSISTANT_IDEMPOTENCY_PREFIX = "cli-assistant:";
@@ -101,7 +106,35 @@ export function isCliAssistantAggregateMessage(
 }
 
 function isCliAssistantAggregate(entry: ComparableHistoryMessage): boolean {
-  return isCliAssistantAggregateMessage(entry.message, entry.role);
+  return (
+    isCliAssistantAggregateMessage(entry.message, entry.role) &&
+    !cliAssistantAggregateOwnsCanonicalAttachments(entry.message)
+  );
+}
+
+// The runtime rewrites this same idempotency key with managed audio and other
+// display attachments. Native text never carries those bytes, so text coverage
+// must not hide the row that owns them.
+export function cliAssistantAggregateOwnsCanonicalAttachments(message: unknown): boolean {
+  const record = asOptionalRecord(message);
+  if (!record) {
+    return false;
+  }
+  if (hasAssistantDisplayableNonTextContent(record)) {
+    return true;
+  }
+  const display = record[ASSISTANT_DISPLAY_CONTENT_FIELD];
+  if (Array.isArray(display) && hasAssistantDisplayableNonTextContent({ content: display })) {
+    return true;
+  }
+  if (hasTranscriptMediaFacts(record)) {
+    return true;
+  }
+  const mediaUrls = asOptionalRecord(record.openclawDelivery)?.mediaUrls;
+  return (
+    Array.isArray(mediaUrls) &&
+    mediaUrls.some((url) => typeof url === "string" && url.trim().length > 0)
+  );
 }
 
 function hasComparableText(entry: ComparableHistoryMessage): entry is CliAssistantSegment {
