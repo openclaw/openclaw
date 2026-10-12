@@ -36,8 +36,8 @@ extension/provider adapters share the session-persistence warning budget.
 
 ### Harness deletion companions
 
-Unbound `AgentHarnessSessionDeletionMutation` callbacks are deprecated. For
-file-backed sessions, OpenClaw commits the session deletion in its worker before
+Unbound `AgentHarnessSessionDeletionMutation` callbacks are deprecated. During
+Gateway operation, OpenClaw commits file-backed session deletion in its worker before
 calling the opaque `commit` callback. It does not invoke the opaque `rollback`
 callback when that database transaction fails, because the companion has not
 been changed. Legacy use emits one deprecation warning per plugin and callback
@@ -52,8 +52,9 @@ so cleanup must tolerate an absent session and be safe to retry.
 Use the existing native session binding lifecycle for reversible plugin-state
 changes that must settle with session deletion. Its worker receipt and rollback
 preserve those storage guarantees. Initializer rollback is marked complete only
-after the same receipt acknowledges deletion. The process-local incognito owner
-retains its existing native transaction during its separate migration.
+after the same receipt acknowledges deletion. Explicit stopped-owner Doctor/CLI
+maintenance retains its admitted native transaction, as does the process-local
+incognito owner during its separate migration.
 
 ### Retained helper contracts
 

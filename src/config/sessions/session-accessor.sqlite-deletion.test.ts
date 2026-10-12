@@ -1,6 +1,7 @@
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -18,6 +19,8 @@ import type {
 } from "../../agents/harness/types.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -699,11 +702,17 @@ describe("session deletion and native owner state", () => {
           ? "native session is supervised"
           : "injected session delete failure";
       if (phase === "SQLite transaction") {
-        const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-        const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-        database.db.exec(
-          "CREATE TRIGGER reject_session_delete BEFORE DELETE ON session_nodes BEGIN SELECT RAISE(ABORT, 'injected session delete failure'); END",
-        );
+        probe.admission(workerAdmission, (request, grant, callback) => {
+          const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+          if (
+            request.stage === "commit" &&
+            isRecord(facts) &&
+            facts.kind === "session-native-binding"
+          ) {
+            throw new Error(failure);
+          }
+          callback(request, grant);
+        });
       }
       const owner = nativeOwner({
         prepare: async () => {

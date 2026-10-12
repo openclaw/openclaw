@@ -12,8 +12,6 @@ import {
 import type { AgentHarnessSessionDeletionMutation } from "../../agents/harness/types.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import { getChildLogger } from "../../logging/logger.js";
-import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   commitSessionInitializationRollback,
@@ -56,6 +54,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "./session-accessor.types.js";
+import { resolveSessionDeletionWorkerParticipant } from "./session-deletion-worker-participant.js";
 import type {
   CapturedSessionEntryCurrentRead,
   SessionEntryCurrentFacts,
@@ -127,30 +126,7 @@ export function captureNativeSessionWorkerDeletion(entries: readonly DeletionEnt
       continue;
     }
     for (const mutation of prepared.mutations) {
-      let participant = getNativeSessionDeletionParticipant(mutation);
-      if (!participant) {
-        warnPluginSdkDeprecation({
-          family: "session-deletion-transaction-callback",
-          method: "opaque AgentHarnessSessionDeletionMutation",
-          replacement: "createNativeSessionCommitFinalizer or a native binding participant",
-          compatibility:
-            "The callback runs only after a successful session commit; its rollback callback is not used.",
-        });
-        const finalizer = createNativeSessionCommitFinalizer({
-          commit() {
-            try {
-              mutation.commit();
-            } catch (error) {
-              getChildLogger({ subsystem: "session-sqlite" }).warn(
-                "Session deletion committed, but legacy harness cleanup failed",
-                { sessionKey, error },
-              );
-            }
-          },
-          rollback() {},
-        });
-        participant = getNativeSessionDeletionParticipant(finalizer)!;
-      }
+      const participant = resolveSessionDeletionWorkerParticipant(mutation, sessionKey);
       participants.push({ sessionKey, entry, participant });
     }
     if (prepared.target.initialization) {

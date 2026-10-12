@@ -257,7 +257,7 @@ type SessionStoreTranscriptReadParams = {
 };
 
 /** @deprecated Use loadTranscriptEvents; removed in the next Plugin SDK major. */
-export function loadTranscriptEventsSync(
+function loadTranscriptEventsSyncLegacy(
   params: SessionStoreTranscriptReadParams,
 ): SessionStoreTranscriptEvent[] {
   warnPluginSdkDeprecation({
@@ -276,7 +276,7 @@ export function loadTranscriptEvents(
 }
 
 /** @deprecated Use readTranscriptStatsAsync; removed in the next Plugin SDK major. */
-export function readTranscriptStatsSync(params: SessionStoreTranscriptReadParams): {
+function readTranscriptStatsSyncLegacy(params: SessionStoreTranscriptReadParams): {
   eventCount: number;
   maxSeq: number;
   sizeBytes: number;
@@ -288,6 +288,11 @@ export function readTranscriptStatsSync(params: SessionStoreTranscriptReadParams
   });
   return readAccessorTranscriptStatsSync(params);
 }
+
+export {
+  loadTranscriptEventsSyncLegacy as loadTranscriptEventsSync,
+  readTranscriptStatsSyncLegacy as readTranscriptStatsSync,
+};
 
 /** Reads transcript freshness and byte size through the session owner's worker. */
 export function readTranscriptStatsAsync(

@@ -570,111 +570,113 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
   });
 });
 
-it("keeps native alias deletion rollback and creation notifications with the original owner", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const sessionKey = "agent:main:signal:group:Native";
-    const alias = sessionKey.toLowerCase();
-    const original = { sessionId: "native-alias", updatedAt: 1, agentHarnessId: "alias-owner" };
-    const repositories = createSessionRepositoryWorkspaceStore();
-    const workspace = await repositories.create({
-      agentId: "main",
-      sessionKey: alias,
-      url: "https://github.com/example/alias.git",
-      assertCurrent: () => {},
-    });
-    const siblingWorkspace = await repositories.create({
-      agentId: "other",
-      sessionKey: alias,
-      url: "https://github.com/example/sibling.git",
-      assertCurrent: () => {},
-    });
-    writeSessionEntry(database, alias, original);
-    ensureTranscriptHeader(
-      database,
-      { agentId: "main", sessionKey: alias, sessionId: original.sessionId },
-      "/workspace",
-    );
-    const order: string[] = [];
-    let reject = true;
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: "core",
-      source: "runtime",
-      harness: {
-        id: "alias-owner",
-        label: "Alias fixture",
-        supports: () => ({ supported: true }),
-        runAttempt: async () => {
-          throw new Error("unused");
+it.each([false, true])(
+  "keeps alias creation committed when legacy cleanup fails (%s)",
+  async (reject) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const sessionKey = "agent:main:signal:group:Native";
+      const alias = sessionKey.toLowerCase();
+      const original = { sessionId: "native-alias", updatedAt: 1, agentHarnessId: "alias-owner" };
+      const repositories = createSessionRepositoryWorkspaceStore();
+      const workspace = await repositories.create({
+        agentId: "main",
+        sessionKey: alias,
+        url: "https://github.com/example/alias.git",
+        assertCurrent: () => {},
+      });
+      const siblingWorkspace = await repositories.create({
+        agentId: "other",
+        sessionKey: alias,
+        url: "https://github.com/example/sibling.git",
+        assertCurrent: () => {},
+      });
+      writeSessionEntry(database, alias, original);
+      ensureTranscriptHeader(
+        database,
+        { agentId: "main", sessionKey: alias, sessionId: original.sessionId },
+        "/workspace",
+      );
+      const order: string[] = [];
+      const registry = createEmptyPluginRegistry();
+      registry.agentHarnesses.push({
+        pluginId: "core",
+        source: "runtime",
+        harness: {
+          id: "alias-owner",
+          label: "Alias fixture",
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("unused");
+          },
+          withSessionDeletion: async (params, run) => {
+            params.assertCurrent();
+            expect(params.sessionKey).toBe(alias);
+            expect(database.db.isTransaction).toBe(false);
+            order.push("prepare");
+            const result = await run({
+              commit: () => {
+                expect(database.db.isTransaction).toBe(false);
+                order.push("native");
+                if (reject) {
+                  throw new Error("native alias failure");
+                }
+              },
+              rollback: () => {
+                order.push("rollback");
+              },
+            });
+            order.push("release");
+            return result;
+          },
         },
-        withSessionDeletion: async (params, run) => {
-          params.assertCurrent();
-          expect(params.sessionKey).toBe(alias);
-          expect(database.db.isTransaction).toBe(false);
-          order.push("prepare");
-          const result = await run({
-            commit: () => {
-              expect(database.db.isTransaction).toBe(true);
-              order.push("native");
-              if (reject) {
-                throw new Error("native alias failure");
-              }
+      });
+      markPluginRegistryActive(registry);
+      const stop = onSessionIdentityMutation((mutation) => {
+        if (mutation.kind === "move") {
+          order.push("published");
+        }
+      });
+      const create = () =>
+        withPluginRuntimeRegistryScope(registry, () =>
+          createSessionEntryWithTranscript(
+            { agentId: "main", storePath: database.path, sessionKey },
+            ({ existingEntry }) => ({ ok: true, entry: existingEntry! }),
+            {
+              onLifecycleCommitted: () => {
+                order.push("committed");
+              },
+              afterCommitted: async (_entry, source) => {
+                source.assertCurrent();
+                await Promise.resolve();
+                source.assertCurrent();
+                expect(order).toEqual(["prepare", "native", "committed", "published"]);
+                order.push("followup");
+              },
             },
-            rollback: () => {
-              order.push("rollback");
-            },
-          });
-          order.push("release");
-          return result;
-        },
-      },
-    });
-    markPluginRegistryActive(registry);
-    const stop = onSessionIdentityMutation((mutation) => {
-      if (mutation.kind === "move") {
-        order.push("published");
+          ),
+        );
+      try {
+        expect((await create()).ok).toBe(true);
+        expect(order).toEqual([
+          "prepare",
+          "native",
+          "committed",
+          "published",
+          "followup",
+          "release",
+        ]);
+        expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
+        expect(readExactSessionEntryRow(database, sessionKey)?.entry).toMatchObject(original);
+        expect(await repositories.get(workspace.workspaceId)).toBeUndefined();
+        expect(await repositories.get(siblingWorkspace.workspaceId)).toEqual(siblingWorkspace);
+      } finally {
+        stop();
+        markPluginRegistryRetired(registry);
       }
     });
-    const create = () =>
-      withPluginRuntimeRegistryScope(registry, () =>
-        createSessionEntryWithTranscript(
-          { agentId: "main", storePath: database.path, sessionKey },
-          ({ existingEntry }) => ({ ok: true, entry: existingEntry! }),
-          {
-            onLifecycleCommitted: () => {
-              order.push("committed");
-            },
-            afterCommitted: async (_entry, source) => {
-              source.assertCurrent();
-              await Promise.resolve();
-              source.assertCurrent();
-              expect(order).toEqual(["prepare", "native", "committed", "published"]);
-              order.push("followup");
-            },
-          },
-        ),
-      );
-    try {
-      await expect(create()).rejects.toThrow("native alias failure");
-      expect(order).toEqual(["prepare", "native", "rollback"]);
-      expect(await repositories.get(workspace.workspaceId)).toEqual(workspace);
-      expect(readExactSessionEntryRow(database, alias)?.entry).toMatchObject(original);
-      expect(readExactSessionEntryRow(database, sessionKey)).toBeUndefined();
-      order.length = 0;
-      reject = false;
-      expect((await create()).ok).toBe(true);
-      expect(order).toEqual(["prepare", "native", "committed", "published", "followup", "release"]);
-      expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
-      expect(readExactSessionEntryRow(database, sessionKey)?.entry).toMatchObject(original);
-      expect(await repositories.get(workspace.workspaceId)).toBeUndefined();
-      expect(await repositories.get(siblingWorkspace.workspaceId)).toEqual(siblingWorkspace);
-    } finally {
-      stop();
-      markPluginRegistryRetired(registry);
-    }
-  });
-});
+  },
+);
 
 it("checks both alias and canonical target after source custody is acquired", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

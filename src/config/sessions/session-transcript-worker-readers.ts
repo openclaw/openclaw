@@ -264,6 +264,7 @@ export function createSessionHistoryWorkerReaders(
       "a transcript watermark",
       (value) => value.watermark,
     ),
+    readStats: reader("transcript-stats", "transcript statistics", (value) => value.stats),
     readActivitySummarySource: reader(
       "session-activity-summary-source",
       "an Activity recap source",
@@ -281,6 +282,7 @@ export function createSessionHistoryWorkerReaders(
           typeof value === "boolean" ||
           Array.isArray(value) ||
           (value.kind !== "active-accounting" &&
+            value.kind !== "catalog-page" &&
             value.kind !== "bounded-tail" &&
             value.kind !== "reactions" &&
             value.kind !== "conversation-binding" &&

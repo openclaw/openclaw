@@ -224,9 +224,19 @@ it.each([false, true])(
       }
       const entry = fixture.readEntry();
       assert(entry);
-      fixture.database.db.exec(
-        "CREATE TRIGGER reject_initializer_delete BEFORE DELETE ON session_nodes BEGIN SELECT RAISE(ABORT, 'injected initializer delete failure'); END",
-      );
+      let refuse = true;
+      probe.admission(admission, (request, grant, callback) => {
+        const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+        if (
+          refuse &&
+          request.stage === "commit" &&
+          isRecord(facts) &&
+          facts.kind === "session-native-binding"
+        ) {
+          throw new Error("injected initializer delete failure");
+        }
+        callback(request, grant);
+      });
       const initializer = createSessionInitialization(
         { ...fixture.scope, lifecycleRevision: entry.lifecycleRevision },
         () => {},
@@ -239,7 +249,7 @@ it.each([false, true])(
         expect(() => initializer.handle.assertCurrent()).not.toThrow();
         expect(fixture.readEntry()).toEqual(entry);
         expect(fixture.readBinding()).toBeDefined();
-        fixture.database.db.exec("DROP TRIGGER reject_initializer_delete");
+        refuse = false;
         const sql = observeHostDataSql();
         try {
           await expect(initializer.rollback(() => fixture.remove())).resolves.toMatchObject({

@@ -380,20 +380,23 @@ describe("sessions cleanup applied summary", () => {
         authorized = false;
       };
 
-      const result = await runSessionsCleanup({
-        cfg: {},
-        opts: { enforce: true, fixMissing: true },
-        targets: [{ agentId: "main", storePath }],
-        commitGuard: () => {
-          if (!authorized) {
-            throw new Error("cleanup authority revoked");
-          }
+      await expect(
+        runSessionsCleanup({
+          cfg: {},
+          opts: { enforce: true, fixMissing: true },
+          targets: [{ agentId: "main", storePath }],
+          commitGuard: () => {
+            if (!authorized) {
+              throw new Error("cleanup authority revoked");
+            }
+          },
+        }),
+      ).rejects.toMatchObject({
+        name: "SessionsCleanupFailureError",
+        failure: {
+          lifecycleCommitted: false,
+          message: expect.stringContaining("cleanup authority revoked"),
         },
-      });
-
-      expect(result.failure).toMatchObject({
-        lifecycleCommitted: false,
-        message: expect.stringContaining("cleanup authority revoked"),
       });
       expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "guarded-cleanup" });
     });
