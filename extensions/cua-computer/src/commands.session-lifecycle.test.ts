@@ -129,4 +129,41 @@ describe("execution authority preflight", () => {
     await closing;
     expect(typeText).not.toHaveBeenCalled();
   });
+  it("does not recreate recording ownership when close interrupts a released runtime", async () => {
+    const { session, setGeneration } = driver();
+    const callTool = vi.fn(async (name: string, args: Record<string, unknown>) =>
+      result({
+        recording: name !== "stop_recording",
+        enabled: name !== "stop_recording",
+        output_dir: args.output_dir ?? null,
+        next_turn: 0,
+        last_error: null,
+        video_active: false,
+        last_video_path: null,
+        owner: null,
+      }),
+    );
+    session.callTool = callTool;
+    const computer = await createCuaComputerProvider({
+      platform: "linux",
+      driver: session,
+    }).openExecution({ executionId: "123e4567-e89b-42d3-a456-426614174099" });
+    await computer.act('{"action":"start_recording"}');
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    session.prepareExecution = async (_signal, assertAuthority) => {
+      entered.resolve();
+      await release.promise;
+      setGeneration("released-recording-runtime");
+      assertAuthority?.();
+    };
+    const acting = computer.act('{"action":"type","text":"must not type"}');
+    const rejected = expect(acting).rejects.toThrow(/closing|closed/);
+    await entered.promise;
+    const closing = computer.close("cancelled");
+    release.resolve();
+    await rejected;
+    await expect(closing).resolves.toBeUndefined();
+    expect(callTool.mock.calls.some(([name]) => name === "stop_recording")).toBe(false);
+  });
 });

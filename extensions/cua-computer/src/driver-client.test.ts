@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   })),
   isAvailable: vi.fn(() => true),
   isToolError: vi.fn((_error: unknown) => false),
+  isShutdownError: vi.fn((_error: unknown) => false),
   moveCursor: vi.fn(async () => ({})),
   pressKey: vi.fn(async () => ({})),
   scroll: vi.fn(async () => ({})),
@@ -53,7 +54,10 @@ const sdk = {
   ClickPosition: { Coordinates: { new: mocks.createClickPosition } },
   ClickButton: { Left: 0, Right: 1, Middle: 2 },
   CuaDriver: { create: mocks.create, createConfigured: mocks.createConfigured },
-  DriverError: { Tool: { instanceOf: mocks.isToolError } },
+  DriverError: {
+    Tool: { instanceOf: mocks.isToolError },
+    Shutdown: { instanceOf: mocks.isShutdownError },
+  },
   InputDeliveryMode: { Foreground: 1 },
   ScrollBy: { Line: 0 },
   ScrollDirection: { Up: 0, Down: 1, Left: 2, Right: 3 },
@@ -75,6 +79,7 @@ describe("CUA Driver direct session", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.isToolError.mockReturnValue(false);
+    mocks.isShutdownError.mockReturnValue(false);
     mocks.createConfigured.mockReturnValue({
       isAvailable: mocks.isAvailable,
       shutdown: mocks.shutdown,
@@ -522,5 +527,19 @@ describe("CUA Driver direct session", () => {
     expect(mocks.createConfigured).toHaveBeenCalledTimes(1);
     expect(mocks.click).not.toHaveBeenCalled();
     await driver.dispose();
+  });
+  it("does not renew a terminally revoked native session and still releases its runtime", async () => {
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
+    await driver.prepareExecution?.();
+    const shutdown = new Error("DriverError.Shutdown");
+    mocks.isShutdownError.mockImplementation((error) => error === shutdown);
+    mocks.getSessionState.mockRejectedValueOnce(shutdown);
+    await expect(driver.prepareExecution?.()).rejects.toBe(shutdown);
+    expect(mocks.createConfigured).toHaveBeenCalledTimes(1);
+    expect(mocks.click).not.toHaveBeenCalled();
+    mocks.endSession.mockRejectedValueOnce(shutdown);
+    await expect(driver.dispose()).resolves.toBeUndefined();
+    expect(mocks.close).toHaveBeenCalledTimes(1);
+    expect(mocks.shutdown).toHaveBeenCalledTimes(1);
   });
 });

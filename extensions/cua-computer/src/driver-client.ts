@@ -260,7 +260,10 @@ class DirectCuaDriverSession {
       } catch (error) {
         // Expiry already ended this authorization. Still release every native
         // resource, but do not make physical close fail on this refusal.
-        if (!isExpiredSessionError(this.sdk, error)) {
+        if (
+          !isExpiredSessionError(this.sdk, error) &&
+          !this.sdk.DriverError.Shutdown?.instanceOf(error)
+        ) {
           failure ??= error;
         }
       }

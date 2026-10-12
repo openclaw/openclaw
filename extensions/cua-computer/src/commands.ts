@@ -483,14 +483,16 @@ export function createCuaComputerProvider(
           assertOpen();
         };
         assertAuthority();
-        await executionDriver.prepareExecution?.(signal, assertAuthority);
+        try {
+          await executionDriver.prepareExecution?.(signal, assertAuthority);
+        } finally {
+          // Released recording ownership must not survive an interrupted renewal.
+          if (frameState.generation !== executionDriver.generation) {
+            executionState.recording.active = undefined;
+          }
+        }
         // Close/cancellation can arrive while the native health call is pending.
         assertAuthority();
-        // The old native runtime stopped its owned recording. Keep its files
-        // execution-owned, but never advertise or resume it in a new session.
-        if (frameState.generation !== executionDriver.generation) {
-          executionState.recording.active = undefined;
-        }
         // Renewal revokes refs before action validation, not after dispatch.
         adoptGeneration(frameState, executionDriver.generation);
       };
