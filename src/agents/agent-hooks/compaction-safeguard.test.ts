@@ -361,6 +361,7 @@ describe("compaction-safeguard runtime registry", () => {
     buildEmbeddedExtensionFactories({
       cfg,
       sessionManager,
+      workspaceDir: "/workspace",
       model: {
         contextWindow: 200_000,
       } as Parameters<typeof buildEmbeddedExtensionFactories>[0]["model"],

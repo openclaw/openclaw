@@ -360,6 +360,7 @@ describe("AgentSession model-visible tool-result redaction", () => {
       agentDir: cwd,
       extensionFactories: buildEmbeddedExtensionFactories({
         cfg: {},
+        workspaceDir: cwd,
         sessionManager,
         model,
       }),

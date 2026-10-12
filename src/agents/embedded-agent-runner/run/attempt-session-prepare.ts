@@ -99,6 +99,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   agentDir: string;
   clientToolPreparation: ClientToolPreparation;
   effectiveCwd: string;
+  effectiveWorkspace: string;
   getCurrentAttemptPluginMetadataSnapshot: () => PluginMetadataSnapshot | undefined;
   initialSystemPrompt: string;
   markStage: (stage: string) => void;
@@ -136,6 +137,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const extensionFactories = buildEmbeddedExtensionFactories({
     cfg: attempt.config,
     sessionManager: input.sessionManager,
+    workspaceDir: input.effectiveWorkspace,
     model: attempt.model,
     agentId: input.sessionAgentId,
     sessionId: attempt.sessionId,
