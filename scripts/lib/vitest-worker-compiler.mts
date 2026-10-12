@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveBuildInfo } from "../write-build-info.ts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
+import { createPublicSessionCardAssetsPlugin } from "./public-session-card-assets.mts";
 import { collectRuntimeImportClosure } from "./runtime-import-closure.mts";
 import {
   sharedRuntimeProcessBuildEntries,
@@ -115,6 +116,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   const createInputPlugins = (outputPrefix: string) => {
     const schemaPlugin = createStateSchemaInlinePlugin(root);
     return [
+      createPublicSessionCardAssetsPlugin(root, recordInput),
       {
         ...schemaPlugin,
         name: "openclaw:worker-build-inputs",

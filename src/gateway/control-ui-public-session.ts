@@ -3,20 +3,26 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { TLSSocket } from "node:tls";
 import {
   buildControlUiPublicSessionSharePath,
+  buildControlUiPublicSessionCardPath,
   parseControlUiPublicSessionShareUrl,
+  parseControlUiPublicSessionCardUrl,
 } from "@openclaw/session-url-contract/public-share";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
+import type { PublicSessionCardRenderer } from "./control-ui-public-session-card.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
 import { PUBLIC_SESSION_CONTENT_SECURITY_POLICY } from "./control-ui-public-session-render.js";
 import { resolveControlUiShareOrigin } from "./control-ui-share.js";
 import type { GatewayAttributedIngress } from "./ingress-attribution.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
 export function isControlUiPublicSessionPath(pathname: string, basePath: string): boolean {
-  return pathname === `${basePath}/share/session`;
+  return (
+    pathname === `${basePath}/share/session` || pathname === `${basePath}/share/session/card.png`
+  );
 }
 
 export async function serveControlUiPublicSession(params: {
@@ -27,6 +33,11 @@ export async function serveControlUiPublicSession(params: {
   ingress: GatewayAttributedIngress;
   projection?: SessionRowProjection;
   gate: ControlUiPublicSessionRequestGate;
+  card: {
+    render: PublicSessionCardRenderer["render"];
+    fallback: () => Promise<void>;
+    pullRequests?: GatewayRequestContext["controlUiSessionPullRequests"];
+  };
 }): Promise<true> {
   const { req, res, basePath, config: cfg, projection, gate: requestGate } = params;
   const url = req.url ? new URL(req.url, "http://localhost") : undefined;
@@ -35,11 +46,15 @@ export async function serveControlUiPublicSession(params: {
     return true;
   }
   const publicOrigin = resolveGatewayPublicOrigin(cfg);
+  const isCard = url.pathname === `${basePath}/share/session/card.png`;
   const secureIngress = isSecurePublicSessionIngress(req, params.ingress, publicOrigin);
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
   res.setHeader("Content-Security-Policy", PUBLIC_SESSION_CONTENT_SECURITY_POLICY);
   const unavailable = (status: 404 | 429 | 503, retryAfterSeconds = 1) => {
+    if (isCard) {
+      return params.card.fallback().then(() => true as const);
+    }
     const body =
       status === 404
         ? "This public session is unavailable."
@@ -55,7 +70,9 @@ export async function serveControlUiPublicSession(params: {
     res.end(req.method === "HEAD" ? undefined : body);
     return true as const;
   };
-  const publicShare = parseControlUiPublicSessionShareUrl(url, basePath);
+  const publicShare = isCard
+    ? parseControlUiPublicSessionCardUrl(url, basePath)
+    : parseControlUiPublicSessionShareUrl(url, basePath);
   const origin = resolveControlUiShareOrigin(req, publicOrigin);
   const offsetText = url.searchParams.get("offset") ?? "0";
   const offset = Number(offsetText);
@@ -75,6 +92,9 @@ export async function serveControlUiPublicSession(params: {
   // A truthful HEAD would still need authorization, transcript I/O, redaction, and
   // rendering to compute the GET status and length. Refuse it instead of doing that work.
   if (req.method === "HEAD") {
+    if (isCard) {
+      return unavailable(404);
+    }
     res.statusCode = 405;
     res.setHeader("Allow", "GET");
     res.setHeader("Content-Length", "0");
@@ -93,6 +113,17 @@ export async function serveControlUiPublicSession(params: {
     }
     if (!projection) {
       return unavailable(503);
+    }
+    if (isCard) {
+      const { servePublicSessionCardRepresentation } =
+        await import("./control-ui-public-session-card-response.js");
+      return await servePublicSessionCardRepresentation({
+        ...params,
+        locator,
+        projection,
+        host: new URL(origin).host,
+        token: publicShare.token,
+      });
     }
     const { servePublicSessionRepresentation } =
       await import("./control-ui-public-session-response.js");
@@ -113,7 +144,7 @@ export async function serveControlUiPublicSession(params: {
         latestUrl,
         canonicalUrl,
         assetBasePath: basePath,
-        cardUrl: `${origin}${basePath}/share/card.png`,
+        cardUrl: `${origin}${buildControlUiPublicSessionCardPath({ basePath, token: publicShare.token })}`,
       },
       olderUrl: (olderOffset) => `${latestUrl}&offset=${olderOffset}`,
       unavailable,

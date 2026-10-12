@@ -26,6 +26,10 @@ vi.mock(import("./session-row-projection-access.js"), async (importOriginal) => 
   ...(await importOriginal()),
   getSessionRowProjection: () => projection,
 }));
+vi.mock(import("./control-ui-public-session-token.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  mintExistingPublicSessionShareToken: async () => `v1.${"a".repeat(96)}`,
+}));
 const key = "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001";
 const projection = createSessionRowProjectionFixture({
   cfg: { agents: { entries: { main: {} } } },
@@ -89,6 +93,17 @@ afterEach(() => {
 });
 
 describe("canonical anonymous HTTP entry", () => {
+  it("uses a per-publication preview URL in canonical public chat metadata", async () => {
+    const response = await request(server());
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain(
+      `https://example.test/control/share/session/card.png?token=v1.${"a".repeat(96)}`,
+    );
+    expect(response.getBody()).toContain(
+      'name="twitter:image:alt" content="Public launch notes · OpenClaw public session"',
+    );
+  });
+
   it("reloads the exact Incognito address produced by in-app navigation", async () => {
     const sessionKey = "agent:main:dashboard:incognito-12345678-aaaa-4000-8000-000000000001";
     const target = sessionNavigationTarget({

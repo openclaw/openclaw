@@ -20,14 +20,14 @@ const {
   getActiveMemorySearchManagerMock,
   getActiveMemoryProviderMock,
   isActiveMemoryProviderNativeMock,
-  loadCombinedSessionStoreForGatewayMock,
+  loadCombinedSessionStoreForGatewayAsyncMock,
   resolveDefaultAgentIdMock,
   resolveSessionAgentIdMock,
 } = vi.hoisted(() => ({
   getActiveMemorySearchManagerMock: vi.fn(),
   getActiveMemoryProviderMock: vi.fn(),
   isActiveMemoryProviderNativeMock: vi.fn(),
-  loadCombinedSessionStoreForGatewayMock: vi.fn(),
+  loadCombinedSessionStoreForGatewayAsyncMock: vi.fn(),
   resolveDefaultAgentIdMock: vi.fn(() => "main"),
   resolveSessionAgentIdMock: vi.fn(({ sessionKey }: { sessionKey?: string }) => {
     const match = /^agent:([^:]+):/.exec(sessionKey ?? "");
@@ -56,7 +56,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: loadCombinedSessionStoreForGatewayMock,
+    loadCombinedSessionStoreForGatewayAsync: loadCombinedSessionStoreForGatewayAsyncMock,
   };
 });
 
@@ -95,8 +95,8 @@ beforeEach(() => {
   getActiveMemoryProviderMock.mockReset();
   // Memory Core owns the slot unless a test selects a native provider.
   isActiveMemoryProviderNativeMock.mockReset().mockResolvedValue(false);
-  loadCombinedSessionStoreForGatewayMock.mockReset();
-  loadCombinedSessionStoreForGatewayMock.mockReturnValue({ storePath: "(test)", store: {} });
+  loadCombinedSessionStoreForGatewayAsyncMock.mockReset();
+  loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({ storePath: "(test)", store: {} });
   resolveDefaultAgentIdMock.mockClear();
   resolveSessionAgentIdMock.mockClear();
   vi.mocked(filterMemorySearchHitsBySessionVisibility).mockClear();
@@ -152,7 +152,7 @@ function createAgentSessionVisibilityAppConfig(): OpenClawConfig {
 }
 
 function mockSessionTranscriptStore() {
-  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+  loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({
     storePath: "(test)",
     store: {
       "agent:main:child-session": {
@@ -207,7 +207,7 @@ describe("getMemoryWikiPage", () => {
     });
     getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
     for (const relPath of ["sessions/child-session.jsonl"]) {
-      loadCombinedSessionStoreForGatewayMock.mockClear();
+      loadCombinedSessionStoreForGatewayAsyncMock.mockClear();
       await getMemoryWikiPage({
         config,
         appConfig: createSessionVisibilityAppConfig(),
@@ -215,7 +215,7 @@ describe("getMemoryWikiPage", () => {
         sandboxed: true,
         lookup: relPath,
       });
-      expect(loadCombinedSessionStoreForGatewayMock).toHaveBeenCalled();
+      expect(loadCombinedSessionStoreForGatewayAsyncMock).toHaveBeenCalled();
     }
 
     for (const relPath of [
@@ -223,7 +223,7 @@ describe("getMemoryWikiPage", () => {
       "wiki/sessions/foo.md",
       "wiki\\sessions\\foo.md",
     ]) {
-      loadCombinedSessionStoreForGatewayMock.mockClear();
+      loadCombinedSessionStoreForGatewayAsyncMock.mockClear();
       await getMemoryWikiPage({
         config,
         appConfig: createSessionVisibilityAppConfig(),
@@ -231,7 +231,7 @@ describe("getMemoryWikiPage", () => {
         sandboxed: true,
         lookup: relPath,
       });
-      expect(loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
+      expect(loadCombinedSessionStoreForGatewayAsyncMock).not.toHaveBeenCalled();
     }
   });
 });
@@ -1004,7 +1004,7 @@ describe("searchMemoryWiki", () => {
       });
       const anchorSessionKey = "agent:main:telegram:direct:owner";
       const requesterSessionKey = `${anchorSessionKey}:active-memory:abcdef123456`;
-      loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({
         storePath: "(test)",
         store: {
           [anchorSessionKey]: {
@@ -1064,7 +1064,7 @@ describe("searchMemoryWiki", () => {
       initialize: true,
       config: { search: { backend: "shared", corpus: "memory" } },
     });
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({
       storePath: "(test)",
       store: {
         "agent:main:visible-session": {
@@ -1112,7 +1112,7 @@ describe("searchMemoryWiki", () => {
     expect(results.map((result) => result.path)).toEqual(["sessions/visible-session.jsonl"]);
     expect(forbiddenPage).toBeNull();
     expect(manager.readFile).not.toHaveBeenCalled();
-    expect(loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(appConfig, {
+    expect(loadCombinedSessionStoreForGatewayAsyncMock).toHaveBeenCalledWith(appConfig, {
       agentId: "main",
     });
   });
@@ -1814,13 +1814,13 @@ registerSessionlessAgentScopeQueryTests({
   createAppConfig: createAgentSessionVisibilityAppConfig,
   createMemoryManager,
   getActiveMemorySearchManagerMock,
-  loadCombinedSessionStoreForGatewayMock,
+  loadCombinedSessionStoreForGatewayAsyncMock,
   searchMemoryWiki,
 });
 registerConversationRecallQueryTests({
   createQueryVault,
   getActiveMemorySearchManagerMock,
-  loadCombinedSessionStoreForGatewayMock,
+  loadCombinedSessionStoreForGatewayAsyncMock,
   searchMemoryWiki,
 });
 registerProviderRecordQueryTests({
