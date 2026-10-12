@@ -446,6 +446,13 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
+      "path": "ui/src/pages/custodian/custodian-setup-card.ts",
+      "text": "openclaw onboard"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
       "path": "ui/src/pages/debug/view.tsx",
       "text": "openclaw security audit --deep"
     },

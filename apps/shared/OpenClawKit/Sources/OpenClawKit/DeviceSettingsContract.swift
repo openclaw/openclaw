@@ -79,6 +79,7 @@ public enum DeviceSettingsPanel: String, CaseIterable, Sendable {
     case quickChatShortcut = "quick-chat-shortcut"
     case microphoneTest = "microphone-test"
     case browserImport = "browser-import"
+    case aiSetup = "ai-setup"
     case connection, gateways, debug, diagnostics, licenses, about, watch
 }
 

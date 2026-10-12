@@ -125,6 +125,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var pendingNativeCommands: [DashboardNativeCommand] = []
     private var pendingNativeNavigation: DashboardNativeNavigation?
     var onClosed: (() -> Void)?
+    private var documentLoadContinuation: CheckedContinuation<Void, Error>?
+    private var documentLoadURL: URL?
 
     init(
         url: URL,
@@ -455,6 +457,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     func detachWindowForReplacement() -> NSWindow? {
         guard let window else { return nil }
+        self.finishDocumentLoad(.failure(CancellationError()))
         // Route changes replace the privileged document, not its native shell;
         // detaching first transfers AppKit ownership without a close/focus cycle.
         self.reconnectTask?.task.cancel()
@@ -716,6 +719,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             refreshGatewayHealth()
             return
         }
+        self.finishDocumentLoad(.failure(error))
         prepareForFailure()
         let urlDescription = GatewayEndpointStore.diagnosticURLString(for: self.currentURL)
         dashboardWindowLogger.error(
@@ -734,6 +738,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
 extension DashboardWindowController {
     private func prepareForFailure(preservingPendingCommands: Bool = false) {
+        self.finishDocumentLoad(.failure(URLError(.cannotLoadFromNetwork)))
         self.deferredFinishSourceID = nil
         self.documentHost.retirePendingLoad()
         self.invalidateGatewayHealth()
@@ -968,19 +973,27 @@ extension DashboardWindowController {
     }
 
     private func refreshNativeCommandReadiness() {
-        guard self.auth.usesBrowserIdentity else { return }
+        guard self.auth.usesBrowserIdentity || self.documentLoadContinuation != nil else { return }
         let sourceID = self.notificationSourceID
         let sourceURL = self.currentURL
         Task { @MainActor [weak self] in
             guard let self else { return }
             // Messages only wake the read. A previous same-URL document cannot
             // attest that the currently displayed sign-in page has command listeners.
-            let ready = try? await self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
-                "return window.__OPENCLAW_NATIVE_COMMANDS_READY__ === true;", url: sourceURL))
+            let routeCheck = self.documentLoadURL.map {
+                "window.location.pathname === \(WebViewJavaScriptSupport.jsValue($0.path)) && " +
+                    "window.location.search === \(WebViewJavaScriptSupport.jsValue($0.query.map { "?" + $0 } ?? ""))"
+            } ?? "true"
+            let readiness = try? await self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
+                "return {ready: window.__OPENCLAW_NATIVE_COMMANDS_READY__ === true, matches: (\(routeCheck))};",
+                url: sourceURL)) as? [String: Bool]
             guard self.notificationSourceID == sourceID, self.currentURL == sourceURL,
                   !self.webView.isLoading else { return }
-            self.nativeCommandsReady = ready as? Bool == true
+            self.nativeCommandsReady = readiness?["ready"] == true
             self.flushReadyNativeActions()
+            if self.nativeCommandsReady, readiness?["matches"] == true {
+                self.finishDocumentLoad(.success(()))
+            }
         }
     }
 
@@ -1050,6 +1063,7 @@ extension DashboardWindowController {
     }
 
     func windowWillClose(_: Notification) {
+        self.finishDocumentLoad(.failure(CancellationError()))
         self.reconnectTask?.task.cancel()
         self.reconnectTask = nil
         self.browserSignInRoute = nil
@@ -1203,7 +1217,11 @@ extension DashboardWindowController {
             let handled = result as? Bool
             // Async completions may return after another route or New Session intent.
             // Only the newest navigation intent may load its fallback URL.
-            guard handled != true, self.isTrustedDashboardDocument,
+            if handled == true {
+                self.refreshNativeCommandReadiness()
+                return
+            }
+            guard self.isTrustedDashboardDocument,
                   self.navigationFallbackIsCurrent(generation: generation, sourceURL: sourceURL)
             else { return }
             self.load(navigation.fallbackURL)
@@ -1377,6 +1395,41 @@ extension DashboardWindowController {
         }
     }
 
+    func waitForDocumentLoad(at url: URL) async throws {
+        // The shell can bootstrap after HTML finishes; its listener-owned readiness
+        // signal, rather than didFinish, completes the first-run handoff.
+        try await AsyncTimeout.withTimeout(seconds: 120, onTimeout: { URLError(.timedOut) }) {
+            try await self.awaitDocumentLoad(at: url)
+        }
+    }
+
+    private func awaitDocumentLoad(at url: URL) async throws {
+        try Task.checkCancellation()
+        if self.isShowingFailurePage { throw URLError(.cannotLoadFromNetwork) }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                self.documentLoadContinuation?.resume(throwing: CancellationError())
+                self.documentLoadContinuation = continuation
+                self.documentLoadURL = url
+                if self.documentHost.hasLiveContent, !self.webView.isLoading {
+                    self.refreshNativeCommandReadiness()
+                }
+            }
+        } onCancel: {
+            Task { @MainActor in self.finishDocumentLoad(.failure(CancellationError())) }
+        }
+    }
+
+    private func finishDocumentLoad(_ result: Result<Void, Error>) {
+        self.documentLoadContinuation?.resume(with: result)
+        self.documentLoadContinuation = nil
+        self.documentLoadURL = nil
+    }
+
     private func finishDocument() {
         self.deferredFinishSourceID = nil
         // A finished sign-in document is usable but never receives native
@@ -1410,6 +1463,7 @@ extension DashboardWindowController {
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if webView === self.webView {
+            self.finishDocumentLoad(.failure(URLError(.networkConnectionLost)))
             self.documentHost.hasLiveContent = false
             self.nativeCommandsReady = false
             self.invalidateGatewayHealth()

@@ -197,6 +197,7 @@ export type SettingKey =
   | "updates.automatic";
 
 type NativePanel =
+  | "ai-setup"
   | "quick-chat-shortcut"
   | "microphone-test"
   | "browser-import"

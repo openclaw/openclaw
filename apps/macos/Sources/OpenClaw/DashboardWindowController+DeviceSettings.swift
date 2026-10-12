@@ -239,6 +239,7 @@ extension DashboardWindowController {
             }
         case .diagnostics, .licenses, .about, .watch:
             break
+        case .aiSetup: OnboardingController.shared.show(page: .aiSetup)
         case .connection: AppNavigationActions.openConnection()
         case .gateways: AppNavigationActions.openConnection(tab: .gateways)
         case .debug:

@@ -38,6 +38,7 @@ import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { renderCustodianAlertCard } from "./custodian-alert-card.ts";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
+import "./custodian-setup-card.tsx";
 import * as eventNudgeState from "./event-nudge.ts";
 import {
   createPluginHelpRequest,
@@ -192,7 +193,7 @@ class CustodianSurface extends OpenClawLightDomElement {
     await Promise.all(
       Array.from(
         this.querySelectorAll<HTMLElement & { updateComplete: Promise<boolean> }>(
-          "openclaw-option-card",
+          "openclaw-option-card, openclaw-custodian-setup-card",
         ),
       ).map((card) => card.updateComplete),
     );
@@ -270,28 +271,35 @@ class CustodianSurface extends OpenClawLightDomElement {
           onDismiss: () => custodianAlertStore.dismiss(),
         })
       : nothing;
-    if (store.setupRequired) {
+    const setupCard = this.onboarding
+      ? html`<openclaw-custodian-setup-card .store=${store}></openclaw-custodian-setup-card>`
+      : nothing;
+    if (store.setupRequired || store.autoSetup.blocksGreeting) {
       return html`
         <section
           class="custodian-surface custodian-surface--setup-required ${
             this.compact ? "custodian-surface--panel" : ""
           }"
         >
-          ${alertCard}
-          <div class="custodian__setup-state" role="alert">
-            <openclaw-mascot mood="idle" .size=${this.compact ? 72 : 96}></openclaw-mascot>
-            <h2>${t("modelSetup.required.title")}</h2>
-            <p>${t("modelSetup.required.body")}</p>
-            <div class="custodian__setup-actions">
-              <button
-                class="btn primary"
-                type="button"
-                @click=${() => store.exitSetup("model-setup")}
-              >
-                ${t("modelSetup.required.action")}
-              </button>
-            </div>
-          </div>
+          ${setupCard} ${alertCard}
+          ${
+            store.autoSetup.blocksGreeting && !store.autoSetup.dismissed
+              ? nothing
+              : html`<div class="custodian__setup-state" role="alert">
+                  <openclaw-mascot mood="idle" .size=${this.compact ? 72 : 96}></openclaw-mascot>
+                  <h2>${t("modelSetup.required.title")}</h2>
+                  <p>${t("modelSetup.required.body")}</p>
+                  <div class="custodian__setup-actions">
+                    <button
+                      class="btn primary"
+                      type="button"
+                      @click=${() => store.exitSetup("model-setup")}
+                    >
+                      ${t("modelSetup.required.action")}
+                    </button>
+                  </div>
+                </div>`
+          }
         </section>
       `;
     }
@@ -323,7 +331,7 @@ class CustodianSurface extends OpenClawLightDomElement {
             handleMarkdownTableInteraction(event);
           }}
         >
-          ${alertCard}
+          ${setupCard} ${alertCard}
           ${
             this.channelOnboardingError || this.showChannelOnboardingNudge
               ? eventNudgeState.renderCustodianChannelOnboardingNudge({
