@@ -117,6 +117,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/mcp-http.plugin-reload.test.ts",
   "src/gateway/mcp-http.question-authority.test.ts",
   "src/gateway/mcp-http.session-controls.test.ts",
+  "src/gateway/mcp-http.source-delivery-revocation.test.ts",
   "src/gateway/mcp-http.test.ts",
   "src/gateway/mcp-http/mediated-exec-policy.test.ts",
   "src/gateway/mention-directory.test.ts",
