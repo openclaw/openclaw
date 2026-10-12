@@ -34,11 +34,14 @@ describe("Ollama provider usage integration", () => {
   };
 
   it("loads balance through the configured local provider", async () => {
+    const fetchFn = vi.fn(async () =>
+      Response.json({ included: { session: { remaining_percent: 80 } } }),
+    );
     const summary = await loadProviderUsageSummary({
       providers: ["ollama"],
       config: configFor("http://127.0.0.1:11434/v1", "ollama-local"),
       env: {},
-      fetch: vi.fn(async () => Response.json({ included: { session: { remaining_percent: 80 } } })),
+      fetch: fetchFn,
       timeoutMs: 5000,
     });
     expect(summary.providers).toEqual([
@@ -47,6 +50,22 @@ describe("Ollama provider usage integration", () => {
         windows: [{ label: "Session", usedPercent: 20 }],
       }),
     ]);
+    expect(fetchFn).toHaveBeenCalledExactlyOnceWith(
+      "http://127.0.0.1:11434/api/balance",
+      expect.objectContaining({ headers: { Accept: "application/json" } }),
+    );
+  });
+
+  it.each([401, 404])("omits unavailable Cloud balance for HTTP %i", async (status) => {
+    const fetchFn = vi.fn(async () => new Response("private", { status }));
+    const summary = await loadProviderUsageSummary({
+      providers: ["ollama"],
+      config: configFor("http://127.0.0.1:11434", "ollama-local"),
+      env: {},
+      fetch: fetchFn,
+    });
+    expect(summary.providers).toEqual([]);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it.each([

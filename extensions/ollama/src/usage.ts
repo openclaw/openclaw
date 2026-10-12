@@ -1,3 +1,4 @@
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   asProviderUsageObject,
@@ -13,21 +14,13 @@ import { OLLAMA_DEFAULT_API_KEY } from "./defaults.js";
 
 const MAX_BALANCE_RESPONSE_BYTES = 64 * 1024;
 
-function readResetAt(value: unknown): number | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function readPercentWindow(value: unknown, label: string): UsageWindow | undefined {
   const record = asProviderUsageObject(value);
   const remaining = parseProviderUsageNonNegativeNumber(record?.remaining_percent);
   if (remaining === undefined || remaining > 100) {
     return undefined;
   }
-  const resetAt = readResetAt(record?.resets_at);
+  const resetAt = parseDateStringTimestampMs(record?.resets_at);
   return {
     label,
     usedPercent: clampPercent(100 - remaining),
@@ -61,11 +54,9 @@ export async function fetchOllamaUsage(params: {
   }
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
-    if (response.status === 401) {
-      return buildUsageErrorSnapshot("ollama", "Sign in to Ollama Cloud on the configured server");
-    }
-    if (response.status === 404) {
-      return buildUsageErrorSnapshot("ollama", "Update the configured Ollama server to 0.40.1+");
+    if (response.status === 401 || response.status === 404) {
+      // Reuse the shared quiet auth outcome for unsigned-in or pre-balance daemons.
+      return buildUsageErrorSnapshot("ollama", "No auth");
     }
     return buildUsageHttpErrorSnapshot({ provider: "ollama", status: response.status });
   }
@@ -91,7 +82,7 @@ export async function fetchOllamaUsage(params: {
   const allowance = parseProviderUsageNonNegativeNumber(included?.allowance_usd);
   const balance = parseProviderUsageNonNegativeNumber(included?.balance_usd);
   const period = asProviderUsageObject(included?.period);
-  const resetAt = readResetAt(period?.until);
+  const resetAt = parseDateStringTimestampMs(period?.until);
   if (allowance !== undefined && allowance > 0 && balance !== undefined) {
     windows.push({
       label: "Included",

@@ -10,42 +10,6 @@ const baseParams = {
 };
 
 describe("Ollama balance usage", () => {
-  it("resolves local auth and strips a legacy /v1 model base path", async () => {
-    const hooks = createOllamaUsageHooks();
-    const config = createModelProviderConfig({
-      ollama: {
-        baseUrl: "http://127.0.0.1:11434/v1",
-        api: "ollama",
-        apiKey: "ollama-local",
-        models: [],
-      },
-    });
-    const auth = await hooks.resolveUsageAuth?.({
-      config,
-      env: {},
-      provider: "ollama",
-      resolveApiKeyFromConfigAndStore: () => "ollama-local",
-      resolveOAuthToken: async () => null,
-    });
-    expect(auth).toEqual({ token: "ollama-local" });
-    const fetchFn = vi.fn(async () =>
-      Response.json({ included: { session: { remaining_percent: 80 } } }),
-    );
-    const snapshot = await hooks.fetchUsageSnapshot?.({
-      config,
-      env: {},
-      provider: "ollama",
-      token: "ollama-local",
-      timeoutMs: 5000,
-      fetchFn,
-    });
-    expect(snapshot?.windows).toEqual([{ label: "Session", usedPercent: 20 }]);
-    expect(fetchFn).toHaveBeenCalledWith(
-      "http://127.0.0.1:11434/api/balance",
-      expect.objectContaining({ headers: { Accept: "application/json" } }),
-    );
-  });
-
   it("sends the configured public endpoint key instead of an ambient Cloud key", async () => {
     const hooks = createOllamaUsageHooks();
     const config = createModelProviderConfig({
@@ -128,7 +92,7 @@ describe("Ollama balance usage", () => {
           },
           purchased: { balance_usd: 25 },
         }),
-      ) as unknown as typeof fetch,
+      ),
     });
     expect(snapshot.windows[0]?.label).toBe("Included");
     expect(snapshot.windows[0]?.usedPercent).toBeCloseTo(27.5);
@@ -145,18 +109,6 @@ describe("Ollama balance usage", () => {
       fetchFn: vi.fn(async () => new Response("private", { status: 403 })),
     });
     expect(snapshot.error).toBe("HTTP 403");
-    expect(snapshot.windows).toEqual([]);
-  });
-
-  it.each([
-    [401, "Sign in to Ollama Cloud on the configured server"],
-    [404, "Update the configured Ollama server to 0.40.1+"],
-  ])("gives a recovery action for HTTP %i", async (status, message) => {
-    const snapshot = await fetchOllamaUsage({
-      ...baseParams,
-      fetchFn: vi.fn(async () => new Response("private", { status })),
-    });
-    expect(snapshot.error).toBe(message);
     expect(snapshot.windows).toEqual([]);
   });
 
