@@ -39,6 +39,7 @@ import { recordSessionCreated } from "../../../sessions/session-created.js";
 import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
+import { runWithAgentToolSourceExecutionScope } from "../../agent-tool-source-execution-guard.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -523,45 +524,51 @@ export async function spawnAcpDirect(
       const initializedSession = await withAcpResumeSessionAuthorization(
         resumeOwnership,
         (revalidateResume) =>
-          initializeAcpSpawnRuntime({
-            assertActive: ctx.assertActive,
-            revalidateResume,
-            cfg,
-            sessionKey,
-            ownerAgentId,
-            runtimeAgentId: targetAgentId,
-            runtimeMode: spawnMode === "session" ? "persistent" : "oneshot",
-            backendId,
-            resumeSessionId: params.resumeSessionId,
-            runtimeOptions: runtimeOptionsResult.runtimeOptions,
-            modelExplicit: runtimeOptionsResult.modelExplicit,
-            thinkingExplicit: runtimeOptionsResult.thinkingExplicit,
-            cwd: runtimeCwd,
-          }),
+          runWithAgentToolSourceExecutionScope(ctx.assertActive, () =>
+            initializeAcpSpawnRuntime({
+              assertActive: ctx.assertActive,
+              revalidateResume,
+              cfg,
+              sessionKey,
+              ownerAgentId,
+              runtimeAgentId: targetAgentId,
+              runtimeMode: spawnMode === "session" ? "persistent" : "oneshot",
+              backendId,
+              resumeSessionId: params.resumeSessionId,
+              runtimeOptions: runtimeOptionsResult.runtimeOptions,
+              modelExplicit: runtimeOptionsResult.modelExplicit,
+              thinkingExplicit: runtimeOptionsResult.thinkingExplicit,
+              cwd: runtimeCwd,
+            }),
+          ),
       );
       closeRuntimeOnFailure = initializedSession.initialized.closeRuntimeOnFailure;
       ctx.assertActive?.();
       const binding = preparedBinding
-        ? await bindPreparedAcpThread({
-            assertActive: ctx.assertActive,
-            cfg,
-            sessionKey,
-            targetAgentId: ownerAgentId,
-            label: params.label,
-            preparedBinding,
-            initializedRuntime: initializedSession,
+        ? await runWithAgentToolSourceExecutionScope(ctx.assertActive, () => {
+            ctx.assertActive?.();
+            return bindPreparedAcpThread({
+              assertActive: ctx.assertActive,
+              cfg,
+              sessionKey,
+              targetAgentId: ownerAgentId,
+              label: params.label,
+              preparedBinding,
+              initializedRuntime: initializedSession,
+            });
           })
         : null;
       return { initializedSession, binding };
     },
     async dispatchTurn(state) {
-      state.deliveryPlan = resolveAcpSpawnBootstrapDeliveryPlan({
+      const deliveryPlan = resolveAcpSpawnBootstrapDeliveryPlan({
         cfg,
         spawnMode,
         effectiveStreamToParent,
         requester: requesterState,
         binding: state.binding,
       });
+      state.deliveryPlan = deliveryPlan;
       // ACP bypasses the native adapter, so seed the same child lineage before dispatch.
       if (childCreationEntry) {
         await recordSessionCreated(cfg, {
@@ -594,33 +601,35 @@ export async function spawnAcpDirect(
             })
           : undefined;
       state.parentRelay = startParentRelay(childIdem);
-      const response = await launchAcpChildThroughGateway({
-        assertDispatchCurrent: ctx.assertActive,
-        task: params.task,
-        sessionKey,
-        deliveryPlan: state.deliveryPlan,
-        childIdem,
-        runTimeoutSeconds,
-        label: params.label,
-        attachments: gatewayAttachments,
-        lineage: {
-          enabled: isExecutionIdentityCollectionEnabled(cfg),
-          backend: "acp",
-          parentAgentId: requesterAgentId,
-          requesterRef: requesterInternalKey,
-          controllerRef: ownership.controllerSessionKey,
-          depth: admission.childSessionPatch?.spawnDepth ?? 1,
-          maxDepth: admission.maxSpawnDepth,
-          targetAgentId: ownerAgentId,
-          sandbox: params.sandbox === "require" ? "require" : "inherit",
-          inheritedToolAllowlist: ctx.inheritedToolAllowlist,
-          inheritedToolDenylist: ctx.inheritedToolDenylist,
-        },
-        parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
-        participantStorePath: resolveSessionStorePathCore(cfg.session?.store, {
-          agentId: ownerAgentId,
+      const response = await runWithAgentToolSourceExecutionScope(ctx.assertActive, () =>
+        launchAcpChildThroughGateway({
+          assertDispatchCurrent: ctx.assertActive,
+          task: params.task,
+          sessionKey,
+          deliveryPlan,
+          childIdem,
+          runTimeoutSeconds,
+          label: params.label,
+          attachments: gatewayAttachments,
+          lineage: {
+            enabled: isExecutionIdentityCollectionEnabled(cfg),
+            backend: "acp",
+            parentAgentId: requesterAgentId,
+            requesterRef: requesterInternalKey,
+            controllerRef: ownership.controllerSessionKey,
+            depth: admission.childSessionPatch?.spawnDepth ?? 1,
+            maxDepth: admission.maxSpawnDepth,
+            targetAgentId: ownerAgentId,
+            sandbox: params.sandbox === "require" ? "require" : "inherit",
+            inheritedToolAllowlist: ctx.inheritedToolAllowlist,
+            inheritedToolDenylist: ctx.inheritedToolDenylist,
+          },
+          parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
+          participantStorePath: resolveSessionStorePathCore(cfg.session?.store, {
+            agentId: ownerAgentId,
+          }),
         }),
-      });
+      );
       const runId = readGatewayRunId(response) ?? childIdem;
       if (state.parentRelay && runId !== childIdem) {
         // Seal the old relay now; its Gateway owner joins diagnostic settlement.

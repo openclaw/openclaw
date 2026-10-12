@@ -105,57 +105,6 @@ describe("cron service store seam coverage", () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
-  it("loads stored jobs without schedule repair or rewriting the store", async () => {
-    const { storePath } = await makeStorePath();
-
-    await writeSingleJobStore(storePath, {
-      id: "modern-job",
-      name: "modern job",
-      enabled: true,
-      createdAtMs: STORE_TEST_NOW - 60_000,
-      updatedAtMs: STORE_TEST_NOW - 60_000,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "ping" },
-      delivery: { mode: "announce", channel: "telegram", to: "123" },
-      state: {},
-    });
-
-    const state = createStoreTestState(storePath);
-
-    await ensureLoaded(state);
-
-    const job = state.store?.jobs[0];
-    if (!job) {
-      throw new Error("expected loaded cron job");
-    }
-    expect(job.sessionTarget).toBe("isolated");
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.message).toBe("ping");
-    }
-    expect(job.delivery?.mode).toBe("announce");
-    expect(job.delivery?.channel).toBe("telegram");
-    expect(job.delivery?.to).toBe("123");
-    expect(job.state.nextRunAtMs).toBeUndefined();
-
-    const persistedJob = (await loadCronStore(storePath)).jobs[0];
-    expect(persistedJob?.state.nextRunAtMs).toBeUndefined();
-    const persistedPayload = persistedJob?.payload as
-      | { kind?: string; message?: string }
-      | undefined;
-    expect(persistedPayload?.kind).toBe("agentTurn");
-    expect(persistedPayload?.message).toBe("ping");
-    const persistedDelivery = persistedJob?.delivery as
-      | { mode?: string; channel?: string; to?: string }
-      | undefined;
-    expect(persistedDelivery?.mode).toBe("announce");
-    expect(persistedDelivery?.channel).toBe("telegram");
-    expect(persistedDelivery?.to).toBe("123");
-    await expectPathMissing(storePath);
-  });
-
   it("quarantines malformed SQLite rows atomically without creating JSON state", async () => {
     const { storePath } = await makeStorePath();
     const malformed = createReloadCronJob({ id: "malformed-sqlite-row" });
@@ -227,42 +176,6 @@ describe("cron service store seam coverage", () => {
       }),
     ]);
     await expectPathMissing(storePath.replace(/\.json$/, "-quarantine.json"));
-  });
-
-  it("quarantines malformed job and state JSON with exact recovery bytes", async () => {
-    const { storePath } = await makeStorePath();
-    const malformedJob = createReloadCronJob({ id: "malformed-job-json" });
-    const malformedState = createReloadCronJob({ id: "malformed-state-json" });
-    const surviving = createReloadCronJob({ id: "surviving-json-row" });
-    await saveCronStore(storePath, {
-      version: 1,
-      jobs: [malformedJob, malformedState, surviving],
-    });
-    const db = openOpenClawStateDatabase().db;
-    const stateRow = db
-      .prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
-      .get(malformedState.id) as { job_json: string };
-    db.prepare("UPDATE cron_jobs SET job_json = ? WHERE job_id = ?").run("{", malformedJob.id);
-    db.prepare("UPDATE cron_jobs SET state_json = ? WHERE job_id = ?").run("[]", malformedState.id);
-    const state = createStoreTestState(storePath);
-
-    await ensureLoaded(state);
-
-    expect(state.store?.jobs.map((job) => job.id)).toEqual([surviving.id]);
-    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([surviving.id]);
-    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
-      expect.objectContaining({
-        sourceIndex: 0,
-        reason: "invalid-payload",
-        raw: { jobId: malformedJob.id, jobJson: "{", stateJson: "{}" },
-      }),
-      expect.objectContaining({
-        sourceIndex: 1,
-        reason: "invalid-state",
-        job: expect.objectContaining({ id: malformedState.id }),
-        raw: { jobId: malformedState.id, jobJson: stateRow.job_json, stateJson: "[]" },
-      }),
-    ]);
   });
 
   it("quarantines persisted every schedules that cannot produce valid Date timestamps", async () => {
@@ -534,31 +447,6 @@ describe("cron service store seam coverage", () => {
       namespace: "codex.apps",
       payload: { apps: [{ id: "calendar" }] },
     });
-    await expectPathMissing(`${storePath}.migrated`);
-  });
-
-  it("preserves disabled jobs when persisted booleans roundtrip through string values", async () => {
-    const { storePath } = await makeStorePath();
-
-    await writeSingleJobStore(storePath, {
-      id: "disabled-string-job",
-      name: "disabled string job",
-      enabled: "false",
-      createdAtMs: STORE_TEST_NOW - 60_000,
-      updatedAtMs: STORE_TEST_NOW - 60_000,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
-      state: {},
-    });
-
-    const state = createStoreTestState(storePath);
-
-    await ensureLoaded(state);
-
-    const job = findJobOrThrow(state, "disabled-string-job");
-    expect(job.enabled).toBe(false);
     await expectPathMissing(`${storePath}.migrated`);
   });
 

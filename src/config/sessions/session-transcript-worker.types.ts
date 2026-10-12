@@ -8,7 +8,7 @@ import type { BoardReadOperations } from "../../boards/sqlite-board-operations.j
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type {
   SessionRowTranscriptFields,
-  SessionRowTranscriptReadParams,
+  SessionRowBackfillWorkerInput,
 } from "../../gateway/session-row-transcript-backfill.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.types.js";
@@ -74,10 +74,7 @@ import type {
   SessionTranscriptReadScope,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import type {
-  SessionEntryCurrentFacts,
-  SessionEntryCurrentSource,
-} from "./session-entry-current.types.js";
+import type { SessionEntryCurrentFacts } from "./session-entry-current.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type {
   SessionEntryListWorkerInput,
@@ -159,6 +156,8 @@ import type {
   SessionSqliteTargetWorkerInput,
   SessionResetRecallWorkerInput,
   SessionEntryWorkerInput,
+  SessionEntryCurrentWorkerInput,
+  SessionEntryCurrentWorkerResult,
   BoardSnapshotWorkerInput,
   BoardWidgetDocumentWorkerInput,
   SessionHistoricalEvictionCandidatesWorkerInput,
@@ -227,23 +226,6 @@ type SessionActivitySummarySourceWorkerInput = SessionActivitySummaryBatchInput 
   kind: "session-activity-summary-source";
   database: { agentId: string; path: string };
   admission?: UserTurnTranscriptAdmissionReceipt;
-};
-
-type SessionRowBackfillWorkerInput = {
-  kind: "session-row-backfill";
-  database: { agentId: string; path: string };
-  params: SessionRowTranscriptReadParams;
-};
-
-export type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
-  kind: "session-entry-current";
-  source?: SessionEntryCurrentSource;
-};
-
-export type SessionEntryCurrentWorkerResult = {
-  kind: "session-entry-current";
-  entry: SessionEntryCurrentFacts | undefined;
-  source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
 };
 
 export type SessionDiagnosticTextWorkerInput = {

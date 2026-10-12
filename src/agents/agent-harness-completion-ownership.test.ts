@@ -26,6 +26,7 @@ import {
   createAgentHarnessCompletionScope,
   withAgentHarnessCompletionAdmission,
 } from "./agent-harness-completion-scope.js";
+import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 
 const requesterSessionKey = "agent:main:main";
 const sourceSessionKey = "native-child:one";
@@ -236,11 +237,13 @@ describe("pre-mirror recovery input custody", () => {
         });
         try {
           const context = await admission.admit("embedded");
-          const effect = resolveAdmittedRunActiveAssertion(context);
-          if (!effect) {
+          const assertion = resolveAdmittedRunActiveAssertion(context);
+          if (!assertion) {
             throw new Error("Missing real delegated effect authority");
           }
-          effect();
+          const effect = () =>
+            runWithAgentToolSourceExecutionScope(assertion, async () => assertion());
+          await effect();
           const inputRunId =
             scenario === "prior" || scenario === "unadmitted-prior" ? priorRunId : recoveryRunId;
           const recorder = createUserTurnTranscriptRecorder({
@@ -266,9 +269,9 @@ describe("pre-mirror recovery input custody", () => {
           expect(persisted?.message.idempotencyKey).toBe(`${inputRunId}:user`);
           expect(persisted?.message["__openclaw"]?.runId).toBeUndefined();
           if (scenario === "current" || scenario === "prior") {
-            expect(effect).not.toThrow();
+            await expect(effect()).resolves.toBeUndefined();
           } else {
-            expect(effect).toThrow();
+            await expect(effect()).rejects.toThrow();
           }
         } finally {
           admission.close();

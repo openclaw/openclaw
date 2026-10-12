@@ -319,7 +319,7 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   expectedTranscript?: SessionTranscriptContextVersion;
   /** Rebase a stale explicit parent when the current tail still descends from it. */
   appendIntent?: "active-branch";
-  /** Runtime config used for message redaction and transcript header metadata. */
+  /** Runtime config used for transcript header metadata. */
   config?: OpenClawConfig;
   /** Working directory recorded in a newly created transcript header. */
   cwd?: string;
@@ -346,7 +346,7 @@ export type TranscriptMessageAppendOptions<TMessage> = {
 export type TranscriptMessageAppendResult<TMessage> = {
   /** False when idempotency lookup found an existing transcript message. */
   appended: boolean;
-  /** Redacted message payload as persisted or replayed from the transcript. */
+  /** Prepared message payload as persisted or replayed from the transcript. */
   message: TMessage;
   /** Existing or newly generated transcript message id. */
   messageId: string;
@@ -442,7 +442,7 @@ export type SessionTranscriptTurnPersistOptions = {
   /** Retained caller authority, with no same-database reads inside worker grants. */
   assertCurrent?: () => void;
   acceptedResultGuard?: { expectedWriterRunId: string | null; errorMessage: string };
-  /** Runtime config used for lock settings, redaction, and header metadata. */
+  /** Runtime config used for lock settings and header metadata. */
   config?: OpenClawConfig;
   /** Working directory recorded in a newly created transcript header. */
   cwd?: string;

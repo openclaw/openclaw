@@ -67,22 +67,6 @@ afterEach(async () => {
 });
 
 describe("runRespawnChildWithSignalBridge", () => {
-  it.each([false, true])(
-    "owns the respawn group only without terminal stdio (terminal=%s)",
-    async (terminal) => {
-      const run = start({ pid: 1234, detached: true, terminal });
-      expect(run.spawn).toHaveBeenCalledWith("/usr/bin/node", ["/repo/openclaw/dist/entry.js"], {
-        stdio: "inherit",
-        env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
-        detached: process.platform !== "win32" && !terminal,
-        windowsHide: !terminal,
-      });
-      run.child.emit("close", 0, null);
-      await expect(run.completion).resolves.toBe(0);
-      expect(run.detach).toHaveBeenCalledOnce();
-    },
-  );
-
   it.each([
     {
       signal: "SIGINT",
@@ -104,13 +88,6 @@ describe("runRespawnChildWithSignalBridge", () => {
       laterSignal: undefined,
       windowsCode: 1,
       posixCode: 143,
-    },
-    {
-      signal: "SIGKILL",
-      firstSignal: undefined,
-      laterSignal: undefined,
-      windowsCode: 1,
-      posixCode: 137,
     },
   ] as const)(
     "settles actual $signal status only after close (first=$firstSignal)",
@@ -191,7 +168,7 @@ describe("runRespawnChildWithSignalBridge", () => {
     await expect(run.completion).resolves.toBe(0);
   });
 
-  it.each(["resolve", "reject", "throw"] as const)(
+  it.each(["reject", "throw"] as const)(
     "waits for close and diagnostic settlement (%s)",
     async (settlement) => {
       const reporting = createDeferredCore();

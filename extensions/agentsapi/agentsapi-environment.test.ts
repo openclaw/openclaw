@@ -99,7 +99,6 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   resolveAgentDir: () => "/fixture/agent",
   runAgentEndSideEffectsAsync: vi.fn(async () => {}),
   runAgentHarnessLlmOutputHook: vi.fn(),
-  sanitizeToolArgs: (args: unknown) => args,
   setActiveEmbeddedRun: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({

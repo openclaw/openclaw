@@ -4,7 +4,6 @@ import {
   resolveWorkerPoolSize,
   SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
 } from "../../infra/worker-pool-sizing.js";
-import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
@@ -108,13 +107,11 @@ export async function readSessionTranscriptContextMessagesInWorker(
 export async function prepareSessionEntryInWorker(
   absPath: string,
   options: SessionEntryWorkerInput["options"],
-  redaction: SensitiveTextRedactionSnapshot,
 ) {
   const result = await readSessionEntryInWorker({
     kind: "session-entry",
     absPath,
     options,
-    redaction,
   });
   if (!("entry" in result)) {
     throw new Error("Session transcript worker returned a snapshot instead of an export");
@@ -159,13 +156,7 @@ async function readSessionEntryInWorker(input: SessionEntryWorkerInput) {
                 options.agentId.length +
                 options.sessionId.length +
                 options.storePath.length +
-                (options.sessionKey?.length ?? 0) +
-                (input.mode === "snapshot"
-                  ? 0
-                  : input.redaction.registeredSecretValues.reduce(
-                      (bytes, value) => bytes + value.length,
-                      0,
-                    ))),
+                (options.sessionKey?.length ?? 0)),
           },
         ),
     ),

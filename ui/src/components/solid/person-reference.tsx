@@ -9,6 +9,7 @@ import {
 } from "../../lib/presence-users.ts";
 import { profileAvatarUrl, profileDirectory } from "../../lib/profile-directory.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
   prepareSessionNavigationHandoff,
@@ -28,7 +29,6 @@ import { updatePersonActivityCard } from "../person-activity-card.ts";
 import { observePersonActivityData } from "../person-activity-data.ts";
 import { personActivityRouting } from "../person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "../portaled-hovercard.ts";
-import { useIdentityApplication } from "./identity-application.ts";
 import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import "../../styles/chat/person-reference.css";
@@ -44,7 +44,7 @@ let nextCardId = 0;
 
 /** Explicit transcript selections only. The directory remains Gateway-owned, not a UI name index. */
 export function PersonReferenceContent(props: PersonReferenceProps) {
-  const context = useIdentityApplication();
+  const context = useOptionalApplication();
   const profileId = () => props.profileId ?? "";
   const label = () => props.label ?? "";
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });

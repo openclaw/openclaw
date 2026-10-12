@@ -2,6 +2,7 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { LitContent } from "../../lit/solid-content.tsx";
 import { Icon } from "./icon.tsx";
 import { LoadingState } from "./loading-state.tsx";
 
@@ -47,6 +48,7 @@ export function LazyViewError(props: {
   onClose?: (event: Event) => void;
   onRetry: (event: Event) => void;
   render?: () => SolidJSX.Element;
+  inline?: boolean;
   stale?: boolean;
   subtitle?: string;
 }) {
@@ -72,10 +74,21 @@ export function LazyViewError(props: {
           </>
         }
         detail={formatUiError(props.error)}
-        inline={Boolean(props.render)}
+        inline={props.inline ?? Boolean(props.render)}
         stale={props.stale}
       />
     </>
+  );
+}
+
+export function LegacyPanelErrorState(
+  props: Omit<Parameters<typeof PanelErrorState>[0], "actions"> & { actions?: unknown },
+) {
+  return (
+    <PanelErrorState
+      {...props}
+      actions={props.actions ? <LitContent value={props.actions} /> : undefined}
+    />
   );
 }
 

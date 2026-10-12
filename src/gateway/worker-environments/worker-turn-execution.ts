@@ -643,6 +643,7 @@ export async function executeWorkerTurn(
     let processResult: Awaited<ReturnType<NonNullable<typeof tunnel.launchTurn>>>;
     try {
       processResult = await tunnel.launchTurn({
+        assertCurrent: assertActive,
         plan: launchPlan.plan,
         turnClaim: params.turnClaim,
         timeoutMs: turn.timeoutMs,

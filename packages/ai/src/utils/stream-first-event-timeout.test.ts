@@ -25,7 +25,8 @@ describe("withFirstStreamEventTimeout", () => {
   it("fails when the first event never arrives", async () => {
     vi.useFakeTimers();
     try {
-      const stream = withFirstStreamEventTimeout(createNeverYieldingStream(), {
+      const onReturn = vi.fn();
+      const stream = withFirstStreamEventTimeout(createNeverYieldingStream(onReturn), {
         provider: "local",
         api: "openai-completions",
         model: "test-model",
@@ -39,24 +40,6 @@ describe("withFirstStreamEventTimeout", () => {
 
       await vi.advanceTimersByTimeAsync(5);
       await next;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("calls iterator return on first-event timeout", async () => {
-    vi.useFakeTimers();
-    try {
-      const onReturn = vi.fn();
-      const stream = withFirstStreamEventTimeout(createNeverYieldingStream(onReturn), {
-        timeoutMs: 5,
-      });
-      const iterator = stream[Symbol.asyncIterator]();
-      const next = iterator.next().catch((error: unknown) => error);
-
-      await vi.advanceTimersByTimeAsync(5);
-      await next;
-
       expect(onReturn).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();

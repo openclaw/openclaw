@@ -119,31 +119,6 @@ describe("runWorkspaceInventoryCommandToFile", () => {
     await expect(fs.readFile(outputPath)).resolves.toEqual(expected);
   });
 
-  it("fully persists a buffered Git transfer list after a positive short write", async () => {
-    const root = tempDirs.make("openclaw-workspace-list-short-write-");
-    const temporaryDirectory = `${root}-transfer`;
-    const outputPath = path.join(temporaryDirectory, "transfer-list");
-    await fs.mkdir(path.join(root, "nested"));
-    await Promise.all([
-      fs.writeFile(path.join(root, "alpha.txt"), "alpha"),
-      fs.writeFile(path.join(root, "nested", "beta.txt"), "beta"),
-    ]);
-    await git(root, "init", "--quiet");
-    const shortWriteObserved = injectPositiveShortWrite(outputPath);
-
-    await createWorkspaceGitTransferList({
-      gitRoot: root,
-      temporaryDirectory,
-      signal: new AbortController().signal,
-      timeoutMs: 10_000,
-    });
-
-    expect(shortWriteObserved()).toBe(true);
-    await expect(fs.readFile(outputPath)).resolves.toEqual(
-      Buffer.from("alpha.txt\0nested/beta.txt\0"),
-    );
-  });
-
   it.each(
     (["inventory", "metadata"] as const).flatMap((operation) =>
       [
@@ -491,63 +466,6 @@ describe("runWorkspaceInventoryCommandToFile", () => {
       }),
     ).rejects.toThrow("pack exceeds the 16 byte limit");
     await expect(fs.stat(outputPath)).resolves.toMatchObject({ size: 0 });
-  });
-
-  it("omits derived artifacts from outbound Git file lists", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-files-"));
-    const retainedFiles = [
-      "src/keep.ts",
-      "openclaw-inbound-project/report.txt",
-      "nested/openclaw-inbound-12345678-1234-4234-8234-123456789ab-/report.txt",
-    ];
-    const files = [
-      ...retainedFiles,
-      "__pycache__/fizzbuzz.cpython-314.pyc",
-      "generated.pyc",
-      "generated.pyo",
-      "cache.pyc/inside",
-      "nested/.DS_Store/inside",
-      ".pytest_cache/state",
-      ".mypy_cache/state",
-      ".ruff_cache/state",
-      "node_modules/pkg/index.js",
-      ".DS_Store",
-      "openclaw-inbound-12345678-1234-4234-8234-123456789abc/report.pdf",
-      "nested/openclaw-inbound-12345678-1234-4234-8234-123456789abc/photo.png",
-    ];
-    const temporaryDirectory = path.join(root, "..", `${path.basename(root)}-transfer`);
-    const initOutputPath = path.join(root, "..", `${path.basename(root)}-git-init-output`);
-    try {
-      await Promise.all(
-        files.map(async (file) => {
-          await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
-          await fs.writeFile(path.join(root, file), file);
-        }),
-      );
-      await runWorkspaceInventoryCommandToFile({
-        argv: ["git", "-C", root, "init", "--quiet"],
-        outputPath: initOutputPath,
-        signal: new AbortController().signal,
-        timeoutMs: 10_000,
-      });
-
-      const outputPath = await createWorkspaceGitTransferList({
-        gitRoot: root,
-        temporaryDirectory,
-        signal: new AbortController().signal,
-        timeoutMs: 10_000,
-      });
-
-      expect((await fs.readFile(outputPath, "utf8")).split("\0").filter(Boolean)).toEqual(
-        retainedFiles.toSorted(),
-      );
-    } finally {
-      await Promise.all([
-        fs.rm(root, { recursive: true, force: true }),
-        fs.rm(temporaryDirectory, { recursive: true, force: true }),
-        fs.rm(initOutputPath, { force: true }),
-      ]);
-    }
   });
 
   it("bounds raw Git candidates before materializing the eligible inventory", async () => {

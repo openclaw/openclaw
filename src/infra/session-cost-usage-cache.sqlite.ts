@@ -39,6 +39,7 @@ import {
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
 import { isSessionActorUsageRefreshRunning } from "./session-cost-usage-memory.js";
+import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 // Per-agent SQLite storage for rebuildable per-session usage rollups.
@@ -64,8 +65,15 @@ type CacheWriteKey = Extract<keyof AgentDatabaseOperations, `usageCache.${string
 
 function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOptions>) {
   // Incognito and maintenance scopes retain their process-held native owner.
-  const execution = supportsOpenClawAgentDatabaseExecution(options)
-    ? captureOpenClawAgentDatabaseExecution(options)
+  const observed = supportsOpenClawAgentDatabaseExecution(options)
+    ? readDatabasePathIdentitySync(options.path)
+    : undefined;
+  // Refresh-lock discovery can yield before the first write; retain its creation witness.
+  const execution = observed
+    ? captureOpenClawAgentDatabaseExecution(
+        options,
+        observed.key.startsWith("path:") ? { expectedCreationIdentity: observed } : undefined,
+      )
     : undefined;
   let database: OpenClawAgentDatabase | undefined;
   let releaseBorrow: (() => void) | undefined;

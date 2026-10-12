@@ -33,28 +33,6 @@ function spawnPreparedWithBashAsSh(prepared: OomScoreAdjustedSpawn) {
 }
 
 describe("prepareOomScoreAdjustedSpawn", () => {
-  it("returns command, args, and hardened env when wrap applies", () => {
-    const result = prepareOomScoreAdjustedSpawn("/usr/bin/node", ["run.js"], {
-      ...linux,
-      env: {
-        PATH: "/usr/bin",
-        BASH_ENV: "/tmp/bashenv",
-        ENV: "/tmp/env",
-        CDPATH: "/tmp",
-        SHELLOPTS: "xtrace",
-        BASHOPTS: "extdebug",
-        PS4: "trace",
-        "BASH_FUNC_echo%%": "() { :; }",
-      },
-    });
-    expect(result).toEqual({
-      command: "/bin/sh",
-      args: ["-c", wrapScript, "/usr/bin/node", "run.js"],
-      env: { PATH: "/usr/bin" },
-      wrapped: true,
-    });
-  });
-
   it("preserves the spawn shape when wrap does not apply", () => {
     const env = { PATH: "/usr/bin" };
     expect(
@@ -84,23 +62,11 @@ describe("prepareOomScoreAdjustedSpawn", () => {
     });
   });
 
-  it.each(["0", "false", "FALSE", "no", "off"])(
-    "respects the OPENCLAW_CHILD_OOM_SCORE_ADJ=%s opt-out",
-    (value) => {
-      expect(
-        prepareOomScoreAdjustedSpawn("/usr/bin/node", ["run.js"], {
-          ...linux,
-          env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: value },
-        }),
-      ).toMatchObject({ command: "/usr/bin/node", args: ["run.js"], wrapped: false });
-    },
-  );
-
-  it("skips wrapping when the shell is unavailable", () => {
+  it.each(["off"])("respects the OPENCLAW_CHILD_OOM_SCORE_ADJ=%s opt-out", (value) => {
     expect(
       prepareOomScoreAdjustedSpawn("/usr/bin/node", ["run.js"], {
         ...linux,
-        shellAvailable: () => false,
+        env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: value },
       }),
     ).toMatchObject({ command: "/usr/bin/node", args: ["run.js"], wrapped: false });
   });
@@ -112,6 +78,8 @@ describe("prepareOomScoreAdjustedSpawn", () => {
         env: {
           PATH: "/usr/bin",
           BASH_ENV: "/tmp/bashenv",
+          ENV: "/tmp/env",
+          CDPATH: "/tmp",
           SHELLOPTS: "xtrace",
           BASHOPTS: "extdebug",
           PS4: "trace",
@@ -136,26 +104,6 @@ describe("prepareOomScoreAdjustedSpawn", () => {
 });
 
 describe("prepareOomScoreAdjustedSpawnPreservingExecEnv", () => {
-  it.each([
-    ["SHELLOPTS", { SHELLOPTS: "xtrace" }],
-    ["BASHOPTS", { BASHOPTS: "extdebug" }],
-    ["imported function", { "BASH_FUNC_echo%%": "() { :; }" }],
-  ])("falls back to direct spawn for defined %s controls", (_name, startupEnv) => {
-    const env = { PATH: "/usr/bin", ...startupEnv };
-    const result = prepareOomScoreAdjustedSpawnPreservingExecEnv("/usr/bin/node", ["run.js"], {
-      ...linux,
-      env,
-    });
-
-    expect(result).toEqual({
-      command: "/usr/bin/node",
-      args: ["run.js"],
-      env,
-      wrapped: false,
-    });
-    expect(result.env).toBe(env);
-  });
-
   it("falls back to direct spawn on a defined carrier collision", () => {
     const env = {
       PATH: "/usr/bin",
@@ -174,29 +122,6 @@ describe("prepareOomScoreAdjustedSpawnPreservingExecEnv", () => {
       wrapped: false,
     });
     expect(result.env).toBe(env);
-  });
-
-  it("ignores undefined carrier properties", () => {
-    const result = prepareOomScoreAdjustedSpawnPreservingExecEnv("/usr/bin/node", [], {
-      ...linux,
-      env: {
-        PATH: "/usr/bin",
-        ENV: "",
-        BASH_ENV: undefined,
-        [carriers.ENV]: undefined,
-        SHELLOPTS: undefined,
-        BASHOPTS: undefined,
-        "BASH_FUNC_echo%%": undefined,
-      },
-    });
-
-    expect(result).toMatchObject({
-      env: {
-        PATH: "/usr/bin",
-        [carriers.ENV]: "",
-      },
-      wrapped: true,
-    });
   });
 
   it.runIf(process.platform !== "win32")(

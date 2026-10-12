@@ -13,7 +13,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import * as transcriptRedact from "../transcript-redact.js";
+import * as transcriptRedact from "../transcript-sanitize.js";
 import { SessionManager } from "./session-manager.js";
 
 it.each(["assistant", "toolResult"] as const)(
@@ -61,7 +61,7 @@ it.each(["assistant", "toolResult"] as const)(
         throw new Error("Writer preparation proof requires native zstd support");
       }
       const compress = codec.compress;
-      const redact = transcriptRedact.redactTranscriptMessage;
+      const redact = transcriptRedact.sanitizeTranscriptMessage;
       const stringify = JSON.stringify;
       const parse = JSON.parse;
       const spies = [
@@ -69,7 +69,7 @@ it.each(["assistant", "toolResult"] as const)(
           compressionHeld.push(db.isTransaction);
           return compress(...args);
         }),
-        vi.spyOn(transcriptRedact, "redactTranscriptMessage").mockImplementation((...args) => {
+        vi.spyOn(transcriptRedact, "sanitizeTranscriptMessage").mockImplementation((...args) => {
           redactionHeld.push(db.isTransaction);
           return redact(...args);
         }),
