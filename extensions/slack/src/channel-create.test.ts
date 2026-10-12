@@ -128,7 +128,8 @@ describe("Slack channel-create", () => {
           { headers: { "content-type": "application/json" } },
         );
       }
-      throw new Error(`unexpected Slack request: ${method} (${String(init?.body)})`);
+      const body = typeof init?.body === "string" ? init.body : "<non-string body>";
+      throw new Error(`unexpected Slack request: ${method} (${body})`);
     };
     vi.spyOn(slackClient, "createSlackWriteClient").mockImplementation(
       (token, options, assert) =>
