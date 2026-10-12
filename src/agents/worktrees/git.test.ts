@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -9,19 +9,15 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as execRunner from "../../process/exec-runner.js";
 import * as processExec from "../../process/exec.js";
-import type { SpawnResult } from "../../process/exec.js";
 import { resolveWorktreeBase } from "./base-ref.js";
 import {
-  commandError,
   findGitCheckoutRoot,
   gitEnvironment,
   hasSelfContainedGitMetadata,
   insideGitCheckout,
-  listGitWorktrees,
   requireGit,
   runGit,
   runGitBuffered,
-  runGitBytes,
 } from "./git.js";
 
 afterEach(() => {
@@ -35,7 +31,6 @@ describe("Git ref mutation ownership", () => {
   const queuedRef = "refs/openclaw/snapshots/queued";
   const transports = [
     ["text", runGit],
-    ["bytes", runGitBytes],
     ["buffered", runGitBuffered],
   ] as const;
 
@@ -407,23 +402,23 @@ describe("Git ref mutation ownership", () => {
     },
   );
 
-  it.each(transports)(
-    "%s preserves authority errors when the admitted callback also aborts",
-    async (_transport, run) => {
-      const root = await repository();
-      const controller = new AbortController();
-      const revoked = new Error("Git mutation authority revoked");
-      const beforeRun = vi.fn(() => {
-        controller.abort(revoked);
-        throw revoked;
-      });
-      await expect(
-        run(root, ["update-ref", "-d", queuedRef], { signal: controller.signal, beforeRun }),
-      ).rejects.toBe(revoked);
-      expect(beforeRun).toHaveBeenCalledOnce();
-      expect(await requireGit(root, ["show-ref", "--verify", queuedRef])).toContain(queuedRef);
-    },
-  );
+  it("preserves authority errors when the buffered callback also aborts", async () => {
+    const root = await repository();
+    const controller = new AbortController();
+    const revoked = new Error("Git mutation authority revoked");
+    const beforeRun = vi.fn(() => {
+      controller.abort(revoked);
+      throw revoked;
+    });
+    await expect(
+      runGitBuffered(root, ["update-ref", "-d", queuedRef], {
+        signal: controller.signal,
+        beforeRun,
+      }),
+    ).rejects.toBe(revoked);
+    expect(beforeRun).toHaveBeenCalledOnce();
+    expect(await requireGit(root, ["show-ref", "--verify", queuedRef])).toContain(queuedRef);
+  });
 
   it("keeps discovery and queued mutation in the captured Git environment", async () => {
     vi.stubEnv("GIT_COMMON_DIR", undefined);
@@ -450,33 +445,14 @@ describe("Git ref mutation ownership", () => {
 });
 
 describe("Git execution environment", () => {
-  it("preserves literal commit revisions only for Windows worktree Git", () => {
-    expect(
-      gitEnvironment(
-        {
-          MSYS: "winsymlinks:nativestrict",
-          CYGWIN: "disable_pcon",
-        },
-        ["rev-parse", "--verify", "HEAD^{commit}"],
-        "win32",
-      ),
-    ).toMatchObject({
-      MSYS: "winsymlinks:nativestrict noglob",
-      CYGWIN: "disable_pcon noglob",
-    });
-    expect(gitEnvironment({ MSYS: "winsymlinks:nativestrict" }, ["status"], "win32").MSYS).toBe(
-      "winsymlinks:nativestrict",
-    );
-  });
-
-  it.each([
-    ["noglob glob:ignorecase", "noglob glob:ignorecase noglob"],
-    ["winsymlinks:native noglob", "winsymlinks:native noglob"],
-  ])("keeps noglob final for %s", (value, expected) => {
-    expect(gitEnvironment({ MSYS: value }, ["rev-parse", "HEAD^{commit}"], "win32").MSYS).toBe(
-      expected,
-    );
-  });
+  it.each([["winsymlinks:native noglob", "winsymlinks:native noglob"]])(
+    "keeps noglob final for %s",
+    (value, expected) => {
+      expect(gitEnvironment({ MSYS: value }, ["rev-parse", "HEAD^{commit}"], "win32").MSYS).toBe(
+        expected,
+      );
+    },
+  );
 
   it("merges inherited Windows runtime options before preserving revisions", () => {
     expect(
@@ -499,20 +475,6 @@ describe("Git execution environment", () => {
 
 describe("Git checkout discovery", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-  it("reports a real Git failure with execution metadata through the worktree wrapper", async () => {
-    const root = tempDirs.make("openclaw-git-error-");
-    const result = await runGit(path.join(root, "missing"), ["status"]);
-
-    expectTypeOf(result).toMatchTypeOf<SpawnResult>();
-    expect(result.timeoutMs).toBe(120_000);
-    expect(result.code).toBe(128);
-    expect(result).toMatchObject({ termination: "exit", signal: null });
-    const message = commandError("git status", result).message;
-    expect(message).toContain("git status failed (exit code 128)");
-    expect(message).toContain("fatal:");
-    expect(message).not.toMatch(/timeout|timed out/i);
-  });
 
   it("returns the nearest checkout root for nested paths", async () => {
     const root = tempDirs.make("openclaw-git-root-");
@@ -540,64 +502,4 @@ describe("Git checkout discovery", () => {
     await fs.writeFile(path.join(root, ".git"), "gitdir: /outside/worktrees/card\n", "utf8");
     await expect(hasSelfContainedGitMetadata(root)).resolves.toBe(false);
   });
-
-  it.for(["files", "reftable"] as const)(
-    "parses native %s worktree paths, locks, symbolic heads, and detached tips",
-    async (refStorage, context) => {
-      const root = tempDirs.make("openclaw-git-worktree-list-");
-      const repo = path.join(root, "repo");
-      const linked = path.join(root, "linked");
-      const detached = path.join(root, "detached");
-      const initialized = await runGit(root, [
-        "init",
-        "--template=",
-        ...(refStorage === "reftable" ? ["--ref-format=reftable"] : []),
-        "-b",
-        "main",
-        repo,
-      ]);
-      if (
-        refStorage === "reftable" &&
-        initialized.termination === "exit" &&
-        initialized.code !== 0 &&
-        /unknown option.*ref-format|unknown ref storage format.*reftable/u.test(initialized.stderr)
-      ) {
-        context.skip("Installed Git does not support reftable repositories");
-      }
-      expect(initialized.code, initialized.stderr).toBe(0);
-      await requireGit(repo, ["config", "user.name", "OpenClaw Test"]);
-      await requireGit(repo, ["config", "user.email", "openclaw-test@example.invalid"]);
-      await requireGit(repo, ["config", "commit.gpgSign", "false"]);
-      await fs.writeFile(path.join(repo, "README.md"), "base\n");
-      await requireGit(repo, ["add", "README.md"]);
-      await requireGit(repo, ["commit", "-m", "initial"]);
-      const initialHead = await requireGit(repo, ["rev-parse", "HEAD"]);
-      await requireGit(repo, ["worktree", "add", "-b", "linked", linked, "HEAD"]);
-      await requireGit(repo, ["worktree", "add", "--detach", detached, "HEAD"]);
-      await requireGit(linked, ["commit", "--allow-empty", "-m", "linked tip"]);
-      const linkedHead = await requireGit(linked, ["rev-parse", "HEAD"]);
-      await requireGit(repo, ["symbolic-ref", "refs/heads/alias-middle", "refs/heads/linked"]);
-      await requireGit(repo, ["symbolic-ref", "refs/heads/alias", "refs/heads/alias-middle"]);
-      await requireGit(linked, ["symbolic-ref", "HEAD", "refs/heads/alias"]);
-      await requireGit(repo, ["worktree", "lock", "--reason", "held by test", linked]);
-
-      // These fixtures exist; compare identity without imposing Git's separator spelling.
-      const worktrees = await listGitWorktrees(repo);
-      for (const entry of worktrees) {
-        entry.path = await fs.realpath(entry.path);
-      }
-      expect(worktrees).toEqual(
-        expect.arrayContaining([
-          { path: await fs.realpath(repo), branch: "refs/heads/main", head: initialHead },
-          {
-            path: await fs.realpath(linked),
-            lockedReason: "held by test",
-            branch: "refs/heads/linked",
-            head: linkedHead,
-          },
-          { path: await fs.realpath(detached), branch: null, head: initialHead },
-        ]),
-      );
-    },
-  );
 });

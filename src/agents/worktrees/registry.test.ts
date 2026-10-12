@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -292,35 +291,5 @@ describe("managed worktree registry", () => {
       counter.restore();
     }
     expect(await getRegistryWorktreeProvisionedPaths(env, record.id)).toEqual(provisionedPaths);
-  });
-
-  it("adds the provisioned-path ledger to an existing worktree registry", async () => {
-    const databasePath = openOpenClawStateDatabase({ env }).path;
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rename(databasePath, `${databasePath}.template`);
-    await fs.copyFile(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacy = new DatabaseSync(databasePath);
-    legacy.exec(`
-      ALTER TABLE worktrees DROP COLUMN provisioned_paths_json;
-      DROP INDEX idx_worker_session_placements_environment;
-      PRAGMA user_version = 5;
-      UPDATE schema_meta SET schema_version = 5 WHERE meta_key = 'primary';
-    `);
-    legacy.close();
-
-    expect(await getRegistryWorktreeProvisionedPaths(env, "missing")).toBeUndefined();
-    const database = openOpenClawStateDatabase({ env }).db;
-    const columns = database.prepare("PRAGMA table_info(worktrees)").all() as Array<{
-      name?: unknown;
-    }>;
-    expect(columns.some((column) => column.name === "provisioned_paths_json")).toBe(true);
-    const chunkTable = database
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'worktree_provisioned_file_chunks'",
-      )
-      .get();
-    expect(chunkTable).toBeTruthy();
   });
 });

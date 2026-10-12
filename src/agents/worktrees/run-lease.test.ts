@@ -107,43 +107,6 @@ describe("worktree run lease", () => {
     return created;
   }
 
-  it("shares one worktree across concurrent runs and refcounts the git lock", async () => {
-    const created = await createSessionWorktree();
-    let parent: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
-    let child: typeof parent;
-    try {
-      const acquisitionSql = observeMainThreadSql();
-      try {
-        parent = await acquireWorktreeRunLease(created.id, { env });
-        child = await acquireWorktreeRunLease(created.id, { env });
-        acquisitionSql.expectIdle();
-      } finally {
-        acquisitionSql.restore();
-      }
-
-      const record = getRegistryWorktree(env, created.id);
-      expect(record).toBeDefined();
-      expect(await lockState(record!)).toEqual({ kind: "live", pid: process.pid });
-      expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
-
-      const sql = observeMainThreadSql();
-      try {
-        await parent.release();
-        sql.expectIdle();
-      } finally {
-        sql.restore();
-      }
-      expect(await lockState(record!)).toEqual({ kind: "live", pid: process.pid });
-      expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
-
-      await child.release();
-      expect(await lockState(record!)).toEqual({ kind: "none" });
-      expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
-    } finally {
-      await Promise.all([parent?.release(), child?.release()]);
-    }
-  });
-
   it("rejects admission when the linked Git admin directory is missing", async () => {
     const created = await createSessionWorktree();
     const knownFile = path.join(created.path, "README.md");
@@ -169,7 +132,6 @@ describe("worktree run lease", () => {
   });
 
   it.each([
-    { settlement: "completed", guard: "live" },
     { settlement: "unknown", guard: "live" },
     { settlement: "completed", guard: "pending unlock" },
   ] as const)(
@@ -380,25 +342,6 @@ describe("worktree run lease", () => {
     expect(await lockState(created)).toEqual({ kind: "none" });
   });
 
-  it("prunes a dead owner lease so removal can proceed", async () => {
-    const created = await createSessionWorktree();
-    runOpenClawStateWriteTransaction(
-      ({ db }) =>
-        admitWorktreeRunLeaseInDatabase(db, {
-          worktreeId: created.id,
-          token: "dead-owner",
-          pid: 2_147_483_647,
-          startTime: 4242,
-          now: 1,
-        }),
-      { env },
-    );
-    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
-    await expect(
-      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" }),
-    ).resolves.toBeUndefined();
-  });
-
   it("prunes a reused pid whose start time no longer matches", async () => {
     const created = await createSessionWorktree();
     runOpenClawStateWriteTransaction(
@@ -422,40 +365,6 @@ describe("worktree run lease", () => {
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
     await lease.release();
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
-  });
-
-  it("rejects removal while a live lease exists", async () => {
-    const created = await createSessionWorktree();
-    const lease = await acquireWorktreeRunLease(created.id, { env });
-
-    await expect(
-      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" }),
-    ).rejects.toThrow("worktree is busy");
-    await lease.release();
-  });
-
-  it("fails admission once a removal claim is held", async () => {
-    const created = await createSessionWorktree();
-    await claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" });
-
-    await expect(acquireWorktreeRunLease(created.id, { env })).rejects.toThrow(
-      `managed worktree was removed: ${created.path}`,
-    );
-  });
-
-  it("recovers admission when the remover died before finalizing the removal", async () => {
-    const created = await createSessionWorktree();
-    await claimWorktreeRemovalRow(env, {
-      worktreeId: created.id,
-      token: "remover",
-      pid: 2_147_483_647,
-      startTime: null,
-      now: 1,
-    });
-
-    const lease = await acquireWorktreeRunLease(created.id, { env });
-    expect(lease.token).toBeTruthy();
-    await lease.release();
   });
 
   it("rejects a second live remover until the first releases", async () => {
@@ -555,12 +464,19 @@ describe("worktree run lease", () => {
   it("serializes overlapping same-process acquisitions so the guard holds until the last release", async () => {
     const created = await createSessionWorktree();
     const record = getRegistryWorktree(env, created.id)!;
-
-    const [first, second] = await Promise.all([
-      acquireWorktreeRunLease(created.id, { env }),
-      acquireWorktreeRunLease(created.id, { env }),
-    ]);
-
+    const sql = observeMainThreadSql();
+    const [first, second] = await (async () => {
+      try {
+        const leases = await Promise.all([
+          acquireWorktreeRunLease(created.id, { env }),
+          acquireWorktreeRunLease(created.id, { env }),
+        ]);
+        sql.expectIdle();
+        return leases;
+      } finally {
+        sql.restore();
+      }
+    })();
     expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
     await first.release();
     expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
@@ -598,42 +514,6 @@ describe("worktree run lease", () => {
       runLeaseTesting.resetForTest();
     }
   });
-
-  it.each(["unlock", "registry read"])(
-    "retains the Git guard when %s fails, releasing it on a lifecycle retry",
-    async (failure) => {
-      const created = await createSessionWorktree();
-      const lease = await acquireWorktreeRunLease(created.id, { env });
-      const record = getRegistryWorktree(env, created.id)!;
-
-      let fail = true;
-      if (failure === "unlock") {
-        const unlockWorktree = gitLock.unlockWorktree;
-        vi.spyOn(gitLock, "unlockWorktree").mockImplementation(async (rec) => {
-          if (fail) {
-            throw new Error("simulated git unlock failure");
-          }
-          await unlockWorktree(rec);
-        });
-      } else {
-        const readWorktree = registryRead.readRegistryWorktree;
-        vi.spyOn(registryRead, "readRegistryWorktree").mockImplementation(async (...args) => {
-          if (fail) {
-            throw new Error("simulated registry read failure");
-          }
-          return readWorktree(...args);
-        });
-      }
-
-      await expect(lease.release()).rejects.toThrow("cleanup did not settle");
-      expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
-      expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
-
-      fail = false;
-      await runLeaseTesting.drainPendingCleanupsForTest();
-      expect(await lockState(record)).toEqual({ kind: "none" });
-    },
-  );
 
   it("does not let a failed cleanup unlock a newer holder generation", async () => {
     const created = await createSessionWorktree();

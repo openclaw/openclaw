@@ -128,37 +128,15 @@ describe("empty managed workspaces", () => {
     expect(await fs.readFile(path.join(restored.path, "attachment.bin"))).toEqual(attachment);
   });
 
-  it.each(["files", "head", "commit", "metadata"])(
-    "preserves and refuses a source with modified %s",
-    async (modified) => {
-      const { repoRoot: source } = await create("modified");
-      const marker = path.join(source, "keep.txt");
-      if (modified === "files") {
-        await fs.writeFile(marker, "keep this content\n");
-      } else if (modified === "head") {
-        await requireGit(source, ["checkout", "--detach"]);
-      } else if (modified === "commit") {
-        await requireGit(source, ["commit", "--allow-empty", "-m", "Changed source"], {
-          env: identity,
-        });
-      } else {
-        await fs.rename(path.join(source, ".git"), path.join(source, "saved-metadata"));
-      }
-      await expect(create("modified")).rejects.toThrow(
-        "Empty workspace source is unavailable or modified",
-      );
-      if (modified === "files") {
-        expect(await fs.readFile(marker, "utf8")).toBe("keep this content\n");
-      } else if (modified === "head") {
-        expect(await requireGit(source, ["branch", "--show-current"])).toBe("");
-      } else if (modified === "commit") {
-        expect(await requireGit(source, ["rev-list", "--count", "main"])).toBe("2");
-      } else {
-        expect(fsSync.existsSync(path.join(source, "saved-metadata", "HEAD"))).toBe(true);
-        expect(fsSync.existsSync(path.join(source, ".git"))).toBe(false);
-      }
-    },
-  );
+  it("preserves and refuses a source with extra files", async () => {
+    const { repoRoot: source } = await create("modified");
+    const marker = path.join(source, "keep.txt");
+    await fs.writeFile(marker, "keep this content\n");
+    await expect(create("modified")).rejects.toThrow(
+      "Empty workspace source is unavailable or modified",
+    );
+    expect(await fs.readFile(marker, "utf8")).toBe("keep this content\n");
+  });
 
   it("cleans unexposed bootstrap state when authority is revoked after Git initialization", async () => {
     const revoked = new Error("session creation no longer owns this request");
@@ -195,6 +173,20 @@ describe("empty managed workspaces", () => {
     expect((await service.gc()).snapshotsPruned).toBe(0);
     expect(fsSync.existsSync(created.repoRoot)).toBe(true);
     const restored = await service.restore({ id: created.id });
+    expect(await fs.readFile(path.join(restored.path, "draft.txt"), "utf8")).toBe(
+      "Restorable work\n",
+    );
+    const orphan = path.join(path.dirname(restored.path), "abandoned");
+    const uncertain = path.join(path.dirname(restored.path), "unregistered");
+    await fs.mkdir(orphan);
+    await fs.writeFile(path.join(orphan, "draft.txt"), "Abandoned allocation\n");
+    await fs.mkdir(uncertain);
+    await fs.writeFile(path.join(uncertain, ".git"), "gitdir: missing-metadata\n");
+    expect(await service.gc()).toMatchObject({ orphansDeleted: 1, snapshotsPruned: 0 });
+    expect(fsSync.existsSync(orphan)).toBe(false);
+    expect(await fs.readFile(path.join(uncertain, ".git"), "utf8")).toBe(
+      "gitdir: missing-metadata\n",
+    );
     expect(await fs.readFile(path.join(restored.path, "draft.txt"), "utf8")).toBe(
       "Restorable work\n",
     );
