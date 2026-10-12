@@ -1,3 +1,4 @@
+// Disposable Security Review direct-comment demo; do not merge.
 import type { IncomingMessage } from "node:http";
 import {
   normalizeLowercaseStringOrEmpty,
