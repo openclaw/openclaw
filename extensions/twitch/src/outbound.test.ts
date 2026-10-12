@@ -319,6 +319,36 @@ describe("outbound", () => {
       expect(result.ok).toBe(true);
       expect(assertResolvedTarget(result)).toBe("mychannel");
     });
+
+    it.each([
+      { to: "twitch:channel:OpenClaw", expected: "openclaw" },
+      { to: "twitch-chat:group:OpenClaw", expected: "openclaw" },
+      { to: "twitch:#OpenClaw", expected: "openclaw" },
+    ])("should normalize prefixed channel target $to", ({ to, expected }) => {
+      const result = resolveTarget({
+        to,
+        mode: "explicit",
+        allowFrom: [],
+      });
+
+      expect(result.ok).toBe(true);
+      expect(assertResolvedTarget(result)).toBe(expected);
+    });
+
+    it.each(["twitch:user:alice", "twitch:dm:alice"])(
+      "should reject unsupported direct target %s",
+      (to) => {
+        expectTargetError(
+          resolveTarget,
+          {
+            to,
+            mode: "explicit",
+            allowFrom: [],
+          },
+          "Delivering to Twitch requires target <channel-name>",
+        );
+      },
+    );
   });
 
   describe("sendText", () => {
@@ -447,6 +477,80 @@ describe("outbound", () => {
         clientManager: undefined,
       });
     });
+
+    it("should deliver durable reply targets with the twitch:channel: prefix", async () => {
+      const { sendMessageTwitchInternal } = await import("./send.js");
+
+      setupAccountContext();
+      vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
+        messageId: "msg-789",
+        receipt: twitchTestReceipt("msg-789"),
+      });
+
+      await twitchOutbound.sendText!({
+        cfg: mockConfig,
+        to: "twitch:channel:OpenClaw",
+        text: "Hello!",
+        accountId: "default",
+      });
+
+      expect(sendMessageTwitchInternal).toHaveBeenCalledWith({
+        channel: "openclaw",
+        text: "Hello!",
+        cfg: mockConfig,
+        account: mockAccount,
+        accountId: "default",
+        clientManager: undefined,
+      });
+    });
+
+    it.each(["twitch:user:alice", "twitch:dm:alice"])(
+      "should reject direct-message target %s instead of falling back to the default channel",
+      async (to) => {
+        const { sendMessageTwitchInternal } = await import("./send.js");
+
+        setupAccountContext();
+
+        await expect(
+          twitchOutbound.sendText!({
+            cfg: mockConfig,
+            to,
+            text: "Hello!",
+            accountId: "default",
+          }),
+        ).rejects.toThrow(`Twitch target "${to}" is not a deliverable channel`);
+        expect(sendMessageTwitchInternal).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["#", "   "])(
+      "should keep the default-channel fallback for empty-normalizing target %j",
+      async (to) => {
+        const { sendMessageTwitchInternal } = await import("./send.js");
+
+        setupAccountContext();
+        vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
+          messageId: "msg-fallback",
+          receipt: twitchTestReceipt("msg-fallback"),
+        });
+
+        await twitchOutbound.sendText!({
+          cfg: mockConfig,
+          to,
+          text: "Hello!",
+          accountId: "default",
+        });
+
+        expect(sendMessageTwitchInternal).toHaveBeenCalledWith({
+          channel: "testchannel",
+          text: "Hello!",
+          cfg: mockConfig,
+          account: mockAccount,
+          accountId: "default",
+          clientManager: undefined,
+        });
+      },
+    );
 
     it("uses configured defaultAccount when accountId is omitted", async () => {
       const { sendMessageTwitchInternal } = await import("./send.js");

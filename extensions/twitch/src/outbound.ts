@@ -10,7 +10,11 @@ import type {
   ChannelOutboundContext,
   OutboundDeliveryResult,
 } from "./types.js";
-import { normalizeTwitchChannel } from "./utils/twitch.js";
+import {
+  isTwitchDirectMessageTarget,
+  normalizeTwitchChannel,
+  normalizeTwitchMessagingTarget,
+} from "./utils/twitch.js";
 
 export const twitchOutbound = {
   deliveryMode: "direct",
@@ -35,10 +39,10 @@ export const twitchOutbound = {
     const hasWildcard = allowListRaw.includes("*");
     const allowList = allowListRaw
       .filter((entry: string) => entry !== "*")
-      .map((entry: string) => normalizeTwitchChannel(entry))
+      .map((entry: string) => normalizeTwitchMessagingTarget(entry))
       .filter((entry): entry is string => entry.length > 0);
 
-    const normalizedTo = normalizeTwitchChannel(trimmed);
+    const normalizedTo = normalizeTwitchMessagingTarget(trimmed);
     const restricted = mode === "implicit" || mode === "heartbeat";
     if (
       normalizedTo &&
@@ -84,13 +88,19 @@ export const twitchOutbound = {
           "Required: username, clientId, and accessToken (config or env for default account).",
       );
     }
+    // Twitch chat only delivers to channels: reject direct-message targets
+    // instead of silently redirecting them to the account's default channel.
+    if (isTwitchDirectMessageTarget(channel)) {
+      throw new Error(`Twitch target "${channel}" is not a deliverable channel`);
+    }
     // A target that normalizes to empty still uses the account's default channel.
-    const deliveryChannel = normalizeTwitchChannel(channel) || account.channel;
+    const deliveryChannel =
+      normalizeTwitchMessagingTarget(channel) || normalizeTwitchChannel(account.channel ?? "");
     if (!deliveryChannel) {
       throw new Error("No channel specified and no default channel in account config");
     }
     const result = await sendMessageTwitchInternal({
-      channel: normalizeTwitchChannel(deliveryChannel),
+      channel: deliveryChannel,
       text,
       cfg,
       account,
