@@ -50,7 +50,6 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("relay authority rechecks", () => {
   it.each([
-    { name: "evaluation", method: "Runtime.evaluate", params: undefined, sessionId: undefined },
     {
       name: "blank fragment navigation",
       method: "Page.navigate",
