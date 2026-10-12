@@ -91,7 +91,7 @@ describe("worker provider project preparation ownership", () => {
     expect(environments[1]?.profileSnapshot).toEqual(environments[0]?.profileSnapshot);
   });
 
-  it.each([false, true])(
+  it.each([false, true, undefined])(
     "requires explicit dedicated classification after prepared node provisioning (sharedHost=%s)",
     async (sharedHost) => {
       const git = await repository("prepared-host-classification");
