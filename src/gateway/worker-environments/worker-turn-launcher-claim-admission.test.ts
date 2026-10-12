@@ -64,7 +64,7 @@ describe("worker turn launcher claim admission", () => {
             );
             expect(placements.get(SESSION_ID)).toEqual(before);
             expect(loadSessionEntry(sessionTarget)).toEqual(entryBefore);
-            expect(placements.get(successorId)).toBeUndefined();
+            expect(await placements.getAsync(successorId)).toBeUndefined();
           };
           const localClaim = await placements.claimTurn({
             ...sessionTarget,
@@ -227,7 +227,7 @@ describe("worker turn launcher claim admission", () => {
         priorClaim,
         "refs/openclaw/worker-results/missing",
       );
-      placements.clearLocalTurnClaimsAfterRestart();
+      await placements.clearLocalTurnClaimsAfterRestartAsync();
       const pending = await placements.listPendingWorkspaceResultsAsync();
       expect(pending).toMatchObject([
         { stagedResultRef: "refs/openclaw/worker-results/missing", workspaceAcceptedAtMs: null },

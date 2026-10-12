@@ -218,7 +218,7 @@ describe("worker session placement activation", () => {
       recoveryError: "workspace recovery failed",
     });
     nowMs = 8_000;
-    store.retireSessionPlacement({
+    await store.retireSessionPlacementAsync({
       sessionId: SESSION.sessionId,
       expectedState: "failed",
       expectedGeneration: failed.generation,

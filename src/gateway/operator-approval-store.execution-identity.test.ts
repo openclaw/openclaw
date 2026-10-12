@@ -14,7 +14,7 @@ import {
   insertOperatorApproval,
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
-import { insertOperatorApprovalInDatabase as insertOperatorApprovalNative } from "./operator-approval-store.kernel.js";
+import { insertOperatorApprovalInDatabase as insertOperatorApprovalNative } from "./operator-approval-store.kernel.worker.js";
 import {
   getOperatorApprovalDetailed as getOlderOperatorApproval,
   OLDER_OPERATOR_APPROVAL_SCHEMA_SQL,

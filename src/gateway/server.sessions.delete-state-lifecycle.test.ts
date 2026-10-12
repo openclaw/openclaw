@@ -503,7 +503,7 @@ test.each(["archive-publication", "worker-queue"] as const)(
         async (...args) => {
           const result = await publish(...args);
           if (!loadSessionEntry({ sessionKey }) && !retired) {
-            placementStore.retireSessionPlacement({
+            await placementStore.retireSessionPlacementAsync({
               sessionId,
               expectedState: "local",
               expectedGeneration: claim.placementGeneration,

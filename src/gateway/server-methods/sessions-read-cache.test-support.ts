@@ -70,7 +70,9 @@ export function createSessionPlacementFactsReader(
 ): Pick<WorkerSessionPlacementStore, "readProjection"> {
   return {
     async readProjection(sessionIds) {
-      const records = placements.getMany(sessionIds);
+      const records = placements.getManyAsync
+        ? await placements.getManyAsync(sessionIds)
+        : placements.getMany(sessionIds);
       const environments = new Map();
       for (const placement of records.values()) {
         const environmentId = placement.environmentId;

@@ -33,7 +33,7 @@ describe("worker placement idle suspension", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  function createIdleFixture(
+  async function createIdleFixture(
     options: {
       suspendAfter?: string | null;
       destroyFails?: boolean;
@@ -47,7 +47,7 @@ describe("worker placement idle suspension", () => {
       }) => Promise<() => boolean>;
     } = {},
   ) {
-    const harness = createHarness(database, placements, {
+    const harness = await createHarness(database, placements, {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
       destroyFails: options.destroyFails,
@@ -117,7 +117,7 @@ describe("worker placement idle suspension", () => {
       warn: vi.fn(),
     });
     try {
-      const { harness, idleSweep, profile } = createIdleFixture({
+      const { harness, idleSweep, profile } = await createIdleFixture({
         suspendAfter: null,
         reportChanges,
       });
@@ -143,17 +143,15 @@ describe("worker placement idle suspension", () => {
   });
 
   it("suspends a never-run worker after its activation through the real reclaim teardown", async () => {
-    const { harness, idleSweep, info, warn } = createIdleFixture();
+    const { harness, idleSweep, info, warn } = await createIdleFixture();
     const active = await harness.service.dispatch(REQUEST);
 
     nowMs += 59_999;
     const sql = observeHostDataSql();
     try {
       expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
-      expect(sql.queries.length).toBeGreaterThan(0);
-      const beforeSweep = sql.queries.length;
       await idleSweep.sweep();
-      expect(sql.queries.slice(beforeSweep)).toEqual([]);
+      expect(sql.queries).toEqual([]);
     } finally {
       sql.restore();
     }
@@ -182,7 +180,7 @@ describe("worker placement idle suspension", () => {
   });
 
   it("starts the idle clock at the latest authoritative turn-claim release", async () => {
-    const { harness, idleSweep } = createIdleFixture();
+    const { harness, idleSweep } = await createIdleFixture();
     await harness.service.dispatch(REQUEST);
 
     nowMs += 50_000;
@@ -203,7 +201,7 @@ describe("worker placement idle suspension", () => {
   it.each(["dispatch", "move"] as const)(
     "does not suspend while the real coordinator owns an in-flight %s",
     async (kind) => {
-      const { harness, idleSweep, info, warn } = createIdleFixture({
+      const { harness, idleSweep, info, warn } = await createIdleFixture({
         isPlacementOperationInFlight: (sessionId) =>
           coordinated.isPlacementOperationInFlight(sessionId),
       });
@@ -268,7 +266,7 @@ describe("worker placement idle suspension", () => {
   ] as const)("does not suspend when blocked by $reason", async ({ kind }) => {
     const getSessionWorkAdmissionCheck =
       kind === "admitted-turn" ? vi.fn(async () => () => true) : undefined;
-    const { harness, idleSweep, info, warn } = createIdleFixture({
+    const { harness, idleSweep, info, warn } = await createIdleFixture({
       ...(kind === "no-suspend-after" ? { suspendAfter: null } : {}),
       ...(getSessionWorkAdmissionCheck ? { getSessionWorkAdmissionCheck } : {}),
     });
@@ -294,7 +292,7 @@ describe("worker placement idle suspension", () => {
         });
         if (kind === "pending-result") {
           await placements.markWorkspaceResultPending(claim);
-          placements.clearLocalTurnClaimsAfterRestart();
+          await placements.clearLocalTurnClaimsAfterRestartAsync();
           expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
           expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }
@@ -351,7 +349,7 @@ describe("worker placement idle suspension", () => {
   it("abandons suspension silently when session work is admitted before reclaim begins", async () => {
     const hasSessionWork = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
     const getSessionWorkAdmissionCheck = vi.fn(async () => hasSessionWork);
-    const { harness, idleSweep, info, warn } = createIdleFixture({
+    const { harness, idleSweep, info, warn } = await createIdleFixture({
       getSessionWorkAdmissionCheck,
     });
     await harness.service.dispatch(REQUEST);
@@ -369,7 +367,7 @@ describe("worker placement idle suspension", () => {
   it.each(["transaction", "commit"] as const)(
     "rechecks idle policy at drain %s admission",
     async (stage) => {
-      const { harness, idleSweep, profile, info, warn } = createIdleFixture({
+      const { harness, idleSweep, profile, info, warn } = await createIdleFixture({
         getSessionWorkAdmissionCheck: async () => () => false,
       });
       const active = await harness.service.dispatch(REQUEST);
@@ -399,7 +397,7 @@ describe("worker placement idle suspension", () => {
     async (change) => {
       const reclaimStarted = createDeferredCore();
       const releaseReclaim = createDeferredCore();
-      const { harness, idleSweep, profile, info, warn } = createIdleFixture({
+      const { harness, idleSweep, profile, info, warn } = await createIdleFixture({
         reclaim: async (request, authorize, beforeDrain) => {
           reclaimStarted.resolve();
           await releaseReclaim.promise;
@@ -446,7 +444,7 @@ describe("worker placement idle suspension", () => {
 
   it("finishes its owned drain without rechecking idle eligibility during teardown", async () => {
     let hasSessionWork = false;
-    const { harness, idleSweep, info, warn } = createIdleFixture({
+    const { harness, idleSweep, info, warn } = await createIdleFixture({
       getSessionWorkAdmissionCheck: async () => () => hasSessionWork,
     });
     await harness.service.dispatch(REQUEST);
@@ -470,7 +468,7 @@ describe("worker placement idle suspension", () => {
   });
 
   it("logs a failed reclaim once without immediately retrying provider teardown", async () => {
-    const { harness, idleSweep, info, warn } = createIdleFixture({ destroyFails: true });
+    const { harness, idleSweep, info, warn } = await createIdleFixture({ destroyFails: true });
     await harness.service.dispatch(REQUEST);
     nowMs += 60_000;
 

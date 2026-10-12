@@ -267,7 +267,7 @@ describe("initial worker setup admission", () => {
         owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       });
       await placements.markWorkspaceResultPending(claim);
-      placements.clearLocalTurnClaimsAfterRestart();
+      await placements.clearLocalTurnClaimsAfterRestartAsync();
     });
     const claimTurn = vi.spyOn(placements, "claimTurn");
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));

@@ -312,7 +312,7 @@ describe("worker placement read projection", () => {
       if (kind !== "local") {
         await activePlacement(database, session.sessionId, kind);
       }
-      const current = store.get(session.sessionId);
+      const current = await store.getAsync(session.sessionId);
       await store.claimTurn({
         ...session,
         owner: current?.state === "active" ? placementTurnOwner(current) : { kind: "local" },
@@ -428,7 +428,7 @@ describe("worker placement read projection", () => {
     const sql = observeHostDataSql();
     try {
       expect(store.get(first.placement.sessionId)?.state).toBe("active");
-      expect(sql.queries.length).toBeGreaterThan(0);
+      expect(sql.queries).toEqual([]);
       const beforeSweep = sql.queries.length;
       let discoverySql: string[] | undefined;
       const requestedEnvironments: string[] = [];
@@ -704,7 +704,7 @@ describe("worker placement read projection", () => {
       expect(await store.listPendingWorkspaceResultsAsync()).toEqual(pendingResults);
       const orderedIds = [
         ...new Set([
-          ...store.listForReconcile().map((placement) => placement.sessionId),
+          ...(await store.listForReconcileAsync()).map((placement) => placement.sessionId),
           ...db
             .prepare(
               "SELECT session_id FROM worker_session_placement_moves ORDER BY created_at_ms, session_id",
@@ -802,7 +802,7 @@ describe("worker placement read projection", () => {
       for (const claimless of [false, true]) {
         if (claimless) {
           if (executionMode === "remote-exec") {
-            expect(store.clearLocalTurnClaimsAfterRestart()).toBe(1);
+            expect(await store.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
           } else {
             database.db
               .prepare(`UPDATE worker_session_placements SET turn_claim_owner = NULL, turn_claim_id = NULL,

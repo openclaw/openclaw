@@ -810,7 +810,7 @@ describe("Gateway GitHub publication boundaries", () => {
     });
     await placements.releaseTurn(claim);
 
-    expect(coordinator.deferOrphanedRequests()).toBeUndefined();
+    expect(await coordinator.deferOrphanedRequestsAsync()).toBeUndefined();
     expect(
       database.db
         .prepare("SELECT claim_id FROM github_publication_requests WHERE request_id = ?")

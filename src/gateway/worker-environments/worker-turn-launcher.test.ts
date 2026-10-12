@@ -247,7 +247,7 @@ describe("worker turn launcher local placement", () => {
             await expect(adopt("session-local-successor")).resolves.toBe(SESSION_ID);
             expect(loadSessionEntry(sessionTarget)?.sessionId).toBe("session-local-successor");
             expect(placements.get(SESSION_ID)).toEqual(placement);
-            expect(placements.get("session-local-successor")).toBeUndefined();
+            expect(await placements.getAsync("session-local-successor")).toBeUndefined();
             await settle();
             expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
           });
@@ -278,7 +278,7 @@ describe("worker turn launcher local placement", () => {
     }
 
     expect(runLocal).toHaveBeenCalledOnce();
-    expect(placements.list()).toEqual([]);
+    expect(await placements.listAsync()).toEqual([]);
   });
 
   it.each(["cancellation", "placement publication", "run revocation"] as const)(
@@ -613,7 +613,7 @@ describe("worker turn launcher local placement", () => {
     });
     await firstStarted.promise;
     const firstClaimId = placements.get(SESSION_ID)?.turnClaim?.claimId;
-    expect(placements.clearLocalTurnClaimsAfterRestart()).toBe(1);
+    expect(await placements.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
 
     const second = localProvider.executeLocalTurn(claim, async () => {
       secondStarted.resolve();

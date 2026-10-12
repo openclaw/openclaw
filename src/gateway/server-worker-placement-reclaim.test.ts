@@ -133,7 +133,7 @@ async function scenario(
     },
   });
   let reconciliations = 0;
-  const harness = createHarness(database, placements, {
+  const harness = await createHarness(database, placements, {
     workspacePath: worktreePath,
     ...(failedRetry ? { failAt: "sync" as const } : {}),
     runReclaimPreparation: barriers.runReclaimPreparation,
@@ -665,7 +665,7 @@ it.each(["missing", "local"] as const)(
       cancelSessionWork: cancel,
       revokeSessionAuthority: vi.fn(),
     });
-    const harness = createHarness(database, placements, {
+    const harness = await createHarness(database, placements, {
       workspacePath: root,
       runReclaimPreparation: barriers.runReclaimPreparation,
       runReclaimBarrier: barriers.runReclaimBarrier,
@@ -699,7 +699,9 @@ it.each(["missing", "local"] as const)(
     });
     const sweep = coordinated.reconcileActive();
     await entered.promise;
-    expect(placements.get(REQUEST.sessionId)?.state).toBe(state === "local" ? "local" : undefined);
+    expect((await placements.getAsync(REQUEST.sessionId))?.state).toBe(
+      state === "local" ? "local" : undefined,
+    );
     let dispatchSettled = false;
     const dispatch = coordinated
       .dispatch(REQUEST)

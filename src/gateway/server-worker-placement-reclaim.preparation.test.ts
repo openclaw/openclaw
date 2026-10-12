@@ -115,7 +115,7 @@ async function cancellationLoadFixture(
     },
     revokeSessionAuthority: vi.fn(),
   });
-  const harness = createHarness(database, placements, {
+  const harness = await createHarness(database, placements, {
     workspacePath: root,
     runReclaimPreparation: barriers.runReclaimPreparation,
     runReclaimBarrier: barriers.runReclaimBarrier,
@@ -572,15 +572,17 @@ it.each([
     const stopping = Promise.resolve()
       .then(async () => {
         if (action === "archive") {
-          return await prepareSessionWorkerPlacementStop({
-            ...REQUEST,
-            action,
-            context: {
-              workerSessionPlacementService: placements,
-              workerPlacementDispatchService: coordinated,
-              workerEnvironmentService: harness.environments,
-            },
-          }).stop();
+          return await (
+            await prepareSessionWorkerPlacementStop({
+              ...REQUEST,
+              action,
+              context: {
+                workerSessionPlacementService: placements,
+                workerPlacementDispatchService: coordinated,
+                workerEnvironmentService: harness.environments,
+              },
+            })
+          ).stop();
         }
         return await coordinated.reclaim(REQUEST);
       })

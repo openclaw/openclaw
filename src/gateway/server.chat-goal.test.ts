@@ -340,8 +340,8 @@ describe("Goal chat admission and continuation", () => {
         state: "requested",
         generation: provisionalPlacement.generation,
       });
-    }).finally(() => {
-      placements.retireSessionPlacement({
+    }).finally(async () => {
+      await placements.retireSessionPlacementAsync({
         sessionId: request.idempotencyKey,
         expectedState: "requested",
         expectedGeneration: provisionalPlacement.generation,

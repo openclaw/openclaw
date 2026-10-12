@@ -2,14 +2,16 @@ import type { DatabaseSync } from "node:sqlite";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
-import { notifyListeners, registerListener } from "../../shared/listeners.js";
-import {
-  registerOpenClawStateDatabaseLifecycleListener,
-  requireOpenClawStateDatabaseIdentity,
-} from "../../state/openclaw-state-db-cache.js";
+import { registerListener } from "../../shared/listeners.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  closePlacementAuthorityOwner as closeOwner,
+  notifyPlacementClaimRevoked as notifyRevoked,
+  placementAuthorityOwnerFor as ownerFor,
+  placementAuthorityOwners as owners,
+} from "./placement-authority-owner.js";
 import {
   affectsPlacementObservation,
   applyPlacementReadPublication,
@@ -49,83 +51,6 @@ import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.
 
 export type { PlacementTurnClaimAuthority } from "./placement-turn-authority.types.js";
 
-function notifyRevoked(claim: RetainedClaim): void {
-  if (!claim.revoked) {
-    return;
-  }
-  const listeners = [...claim.listeners];
-  claim.listeners.clear();
-  notifyListeners(listeners, undefined);
-}
-
-function closeOwner(owner: PlacementAuthorityOwner): void {
-  owner.active = false;
-  owner.pending.clear();
-  owner.published.clear();
-  owner.tools.clear();
-  owner.workspaceResults.clear();
-  const claims = Array.from(owner.claims.values()).flatMap((retained) => Array.from(retained));
-  for (const claim of claims) {
-    claim.revoked = true;
-  }
-  for (const claim of claims) {
-    notifyRevoked(claim);
-  }
-  owner.claims.clear();
-  owner.observations.clear();
-  owner.placementReaders.clear();
-  owner.projections.clear();
-  owner.preservation = undefined;
-}
-
-const owners = resolveGlobalSingleton(
-  Symbol.for("openclaw.placementTurnAuthorities"),
-  () => new Map<string, PlacementAuthorityOwner>(),
-  (registered) => {
-    for (const owner of registered.values()) {
-      closeOwner(owner);
-    }
-    registered.clear();
-  },
-);
-
-function ownerFor(identity: DatabasePathIdentity): PlacementAuthorityOwner {
-  const existing = owners.get(identity.key);
-  if (existing?.active) {
-    return existing;
-  }
-  const owner: PlacementAuthorityOwner = {
-    identity,
-    active: true,
-    claims: new Map(),
-    observations: new Map(),
-    placementReaders: new Map(),
-    pending: new Set(),
-    sequence: 0,
-    published: new Map(),
-    tools: new Map(),
-    workspaceResults: new Map(),
-    projections: new Map(),
-  };
-  owners.set(identity.key, owner);
-  return owner;
-}
-
-registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind === "opened") {
-    return;
-  }
-  for (const [key, owner] of owners) {
-    if (
-      key === event.identity?.key ||
-      owner.identity.canonicalPath === (event.identity?.canonicalPath ?? event.path)
-    ) {
-      closeOwner(owner);
-      owners.delete(key);
-    }
-  }
-});
-
 function allows(change: ClaimChange, claim: WorkerSessionTurnClaim): boolean {
   return (
     change.kind !== "claim" ||
@@ -153,6 +78,22 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
   owner.pending.delete(change);
   if (!owner.active) {
     return;
+  }
+  const newerPlacement = (owner.placements.get(change.sessionId)?.sequence ?? -1) > sequence;
+  if (
+    !newerPlacement &&
+    change.indeterminate &&
+    (change.kind === "claim" || change.kind === "workspace-result")
+  ) {
+    owner.placements.delete(change.sessionId);
+  } else if (!newerPlacement && change.kind === "claim") {
+    if (change.retired) {
+      owner.placements.set(change.sessionId, { placement: undefined, sequence });
+    } else if (change.workspacePlacement) {
+      owner.placements.set(change.sessionId, { placement: change.workspacePlacement, sequence });
+    }
+  } else if (!newerPlacement && change.kind === "workspace-result" && change.facts) {
+    owner.placements.set(change.sessionId, { placement: change.facts.placement, sequence });
   }
   applyPlacementReadPublication(owner, change, sequence);
   if (affectsPlacementObservation(change)) {
@@ -438,6 +379,54 @@ export function stagePlacementRetirementWorkerPublication(
     localOnly: previousState === "local",
     retired: true,
   });
+}
+
+/** A read can fill a cold replica but never overwrite a newer committed postimage. */
+export function capturePlacementReplicaRead(identity: DatabasePathIdentity) {
+  const owner = ownerFor(identity);
+  const sequence = owner.sequence;
+  return (records: Iterable<WorkerSessionPlacementRecord>, requestedIds?: readonly string[]) => {
+    if (!owner.active) {
+      return;
+    }
+    const byId = new Map(Array.from(records, (record) => [record.sessionId, record]));
+    for (const sessionId of requestedIds ?? byId.keys()) {
+      if ((owner.placements.get(sessionId)?.sequence ?? -1) <= sequence) {
+        owner.placements.set(sessionId, {
+          placement: freezeJsonSnapshot(byId.get(sessionId)),
+          sequence,
+        });
+      }
+    }
+  };
+}
+
+/** Synchronous SDK reads consume committed writer receipts; cold reads use the async API. */
+export function readPlacementReplica(identity: DatabasePathIdentity, sessionId: string) {
+  const owner = owners.get(identity.key);
+  if (
+    !owner?.active ||
+    !owner.placements.has(sessionId) ||
+    hasPendingPublication(owner, sessionId)
+  ) {
+    return undefined;
+  }
+  return { placement: owner.placements.get(sessionId)!.placement };
+}
+
+/** Claim effects consult the single writer's postimage without reopening SQLite. */
+export function isPublishedPlacementTurnClaimCurrent(
+  identity: DatabasePathIdentity,
+  claim: WorkerSessionTurnClaim,
+): boolean {
+  const owner = owners.get(identity.key);
+  const placement = owner?.placements.get(claim.sessionId)?.placement;
+  return Boolean(
+    owner?.active &&
+    placement &&
+    isCurrentPlacementTurnClaim(placement, claim) &&
+    [...owner.pending].every((change) => allows(change, claim)),
+  );
 }
 
 /** Current result custody is published by its writer; discovery snapshots grant no authority. */

@@ -69,7 +69,7 @@ describe("dispatch Stop before provider allocation", () => {
     );
     const allocate = vi.spyOn(environments, "createWithRequest");
     const start = vi.spyOn(placements, "startDispatch");
-    const runtime = createRuntime(placements, environments);
+    const runtime = await createRuntime(placements, environments);
     const interrupted = vi.fn();
     const admission = await beginSessionWorkAdmission({
       scope: `${support.testState.root}/sessions.sqlite`,
@@ -89,7 +89,7 @@ describe("dispatch Stop before provider allocation", () => {
         await expect(dispatch()).rejects.toThrow("is busy with active work");
         expect(workspace.preflight).not.toHaveBeenCalled();
         expect(start).not.toHaveBeenCalled();
-        expect(placements.get(REQUEST.sessionId)).toBeUndefined();
+        expect(await placements.getAsync(REQUEST.sessionId)).toBeUndefined();
       }
       expect(interrupted).not.toHaveBeenCalled();
       expect(admission.isActive()).toBe(true);
@@ -177,7 +177,7 @@ describe("dispatch Stop before provider allocation", () => {
         signal?.throwIfAborted();
       });
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const harness = createHarness(support.testState.stateDb, placements, {
+      const harness = await createHarness(support.testState.stateDb, placements, {
         workspacePath: support.testState.root,
       });
       const active = await harness.placements.seedActive(2, "remote-exec");
@@ -200,7 +200,7 @@ describe("dispatch Stop before provider allocation", () => {
         ...support.createService(support.createProvider()),
         ...harness.environments,
       };
-      const runtime = createRuntime(placements, environments, async (request) => {
+      const runtime = await createRuntime(placements, environments, async (request) => {
         request.assertCurrent();
         request.onCancellationStarted?.();
       });
@@ -263,7 +263,7 @@ describe("dispatch Stop before provider allocation", () => {
             // completion as authority over the replacement session incarnation.
             expect(stopped).toMatchObject({ code: "invalid_state" });
             expect(sourceEntry.sessionId).toBe("replacement-session");
-            expect(placements.get("replacement-session")).toBeUndefined();
+            expect(await placements.getAsync("replacement-session")).toBeUndefined();
           } else {
             expect.soft(stopped).toMatchObject({ state: "local", generation: local?.generation });
           }
@@ -311,10 +311,10 @@ describe("dispatch Stop before provider allocation", () => {
     });
     const environments = support.createService(support.createProvider({ provision }));
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const runtime = createRuntime(placements, environments);
+    const runtime = await createRuntime(placements, environments);
     const dispatch = runtime.dispatchService.dispatch(REQUEST).catch((error: unknown) => error);
     await preflight.entered;
-    expect(placements.get(REQUEST.sessionId)).toBeUndefined();
+    expect(await placements.getAsync(REQUEST.sessionId)).toBeUndefined();
     const stopping = runtime.dispatchService.reclaim(REQUEST);
     let stopped = false;
     void stopping.then(
@@ -395,7 +395,7 @@ describe("dispatch Stop before provider allocation", () => {
         await release.promise;
       });
       const create = vi.spyOn(environments, "createWithRequest");
-      const runtime = createRuntime(placements, environments);
+      const runtime = await createRuntime(placements, environments);
       const sweep = runtime.dispatchService.reconcileActive();
       await entered.promise;
       const dispatch = runtime.dispatchService.dispatch(REQUEST).then(
@@ -455,7 +455,7 @@ describe("dispatch Stop before provider allocation", () => {
       assertAllowed: () => {},
       onInterrupt: interrupted,
     });
-    const runtime = createRuntime(placements, environments);
+    const runtime = await createRuntime(placements, environments);
     try {
       await expect(runtime.dispatchService.reclaim(REQUEST)).rejects.toThrow();
       expect(interrupted).not.toHaveBeenCalled();
@@ -541,12 +541,12 @@ describe("dispatch Stop before provider allocation", () => {
       );
       workspace.preflight.mockResolvedValue(undefined);
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const harness = createHarness(support.testState.stateDb, placements);
+      const harness = await createHarness(support.testState.stateDb, placements);
       const environments = {
         ...support.createService(support.createProvider()),
         ...harness.environments,
       };
-      const runtime = createRuntime(placements, environments);
+      const runtime = await createRuntime(placements, environments);
       const initial =
         phase === "recovery"
           ? await harness.placements.seedProvisioning("remote-exec")
@@ -674,7 +674,7 @@ describe("dispatch Stop before provider allocation", () => {
           new Error("Bootstrap failed"),
         );
       }
-      const runtime = createRuntime(placements, environments);
+      const runtime = await createRuntime(placements, environments);
       const uninstall = installWorkerPlacementReconcileGuard({
         placements,
         environments,
@@ -853,7 +853,7 @@ describe("dispatch Stop before provider allocation", () => {
           await reconcileOnce();
         });
       }
-      const runtime = createRuntime(placements, environments, cancelSessionWork);
+      const runtime = await createRuntime(placements, environments, cancelSessionWork);
       const uninstallGuard = installWorkerPlacementReconcileGuard({
         placements,
         environments,

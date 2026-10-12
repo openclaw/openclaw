@@ -7,6 +7,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
@@ -45,7 +46,6 @@ import {
   readGitHubPublicationRequestAsync,
 } from "./github-publication-store-async.js";
 import {
-  deferGitHubPublicationRequests as deferRequests,
   insertGitHubPublicationRequest,
   ensureGitHubPublicationStore as ensureSchema,
   githubPublicationDatabase as publicationDb,
@@ -59,7 +59,6 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./worker-environments/placement-store.js";
-import type { WorkerWorkspacePendingResult } from "./worker-environments/placement-workspace-result.types.js";
 
 /** @deprecated Use GitHubPublicationClaimRequestV2; removed in the next Plugin SDK major. */
 export type GitHubPublicationClaimRequest = {
@@ -176,35 +175,6 @@ export function createGitHubPublicationCoordinatorMethods(params: {
   ) => Promise<SessionGitHubPublicationResult>;
 }) {
   const { readById, requestForClaim, sameWorktree, processRow } = params;
-  const deferOrphanedRequestsWithPendingResults = (
-    results: readonly WorkerWorkspacePendingResult[],
-  ): void => {
-    const pending = new Set(results.map((row) => `${row.sessionId}\0${row.claimId}\0${row.runId}`));
-    const db = openOpenClawStateDatabase().db;
-    const rows = executeSqliteQuerySync(
-      db,
-      publicationDb(db)
-        .selectFrom("github_publication_requests")
-        .selectAll()
-        .where("status", "in", ["requested", "publishing"])
-        .orderBy("created_at_ms"),
-    ).rows;
-    const orphaned = rows.filter((row) => {
-      if (row.claim_id === null) {
-        return false;
-      }
-      const ownerKey = `${row.session_id}\0${row.claim_id}\0${row.run_id}`;
-      const placement = params.placements.get(row.session_id);
-      const liveClaim = placement?.turnClaim;
-      const stillLive =
-        liveClaim?.claimId === row.claim_id &&
-        liveClaim.runId === row.run_id &&
-        liveClaim.generation === row.placement_generation;
-      return !pending.has(ownerKey) && !stillLive;
-    });
-    deferRequests(orphaned.map((row) => row.request_id));
-  };
-
   const requestForSession = async (
     input: GitHubPublicationSessionRequest,
     workerRequester?: GitHubPublicationRequesterV2,
@@ -573,10 +543,14 @@ export function createGitHubPublicationCoordinatorMethods(params: {
 
     /** @deprecated Use deferOrphanedRequestsAsync; removed in the next Plugin SDK major. */
     deferOrphanedRequests(): void {
-      if (!schemaExists()) {
-        return;
-      }
-      deferOrphanedRequestsWithPendingResults(params.placements.listPendingWorkspaceResults());
+      warnPluginSdkDeprecation({
+        family: "github-publication",
+        method: "deferOrphanedRequests",
+        replacement: "deferOrphanedRequestsAsync",
+      });
+      throw new Error(
+        "Await deferOrphanedRequestsAsync; synchronous placement reads are no longer supported.",
+      );
     },
 
     async deferOrphanedRequestsAsync(): Promise<void> {

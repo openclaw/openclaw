@@ -30,8 +30,9 @@ warning per family. Diagnostics contain no database paths, credentials, payloads
 or stack dumps. This policy replaces the earlier no-new-runtime-warnings rule for
 these writer migrations; documentation-only reader records retain their own policy.
 
-Synchronous compatibility calls still commit before returning. Awaited mutations
-complete only after committed facts have been installed. SessionManager and its
+Synchronous compatibility writers that retain native adapters still commit before
+returning. Retired adapters reject calls as documented in their records below.
+Awaited mutations complete only after committed facts have been installed. SessionManager and its
 extension/provider adapters share the session-persistence warning budget.
 
 ### Retained helper contracts
@@ -133,22 +134,31 @@ migration.
 
 The Gateway context exposed by `GatewayRequestHandlerOptions` from `core` and
 `gateway-runtime`, and by `getPluginRuntimeGatewayRequestScope()` from
-`plugin-runtime`, retains these synchronous contracts shipped in OpenClaw
-2026.9.7:
+`plugin-runtime`, retains deprecated placement signatures through the next
+Plugin SDK major. Placement reads and writes now use the existing shared-state
+workers; the native synchronous database paths are retired.
 
-- `workerSessionPlacementService.listPendingWorkspaceResults(sessionId?)`
-  returns the pending result array.
-- `workerSessionPlacementService.getWorkspaceResultReconcilingSessionIds(sessionIds)`
-  returns a `ReadonlySet<string>`.
-- `githubPublicationService.deferOrphanedRequests()` returns `void` after
-  orphaned requests have been deferred.
+`workerSessionPlacementService.get` and `getMany` read only committed in-process
+receipts. A cold or invalidated entry throws with instructions to await `getAsync`
+or `getManyAsync`; absence is returned only when the owner has published that fact.
+Synchronous inventory methods (`list`, `listForReconcile`,
+`listPendingWorkspaceResults`, and `getWorkspaceResultReconcilingSessionIds`) and
+mutations (`retireSessionPlacement` and `clearLocalTurnClaimsAfterRestart`) throw
+with their `Async` replacement. These calls neither query SQLite nor queue work.
+Legacy placement reads and writes share their per-plugin capability-family warning.
 
-Migrate to the corresponding `Async`-suffixed methods and await their results.
-The placement readers use the SQLite worker. Internal callers use the awaited
-methods; the synchronous adapters remain solely for released plugin contracts.
-TypeScript marks those adapters deprecated. They retain their result shapes and
-completion timing until the next Plugin SDK major and an explicitly approved
-breaking release. No schema, retained data, or update migration changes.
+The built-in `placementStandingGrants.resolveBinding`, `retain`, and `validate`
+methods likewise throw migration-directed errors. Await their `Async` replacements;
+`resolveAsync` can combine binding and retained-parent validation. Immediately
+before transport, await `consumeAsync`, then use synchronous `consume` for the final
+receipt and expiry check without SQLite. Current placement, pairing, parent approval,
+and caller authority remain required at the effect. Custom released service objects
+retain their own explicitly selected compatibility contracts; the built-in Gateway
+never falls back to native SQL. See [placement preparation](/plugins/sdk-migration/how-to-migrate#await-placement-preparation).
+
+`githubPublicationService.deferOrphanedRequests()` now warns and throws with
+migration guidance; await `deferOrphanedRequestsAsync()` instead. These changes
+preserve schemas, stored data, retention, durability, and update behavior.
 
 GitHub publication's opaque requester and synchronous lifecycle methods, plus
 personal OAuth `cancelAuthorization` and `disconnect`, share the
@@ -158,6 +168,18 @@ their synchronous results until the same removal gate; migrate to
 [V2 request and lifecycle migration](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
 for required host capabilities and callback ordering. This does not change the
 warning policy of the placement reader family.
+
+### Approval callback timing
+
+The deprecated `GatewayRequestHandlerOptions.sessionMutationCommitGuard` callback
+keeps its signature for approval requests, but now runs at the worker's precommit
+boundary. A throw rejects and rolls back that write. The callback can inspect live
+host authority; it cannot observe tentative worker rows through a host database
+connection or depend on the former host transaction view. Use host-bound
+`api.runtime.gateway.request` approval methods instead. Legacy use shares the
+`native-approval-callback` warning budget. Boot orphan cleanup and terminal pruning
+remain synchronous boot-admission work. Schemas, retained decisions, durability,
+and update behavior are unchanged.
 
 ### Channel pairing allowlists
 
@@ -309,22 +331,23 @@ are unchanged.
 
 ### Mention Inbox persistence
 
-The October 3, 2026 `mention-inbox-sync-persistence` record retains the
-synchronous `mentionInbox.list(client)`, `mentionInbox.dismiss(client, ids)`,
+The `mention-inbox-sync-persistence` record retains the TypeScript signatures of
+`mentionInbox.list(client)`, `mentionInbox.dismiss(client, ids)`,
 `mentionInbox.recordCommittedInput(input)`, and `mentionInbox.invalidate(sessionKey)`
-contracts exposed through the Gateway Plugin SDK context. Their result shapes,
-exact-ID matching, and immediate completion remain supported until the next
-Plugin SDK major and explicit breaking-release approval. Recording persists
-synchronously; invalidation refreshes connected views before returning. Inside
-an enclosing transaction, notifications wait for that transaction to commit.
+until the next Plugin SDK major. Their native synchronous persistence adapters
+were retired on October 11, 2026 so Gateway database work runs only in workers.
+`list` and `dismiss` now return an `UNAVAILABLE` result with migration guidance;
+`recordCommittedInput` and `invalidate` throw an error with the same guidance.
+They do not read, mutate, or schedule database work.
 
 Use `listAsync` and `dismissAsync` with their synchronous result-publication
 callbacks, and await `recordCommittedInputAsync` and `invalidateAsync`; see
 [awaited Mention Inbox operations](/plugins/sdk-migration/how-to-migrate#await-mention-inbox-operations).
 Core and bundled callers use these worker-backed methods. Legacy calls emit one
-`DEP_SESSION_PERSISTENCE` warning per plugin and capability family per process, with one
-SDK-level family warning for unscoped calls. Schemas, retained data, and update
-behavior are unchanged.
+`DEP_SESSION_PERSISTENCE` warning per plugin and capability family per process,
+with one SDK-level family warning for unscoped calls. Awaited operations retain
+exact-ID matching and complete persistence before resolving. Schemas, retained
+data, retention, and update behavior are unchanged.
 
 ### Personal model-account control plane
 

@@ -148,8 +148,6 @@ it.each([
     client.connectionSignal = connection.signal;
     let nativeRevoked = false;
     const nativeGuard = vi.fn(() => {
-      // This enters the existing native write transaction even for a pending-row read.
-      getOperatorApproval({ id: record.id, databaseOptions });
       if (nativeRevoked) {
         throw new Error("synthetic native guard revoked");
       }
@@ -311,21 +309,16 @@ it.each([
         publishConfig(initialConfig);
       }
       const response = await pending;
-      expect(stages).toEqual(
-        native
-          ? []
-          : [
-              "transport-retired",
-              "lookup-completed",
-              ...(verdictChange ? ["verdict-precommit"] : []),
-              ...(revocation === "lookup" || revocation === "verdict" ? ["device-revoked"] : []),
-            ],
-      );
+      expect(stages).toEqual([
+        "transport-retired",
+        "lookup-completed",
+        ...(verdictChange ? ["verdict-precommit"] : []),
+        ...(revocation === "lookup" || revocation === "verdict" ? ["device-revoked"] : []),
+      ]);
       if (native) {
         expect(nativeGuard).toHaveBeenCalled();
-      } else {
-        expect(client.connectionSignal.aborted).toBe(true);
       }
+      expect(client.connectionSignal.aborted).toBe(true);
       expect(lookup).toHaveBeenCalledOnce();
       if (revoke) {
         expect(response).toMatchObject({ ok: false, error: { message: "approval not found" } });

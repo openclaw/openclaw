@@ -24,8 +24,6 @@ import {
 import {
   deferTurnClaimRelease,
   deferWorkerTurnClaimClosed,
-  removeTurnClaimReleaseWaiter,
-  waitersFor,
 } from "./placement-turn-claim-events.js";
 import {
   assertSessionWorkspaceUnreserved,
@@ -80,7 +78,7 @@ export function clearLocalTurnClaimsInDatabase(
 }
 
 export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
-  const { instanceId, path, now, read, write } = runtime;
+  const { instanceId, path, now, write } = runtime;
   function publishTurnRelease(
     db: DatabaseSync,
     claim: WorkerSessionTurnClaim,
@@ -485,75 +483,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           `Session ${sessionId} workspace result changed during cancellation`,
         );
       });
-    },
-
-    clearLocalTurnClaimsAfterRestart(this: void): number {
-      return write((db) => clearLocalTurnClaimsInDatabase(db, path, now()).length);
-    },
-
-    async waitForTurnClaimRelease(
-      this: void,
-      sessionIdInput: string,
-      waitOptions: { timeoutMs?: number; signal?: AbortSignal },
-    ): Promise<void> {
-      const sessionId = required(sessionIdInput, "session id");
-      if (
-        waitOptions.timeoutMs !== undefined &&
-        (!Number.isSafeInteger(waitOptions.timeoutMs) || waitOptions.timeoutMs < 0)
-      ) {
-        throw new Error("Worker session turn claim wait timeout must be a non-negative integer");
-      }
-      if (!find(read(), sessionId)?.turnClaim) {
-        return;
-      }
-      if (waitOptions.signal?.aborted) {
-        throw new Error(`Turn claim wait aborted for session ${sessionId}`);
-      }
-      await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        const waiters = waitersFor(path, sessionId);
-        const finish = (error?: Error) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          if (timer) {
-            clearTimeout(timer);
-          }
-          waitOptions.signal?.removeEventListener("abort", onAbort);
-          removeTurnClaimReleaseWaiter(path, sessionId, onRelease);
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        };
-        const onRelease = (error?: Error) => finish(error);
-        const onAbort = () => finish(new Error(`Turn claim wait aborted for session ${sessionId}`));
-        const timer =
-          waitOptions.timeoutMs === undefined
-            ? undefined
-            : setTimeout(
-                () =>
-                  finish(
-                    new Error(`Timed out waiting for session ${sessionId} turn claim release`),
-                  ),
-                waitOptions.timeoutMs,
-              );
-        waiters.add(onRelease);
-        waitOptions.signal?.addEventListener("abort", onAbort, { once: true });
-        // Register first, then reread. This closes the release-between-check-and-wait race.
-        if (!find(read(), sessionId)?.turnClaim) {
-          finish();
-        } else if (waitOptions.signal?.aborted) {
-          onAbort();
-        }
-      });
-    },
-
-    validateTurnClaim(this: void, claim: WorkerSessionTurnClaim): boolean {
-      const current = find(read(), required(claim.sessionId, "session id"));
-      return current ? isCurrentPlacementTurnClaim(current, claim) : false;
     },
 
     updateWorkspaceBaseManifest(input: {

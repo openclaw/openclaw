@@ -77,7 +77,7 @@ async function preparedHarness(
     database: support.testState.stateDb,
     now: () => support.testState.nowMs,
   });
-  const harness = createHarness(support.testState.stateDb, placements, {
+  const harness = await createHarness(support.testState.stateDb, placements, {
     ...(options.repository
       ? {
           requiresNodeEnrollment: true,

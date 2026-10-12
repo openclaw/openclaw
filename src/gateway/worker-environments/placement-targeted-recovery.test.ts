@@ -37,13 +37,13 @@ async function seedAttached(environmentId: string) {
   });
 }
 
-function createDispatch(
+async function createDispatch(
   environments: WorkerEnvironmentService,
   placements: ReturnType<typeof createWorkerSessionPlacementStore>,
 ) {
   return coordinateWorkerPlacementDispatch(
     createWorkerPlacementDispatchService({
-      initialPlacements: placements.list(),
+      initialPlacements: await placements.listAsync(),
       placements,
       environments,
       runnerAvailability: { read: () => undefined, version: () => 0 },
@@ -106,7 +106,7 @@ describe("targeted worker placement recovery", () => {
       }),
       { maintainProviders },
     );
-    const dispatch = createDispatch(environments, placements);
+    const dispatch = await createDispatch(environments, placements);
     const uninstall = installWorkerPlacementReconcileGuard({
       placements,
       environments,
@@ -143,7 +143,7 @@ describe("targeted worker placement recovery", () => {
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const cleanupStarted = createDeferredCore();
     const releaseCleanup = createDeferredCore();
-    const harness = createHarness(support.testState.stateDb, placements, {
+    const harness = await createHarness(support.testState.stateDb, placements, {
       workspacePath: support.testState.root,
       reconcileChanged: false,
       reconcileCommitsManifest: false,
@@ -227,7 +227,7 @@ describe("targeted worker placement recovery", () => {
           executionMode: "remote-exec",
         });
       }
-      const dispatch = createDispatch(environments, placements);
+      const dispatch = await createDispatch(environments, placements);
       await dispatch.reconcileActive(match === "source" ? sourceId : destinationId);
       expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
       expect(placements.get(active.sessionId)?.state).toBe(

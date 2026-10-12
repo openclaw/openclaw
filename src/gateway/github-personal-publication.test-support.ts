@@ -299,7 +299,7 @@ export async function restartPersonalPublicationFixture(
   fixture.profileCatalog = await preparePersonalPublicationProfileCatalog();
   fixture.placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
   await fixture.placements.recoverWorkerSessionToolOperationsAfterRestart();
-  fixture.placements.clearLocalTurnClaimsAfterRestart();
+  await fixture.placements.clearLocalTurnClaimsAfterRestartAsync();
   expect(fixture.placements.workspaceResultInstanceId()).not.toBe(
     previous.workspaceResultInstanceId(),
   );

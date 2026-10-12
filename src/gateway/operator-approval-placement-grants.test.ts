@@ -1,6 +1,5 @@
 // Process-local placement-grant retention and final-boundary revalidation.
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -246,12 +245,18 @@ async function retainAllowedGrant(
 
 describe("placement standing grants", () => {
   it("accepts the released synchronous SDK runtime at the node approval boundary", async () => {
-    const { binding, runtime } = await mintGrant(createDatabaseOptions());
+    const { binding } = await mintGrant(createDatabaseOptions());
     const legacyRuntime: PlacementStandingGrantRuntime = {
-      resolveBinding: runtime.resolveBinding,
-      retain: runtime.retain,
-      validate: runtime.validate,
-      consume: runtime.consume,
+      resolveBinding: () => binding,
+      retain: () => true,
+      validate: () => ({
+        outcome: "consumed",
+        grant: { ...binding, mintedByApprovalId: "approval-1", expiresAtMs: NOW_MS + 60_000 },
+      }),
+      consume: () => ({
+        outcome: "consumed",
+        grant: { ...binding, mintedByApprovalId: "approval-1", expiresAtMs: NOW_MS + 60_000 },
+      }),
     };
     const owner = { agentId: "main", sessionKey: SESSION_KEY, assertCurrent: () => {} };
     expect(
@@ -322,7 +327,7 @@ describe("placement standing grants", () => {
     expect(await runtime.resolveAsync(input)).toEqual({ binding, approvalId: "approval-1" });
   });
 
-  it("prepares a grant without host SQL and observes a foreign parent revocation", async () => {
+  it("prepares without host SQL and rejects a parent revoked before transport handoff", async () => {
     const databaseOptions = createDatabaseOptions();
     const { binding, runtime } = await mintGrant(databaseOptions);
     await runtime.resolveAsync(binding);
@@ -336,7 +341,7 @@ describe("placement standing grants", () => {
       };
       const posted = vi.spyOn(Worker.prototype, "postMessage");
       try {
-        expect(runtime.retain(expired)).toBe(false);
+        expect(() => runtime.retain(expired)).toThrow("use retainAsync");
         expect(await runtime.retainAsync(expired)).toBe(false);
         expect(posted).not.toHaveBeenCalled();
         expect(hostSql.queries).toEqual([]);
@@ -360,15 +365,23 @@ describe("placement standing grants", () => {
     } finally {
       hostSql.restore();
     }
-    const foreign = new DatabaseSync(databaseOptions.path!);
+    expect(await runtime.consumeAsync(binding)).toMatchObject({ outcome: "consumed" });
+    expect(runtime.consume(binding).outcome).toBe("consumed");
+    const database = openOpenClawStateDatabase(databaseOptions);
+    const stateDb = getNodeSqliteKysely<PlacementTestDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      stateDb
+        .updateTable("operator_approvals")
+        .set({ status: "denied", decision: "deny" })
+        .where("approval_id", "=", "approval-1"),
+    );
+    const dispatchSql = observeHostDataSql();
     try {
-      foreign
-        .prepare(
-          "UPDATE operator_approvals SET status = 'denied', decision = 'deny' WHERE approval_id = ?",
-        )
-        .run("approval-1");
+      expect(runtime.consume(binding).outcome).toBe("no-grant");
+      expect(dispatchSql.queries).toEqual([]);
     } finally {
-      foreign.close();
+      dispatchSql.restore();
     }
     expect(await runtime.validateAsync(binding)).toMatchObject({
       outcome: "approval-not-allow-always",
@@ -423,19 +436,21 @@ describe("placement standing grants", () => {
     });
     await retainAllowedGrant(databaseOptions, runtime, binding);
 
-    expect(runtime.validate(binding)).toMatchObject({
+    expect(await runtime.validateAsync(binding)).toMatchObject({
       outcome: "consumed",
       grant: { mintedByApprovalId: "approval-1" },
     });
     expect(runtime.consume(binding).outcome).toBe("consumed");
     expect(tableExists(database.db, "operator_approval_placement_grants")).toBe(false);
-    expect(
+    await expect(
       createPlacementStandingGrantRuntime({
         runtimeEpoch: "runtime-1",
         databaseOptions,
         now: () => NOW_MS + 2_000,
-      }).validate(binding).outcome,
-    ).toBe("no-grant");
+      })
+        .validateAsync(binding)
+        .then((result) => result.outcome),
+    ).resolves.toBe("no-grant");
     expect(database.db.prepare("PRAGMA user_version").get()).toEqual(versionBefore);
     expect(
       database.db
@@ -462,17 +477,19 @@ describe("placement standing grants", () => {
         expiresAtMs: null,
       }),
     ).toBe(false);
-    expect(runtime.validate(binding).outcome).toBe("no-grant");
+    expect((await runtime.validateAsync(binding)).outcome).toBe("no-grant");
   });
 
   it("keeps operation families isolated", async () => {
     const databaseOptions = createDatabaseOptions();
     const { binding, runtime } = await mintGrant(databaseOptions);
     expect(
-      runtime.validate({
-        ...binding,
-        command: "another.dangerous.command",
-      }).outcome,
+      (
+        await runtime.validateAsync({
+          ...binding,
+          command: "another.dangerous.command",
+        })
+      ).outcome,
     ).toBe("no-grant");
   });
 
@@ -493,7 +510,7 @@ describe("placement standing grants", () => {
   ])("fails closed after $name", async ({ expected, change }) => {
     const databaseOptions = createDatabaseOptions();
     const { binding, runtime } = await mintGrant(databaseOptions);
-    expect(runtime.consume(change(binding)).outcome).toBe(expected);
+    expect((await runtime.consumeAsync(change(binding))).outcome).toBe(expected);
   });
 
   it.each([
@@ -512,7 +529,7 @@ describe("placement standing grants", () => {
         .set(update)
         .where("session_id", "=", SESSION_ID),
     );
-    expect(runtime.consume(binding).outcome).toBe("placement-changed");
+    expect((await runtime.consumeAsync(binding)).outcome).toBe("placement-changed");
   });
 
   it("fails closed after expiry, parent removal or reversal, or placement removal", async () => {
@@ -542,7 +559,7 @@ describe("placement standing grants", () => {
       if (scenario === "expired") {
         nowMs = NOW_MS + 31 * 24 * 60 * 60_000;
       }
-      expect(runtime.consume(binding).outcome).toBe(
+      expect((await runtime.consumeAsync(binding)).outcome).toBe(
         scenario === "expired"
           ? "expired"
           : scenario === "parent-missing"
@@ -597,7 +614,10 @@ describe("placement standing grants", () => {
       });
       context.placementStandingGrants = placementStandingGrants;
       const invoke = vi.fn(async (input: Parameters<typeof context.nodeRegistry.invoke>[0]) => {
-        if (input.isDispatchAuthorized?.() === false) {
+        if (
+          (input.authorizeDispatch && !(await input.authorizeDispatch())) ||
+          input.isDispatchAuthorized?.() === false
+        ) {
           return {
             ok: false,
             payload: null,

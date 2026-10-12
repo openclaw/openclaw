@@ -69,15 +69,13 @@ function claimForOwnerRevocation(
 
 export function createWorkerSessionPlacementGate(
   store: WorkerSessionPlacementStore,
-  options: { rejectExistingWorkerClaims?: boolean } = {},
+  options: { recoveryPlacements?: readonly WorkerSessionPlacementRecord[] } = {},
 ): WorkerSessionPlacementGate {
   const recoveryOnlyClaims = new Set(
-    options.rejectExistingWorkerClaims
-      ? store.list().flatMap((record) => {
-          const claim = projectWorkerSessionTurnClaim(record);
-          return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
-        })
-      : [],
+    (options.recoveryPlacements ?? []).flatMap((record) => {
+      const claim = projectWorkerSessionTurnClaim(record);
+      return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
+    }),
   );
   const validateWorkerTurn = (claim: WorkerSessionTurnClaim) =>
     !recoveryOnlyClaims.has(serializeWorkerSessionTurnClaim(claim)) &&
@@ -162,16 +160,7 @@ export function createWorkerSessionPlacementGate(
         throw error;
       }
     },
-    readWorkerTurnClaim(binding) {
-      const record = store.get(binding.sessionId);
-      const claim = record ? projectWorkerSessionTurnClaim(record) : undefined;
-      return claim?.sessionId === binding.sessionId &&
-        claim.owner.environmentId === binding.environmentId &&
-        claim.owner.ownerEpoch === binding.ownerEpoch &&
-        store.validateTurnClaim(claim)
-        ? claim
-        : undefined;
-    },
+    readWorkerTurnClaim: (binding) => store.readWorkerTurnClaim(binding),
     getExecutionIdentityCapability: (claim) =>
       getWorkerTurnExecutionIdentityCapability(store, claim),
     validateWorkerTurn,
@@ -209,7 +198,7 @@ export function createWorkerSessionPlacementGate(
     },
 
     async prepareWorkspaceResultOwnerRevocation(binding, error, assertCurrent): Promise<void> {
-      const claim = claimForOwnerRevocation(store.get(binding.sessionId), binding);
+      const claim = claimForOwnerRevocation(await store.getAsync(binding.sessionId), binding);
       if (!claim) {
         return;
       }

@@ -8,7 +8,6 @@ import { readGitHubPublicationInWorker } from "../state/github-publication-worke
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
-import { exactClaimForPlacement } from "./github-publication-coordinator-methods.js";
 import { matchesRepositoryGitHubPublicationClaim } from "./github-publication-defer.kernel.js";
 import { createGitHubPublicationExecutionIdentity } from "./github-publication-execution-identity.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
@@ -164,30 +163,6 @@ export function createRepositoryGitHubPublicationRecovery(params: {
   ) => Promise<SessionGitHubPublicationResult>;
 }) {
   const { placements } = params;
-  const deferOrphanedRequestsWithPendingResults = (
-    pending: Awaited<ReturnType<WorkerSessionPlacementStore["listPendingWorkspaceResultsAsync"]>>,
-  ): void => {
-    deferRepositoryGitHubPublicationClaims(
-      listRepositoryGitHubPublications({ ownerProfileId: null, pending: true })
-        .filter((row) => {
-          if (!row.claim_id) {
-            return false;
-          }
-          const placement = placements.get(row.session_id);
-          const claim = placement ? exactClaimForPlacement(placement) : undefined;
-          return (
-            !(claim && matchesRepositoryGitHubPublicationClaim(row, claim)) &&
-            !pending.some(
-              (result) =>
-                result.sessionId === row.session_id &&
-                result.claimId === row.claim_id &&
-                result.runId === row.run_id,
-            )
-          );
-        })
-        .map((row) => row.request_id),
-    );
-  };
   return {
     async prepareClaimWorkspace(claim: WorkerSessionTurnClaim): Promise<void> {
       const assertCurrent = () => {
@@ -355,7 +330,9 @@ export function createRepositoryGitHubPublicationRecovery(params: {
         method: "deferOrphanedRequests",
         replacement: "deferOrphanedRequestsAsync",
       });
-      deferOrphanedRequestsWithPendingResults(placements.listPendingWorkspaceResults());
+      throw new Error(
+        "Await deferOrphanedRequestsAsync; synchronous placement reads are no longer supported.",
+      );
     },
     async deferOrphanedRequestsAsync(): Promise<void> {
       const pending = await listRepositoryGitHubPublicationsAsync({

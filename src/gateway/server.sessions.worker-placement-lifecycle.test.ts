@@ -487,7 +487,7 @@ test("sessions.reset rechecks lifecycle ownership after draining before placemen
     storePath,
   });
   const retireSessionPlacement = vi.fn((retirement: WorkerSessionPlacementRetirement) =>
-    placementStore.retireSessionPlacement(retirement),
+    placementStore.retireSessionPlacementAsync(retirement),
   );
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
 
@@ -724,7 +724,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
     });
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     const release = vi.fn();
-    const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
+    const harness = await createHarness(openOpenClawStateDatabase(), placementStore, {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
       afterReconcile: () => {
@@ -792,7 +792,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
       entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
     });
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-    const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
+    const harness = await createHarness(openOpenClawStateDatabase(), placementStore, {
       reconcileCommitsManifest: false,
       reconcileCommitsManifestOnApply: true,
       verifyFailurePhase: "after-apply",
@@ -835,7 +835,7 @@ test("sessions.delete retains reclaimed placement when runtime cleanup fails bef
     entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
   });
   const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-  const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
+  const harness = await createHarness(openOpenClawStateDatabase(), placementStore, {
     reconcileChanged: false,
     reconcileCommitsManifest: false,
   });

@@ -7,7 +7,8 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { writeMentionStoreChanges, type MentionStoreSource } from "./mention-inbox-store.js";
+import type { MentionStoreSource } from "./mention-inbox-store.js";
+import { writeMentionStoreChanges } from "./mention-inbox-store.worker.js";
 import { mentionReadOperations } from "./mention-inbox.worker.js";
 
 describe("Mention Inbox worker snapshots", () => {
