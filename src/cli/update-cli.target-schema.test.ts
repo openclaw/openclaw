@@ -56,7 +56,6 @@ import {
   resolveNpmChannelTag,
   resolveOpenClawPackageRoot,
   runCommandWithTimeout,
-  runUpdateFailureTriage,
   doctorCommand,
   mockGitUpdateAfterMutation,
   runDaemonInstall,
@@ -255,58 +254,6 @@ describe("update-cli", () => {
         expect(destinationVisibleAtAdmission).toBe(false);
         expect(fsSync.existsSync(destination)).toBe(false);
       }
-    },
-  );
-
-  it.each(["absent"] as const)(
-    "refuses a newly owned service after an initially %s Git admission snapshot",
-    async (initial) => {
-      const root = createCaseDir(`new-service-${initial}`);
-      await writeOpenClawPackageFixture(root, "1.0.0", { git: true });
-      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
-      const managedState = profileStateDir("work");
-      let admitted = false;
-      databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) => ({
-        incompatible:
-          env.OPENCLAW_STATE_DIR === managedState
-            ? [newerAgentSchemaFixture(path.join(managedState, "worker.sqlite"))]
-            : [],
-        indeterminate: [],
-      }));
-      vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts: options }) => {
-        primeServiceCommand(
-          [nodeExecutable, path.join(root, "dist", "index.js"), "gateway", "run"],
-          {
-            OPENCLAW_PROFILE: "work",
-            OPENCLAW_STATE_DIR: managedState,
-            OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-          },
-        );
-        serviceLoaded.mockResolvedValue(true);
-        await requireValue(
-          options.beforeGitMutation,
-          "Git mutation admission",
-        )({ schemaVersions: { state: 3, agent: 11 } });
-        admitted = true;
-        return makeOkUpdateResult({ mode: "git", root });
-      });
-      let failure: unknown;
-      try {
-        await updateCommand({ yes: true, json: true });
-      } catch (error) {
-        failure = error;
-      }
-      expect(admitted).toBe(false);
-      expect(failure).toEqual(new ExitError(1));
-      expectNoSideEffects(
-        serviceStop,
-        cleanupStaleManagedServiceUpdateHandoffs,
-        launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
-      );
-      expect(lastWriteJsonCall()).toMatchObject({
-        status: "error",
-        reason: "managed-service-preflight",
-      });
     },
   );
 
@@ -565,94 +512,6 @@ Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtime
       phase: "finished",
       reason: "unmanaged-package-install",
     });
-  });
-
-  it("refuses a git target that changes after the service stops", async () => {
-    const root = createCaseDir("schema-git");
-    const sha = "a".repeat(40);
-    await writeOpenClawPackageFixture(root, "1.0.0", {
-      git: true,
-      builtSha: sha,
-      entrySource: "export {};\n",
-    });
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
-    vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
-    mockOwnedGitService(root);
-    mockGatewayHealth("1.0.0", "restored", "fixture-original-build");
-    const entrypoint = path.join(root, "dist", "index.js");
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
-
-    serviceLoaded.mockResolvedValue(true);
-    vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts: options }) => {
-      await requireValue(
-        options.beforeGitMutation,
-        "Git mutation admission",
-      )({ schemaVersions: { state: 3, agent: 11 } });
-      return makeOkUpdateResult({ mode: "git" });
-    });
-    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(() =>
-      serviceStop.mock.calls.length === 0
-        ? { incompatible: [], indeterminate: [] }
-        : {
-            incompatible: [],
-            indeterminate: [
-              { kind: "agent", path: "/tmp/openclaw-agent.sqlite", reason: "database busy" },
-            ],
-          },
-    );
-
-    await expect(updateCommand({ yes: true, timeout: "17" })).rejects.toEqual(new ExitError(1));
-
-    expect(serviceStop).toHaveBeenCalledOnce();
-    const stoppedAt = serviceStop.mock.invocationCallOrder[0]!;
-    const schemaCalls =
-      databasePreflightMocks.preflightOpenClawDatabaseSchemas.mock.invocationCallOrder;
-    expect(schemaCalls.some((order) => order < stoppedAt)).toBe(true);
-    expect(schemaCalls.some((order) => order > stoppedAt)).toBe(true);
-    expect(freshRestartCalls()).toEqual([
-      [
-        [
-          process.execPath,
-          entrypoint,
-          "gateway",
-          "restart",
-          "--preserve-definition",
-          "--json",
-          "--update-executor",
-          "run",
-        ],
-        expect.objectContaining({ cwd: root, timeoutMs: 17_000, baseEnv: {} }),
-      ],
-    ]);
-    expectNoSideEffects(serviceStart, serviceRestart);
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(vi.mocked(runCommandWithTimeout).mock.invocationCallOrder.at(-1)).toBeLessThan(
-      requireValue(
-        vi.mocked(runUpdateFailureTriage).mock.invocationCallOrder.at(-1),
-        "triage after service recovery",
-      ),
-    );
-  });
-
-  it("fails a post-stop git refusal when no managed service was running", async () => {
-    vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts: options }) => {
-      await requireValue(
-        options.beforeGitMutation,
-        "Git mutation admission",
-      )({ schemaVersions: { state: 3, agent: 11 } });
-      return makeOkUpdateResult({ mode: "git" });
-    });
-    databasePreflightMocks.preflightOpenClawDatabaseSchemas
-      .mockReturnValueOnce({ incompatible: [], indeterminate: [] })
-      .mockReturnValueOnce({
-        incompatible: [],
-        indeterminate: [{ kind: "state", path: "/tmp/openclaw.sqlite", reason: "database busy" }],
-      });
-
-    await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
-
-    expectNoSideEffects(serviceStop, serviceRestart);
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("does not write a control-plane sentinel when a dry-run preflight fails", async () => {

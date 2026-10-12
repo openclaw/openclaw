@@ -759,7 +759,7 @@ describe("client voice session lifecycle", () => {
           }));
         }
         const sessionId = await ensureClientVoiceAgentSessionEntry(storage);
-        expect(resolveClientVoiceAgentSessionId(storage)).toBe(sessionId);
+        expect(await resolveClientVoiceAgentSessionId(storage)).toBe(sessionId);
         const voiceTarget = { agentId: "main", sessionKey: "main" };
         const voiceSessionId = await createOrResumeClientVoiceSession({ ...voiceTarget, origin });
         const append =

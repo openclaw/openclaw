@@ -327,7 +327,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
             store: params.authProfileStore,
             config: params.config,
           })
-        : resolveCodexAppServerAuthProfileIdForAgent({
+        : await resolveCodexAppServerAuthProfileIdForAgent({
             authProfileId: startupAuthProfileCandidate,
             agentDir,
             config: params.config,

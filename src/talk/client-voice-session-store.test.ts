@@ -12,7 +12,7 @@ import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { readOpenVoiceSessions } from "./client-voice-session-lookup.worker.js";
 import {
   parseStoredVoiceSessionRecord,
-  readVoiceSessionFacts,
+  readOwnedVoiceSessionFacts,
   readVoiceSessionRecordInTransaction,
   VOICE_SESSION_RECORD_VERSION,
   writeVoiceSessionRecordInTransaction,
@@ -171,7 +171,8 @@ describe("client voice session store", () => {
       const probes = trackSqliteStatementExecutions(database.db, ["freshness"], (sql) =>
         /data_version/iu.test(sql) ? "freshness" : null,
       );
-      const first = readVoiceSessionFacts("main", "voice-1");
+      const binding = { agentId: "main", voiceSessionId: "voice-1", sessionKey: "agent:main:main" };
+      const first = readOwnedVoiceSessionFacts(binding);
       expect(first).toMatchObject({ status: "open" });
       expect(() =>
         runOpenClawAgentWriteTransaction((owner) => {
@@ -179,9 +180,9 @@ describe("client voice session store", () => {
           throw new Error("synthetic rollback");
         }, options),
       ).toThrow("synthetic rollback");
-      expect(readVoiceSessionFacts("main", "voice-1")).toMatchObject({ status: "open" });
+      expect(readOwnedVoiceSessionFacts(binding)).toMatchObject({ status: "open" });
       write({ transcriptCapable: true });
-      expect(readVoiceSessionFacts("main", "voice-1")).toMatchObject({ transcriptCapable: true });
+      expect(readOwnedVoiceSessionFacts(binding)).toMatchObject({ transcriptCapable: true });
       const broker = new SqliteWorkerBroker();
       try {
         const store = await broker.open<AdmissionOperations>({
@@ -205,7 +206,7 @@ describe("client voice session store", () => {
       } finally {
         await broker.close();
       }
-      expect(readVoiceSessionFacts("main", "voice-1")).toMatchObject({
+      expect(readOwnedVoiceSessionFacts(binding)).toMatchObject({
         status: "closed",
         hasUserTranscript: true,
       });

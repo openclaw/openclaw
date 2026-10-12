@@ -134,6 +134,7 @@ export const ProjectsSearchRemoteParamsSchema = closedObject({
   query: Type.String({ minLength: 1, maxLength: 200 }),
 });
 export const ProjectsSearchRemoteResultSchema = closedObject({
+  stale: Type.Optional(Type.Boolean()),
   credential: Type.Union([Type.Literal("configured"), Type.Literal("missing")]),
   projects: Type.Array(RemoteProjectSchema, { maxItems: 10 }),
 });

@@ -12,8 +12,8 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { applyClawAddPlan } from "./add.js";
 import {
@@ -23,10 +23,12 @@ import {
 import { applyClawRemovePlan, buildClawRemovePlan } from "./lifecycle-state.js";
 import { installClawMcpServers, readClawMcpServerRefsByName } from "./mcp.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    closeOpenClawAgentDatabasesForTest();
+    cleanup();
+  });
 });
 
 const sourceServer = {
@@ -278,7 +280,7 @@ describe("Claw MCP removal", () => {
       config,
       sourceMcpServers: { docs: sourceServer },
     });
-    markClawMcpServerIndependentlyOwned("docs", { env: current.env });
+    await markClawMcpServerIndependentlyOwned("docs", { env: current.env });
     const unsetMcpServer = vi.fn();
 
     await expect(

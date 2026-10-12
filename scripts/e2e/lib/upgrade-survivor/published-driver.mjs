@@ -289,14 +289,15 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       },
       plugins: { enabled: false },
       agents: {
+        ownership: "explicit",
         defaults: { heartbeat: { every: "0m" } },
-        list: [
-          { id: "main", default: true, workspace: path.join(runtime, "workspaces", "main") },
-          { id: "second", workspace: path.join(runtime, "workspaces", "second") },
-        ],
+        entries: {
+          main: { workspace: path.join(runtime, "workspaces", "main") },
+          second: { workspace: path.join(runtime, "workspaces", "second") },
+        },
       },
     };
-    for (const agent of config.agents.list) {
+    for (const agent of Object.values(config.agents.entries)) {
       fs.mkdirSync(agent.workspace, { recursive: true });
     }
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, `${JSON.stringify(config)}\n`);

@@ -1,8 +1,19 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Value } from "typebox/value";
-import { afterEach, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   getFinishedSession,
   getSession,
@@ -14,15 +25,119 @@ import { createExecTool } from "./bash-tools.exec-run.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
+import { runEmbeddedAgent } from "./embedded-agent.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
-afterEach(() => {
+// mock-isolation: Only model inference is synthetic; process and session-event custody are real.
+vi.mock("./embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
+const model = vi.mocked(runEmbeddedAgent);
+await Promise.all([
+  import("../auto-reply/dispatch.js"),
+  import("../auto-reply/reply/get-reply-from-config.runtime.js").then((runtime) =>
+    runtime.prewarmConfigDrivenReplyRuntime(),
+  ),
+]);
+
+let state: OpenClawTestState;
+let config: OpenClawConfig;
+const receipts: sessionEvents.SessionEventReceipt[] = [];
+const completions = new Map<string, sessionEvents.SessionEventReceipt>();
+const enqueue = sessionEvents.enqueueSessionEventForHost;
+let observe: ReturnType<typeof vi.spyOn>;
+
+beforeAll(async () => {
+  state = await createOpenClawTestState({
+    label: "process-notification",
+    env: { OPENCLAW_TEST_FAST: "0" },
+  });
+  config = {
+    agents: {
+      entries: { main: { workspace: state.workspaceDir } },
+      defaults: {
+        workspace: state.workspaceDir,
+        skipBootstrap: true,
+        model: { primary: "mock-openai/gpt-5.6-luna" },
+        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
+      },
+    },
+    plugins: { enabled: false },
+    skills: { load: { watch: false } },
+  };
+  setRuntimeConfigSnapshot(config);
+  await state.writeConfig(config);
+  openOpenClawStateDatabase();
+});
+
+beforeEach(() => {
+  model.mockReset().mockImplementation(async (params: RunEmbeddedAgentParams) => {
+    await expectDefined(params.preparedRunAdmission, "real event admission").admit(
+      "gateway",
+      params.runId,
+    );
+    params.onExecutionPhase?.({ phase: "model_call_started" });
+    await params.onExecutionStarted?.();
+    await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+    return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+  });
+  observe = vi
+    .spyOn(sessionEvents, "enqueueSessionEventForHost")
+    .mockImplementation((text, options) => {
+      const receipt = enqueue(text, options);
+      receipts.push(receipt);
+      if (options.source === "exec") {
+        completions.set(options.sessionKey, receipt);
+      }
+      return receipt;
+    });
+});
+
+afterEach(async () => {
+  for (const receipt of receipts) {
+    receipt.cancel();
+  }
+  await Promise.all(receipts.map((receipt) => receipt.settled));
+  observe.mockRestore();
+  receipts.length = 0;
+  completions.clear();
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
 });
+
+afterAll(async () => {
+  await state?.cleanup();
+});
+
+async function seedOrigin(sessionKey: string) {
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey },
+    {
+      sessionId: sessionKey.replaceAll(":", "-"),
+      lifecycleRevision: "original",
+      updatedAt: Date.now(),
+      sessionStartedAt: Date.now(),
+      permissionMode: "full",
+    },
+  );
+}
+
+async function completionPrompt(sessionKey: string, signal: AbortSignal) {
+  const receipt = expectDefined(completions.get(sessionKey), "ordinary exec completion");
+  expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
+  expect(await withinTest(receipt.settled, signal)).toMatchObject({
+    status: "completed",
+    executionStarted: true,
+  });
+  expect(model).toHaveBeenCalledOnce();
+  const turn = expectDefined(model.mock.calls[0]?.[0], "completion turn");
+  expect(turn.trigger).toBe("event");
+  expect(turn.sessionKey).toBe(sessionKey);
+  expect(turn.sessionId).toBe(sessionKey.replaceAll(":", "-"));
+  return turn.prompt;
+}
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
@@ -99,89 +214,89 @@ const SYNTHETIC_FINALIZER_CREDENTIAL = ["sk", "synthetic", "fixture", "never", "
 
 test.skipIf(process.platform === "win32")(
   "keeps subagent yield blocked until a real finalized background exec is collected",
-  () =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const scopeKey = "agent:main:subagent:process-yield";
-      const runId = "process-yield-run";
-      const registry = await import("./subagents/registry/subagent-registry.test-helpers.js");
+  async () => {
+    const scopeKey = "agent:main:subagent:process-yield";
+    const runId = "process-yield-run";
+    const registry = await import("./subagents/registry/subagent-registry.test-helpers.js");
+    await registry.resetSubagentRegistryForTests();
+    await registry.addSubagentRunForTests({
+      runId,
+      childSessionKey: scopeKey,
+      childAgentId: "main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Collect the owned process before waiting",
+      cleanup: "keep",
+      createdAt: 1,
+      execution: { status: "running" },
+      expectsCompletionMessage: false,
+      completion: { required: false },
+      delivery: { status: "not_required" },
+    });
+    const finalization = createDeferredCore();
+    const run = await runSandboxProcess({
+      command: "yield-retention-proof",
+      containerName: "yield-retention-proof",
+      child: "process.exit(2)",
+      async finalizeExec() {
+        await finalization.promise;
+      },
+      notifyOnExit: false,
+      scopeKey,
+      timeoutSec: 10,
+    });
+    markBackgrounded(run.session);
+    let yieldCount = 0;
+    const yieldTool = createSessionsYieldTool({
+      sessionId: "process-yield",
+      claimYield: createRequesterYieldCallback({
+        requesterSessionKey: scopeKey,
+        requesterAgentId: "main",
+        requesterTurnRunId: runId,
+      }),
+      onYield: () => {
+        yieldCount += 1;
+      },
+    });
+    try {
+      expect((await yieldTool.execute("yield-running", {})).details).toMatchObject({
+        status: "error",
+      });
+      finalization.resolve();
+      await run.promise;
+      const retained = getFinishedSession(run.session.id);
+      expect(retained?.scopeKey).toBe(scopeKey);
+      expect(retained?.sessionKey).toBeUndefined();
+      expect((await yieldTool.execute("yield-finished", {})).details).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("Use process to poll and collect"),
+      });
+      expect(yieldCount).toBe(0);
+      const poll = await createProcessTool({ scopeKey }).execute("poll-finished", {
+        action: "poll",
+        sessionId: run.session.id,
+      });
+      acknowledgeInternalToolResult(poll);
+      expect(
+        (await yieldTool.execute("yield-collected", { waitFor: "message" })).details,
+      ).toMatchObject({
+        status: "yielded",
+      });
+      expect(yieldCount).toBe(1);
+    } finally {
+      finalization.resolve();
+      run.kill();
+      await run.promise;
       await registry.resetSubagentRegistryForTests();
-      await registry.addSubagentRunForTests({
-        runId,
-        childSessionKey: scopeKey,
-        childAgentId: "main",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: "Collect the owned process before waiting",
-        cleanup: "keep",
-        createdAt: 1,
-        execution: { status: "running" },
-        expectsCompletionMessage: false,
-        completion: { required: false },
-        delivery: { status: "not_required" },
-      });
-      const finalization = createDeferredCore();
-      const run = await runSandboxProcess({
-        command: "yield-retention-proof",
-        containerName: "yield-retention-proof",
-        child: "process.exit(2)",
-        async finalizeExec() {
-          await finalization.promise;
-        },
-        notifyOnExit: false,
-        scopeKey,
-        timeoutSec: 10,
-      });
-      markBackgrounded(run.session);
-      let yieldCount = 0;
-      const yieldTool = createSessionsYieldTool({
-        sessionId: "process-yield",
-        claimYield: createRequesterYieldCallback({
-          requesterSessionKey: scopeKey,
-          requesterAgentId: "main",
-          requesterTurnRunId: runId,
-        }),
-        onYield: () => {
-          yieldCount += 1;
-        },
-      });
-      try {
-        expect((await yieldTool.execute("yield-running", {})).details).toMatchObject({
-          status: "error",
-        });
-        finalization.resolve();
-        await run.promise;
-        const retained = getFinishedSession(run.session.id);
-        expect(retained?.scopeKey).toBe(scopeKey);
-        expect(retained?.sessionKey).toBeUndefined();
-        expect((await yieldTool.execute("yield-finished", {})).details).toMatchObject({
-          status: "error",
-          error: expect.stringContaining("Use process to poll and collect"),
-        });
-        expect(yieldCount).toBe(0);
-        const poll = await createProcessTool({ scopeKey }).execute("poll-finished", {
-          action: "poll",
-          sessionId: run.session.id,
-        });
-        acknowledgeInternalToolResult(poll);
-        expect(
-          (await yieldTool.execute("yield-collected", { waitFor: "message" })).details,
-        ).toMatchObject({
-          status: "yielded",
-        });
-        expect(yieldCount).toBe(1);
-      } finally {
-        finalization.resolve();
-        run.kill();
-        await run.promise;
-        await registry.resetSubagentRegistryForTests();
-      }
-    }),
+    }
+  },
 );
 
-test.skipIf(process.platform === "win32").each([false, true])(
+test.skipIf(process.platform === "win32").for([false, true])(
   "observes an explicit real process stop without hiding finalizer failure (fails=%s)",
-  async (finalizerFails) => {
+  async (finalizerFails, { signal }) => {
     const scopeKey = `agent:main:requested-stop-${finalizerFails}`;
+    await seedOrigin(scopeKey);
     const run = await runSandboxProcess({
       command: "requested-stop-proof",
       containerName: "requested-stop-proof",
@@ -201,11 +316,11 @@ test.skipIf(process.platform === "win32").each([false, true])(
       await expect.poll(() => run.session.aggregated).toContain("STOP_PROOF_READY");
       await processTool.execute("requested-stop", { action: "kill", sessionId: run.session.id });
       await run.promise;
-      // Check before polling: collecting the result can acknowledge a queued event.
-      const notifications = peekSystemEventEntries(scopeKey);
-      expect(notifications).toHaveLength(finalizerFails ? 1 : 0);
       if (finalizerFails) {
-        expect(notifications[0]?.text).toContain("Exec failed");
+        expect(await completionPrompt(scopeKey, signal)).toContain("Exec failed");
+      } else {
+        expect(completions.has(scopeKey)).toBe(false);
+        expect(model).not.toHaveBeenCalled();
       }
       for (const action of ["poll", "log"] as const) {
         const observed = await processTool.execute(`requested-stop-${action}`, {
@@ -234,7 +349,7 @@ test.skipIf(process.platform === "win32").each([false, true])(
   },
 );
 
-test.skipIf(process.platform === "win32").each([
+test.skipIf(process.platform === "win32").for([
   {
     name: "post-exit finalizer failure",
     child: 'setTimeout(() => { process.stdout.write("REAL_CHILD_OUTPUT"); process.exit(0); }, 80)',
@@ -256,16 +371,20 @@ test.skipIf(process.platform === "win32").each([
   },
 ] as const)(
   "keeps $name truthful across a real background child, notification, and waiting poll",
-  async ({
-    name,
-    child,
-    timeoutSec,
-    finalizerError,
-    expectedStatus,
-    expectedExitCode,
-    expectedExitLabel,
-  }) => {
+  async (
+    {
+      name,
+      child,
+      timeoutSec,
+      finalizerError,
+      expectedStatus,
+      expectedExitCode,
+      expectedExitLabel,
+    },
+    { signal },
+  ) => {
     const scopeKey = `agent:main:process-terminal-${name.replaceAll(" ", "-")}`;
+    await seedOrigin(scopeKey);
     const run = await runSandboxProcess({
       command: `real-process-terminal-${name}`,
       containerName: "process-terminal-proof",
@@ -291,7 +410,7 @@ test.skipIf(process.platform === "win32").each([
     });
 
     const outcome = await run.promise;
-    const notification = peekSystemEventEntries(scopeKey)[0]?.text;
+    const notification = await completionPrompt(scopeKey, signal);
     let poll = await pendingPoll;
     if ((poll.details as { status?: string }).status === "running") {
       expect(poll.details).toMatchObject({
@@ -352,13 +471,14 @@ test("renders a real foreground empty nonzero exit with the expected structured 
   });
 });
 
-test.skipIf(process.platform === "win32").each([
+test.skipIf(process.platform === "win32").for([
   { name: "quiet successful exit", exitCode: 0, expectsNotification: false },
   { name: "quiet nonzero exit", exitCode: 7, expectsNotification: true },
 ])(
   "preserves default completion wake behavior for a real $name",
-  async ({ name, exitCode, expectsNotification }) => {
+  async ({ name, exitCode, expectsNotification }, { signal }) => {
     const scopeKey = `agent:main:process-default-wake-${name.replaceAll(" ", "-")}`;
+    await seedOrigin(scopeKey);
     const execTool = createGatewayExecTool({
       allowBackground: true,
       backgroundMs: 0,
@@ -375,18 +495,37 @@ test.skipIf(process.platform === "win32").each([
 
     await waitForExecScope(scopeKey);
     expect(getFinishedSession(sessionId)).toBeDefined();
-    const events = peekSystemEventEntries(scopeKey);
-    expect(events).toHaveLength(expectsNotification ? 1 : 0);
     if (expectsNotification) {
-      expect(events[0]?.text).toContain(`code ${exitCode}`);
+      expect(await completionPrompt(scopeKey, signal)).toContain(`code ${exitCode}`);
+    } else {
+      expect(completions.has(scopeKey)).toBe(false);
+      expect(model).not.toHaveBeenCalled();
     }
   },
 );
 
 test.skipIf(process.platform === "win32")(
   "consumes a real notify-on-exit event when the terminal process poll is acknowledged",
-  async () => {
+  async ({ signal }) => {
     const scopeKey = "agent:main:process-notify-poll";
+    await seedOrigin(scopeKey);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const runModel = expectDefined(model.getMockImplementation(), "model inference fixture");
+    model.mockImplementation(async (params) => {
+      const result = await runModel(params);
+      entered.resolve();
+      await release.promise;
+      return result;
+    });
+    const predecessor = enqueue("Hold the preceding turn", {
+      agentId: "main",
+      sessionKey: scopeKey,
+      source: "task",
+      expectedTarget: await sessionEvents.captureSessionEventTargetForHost("main", scopeKey),
+      abortSignal: signal,
+      deliver: false,
+    });
     const execTool = createGatewayExecTool({
       allowBackground: true,
       backgroundMs: 0,
@@ -397,26 +536,43 @@ test.skipIf(process.platform === "win32")(
     });
     const processTool = createProcessTool({ scopeKey });
     const marker = "REAL_NOTIFY_ON_EXIT";
-    const started = await execTool.execute("process-notify-start", {
-      command: currentNodeEvalCommand(`process.stdout.write(${JSON.stringify(marker)});`),
-      background: true,
-    });
-    expect(started.details).toMatchObject({ status: "running" });
-    const sessionId = backgroundSessionId(started.details);
+    try {
+      expect(await withinTest(predecessor.accepted, signal)).toEqual({ ok: true });
+      await withinTest(entered.promise, signal);
+      const started = await execTool.execute("process-notify-start", {
+        command: currentNodeEvalCommand(`process.stdout.write(${JSON.stringify(marker)});`),
+        background: true,
+      });
+      expect(started.details).toMatchObject({ status: "running" });
+      const sessionId = backgroundSessionId(started.details);
 
-    await waitForExecScope(scopeKey);
-    expect(peekSystemEventEntries(scopeKey).some((event) => event.text.includes(marker))).toBe(
-      true,
-    );
+      await waitForExecScope(scopeKey);
+      const completion = expectDefined(completions.get(scopeKey), "queued exec completion");
+      expect(await withinTest(completion.accepted, signal)).toEqual({ ok: true });
+      expect(peekSystemEventEntries(scopeKey)).toEqual([
+        expect.objectContaining({ id: completion.id, text: expect.stringContaining(marker) }),
+      ]);
 
-    const poll = await processTool.execute("process-notify-poll", {
-      action: "poll",
-      sessionId,
-    });
-    expect(poll.details).toMatchObject({ status: "completed", sessionId });
-    expect(peekSystemEventEntries(scopeKey)).toHaveLength(1);
-    acknowledgeInternalToolResult(poll);
-    expect(peekSystemEventEntries(scopeKey)).toHaveLength(0);
+      const poll = await processTool.execute("process-notify-poll", {
+        action: "poll",
+        sessionId,
+      });
+      expect(poll.details).toMatchObject({ status: "completed", sessionId });
+      expect(peekSystemEventEntries(scopeKey)).toHaveLength(1);
+      acknowledgeInternalToolResult(poll);
+      expect(await withinTest(completion.settled, signal)).toMatchObject({
+        status: "cancelled",
+        executionStarted: false,
+      });
+      expect(peekSystemEventEntries(scopeKey)).toHaveLength(0);
+      release.resolve();
+      expect(await withinTest(predecessor.settled, signal)).toMatchObject({ status: "completed" });
+      expect(model).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await waitForExecScope(scopeKey);
+      await predecessor.settled;
+    }
   },
 );
 

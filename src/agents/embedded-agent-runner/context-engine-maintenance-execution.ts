@@ -64,9 +64,7 @@ function buildContextEngineMaintenanceRuntimeContext(
           const { restoreSessionColdTranscript } =
             await import("../../config/sessions/session-cold-storage.js");
           await restoreSessionColdTranscript({ ...runtimeTarget });
-          params.assertActive?.();
           sessionManager = await SessionManager.openAsync(runtimeTarget);
-          params.assertActive?.();
         }
         const manager = sessionManager;
         return await withSessionManagerWrite(manager, () => {
@@ -81,10 +79,8 @@ function buildContextEngineMaintenanceRuntimeContext(
       const result = await (params.withSessionManagerRewriteLock
         ? params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
         : rewriteSessionManagerEntries());
-      params.assertActive?.();
       if (result.changed && runtimeTarget) {
         await publishTranscriptUpdate(runtimeTarget);
-        params.assertActive?.();
       }
       return result;
     },
@@ -117,8 +113,6 @@ export async function executeContextEngineMaintenance(
     }),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
   });
-  params.abortSignal?.throwIfAborted();
-  params.assertActive?.();
   if (result.changed) {
     log.info(
       `[context-engine] maintenance(${params.reason}) changed transcript ` +

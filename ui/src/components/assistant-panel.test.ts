@@ -130,6 +130,16 @@ describe("assistant panel", () => {
     vi.restoreAllMocks();
   });
 
+  it("mounts an unavailable panel before application context is supplied", async () => {
+    const panel = document.createElement("openclaw-assistant-panel");
+    document.body.append(panel);
+
+    await panel.updateComplete;
+
+    expect(panel.querySelector<HTMLElement>(".assistant-panel")?.hidden).toBe(true);
+    expect(panel.assistantPanelOpen).toBe(false);
+  });
+
   it.each([false, true])(
     "admits same-route Home selection through the pane owner (global=%s)",
     async (global) => {
@@ -531,7 +541,10 @@ describe("assistant panel", () => {
         workspace: "/worktrees/research",
       });
 
-      const disconnectedContext = workContext();
+      const detachedHome = panel.querySelector<HTMLElement & { workContext?: ChatWorkContext }>(
+        "openclaw-home-session",
+      );
+      const disconnectedContext = detachedHome?.workContext;
       panel.remove();
       request.mockResolvedValueOnce({
         ...agents.state.agentsList,
@@ -540,7 +553,7 @@ describe("assistant panel", () => {
       await agents.refreshList();
       setGatewaySnapshot({ hello });
       await panel.updateComplete;
-      expect(workContext()).toEqual(disconnectedContext);
+      expect(detachedHome?.workContext).toEqual(disconnectedContext);
 
       provider.append(panel);
       await panel.updateComplete;

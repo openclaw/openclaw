@@ -178,6 +178,7 @@ it("reuses committed row facts when a changed model catalog updates session list
         ...loadSessionEntry(first)!,
         label: "Committed during renewal",
       });
+      sessionChanges.emit({ ...first, factsInvalidated: true });
       const listing = list();
       try {
         await captured.promise;
@@ -287,7 +288,7 @@ it("retains session facts on identity-scope changes and refreshes changes that a
       expect((await list()).sessions.find((row) => row.key === scope.sessionKey)?.label).toBe(
         "Changed during reload",
       );
-      expect(reads).toEqual([scope.sessionKey]);
+      expect(reads).toEqual([]);
 
       const changedModel = await publish(
         {

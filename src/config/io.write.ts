@@ -17,6 +17,7 @@ import {
   recordUpdateDoctorConfigWrite,
 } from "../infra/update-doctor-result.js";
 import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
+import { assertAgentDeletionTargetsUnchanged } from "./agent-workspace-roster-transition.js";
 import { prepareConfigFileWrite } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
 import { cloneEnvWithPlatformSemantics, createConfigRuntimeEnvBase } from "./config-env-vars.js";
@@ -312,14 +313,13 @@ export async function writeConfigFileFromContext(
     undefined,
     deps.homedir(),
   ) as OpenClawConfig;
-  const outputConfig = preserveDeferredPluginMigrationConfig({
-    sourceConfig: snapshot.parsed,
-    nextConfig: applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths),
-    pending: deferredPluginMigrations,
-    writeOptions: { unsetPaths: options.unsetPaths },
-  });
   const stampedOutputConfig = stampConfigWriteMetadata(
-    outputConfig,
+    preserveDeferredPluginMigrationConfig({
+      sourceConfig: snapshot.parsed,
+      nextConfig: applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths),
+      pending: deferredPluginMigrations,
+      writeOptions: { unsetPaths: options.unsetPaths },
+    }),
     options.lastTouchedVersionOverride,
   );
   rejectConfigNonFiniteNumbers(stampedOutputConfig);
@@ -339,7 +339,6 @@ export async function writeConfigFileFromContext(
     ? await deps.fs.promises.stat(configPath).catch(() => null)
     : null;
   const hasMetaBefore = hasConfigMeta(snapshot.parsed);
-  const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
   const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
   const includeFileHashes: Record<string, string> = {};
   const includeFileTargets: Record<string, string> = {};
@@ -416,7 +415,7 @@ export async function writeConfigFileFromContext(
     changedPaths: [...changedPaths],
     origin: options.auditOrigin,
     hasMetaBefore,
-    hasMetaAfter,
+    hasMetaAfter: hasConfigMeta(stampedOutputConfig),
     gatewayModeBefore,
     gatewayModeAfter,
     suspicious: suspiciousReasons,
@@ -544,6 +543,7 @@ export async function writeConfigFileFromContext(
       assertBeforeMutation: writeGuard.assertBeforeMutation,
       onDestinationState: writeGuard.onDestinationState,
     });
+    await assertAgentDeletionTargetsUnchanged(snapshot.config, sourceConfigForPreflight, deps.env);
     await options.beforeCommit?.();
     const result = withDeferredPluginMigrationsCurrent(
       { env: deps.env, configPath, expectedPending: deferredPluginMigrations },
@@ -557,7 +557,7 @@ export async function writeConfigFileFromContext(
     publication.phase = "accepted";
     recordUpdateDoctorConfigWrite(configPath, previousHash, nextHash, snapshot.parsed, json);
     try {
-      recordConfigWriteMetadata();
+      await recordConfigWriteMetadata();
     } catch (error) {
       deps.logger.warn(`Config metadata state update failed: ${formatErrorMessage(error)}`);
     }

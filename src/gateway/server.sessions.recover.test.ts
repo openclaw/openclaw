@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
@@ -45,9 +45,26 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
+const titleGeneration = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../auto-reply/reply/conversation-label-generator.js").generateConversationLabelWithFallback
+  >(),
+);
+
+// Recovery owns identity and continuation; title model behavior has separate boundary coverage.
+vi.mock("../auto-reply/reply/conversation-label-generator.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/conversation-label-generator.js")>()),
+  generateConversationLabelWithFallback: titleGeneration,
+}));
+
+// Reverse hook order joins accepted fixture work before draining global owners.
+afterEach(() => drainGlobalSingletonLifecycleState());
+
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => drainGlobalSingletonLifecycleState());
+beforeEach(() => {
+  titleGeneration.mockReset().mockResolvedValue("Recovered session");
+});
 
 function recoveryWorkerPlacement(params: {
   sessionId: string;

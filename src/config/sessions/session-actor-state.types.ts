@@ -12,7 +12,10 @@ import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionActorTarget = Readonly<{
-  database: AgentDatabaseExecutionFileIdentity | AgentDatabaseIncognitoIdentity;
+  database:
+    | AgentDatabaseExecutionFileIdentity
+    | AgentDatabaseIncognitoIdentity
+    | { kind: "memory"; handle: string; incarnation: string };
   sessionKey: string;
 }>;
 
@@ -20,9 +23,28 @@ export type SessionActorTarget = Readonly<{
 export type SessionActorVersion = Readonly<{ epoch: string; sequence: number }>;
 
 export type SessionActorLifetime = {
+  /** Refuse new work without revoking already accepted settlement. */
+  assertAdmission?(): void;
   assertCurrent(): void;
   /** Accepted work may still settle after new disclosure has been revoked. */
   assertReadable(): void;
+};
+
+/** Entry policy and physical/version identity; transcript indexes are not authority. */
+export type SessionActorAuthorityFacts = Pick<
+  SessionActorHotState,
+  "target" | "version" | "writeToken" | "dependencySessionIds" | "entry"
+>;
+
+/** Host-owned live authority, rechecked at both synchronous admission boundaries. */
+export type SessionActorAuthority = {
+  assertCurrent(): void;
+  authorize(
+    stage: "transaction" | "commit",
+    facts: SessionActorAuthorityFacts,
+    /** Existing kernel source/custody evidence remains subject to its owner's checks. */
+    publication?: unknown,
+  ): void;
 };
 
 /** Complete hot facts. Cold/off-path payloads stay with the bounded history reader. */
@@ -35,9 +57,12 @@ export type SessionActorHotState = {
   dependencySessionIds: string[];
   /** Includes the canonical turn, lifecycle, recovery, and pendingFinalDelivery fields. */
   entry: SessionEntry | undefined;
+  hasBoard: boolean;
   participants: SessionParticipantRecord[];
   members: SessionMember[];
   pendingInputs: Array<Omit<SessionPendingInputRow, "message_json">>;
+  /** Complete retry-key membership; outcome bodies stay in the worker. */
+  completionKeys: string[];
   transcript: {
     watermark: SessionTranscriptWatermark;
     version: SessionTranscriptContextVersion;

@@ -22,6 +22,7 @@ type AgentDeletionCleanupRow = {
 
 type AgentDeletionDatabaseCleanupScope = {
   agentId: string;
+  ownsDatabase: boolean;
   path: string;
   canonicalPath?: string;
   statePath: string;
@@ -50,6 +51,7 @@ const cleanupExecutions = resolveGlobalSingleton(
 
 /** The lifecycle owner supplies live closures, never a transferable operation id. */
 export function createAgentDeletionDatabaseCleanup(owner: {
+  agentId: string;
   statePath: string;
   assertAdmission: () => void | Promise<void>;
   withCommit: (commit: () => void) => void;
@@ -88,6 +90,9 @@ export function createAgentDeletionDatabaseCleanup(owner: {
             errors.push(error);
           }
         }
+        if (errors.length === 0) {
+          cleanupExecutions.delete(scope);
+        }
         return errors;
       };
       const assertActive = () => {
@@ -108,6 +113,7 @@ export function createAgentDeletionDatabaseCleanup(owner: {
       };
       const scope: AgentDeletionDatabaseCleanupScope = {
         agentId: targetAgentId,
+        ownsDatabase: targetAgentId === normalizeAgentId(owner.agentId),
         path: targetPath,
         canonicalPath: targetIdentity.canonicalPath,
         statePath: path.resolve(owner.statePath),
@@ -169,6 +175,10 @@ export function createAgentDeletionDatabaseCleanup(owner: {
           }
           await owner.assertAdmission();
           scope.assertCurrentHost();
+          // A shared store keeps its surviving owner and ordinary borrowers admitted.
+          if (scope.ownsDatabase) {
+            cleanupExecutions.set(scope, scope);
+          }
           const value = await run();
           // Callback settlement retires local admission before any owner check can yield.
           active = false;
@@ -212,7 +222,13 @@ export function createAgentDeletionDatabaseCleanup(owner: {
 export function withAgentDeletionWorkerDatabaseCleanup<T>(
   owner: Pick<
     AgentDeletionDatabaseCleanupScope,
-    "agentId" | "path" | "statePath" | "assertCurrent" | "assertJournal" | "withCommit"
+    | "agentId"
+    | "ownsDatabase"
+    | "path"
+    | "statePath"
+    | "assertCurrent"
+    | "assertJournal"
+    | "withCommit"
   >,
   run: () => T,
 ): T {
@@ -246,6 +262,22 @@ export function getAgentDeletionDatabaseCleanup(
   if (scope.statePath !== path.resolve(statePath)) {
     throw new Error("Agent deletion database cleanup belongs to another state database.");
   }
+  return scope;
+}
+
+/** Resource registration captures only the cleanup scope that admitted this target. */
+export function captureAgentDeletionResourceOwner(
+  matches: (target: { agentId: string; path: string }) => boolean,
+): object | undefined {
+  const scope = databaseCleanup.getStore();
+  if (
+    !scope?.ownsDatabase ||
+    (!matches(scope) &&
+      (!scope.canonicalPath || !matches({ agentId: scope.agentId, path: scope.canonicalPath })))
+  ) {
+    return undefined;
+  }
+  scope.assertCurrentHost();
   return scope;
 }
 
@@ -291,14 +323,14 @@ export function assertAgentDeletionExecutionCleanupAccess(
   scope?.assertCurrentHost();
 }
 
-/** Only a cold executor belongs to cleanup; existing surviving stores retain their owner. */
+/** Only a newly created executor belongs to cleanup; borrowing never transfers ownership. */
 export function registerAgentDeletionExecutionCleanup(
   execution: object,
   options: OpenClawAgentDatabaseOptions,
   close: () => Promise<void>,
 ): void {
   const scope = getAgentDeletionDatabaseCleanup(options);
-  if (!scope?.worker) {
+  if (!scope?.worker || !scope.ownsDatabase) {
     return;
   }
   scope.assertCurrentHost();
@@ -318,7 +350,7 @@ export function registerAgentDeletionDatabaseCleanup(
 ): AgentDeletionDatabaseCleanupScope | undefined {
   const scope = getAgentDeletionDatabaseCleanup(options);
   scope?.assertCurrent();
-  if (!scope || scope.workerOwned) {
+  if (!scope?.ownsDatabase || scope.workerOwned) {
     return undefined;
   }
   cleanupHandles.set(database, scope);

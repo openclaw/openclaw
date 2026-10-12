@@ -20,11 +20,12 @@ import type { MessageActionResult } from "../../infra/outbound/message-action-co
 import { projectGatewayQueuedDeliveryResult } from "../../infra/outbound/message-action-execution.js";
 import { hasAcceptedMessageActionResult } from "../../infra/outbound/message-action-result-acceptance.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import { enforceMessageActionAllowlist } from "../../infra/outbound/outbound-policy.js";
 import { isDeliveredCurrentSourceReplyAsync } from "../../infra/outbound/source-reply-mirror.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
-import { withPreparedChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
@@ -40,6 +41,7 @@ import {
   type MessageToolDiscoveryParams,
   resolveAgentAccountId,
   resolveEffectiveCurrentChannelContext,
+  resolveEffectiveCurrentChannelContextForRequest,
   resolveMessageToolActionSchemaActions,
   resolveMessageToolDiscoveryAsync,
 } from "./message-tool-discovery.js";
@@ -156,7 +158,9 @@ function* createMessageToolSteps(
           currentChannelId: inferredCurrentChannel.currentChannelId,
           currentThreadTs,
           currentMessageId: options.currentMessageId,
+          currentPromptReaction: turnAuthority.hasCurrentPromptReaction,
           currentAccountId: agentAccountId,
+          isScheduledRun: turnAuthority.isScheduledRun,
           scheduledAccountScope: turnAuthority.scheduledAccountScope,
           sessionKey: options.agentSessionKey,
           sessionId: options.sessionId,
@@ -191,7 +195,10 @@ function* createMessageToolSteps(
   const schema = addSourceReplyFinalControl(baseSchema);
   const description = options?.sourceReplyOnly
     ? "Send a message to the current source conversation. Supports actions: send."
-    : buildMessageToolDescription(actions);
+    : buildMessageToolDescription(actions) +
+      (turnAuthority.hasCurrentPromptReaction && (!actions || actions.includes("react"))
+        ? " In this WebChat turn, react with emoji (and optional remove:true) to the current prompt as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions."
+        : "");
   const sandboxRoot = options?.sandboxRoot?.trim();
   const sandboxWorkspaceMediaAccess =
     sandboxRoot && options?.sandboxFsBridge && options.sandboxWorkspaceMediaReadAllowed === true
@@ -225,6 +232,7 @@ function* createMessageToolSteps(
       }) as ChannelMessageActionName;
       const {
         authorization: trustedTurnContext,
+        currentPromptReaction,
         config: rawConfig,
         scheduledRead,
         assertDashboardReadCurrent,
@@ -233,13 +241,16 @@ function* createMessageToolSteps(
       } = turnAuthority.beginInvocation(action);
       const messageActionAuthorization: MessageActionAuthorization = trustedTurnContext ?? {};
       const requestedAccountId = readToolStringParam(params, "accountId");
-      const effectiveCurrentChannel = resolveEffectiveCurrentChannelContext(options, {
-        config: rawConfig,
-        action,
-        params,
-        accountId: requestedAccountId ?? agentAccountId,
-        preparedMessageToolCatalog,
-      });
+      const effectiveCurrentChannel = await resolveEffectiveCurrentChannelContextForRequest(
+        options,
+        {
+          config: rawConfig,
+          action,
+          params,
+          accountId: requestedAccountId ?? agentAccountId,
+          preparedMessageToolCatalog,
+        },
+      );
       const decisions = createMessageToolDecisionRecorder({
         actionId: toolCallId,
         action,
@@ -316,6 +327,54 @@ function* createMessageToolSteps(
       }
       if (explicitTargetGuard) {
         decisions.runBoundary(() => explicitTargetGuard.require(params, action));
+      }
+      // The admitted prompt wins over an inherited external delivery route. Only
+      // an explicit external channel enters the ordinary channel reaction path.
+      const requestedReactionChannel = normalizeOptionalLowercaseString(params.channel);
+      if (
+        action === "react" &&
+        currentPromptReaction &&
+        (!requestedReactionChannel || requestedReactionChannel === "webchat")
+      ) {
+        const allowedParams = new Set(["action", "channel", "emoji", "remove", "dryRun"]);
+        if (
+          Object.keys(params).some((key) => params[key] !== undefined && !allowedParams.has(key))
+        ) {
+          throw new Error(
+            "WebChat reactions only target the current prompt; omit target, messageId, and identity parameters.",
+          );
+        }
+        decisions.runBoundary(() =>
+          enforceMessageActionAllowlist({
+            cfg: rawConfig,
+            agentId: resolvedAgentId,
+            action,
+          }),
+        );
+        const emoji = readToolStringParam(params, "emoji", { required: true });
+        const remove = readBooleanParam(params, "remove") === true;
+        const dryRun = readBooleanParam(params, "dryRun") === true;
+        const result = await currentPromptReaction({
+          emoji,
+          remove,
+          dryRun,
+          assertCurrent: assertActionCurrent,
+        });
+        assertActionCurrent();
+        const sourceReplyDelivered =
+          requestedSourceReplyFinal === true && result.changed && !remove && !dryRun;
+        if (sourceReplyDelivered && options?.sessionId) {
+          resolveActiveReplyOperationForSessionId(options.sessionId)?.markSourceReplyDelivered();
+        }
+        return embeddedMessageDelivery.attachEmbeddedMessageDeliveryFact(
+          jsonResult({ ok: true, channel: "webchat", ...result, remove, dryRun }),
+          {
+            status: dryRun ? "dryRun" : "settled",
+            partialDelivery: false,
+            createdThreadIds: [],
+            ...(sourceReplyDelivered ? { sourceReplyDelivered: true } : {}),
+          },
+        );
       }
 
       const gatewayContext = { ...options, messageActionTurnCapability: gatewayTurnCapability };
@@ -493,11 +552,7 @@ function* createMessageToolSteps(
         action === "send" &&
         sourceReplySinkDeliveryMode === "message_tool_only" &&
         normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
-      const prepareUse = messageActionAuthorization.scheduled?.prepareUse;
-      return await withPreparedChannelReadAuthority(
-        prepareUse
-          ? () => prepareUse(Boolean(scheduledRead || scheduledWrite), assertActionCurrent)
-          : undefined,
+      return await withChannelReadAuthority(
         action === "download-file" || scheduledRead || assertDashboardReadCurrent
           ? assertActionCurrent
           : undefined,

@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import type { SetupRuntimeCredential } from "../agents/auth-profiles/setup-access.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
@@ -463,7 +463,9 @@ async function verifyAndActivateCandidate(
     return failure(ownerFailure);
   }
   const savedCredential = staged.authProfileId
-    ? loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir).profiles[staged.authProfileId]
+    ? (await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir)).profiles[
+        staged.authProfileId
+      ]
     : undefined;
   if (savedCredential?.setup?.replacement && !params.activationConfirmed) {
     if (

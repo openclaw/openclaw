@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
+import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 
 let database: DatabaseSync;
 const cutoff = 1_000;
@@ -27,11 +28,12 @@ afterEach(() => {
 function addNode(id: string, metadata: Record<string, unknown> = {}, raw?: string) {
   const key = `agent:main:${id}`;
   const entryJson = raw ?? JSON.stringify({ sessionId: id, updatedAt: 1, ...metadata });
+  const predicates = deriveSessionPredicateColumns(entryJson);
   database
     .prepare(
-      "INSERT INTO session_nodes (session_key,current_session_id,entry_json,updated_at) VALUES (?,?,?,1)",
+      "INSERT INTO session_nodes (session_key,current_session_id,entry_json,updated_at,session_started_at,has_optional_references) VALUES (?,?,?,1,?,?)",
     )
-    .run(key, id, entryJson);
+    .run(key, id, entryJson, predicates.session_started_at, predicates.has_optional_references);
   addWindow(key, id);
   return { key, entryJson };
 }

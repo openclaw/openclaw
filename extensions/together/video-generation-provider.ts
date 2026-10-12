@@ -3,7 +3,7 @@ import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -109,7 +109,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
       "minimax/hailuo-02",
       "kwaivgI/kling-2.1-master",
     ],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "together", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "together", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,
