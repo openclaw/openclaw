@@ -881,9 +881,6 @@ start of a new task and uses a skill when the task matches it or the user names 
 It searches when the task likely needs a reusable workflow that is not listed.
 It searches or reads again only when the task's scope changes or the user names
 a skill. Simple conversation and self-contained answers do not require discovery.
-The prompt lists names and descriptions without file locations. Search results
-still include locations for resolving relative resources. Without an effective
-skill read tool, the existing location-based prompt is unchanged.
 
 - `skills_search({ query, limit? })` searches eligible installed names,
   descriptions, and bounded instruction text. The default limit is 5; the maximum
@@ -951,14 +948,11 @@ prompt. The cost follows a fixed formula and scales linearly per skill:
 
 - **Base overhead** (only when 1+ skills are eligible): a fixed block of intro
   prose plus the `<available_skills>` wrapper.
-- **Per skill with `skills_read`:** ~71 characters + your `name` and `description`
+- **Per skill:** ~97 characters + your `name`, `description`, and `location`
   field lengths.
-- **Per skill without `skills_read`:** ~97 characters + your `name`, `description`,
-  and `location` field lengths.
 - XML escaping expands `& < > " '` into entities, adding a few characters per
   occurrence.
-- At ~4 chars/token, 71 chars ≈ 18 tokens (97 chars ≈ 24 tokens without
-  `skills_read`) per skill before field lengths.
+- At ~4 chars/token, 97 chars ≈ 24 tokens per skill before field lengths.
 
 If the rendered block would exceed the configured prompt budget
 (`skills.limits.maxSkillsPromptChars`), OpenClaw first preserves as many skill

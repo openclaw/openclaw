@@ -7,7 +7,7 @@ import { buildAgentSystemPrompt } from "./system-prompt.js";
 const skillsPrompt = formatSkillsForPromptCore([createFixtureSkillEntry("demo").skill]);
 
 describe("task-scoped skill discovery", () => {
-  it.each([false, true])("uses name-based skills with Code Mode %s", (codeModeActive) => {
+  it.each([false, true])("checks skills once per task with Code Mode %s", (codeModeActive) => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/workspace",
       codeModeActive,
@@ -24,11 +24,7 @@ describe("task-scoped skill discovery", () => {
     expect(prompt).toContain(
       codeModeActive ? "`skills.search(query)` inside `exec`" : "`skills_search`",
     );
-    expect(prompt).toContain("<name>demo</name>");
-    expect(prompt).toContain("<description>");
-    expect(prompt).not.toContain("<location>");
-    expect(prompt).not.toContain("Read a skill's file at its listed location");
-    expect(prompt).not.toContain("When a skill file references a relative path");
+    expect(prompt).toContain(skillsPrompt.trim());
   });
 
   it.each([false, true])(

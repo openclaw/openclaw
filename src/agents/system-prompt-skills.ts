@@ -8,15 +8,6 @@ export function buildSkillsSection(params: {
   installedSkillRead?: boolean;
 }) {
   const trimmed = params.skillsPrompt?.trim();
-  const catalog = params.installedSkillRead
-    ? trimmed
-        ?.replace(/^[ ]{4}<location>.*<\/location>\n/gmu, "")
-        .replace(/^Read a skill's file at its listed location.*\n/gmu, "")
-        .replace(
-          /^When a skill file references a relative path, resolve it against the skill directory.*\n/gmu,
-          "",
-        )
-    : trimmed;
   const hasListedSkills = parseSkillsPromptCatalog(trimmed ?? "").length > 0;
   if (!hasListedSkills && !params.installedSkillSearch) {
     return trimmed ? ["## Skills", trimmed, ""] : [];
@@ -49,7 +40,7 @@ export function buildSkillsSection(params: {
     "Several: most specific. No relevant skill: read none.",
     "Up-front max one. Never invent paths.",
     "External writes: batch safely; no tight loops; honor 429/Retry-After.",
-    ...(catalog ? [catalog] : []),
+    ...(trimmed ? [trimmed] : []),
     "",
   ];
 }
