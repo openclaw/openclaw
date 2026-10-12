@@ -19,6 +19,8 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { withSessionMutationCommitGuard } from "./server-methods/session-mutation-guards.js";
@@ -49,6 +51,8 @@ describe("committed session mutation authorization", () => {
     "keeps %s worker grants current after membership changes without shared-state reads",
     async (mode) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        ensureUserProfilesSchema({});
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const cfg = rolePolicyConfig();
         if (mode === "fixed") {
           cfg.session = { store: state.statePath("legacy", "sessions.json") };
@@ -182,6 +186,8 @@ describe("committed session mutation authorization", () => {
     "keeps committed guards current without unrelated entries (resident: %s)",
     async (resident) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        ensureUserProfilesSchema({});
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const cfg = rolePolicyConfig();
         const client = roleClient("view", "committed-reader");
         const sessionKey = "agent:main:committed-authorization";
@@ -365,6 +371,8 @@ describe("committed session mutation authorization", () => {
     "revalidates a committed main-key change with a reader first opened %s the uncommitted setter",
     async (opened) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        ensureUserProfilesSchema({});
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const cfg = rolePolicyConfig();
         const client = roleClient("write", "committed-main-key");
         const sessionKey = "agent:main:committed-authorization";
