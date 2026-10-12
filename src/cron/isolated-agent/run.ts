@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import {
+  buildAgentRunTerminalReplySnapshot,
+  normalizeAgentRunTerminalReplySnapshot,
+} from "../../agents/agent-run-terminal-reply.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   createAgentRunRestartAbortError,
@@ -15,6 +19,8 @@ import {
 import {
   claimAgentRunContext,
   consumeCronNextCheckProposal,
+  getAgentRunContextOwnerStatus,
+  registerAgentRunContext,
   releaseAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -40,6 +46,7 @@ import {
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
+import { resolveCronPayloadOutcome } from "./helpers.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
@@ -293,6 +300,38 @@ async function runCronIsolatedAgentTurnInTrace(
                 executeCronRun(executionParams),
               ),
             );
+            const reply =
+              normalizeAgentRunTerminalReplySnapshot(execution.runResult.meta?.terminalReply) ??
+              buildAgentRunTerminalReplySnapshot({
+                visibleText: execution.runResult.meta?.finalAssistantVisibleText,
+                rawText: execution.runResult.meta?.finalAssistantRawText,
+                terminalReplyKind: execution.runResult.meta?.terminalReplyKind,
+              });
+            // Session visibility consumes actual output, not delivery or synthesized workflow errors.
+            const output = resolveCronPayloadOutcome({
+              payloads: (execution.runResult.payloads ?? []).filter((payload) => !payload.isError),
+              finalAssistantVisibleText:
+                reply.disposition === "visible"
+                  ? reply.text
+                  : execution.runResult.meta?.finalAssistantVisibleText,
+              preferFinalAssistantVisibleText: true,
+            });
+            if (
+              runContextOwnerToken &&
+              getAgentRunContextOwnerStatus(runId, runContextOwnerToken, runLifecycleGeneration) ===
+                "active"
+            ) {
+              registerAgentRunContext(
+                runId,
+                {
+                  lifecycleGeneration: runLifecycleGeneration,
+                  isControlUiVisible:
+                    output.deliveryDisposition.kind === "visible" &&
+                    (reply.disposition !== "silent" || output.deliveryPayloadHasStructuredContent),
+                },
+                runContextOwnerToken,
+              );
+            }
             // Publish the execution fact captured before bookkeeping; cron persistence
             // and delivery retain their separate workflow outcome.
             lifecycle.emit("end", execution.runResult);

@@ -8028,7 +8028,6 @@
 ["src/gateway/test-helpers.mocks.ts","../auto-reply/reply/get-reply-from-config.runtime.js","ff888b0875559f519b3d988271a831674879081b0c6dc3ffd823f5e170855e68",1]
 ["src/gateway/test-helpers.mocks.ts","../commands/agent.js","e23f296ac08a90243e85868167fd8e110425491443114965b044c238d5d0963c",1]
 ["src/gateway/test-helpers.mocks.ts","../config/config.js","c3c4235b26a8ddc2078028b19ec1738a6147ff57bcb5c9eebd7d0c48b5dbdf53",1]
-["src/gateway/test-helpers.mocks.ts","../cron/isolated-agent.js","6313c4fdf9cbe6408af572032b85738334958f57879ac425be8f604eb89ef9e0",1]
 ["src/gateway/test-helpers.mocks.ts","../infra/tailnet.js","c94b579f6d66a49cbee1836baeae71209235908f610dc31118d47bed888a91cf",1]
 ["src/gateway/test-helpers.mocks.ts","../status/summary.js","80928d8df492aab39e0b5702cd54a3673063cb092e211fcad8620f6e7cbe2c1e",1]
 ["src/gateway/test-helpers.mocks.ts","./health/collector.js","49ab2e1e48b06742caa74e616fbdbc41f0de9d7e9a87c3317596f99b71d16b2e",1]

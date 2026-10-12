@@ -11,7 +11,6 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { HooksConfig } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { RunCronAgentTurnResult } from "../cron/isolated-agent/run.types.js";
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { resolveGatewayTestFileFixture } from "./server-file-fixtures.test-support.js";
 
@@ -23,7 +22,7 @@ export type GetReplyFromConfigFn = (
   opts?: InternalGetReplyOptions,
   configOverride?: OpenClawConfig,
 ) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
-type CronIsolatedRunFn = (...args: unknown[]) => Promise<RunCronAgentTurnResult>;
+type CronIsolatedRunFn = typeof import("../cron/isolated-agent.js").runCronIsolatedAgentTurn;
 type AgentCommandResult = Awaited<
   ReturnType<(typeof import("../agents/agent-command.js"))["agentCommand"]>
 >;
@@ -99,7 +98,7 @@ const gatewayTestHoisted = resolveGatewayTestFileFixture<GatewayTestHoistedState
       discoverCalls: 0,
       models: [],
     },
-    cronIsolatedRun: vi.fn(async () => ({ status: "ok", summary: "ok" })),
+    cronIsolatedRun: vi.fn<CronIsolatedRunFn>(async () => ({ status: "ok", summary: "ok" })),
     agentCommand: vi.fn().mockResolvedValue(undefined),
     runBtwSideQuestion: vi.fn().mockResolvedValue(undefined),
     dispatchInboundMessage: vi.fn(),

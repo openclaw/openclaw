@@ -196,10 +196,14 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
   };
 });
 
-vi.mock("../cron/isolated-agent.js", () => ({
-  runCronIsolatedAgentTurn: (...args: unknown[]) =>
-    (cronIsolatedRun as (...args: unknown[]) => unknown)(...args),
-}));
+vi.mock("../cron/isolated-agent.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../cron/isolated-agent.js")>();
+  return {
+    ...actual,
+    runCronIsolatedAgentTurn: (...args: Parameters<typeof actual.runCronIsolatedAgentTurn>) =>
+      cronIsolatedRun(...args),
+  };
+});
 
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: () => testTailnetIPv4.value,
