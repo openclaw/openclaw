@@ -17,17 +17,23 @@ it.each(["cohort", "children"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const parent = "agent:main:parent";
       const sessionKey = "agent:main:child";
+      const siblingKey = "agent:main:sibling";
       const scope = { agentId: "main", env, sessionKey };
       replaceSessionEntrySync(scope, {
         sessionId: "child",
         updatedAt: 1,
         parentSessionKey: parent,
       });
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: siblingKey },
+        { sessionId: "sibling", updatedAt: 1, parentSessionKey: parent },
+      );
       recordSessionParticipant(scope, { identity: { type: "agent", id: "first" }, promptedAt: 1 });
       const database = openOpenClawAgentDatabase(scope);
       const read = () =>
         mode === "cohort"
-          ? prepareExactSessionEntryRowReads(database, [sessionKey], "list")(sessionKey)?.entry
+          ? prepareExactSessionEntryRowReads(database, [sessionKey, siblingKey], "list")(sessionKey)
+              ?.entry
           : readSessionChildEntriesInDatabase(database, parent, "list")[0]?.entry;
       listSessionEntriesCore({ ...scope, projection: "list" });
       const sql = observeSqliteReadSql(StatementSync.prototype);
