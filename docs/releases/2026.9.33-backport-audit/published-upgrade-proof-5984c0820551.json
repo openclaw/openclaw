@@ -1,0 +1,246 @@
+{
+  "version": 1,
+  "provenance": "Captured local native-run projections, not hosted CI or a release qualification claim. Raw diagnostic bodies, credentials, host paths, and full payload inventories are omitted.",
+  "sourceCommit": "5984c082055108778da28c67c6061feea115e71a",
+  "command": [
+    "node",
+    "scripts/test-docker-all.mjs"
+  ],
+  "package": {
+    "version": "2026.9.33",
+    "sha256": "a4590dc22083593fd5cfa891a28b92e65138bd9e339df82214640269ff5255d0",
+    "bytes": 114974720,
+    "buildInfo": {
+      "version": "2026.9.33",
+      "commit": "5984c082055108778da28c67c6061feea115e71a",
+      "builtAt": "2026-10-12T03:48:16.698Z",
+      "buildId": "2026.9.33-5984c0820551-2026-10-12T03-48-16.698Z"
+    }
+  },
+  "prepublishPluginRegistry": {
+    "manifestSha256": "2010c4e17ab10c2a00c8955686ced1cafa51eca1159a6f7c5380640046826c63",
+    "requiredPackages": [
+      "@openclaw/codex",
+      "@openclaw/discord",
+      "@openclaw/whatsapp"
+    ],
+    "candidateVersion": "2026.9.33"
+  },
+  "outerRun": {
+    "startedAt": "2026-10-12T04:18:23.186182+00:00",
+    "finishedAt": "2026-10-12T04:24:02.301262+00:00",
+    "wallSeconds": 339.113,
+    "exit": 0,
+    "status": "passed",
+    "sourceHeadAfter": "5984c082055108778da28c67c6061feea115e71a",
+    "sourceStatusAfter": "",
+    "cleanup": {
+      "joined": true
+    },
+    "lane": {
+      "name": "published-upgrade-survivor-2026.8.35",
+      "status": 0,
+      "elapsedSeconds": 331,
+      "startedAt": "2026-10-12T04:18:31.330Z",
+      "finishedAt": "2026-10-12T04:24:02.290Z",
+      "timedOut": false,
+      "noOutputTimedOut": false,
+      "attempts": [
+        {
+          "attempt": 1,
+          "elapsedSeconds": 331,
+          "finishedAt": "2026-10-12T04:24:02.290Z",
+          "noOutputTimedOut": false,
+          "startedAt": "2026-10-12T04:18:31.330Z",
+          "status": 0,
+          "timedOut": false
+        }
+      ]
+    }
+  },
+  "summary": {
+    "status": "passed",
+    "baseline": {
+      "spec": "openclaw@2026.8.35",
+      "version": "2026.8.35"
+    },
+    "scenario": "base",
+    "missingLoadPath": {
+      "applicability": "supported",
+      "reason": null
+    },
+    "installedVersion": "2026.9.33",
+    "candidateInstallMode": "updater",
+    "updateRestartMode": "manual",
+    "updateOutcome": "success",
+    "updateRestartSource": null,
+    "timings": {
+      "startupSeconds": 25,
+      "updateRestartSeconds": null,
+      "idempotenceSeconds": null,
+      "healthzSeconds": 1,
+      "readyzSeconds": 1,
+      "statusSeconds": 1
+    }
+  },
+  "installedPayloadIdentity": {
+    "version": "2026.9.33",
+    "buildInfo": {
+      "version": "2026.9.33",
+      "commit": "5984c082055108778da28c67c6061feea115e71a",
+      "builtAt": "2026-10-12T03:48:16.698Z",
+      "buildId": "2026.9.33-5984c0820551-2026-10-12T03-48-16.698Z"
+    },
+    "comparedScope": [
+      "package.json",
+      "openclaw.mjs",
+      "dist"
+    ],
+    "expectedEntries": 11405,
+    "installedEntries": 11405,
+    "exactInventoryAndEntryIdentityMatch": true
+  },
+  "firstHopPostCore": {
+    "childExitCode": 0,
+    "status": "warning",
+    "changed": true,
+    "warningReasons": [
+      "configured-plugin-path-unavailable",
+      "doctor-advisory"
+    ]
+  },
+  "capturedPhaseEvents": [
+    {
+      "phase": "installed-package-identity",
+      "status": "started",
+      "at": "2026-10-12T04:23:01.096Z"
+    },
+    {
+      "phase": "installed-package-identity",
+      "status": "passed",
+      "at": "2026-10-12T04:23:01.637Z"
+    },
+    {
+      "phase": "missing-load-path-post-update",
+      "status": "started",
+      "at": "2026-10-12T04:23:01.654Z"
+    },
+    {
+      "phase": "missing-load-path-post-update",
+      "status": "passed",
+      "at": "2026-10-12T04:23:01.708Z"
+    },
+    {
+      "phase": "assert-automatic-migration",
+      "status": "started",
+      "at": "2026-10-12T04:23:01.726Z"
+    },
+    {
+      "phase": "assert-automatic-migration",
+      "status": "passed",
+      "at": "2026-10-12T04:23:01.877Z"
+    },
+    {
+      "phase": "assert-prepublish-requests",
+      "status": "started",
+      "at": "2026-10-12T04:23:01.978Z"
+    },
+    {
+      "phase": "assert-prepublish-requests",
+      "status": "passed",
+      "at": "2026-10-12T04:23:04.578Z"
+    },
+    {
+      "phase": "doctor",
+      "status": "started",
+      "at": "2026-10-12T04:23:04.665Z"
+    },
+    {
+      "phase": "doctor",
+      "status": "passed",
+      "at": "2026-10-12T04:23:27.889Z"
+    },
+    {
+      "phase": "validate-post-doctor-config",
+      "status": "started",
+      "at": "2026-10-12T04:23:27.988Z"
+    },
+    {
+      "phase": "validate-post-doctor-config",
+      "status": "passed",
+      "at": "2026-10-12T04:23:29.693Z"
+    },
+    {
+      "phase": "missing-load-path-post-doctor",
+      "status": "started",
+      "at": "2026-10-12T04:23:31.306Z"
+    },
+    {
+      "phase": "missing-load-path-post-doctor",
+      "status": "passed",
+      "at": "2026-10-12T04:23:31.360Z"
+    },
+    {
+      "phase": "assert-survival",
+      "status": "started",
+      "at": "2026-10-12T04:23:31.378Z"
+    },
+    {
+      "phase": "assert-survival",
+      "status": "passed",
+      "at": "2026-10-12T04:23:31.517Z"
+    },
+    {
+      "phase": "gateway-start",
+      "status": "started",
+      "at": "2026-10-12T04:23:33.603Z"
+    },
+    {
+      "phase": "gateway-start",
+      "status": "passed",
+      "at": "2026-10-12T04:23:57.950Z"
+    },
+    {
+      "phase": "gateway-probes",
+      "status": "started",
+      "at": "2026-10-12T04:23:57.968Z"
+    },
+    {
+      "phase": "gateway-probes",
+      "status": "passed",
+      "at": "2026-10-12T04:23:58.201Z"
+    },
+    {
+      "phase": "gateway-status",
+      "status": "started",
+      "at": "2026-10-12T04:23:58.221Z"
+    },
+    {
+      "phase": "gateway-status",
+      "status": "passed",
+      "at": "2026-10-12T04:23:58.956Z"
+    },
+    {
+      "phase": "missing-load-path-ready",
+      "status": "started",
+      "at": "2026-10-12T04:23:58.974Z"
+    },
+    {
+      "phase": "missing-load-path-ready",
+      "status": "passed",
+      "at": "2026-10-12T04:23:59.032Z"
+    }
+  ],
+  "rawArtifactSha256": {
+    "summary.json": "6375ccd359903278e7e0a9c127d6da2d8432291fa594deea828922058f14ab83",
+    "phases.jsonl": "ac1a715ae72c196114d85054da1fcedae87d823ff4795f332c626e8a83944ce0",
+    "candidate-package-identity.json": "008de695256aba6b5b53d712fdfa480f43844b628c29e23aaaf186c7a2c80d1b",
+    "installed-package-identity.json": "a9859ce4158aa66fda3912513ab7e3219d199ca9475b3773b1299cb9b900cd1c"
+  },
+  "limits": [
+    "Only published openclaw@2026.8.35, scenario=base, updateRestartMode=manual.",
+    "Stable policy for an explicit candidate tarball; no extended-stable dist-tag selection.",
+    "No automatic managed-service restart or second-restart/idempotence measurement.",
+    "No native Windows, root-managed VPS, mobile-pairing, fleet, live-provider, soak, merge, tag, or publication proof."
+  ]
+}
