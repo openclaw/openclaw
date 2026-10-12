@@ -268,6 +268,15 @@ async function invokeNodeRegistryCore(
     async () => {
       // Serialization can consume the budget or close caller-owned authority.
       // Revalidate both before arming pending state and handing off to transport.
+      // The authority callback may publish a deadline abort.
+      if (params.isDispatchAuthorized?.() === false) {
+        return {
+          result: nodeInvokeError(
+            "APPROVAL_AUTHORITY_CLOSED",
+            "runtime authority closed before node dispatch",
+          ),
+        };
+      }
       if (params.signal?.aborted) {
         return { result: nodeInvokeError("ABORTED", "node invoke cancelled") };
       }
@@ -282,14 +291,6 @@ async function invokeNodeRegistryCore(
       ) {
         return {
           result: nodeInvokeError("PAIRING_CHANGED", "node pairing changed before dispatch"),
-        };
-      }
-      if (params.isDispatchAuthorized?.() === false) {
-        return {
-          result: nodeInvokeError(
-            "APPROVAL_AUTHORITY_CLOSED",
-            "runtime authority closed before node dispatch",
-          ),
         };
       }
       if (!state.context.isCommandAllowed(params.nodeId, params.command)) {
