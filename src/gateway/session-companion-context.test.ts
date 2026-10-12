@@ -39,6 +39,22 @@ function createScope(prefix: string) {
 }
 
 describe("session companion context", () => {
+  it("reads replaced session identities without host SQL", async () => {
+    const scope = createScope("companion-context-identity");
+    for (const sessionId of [scope.sessionId, `${scope.sessionId}-replacement`]) {
+      await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+      const hostSql = observeHostDataSql();
+      try {
+        await expect(defaultSessionCompanionContextReader.currentSessionId(scope)).resolves.toBe(
+          sessionId,
+        );
+        expect(hostSql.queries).toEqual([]);
+      } finally {
+        hostSql.restore();
+      }
+    }
+  });
+
   it.each(
     [false, true].flatMap((warm) =>
       (["reset", "dispose", "request-abort", "backing-reset"] as const).map((cancellation) => ({
@@ -146,7 +162,9 @@ describe("session companion context", () => {
       updatedAt: 1,
       incognito: true,
     });
-    expect(defaultSessionCompanionContextReader.currentSessionId(scope)).toBe(scope.sessionId);
+    expect(await defaultSessionCompanionContextReader.currentSessionId(scope)).toBe(
+      scope.sessionId,
+    );
     for (const [index, text] of ["First question", "Latest question"].entries()) {
       await persistSessionTranscriptTurn(scope, {
         messages: [
@@ -168,7 +186,7 @@ describe("session companion context", () => {
     }
     memorySessionActorOwners.closeDatabase(location);
     expect(await defaultSessionCompanionContextReader.read(scope)).toEqual({ kind: "missing" });
-    expect(defaultSessionCompanionContextReader.currentSessionId(scope)).toBeUndefined();
+    expect(await defaultSessionCompanionContextReader.currentSessionId(scope)).toBeUndefined();
   });
 
   it("reads a bounded active SQLite tail without decoding old transcript rows", async () => {
@@ -394,9 +412,7 @@ describe("session companion context", () => {
     const result = await defaultSessionCompanionContextReader
       .read(scope)
       .finally(() => hostSql.restore());
-    expect(
-      hostSql.queries.filter((query) => query.includes("session_transcript_active_events")),
-    ).toEqual([]);
+    expect(hostSql.queries).toEqual([]);
     expect(result).toEqual({
       kind: "ready",
       context: {

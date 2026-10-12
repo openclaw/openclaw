@@ -18,11 +18,14 @@ import type { SessionActor } from "../../config/sessions/session-actor-contract.
 import { createDurableSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
+import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
 import * as transcriptReaders from "../../config/sessions/session-transcript-execution-read.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
+import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import {
+  readOwnedSessionTranscriptEntry,
   runWithoutOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
@@ -54,7 +57,7 @@ afterEach(() => {
 
 async function withSelectedTranscriptReader<T>(
   target: Parameters<typeof SessionManager.openModelContextAsync>[0],
-  run: () => Promise<T>,
+  run: (actor?: SessionActor) => Promise<T>,
   retainActor = false,
 ): Promise<T> {
   const { databaseClaim } = await loadSessionEntryForAdmission(target);
@@ -95,7 +98,7 @@ async function withSelectedTranscriptReader<T>(
         ...(actor && { sessionActor: { actor, database: reader.database } }),
         withTranscriptWrite: async (write) => write(),
       },
-      run,
+      () => run(actor),
     );
   } finally {
     try {
@@ -105,6 +108,96 @@ async function withSelectedTranscriptReader<T>(
     }
   }
 }
+
+it.each(["bounded", "anchors"] as const)(
+  "reads current actor entry facts through %s history after writes and replacement",
+  async (route) => {
+    await withOpenClawTestState({ label: `actor-entry-${route}` }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId: "actor-entry",
+        sessionKey: "agent:main:actor-entry",
+        storePath: state.statePath("transcript.sqlite"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const source = await SessionManager.openAsync(target);
+      const entryId = await source.appendMessageAsync(makeUserMessage("original", 1));
+      if (!entryId) {
+        throw new Error("Expected the appended message ID");
+      }
+      const otherTarget = { ...target, sessionId: "other-session", sessionKey: "agent:main:other" };
+      await upsertSessionEntryCore(otherTarget, { sessionId: otherTarget.sessionId, updatedAt: 1 });
+      const otherSource = await SessionManager.openAsync(otherTarget);
+      const otherEntryId = await otherSource.appendMessageAsync(makeUserMessage("other", 1));
+      if (!otherEntryId) {
+        throw new Error("Expected the other session's message ID");
+      }
+      await withSelectedTranscriptReader(
+        target,
+        async (actor) => {
+          if (!actor) {
+            throw new Error("Expected retained session actor");
+          }
+          const read = async (readTarget = target, readEntryId = entryId) => {
+            const hydration = transcriptHydration.prepareSessionTranscriptHydration(readTarget, {
+              maxBytes: 4096,
+              maxEvents: 3,
+            });
+            const selection = { entryIds: [readEntryId], contextAuthority: true as const };
+            let facts: SessionTranscriptAnchorFacts | undefined;
+            if (route === "bounded") {
+              await hydration.readCohort!(
+                { ...selection, sessionKey: readTarget.sessionKey },
+                (prepared) => {
+                  if (prepared.kind === "bounded") {
+                    facts = prepared.transcript;
+                  }
+                },
+              );
+            } else {
+              facts = await transcriptAnchors.readSessionTranscriptAnchorsAsync(
+                readTarget,
+                { ...selection, afterSeq: 0 },
+                undefined,
+                (current) => {
+                  facts = current;
+                },
+              );
+            }
+            return facts;
+          };
+          expect((await read(otherTarget, otherEntryId))?.contextAuthority?.entry?.sessionId).toBe(
+            otherTarget.sessionId,
+          );
+          expect((await read())?.contextAuthority?.entry?.activeWriterRunId).toBeUndefined();
+          const authority = { assertCurrent() {}, authorize() {} };
+          const current = actor.snapshot(authority)!;
+          const adopted = await actor.adoptRun(
+            {
+              commandId: "adopt-current-run",
+              phaseId: "turn",
+              sessionId: target.sessionId,
+              expectedState: buildRestartRecoveryExpectedState(current.entry!),
+              lifecycle: {},
+              runId: "current-run",
+            },
+            authority,
+          );
+          expect(adopted.kind).toBe("committed");
+          expect((await read())?.contextAuthority?.entry?.activeWriterRunId).toBe("current-run");
+
+          await upsertSessionEntryCore(target, { sessionId: "replacement", updatedAt: 2 });
+          expect(actor.snapshot(authority)).toBeUndefined();
+          expect(readOwnedSessionTranscriptEntry(target)?.sessionId).toBe("replacement");
+          const replaced = await read();
+          expect(replaced?.contextAuthority?.entry?.sessionId).toBe("replacement");
+          expect(replaced?.anchors).toEqual([]);
+        },
+        true,
+      );
+    });
+  },
+);
 
 it.each(["unchanged", "append", "rewrite"] as const)(
   "uses exact actor metadata after context consumption and preserves %s validation",

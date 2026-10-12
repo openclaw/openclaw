@@ -33,6 +33,7 @@ import {
   captureSessionTranscriptTargetBinding,
   type CapturedSessionTranscriptTargetBinding,
 } from "./transcript-target-binding.js";
+import { readOwnedSessionTranscriptEntry } from "./transcript-write-context.js";
 
 type SessionTranscriptHydrationReader = {
   target: CapturedSessionTranscriptTargetBinding;
@@ -225,6 +226,7 @@ export function prepareSessionTranscriptHydration(
                         limits: contextLimits,
                         admission,
                         transcript: capturedSelection,
+                        preparedEntry: readOwnedSessionTranscriptEntry(target),
                       },
                       signal,
                     );

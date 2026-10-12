@@ -1,5 +1,7 @@
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type {
   CreatedGatewaySession,
@@ -9,12 +11,12 @@ import type {
 } from "./session-create-service.types.js";
 import { finalizeSessionCreateTarget } from "./session-create-target.js";
 import { unavailableSessionRequest } from "./session-request-error.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 export async function completeGatewaySessionCreation(
   params: CreateGatewaySessionParams,
   result: Extract<GatewaySessionCommitResult, { ok: true }>,
   createdContext: CreatedGatewaySession | undefined,
+  commitGuard: CreateGatewaySessionParams["commitGuard"],
 ): Promise<CreateGatewaySessionResult> {
   if (result.resetExisting || !createdContext || !params.afterCreate) {
     return params.atomicInitialization === true
@@ -23,9 +25,18 @@ export async function completeGatewaySessionCreation(
   }
   if (params.atomicInitialization === true) {
     const initializingSession = createdContext;
-    const stored = loadGatewaySessionEntryReadOnly(initializingSession.key, {
+    const scope = {
       agentId: initializingSession.agentId,
-    }).entry;
+      storePath: initializingSession.storePath,
+      sessionKey: initializingSession.key,
+    };
+    const memory = getSessionActorStorageBinding(scope);
+    const stored = memory
+      ? memory.actor.storage.readCurrent(
+          { type: "session.entry.read", input: {} },
+          memory.authority,
+        )
+      : await readSessionEntryReadOnlyInWorker(scope, commitGuard);
     if (
       !stored ||
       stored.sessionId !== initializingSession.entry.sessionId ||

@@ -17,7 +17,7 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { McpAppTranscriptLookup } from "./mcp-app-transcript.js";
 import { readSessionTranscriptSummaryAsync } from "./session-transcript-readers.js";
 import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import type { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const MCP_APP_RESTORE_IN_FLIGHT_KEY = Symbol.for("openclaw.mcpAppRestoreInFlight");
 
@@ -125,7 +125,10 @@ async function reconstructMcpAppView(params: {
       },
     );
   }
-  return reconstruct(loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId }), () => {});
+  return withGatewaySessionEntryReadOnly(
+    { cfg: params.cfg, key: params.sessionKey, agentId },
+    reconstruct,
+  );
 }
 
 export async function mintMcpAppViewFromTranscript(params: {

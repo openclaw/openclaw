@@ -22,8 +22,14 @@ vi.mock("./http-utils.js", () => ({
     mocks.authorize(...args),
 }));
 
-vi.mock("./session-utils-store.js", () => ({
-  loadGatewaySessionEntryReadOnly: (...args: unknown[]) => mocks.loadEntry(...args),
+// mock-isolation: avatar HTTP tests use request-local config without loading operator state.
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => ({}),
+}));
+
+// mock-isolation: avatar authorization tests supply session ownership without a database worker.
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: (...args: unknown[]) => mocks.loadEntry(...args),
 }));
 
 vi.mock("../media/media-reference.js", () => ({
@@ -102,7 +108,7 @@ describe("handleChannelAvatarHttpRequest", () => {
           () => authorityCurrent,
         ),
       );
-    mocks.loadEntry.mockReset().mockReturnValue({ entry: avatarEntry() });
+    mocks.loadEntry.mockReset().mockResolvedValue({ entry: avatarEntry() });
     mocks.resolveReference.mockReset().mockResolvedValue({
       id: "channel-avatar.png",
       normalizedSource: AVATAR_REFERENCE,

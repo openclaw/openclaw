@@ -192,9 +192,14 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         );
         const entry = source
           ? readCapturedSessionActorEntry(source, agentSessionKey)
-          : (await import("../../gateway/session-utils-store.js")).loadGatewaySessionEntryReadOnly(
-              agentSessionKey,
-              { agentId, clone: false },
+          : (
+              await (
+                await import("../../gateway/session-utils-store-worker.js")
+              ).loadGatewaySessionEntryReadOnlyInWorker({
+                cfg: opts.config ?? (await import("../../config/io.js")).getRuntimeConfig(),
+                key: agentSessionKey,
+                agentId,
+              })
             ).entry;
         if (!entry || entry.sessionId?.trim() !== agentSessionId) {
           throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
