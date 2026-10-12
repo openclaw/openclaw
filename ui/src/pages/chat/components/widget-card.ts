@@ -488,9 +488,14 @@ function renderWidgetAction(value: "copy" | "download" | "raw-details") {
     "raw-details": { icon: icons.fileText, labelKey: "chat.toolCards.showRawDetails" },
   }[value];
   const label = t(labelKey);
+  // Menu actions replace this text, so it must not contain Lit child markers.
   return html`<wa-dropdown-item class="session-menu__item" value=${value}>
     <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
-    <span class="session-menu__text" ?data-raw-label=${value === "raw-details"}>${label}</span>
+    <span
+      class="session-menu__text"
+      ?data-raw-label=${value === "raw-details"}
+      .textContent=${label}
+    ></span>
   </wa-dropdown-item>`;
 }
 

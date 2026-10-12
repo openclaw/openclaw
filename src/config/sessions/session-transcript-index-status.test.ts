@@ -8,6 +8,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import type * as SqliteDatabaseAdmission from "../../infra/sqlite-database-admission.js";
 import type { AdmissionOperations } from "../../infra/sqlite-database-admission.worker.test-support.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
@@ -23,7 +24,20 @@ import {
   maintainSessionTranscriptIndexStatus,
 } from "./session-transcript-index-status.worker.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
-import { bindSqliteWorkerBackend } from "./session-transcript-projection-publication.worker.js";
+import {
+  bindSqliteWorkerBackend,
+  type TranscriptProjectionPublicationOperations,
+} from "./session-transcript-projection-publication.worker.js";
+
+const siblingRevision = vi.hoisted(() => ({ unknown: false }));
+vi.mock("../../infra/sqlite-database-admission.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof SqliteDatabaseAdmission>();
+  return {
+    ...actual,
+    readSqliteDatabaseSiblingWriteRevision: (db: DatabaseSync) =>
+      siblingRevision.unknown ? undefined : actual.readSqliteDatabaseSiblingWriteRevision(db),
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
@@ -392,4 +406,33 @@ it("cleans late orphans during continuous sibling commits and certifies readines
     hasMore: false,
     traversalComplete: true,
   });
+});
+
+it("reaches a late dirty session while the sibling write revision stays unknown", async () => {
+  const db = createDatabase();
+  transaction(db, () => {
+    for (let index = 0; index < 300; index++) {
+      seedCleanSession(db, `z-${String(index).padStart(3, "0")}`);
+    }
+  });
+  db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = 'z-299'");
+  siblingRevision.unknown = true;
+  try {
+    // Mirrors the reconcile backlog loop: each pass resumes from the previous traversal.
+    let traversal: TranscriptProjectionPublicationOperations["preflight"]["output"]["traversal"];
+    for (let pass = 0; pass < 3; pass++) {
+      const status = await drainTranscriptIndexStatus(
+        async () => transaction(db, () => maintainSessionTranscriptIndexStatus(db)),
+        traversal,
+      );
+      if (status.traversalComplete) {
+        expect(status.sessionIds).toEqual(["z-299"]);
+        return;
+      }
+      traversal = status.traversal;
+    }
+    throw new Error("Backlog traversal never reached the late dirty session");
+  } finally {
+    siblingRevision.unknown = false;
+  }
 });

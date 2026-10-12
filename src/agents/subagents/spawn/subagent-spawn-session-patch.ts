@@ -3,6 +3,12 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+  runWithSessionActorStorage,
+  type SessionActorStorageBinding,
+} from "../../../config/sessions/session-actor-storage-binding.js";
+import {
   buildSessionCreationStamp,
   inheritSessionGitContributorProfileIds,
 } from "../../../config/sessions/session-entry-provenance.js";
@@ -128,13 +134,21 @@ export async function createInitialSubagentSession(input: {
       },
       async () => {
         let childActor: IncognitoAgentDatabaseExecution | undefined;
+        let childMemory: SessionActorStorageBinding | undefined;
         try {
-          const parentBinding = captureIncognitoSessionBinding({
+          const parentMemory = getSessionActorStorageBinding({
             agentId: params.requesterAgentId,
             sessionKey: params.requesterInternalKey,
           });
-          const parentEnv = parentBinding
-            ? { OPENCLAW_STATE_DIR: path.resolve(parentBinding.actor.path, "../../../..") }
+          const parentBinding = parentMemory
+            ? undefined
+            : captureIncognitoSessionBinding({
+                agentId: params.requesterAgentId,
+                sessionKey: params.requesterInternalKey,
+              });
+          const parentPath = parentMemory?.path ?? parentBinding?.actor.path;
+          const parentEnv = parentPath
+            ? { OPENCLAW_STATE_DIR: path.resolve(parentPath, "../../../..") }
             : undefined;
           const crossAgentChild =
             parentBinding &&
@@ -148,24 +162,31 @@ export async function createInitialSubagentSession(input: {
           if (crossAgentChild && !childOwner) {
             throw new Error("Incognito child actor is unavailable");
           }
-          const parentTarget: Omit<GatewaySessionStoreTargetWithStore, "store"> = parentBinding
+          const parentTarget: Omit<GatewaySessionStoreTargetWithStore, "store"> = parentMemory
             ? {
-                agentId: parentBinding.actor.agentId,
+                agentId: parentMemory.agentId,
                 canonicalKey: params.requesterInternalKey,
                 storeKeys: [params.requesterInternalKey],
-                storePath: parentBinding.actor.path,
-                capturedReadSource: {
-                  agentId: parentBinding.actor.agentId,
-                  path: parentBinding.actor.path,
-                  databaseIdentity: parentBinding.actor.identity.incarnation,
-                },
+                storePath: parentMemory.path,
               }
-            : await resolveGatewaySessionStoreTargetInWorker({
-                cfg: params.cfg,
-                key: params.requesterInternalKey,
-                agentId: params.requesterAgentId,
-                assertActive: params.assertActive,
-              });
+            : parentBinding
+              ? {
+                  agentId: parentBinding.actor.agentId,
+                  canonicalKey: params.requesterInternalKey,
+                  storeKeys: [params.requesterInternalKey],
+                  storePath: parentBinding.actor.path,
+                  capturedReadSource: {
+                    agentId: parentBinding.actor.agentId,
+                    path: parentBinding.actor.path,
+                    databaseIdentity: parentBinding.actor.identity.incarnation,
+                  },
+                }
+              : await resolveGatewaySessionStoreTargetInWorker({
+                  cfg: params.cfg,
+                  key: params.requesterInternalKey,
+                  agentId: params.requesterAgentId,
+                  assertActive: params.assertActive,
+                });
           const parentStorePath = parentTarget.readSource?.path ?? parentTarget.storePath;
           await waitForSessionParticipantRecording({
             agentId: parentTarget.agentId,
@@ -175,6 +196,10 @@ export async function createInitialSubagentSession(input: {
           params.assertActive?.();
           // Parent rows are read on the session read worker, never on the Gateway thread.
           const readParentEntry = () => {
+            if (parentMemory) {
+              params.assertActive?.();
+              return Promise.resolve(parentMemory.actor.snapshot(parentMemory.authority)?.entry);
+            }
             const read = () =>
               readSessionEntryReadOnlyInWorker(
                 {
@@ -222,6 +247,44 @@ export async function createInitialSubagentSession(input: {
             }
             assertParentActorCurrent();
           }
+          if (parentMemory && params.incognito) {
+            if (params.targetAgentId === parentMemory.agentId) {
+              childMemory = {
+                ...parentMemory,
+                actor: await parentMemory.actor.storage!.acquire(params.childSessionKey),
+              };
+            } else {
+              const selected = captureSessionActorStorageOwner({
+                agentId: params.targetAgentId,
+                sessionKey: params.childSessionKey,
+                sessionActor: parentMemory,
+              });
+              if (!selected?.owner) {
+                throw new Error("Incognito child actor is unavailable");
+              }
+              const actor = await selected.owner.acquire(
+                { database: selected.owner.identity, sessionKey: params.childSessionKey },
+                {
+                  assertCurrent() {
+                    parentMemory.actor.assertCurrent();
+                    parentMemory.authority.assertCurrent();
+                    params.assertActive?.();
+                  },
+                  assertReadable() {
+                    parentMemory.actor.assertReadable();
+                    parentMemory.authority.assertCurrent();
+                    params.assertActive?.();
+                  },
+                },
+              );
+              childMemory = {
+                actor,
+                authority: selected.authority,
+                agentId: selected.agentId,
+                path: selected.path,
+              };
+            }
+          }
           const childBinding =
             params.incognito && parentBinding
               ? { ...parentBinding, actor: childActor ?? parentBinding.actor }
@@ -237,10 +300,12 @@ export async function createInitialSubagentSession(input: {
                 agentId: params.targetAgentId,
                 canonicalKey: params.childSessionKey,
                 storeKeys: [params.childSessionKey],
-                storePath: resolveIncognitoOpenClawAgentSqlitePath({
-                  agentId: params.targetAgentId,
-                  env: parentEnv,
-                }),
+                storePath:
+                  childMemory?.path ??
+                  resolveIncognitoOpenClawAgentSqlitePath({
+                    agentId: params.targetAgentId,
+                    env: parentEnv,
+                  }),
               }
             : await resolveGatewaySessionStoreTargetInWorker({
                 cfg: params.cfg,
@@ -301,7 +366,7 @@ export async function createInitialSubagentSession(input: {
             await parentLineage.assertParentUnchanged();
             const fields = ["sessionId", "lifecycleRevision", "skillLibrarySelections"] as const;
             const expected =
-              parentEntry && (parentBinding || parentEntry.skillLibrarySelections)
+              parentEntry && (parentMemory || parentBinding || parentEntry.skillLibrarySelections)
                 ? {
                     sessionId: parentEntry.sessionId,
                     lifecycleRevision: parentEntry.lifecycleRevision,
@@ -317,15 +382,17 @@ export async function createInitialSubagentSession(input: {
               if (parentBinding) {
                 assertParentActorCurrent();
               }
-              if (!parentBinding && !expected) {
+              if (!parentMemory && !parentBinding && !expected) {
                 return;
               }
-              const latest = parentBinding
-                ? parentBinding.actor.sessions.readPolicy(parentTarget.canonicalKey)
-                : loadSessionEntry({
-                    storePath: parentStorePath,
-                    sessionKey: parentTarget.canonicalKey,
-                  });
+              const latest = parentMemory
+                ? parentMemory.actor.snapshot(parentMemory.authority)?.entry
+                : parentBinding
+                  ? parentBinding.actor.sessions.readPolicy(parentTarget.canonicalKey)
+                  : loadSessionEntry({
+                      storePath: parentStorePath,
+                      sessionKey: parentTarget.canonicalKey,
+                    });
               if (
                 (latest === undefined) !== (expected === undefined) ||
                 fields.some((field) => !isDeepStrictEqual(latest?.[field], expected?.[field]))
@@ -333,50 +400,52 @@ export async function createInitialSubagentSession(input: {
                 refuse();
               }
             };
-            const source: SessionSourceAssertion | undefined = parentBinding
-              ? Object.assign(assertParentSkills, {
-                  async prepareSessionSource() {
-                    assertParentSkills();
-                    return {
-                      assertCurrent: assertParentSkills,
-                      // A same-actor parent is reread in the child's transaction. Cross-actor
-                      // predicates consume the parent's published facts; they never await its FIFO.
-                      checks:
-                        childBinding?.actor.identity.incarnation ===
-                        parentBinding.actor.identity.incarnation
-                          ? [
-                              {
-                                predicate: {
-                                  source: {
-                                    agentId: parentBinding.actor.agentId,
-                                    path: parentBinding.actor.path,
-                                    databaseIdentity: parentBinding.actor.identity.incarnation,
+            const source: SessionSourceAssertion | undefined = parentMemory
+              ? assertParentSkills
+              : parentBinding
+                ? Object.assign(assertParentSkills, {
+                    async prepareSessionSource() {
+                      assertParentSkills();
+                      return {
+                        assertCurrent: assertParentSkills,
+                        // A same-actor parent is reread in the child's transaction. Cross-actor
+                        // predicates consume the parent's published facts; they never await its FIFO.
+                        checks:
+                          childBinding?.actor.identity.incarnation ===
+                          parentBinding.actor.identity.incarnation
+                            ? [
+                                {
+                                  predicate: {
+                                    source: {
+                                      agentId: parentBinding.actor.agentId,
+                                      path: parentBinding.actor.path,
+                                      databaseIdentity: parentBinding.actor.identity.incarnation,
+                                    },
+                                    sessionKey: parentTarget.canonicalKey,
+                                    fields: [...fields],
+                                    expected,
                                   },
-                                  sessionKey: parentTarget.canonicalKey,
-                                  fields: [...fields],
-                                  expected,
+                                  refuse,
                                 },
-                                refuse,
-                              },
-                            ]
-                          : [],
-                    };
-                  },
-                })
-              : expected
-                ? captureSessionEntrySourceAssertion({
-                    scope: {
-                      agentId: parentTarget.agentId,
-                      storePath: parentStorePath,
-                      sessionKey: parentTarget.canonicalKey,
+                              ]
+                            : [],
+                      };
                     },
-                    readSource: parentTarget.capturedReadSource,
-                    expected,
-                    fields,
-                    assertCurrent: assertParentSkills,
-                    refuse,
                   })
-                : undefined;
+                : expected
+                  ? captureSessionEntrySourceAssertion({
+                      scope: {
+                        agentId: parentTarget.agentId,
+                        storePath: parentStorePath,
+                        sessionKey: parentTarget.canonicalKey,
+                      },
+                      readSource: parentTarget.capturedReadSource,
+                      expected,
+                      fields,
+                      assertCurrent: assertParentSkills,
+                      refuse,
+                    })
+                  : undefined;
             const write = () =>
               upsertSessionEntryCore(
                 {
@@ -429,15 +498,18 @@ export async function createInitialSubagentSession(input: {
                   composeSessionSourceAssertion([params.assertActive, source, assertSourceCurrent]),
                 ),
               );
-            return childBinding
-              ? await withIncognitoSessionBinding(childBinding, write)
-              : await write();
+            return childMemory
+              ? await runWithSessionActorStorage(childMemory, write)
+              : childBinding
+                ? await withIncognitoSessionBinding(childBinding, write)
+                : await write();
           };
           const entry = preparedWorktree?.withCommit
             ? await preparedWorktree.withCommit(commit)
             : await commit();
           return { status: "ok" as const, entry: entry ?? undefined };
         } finally {
+          await childMemory?.actor.release();
           await childActor?.release();
         }
       },

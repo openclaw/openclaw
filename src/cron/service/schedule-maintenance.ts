@@ -14,19 +14,9 @@ import { runPostPersistCronNotifications } from "./store.js";
 type MaintenanceOutcome = CronRuntimeMutationContracts["cron.scheduleUnowned"]["outcome"];
 
 /** Capture local activity before dispatch; new activity may race this snapshot. */
-export function captureCronScheduleOwnership(state: CronServiceState, jobIds: readonly string[]) {
+export function captureCronScheduleOwnership(jobIds: readonly string[]) {
   return jobIds.map((jobId) => {
-    const reservation = state.queuedRunReservationsByJobId.get(jobId);
-    return {
-      jobId,
-      active: isCronJobActive(jobId),
-      reservation: reservation
-        ? {
-            markerAtMs: reservation.markerAtMs,
-            preserveWhenDisabled: reservation.preserveWhenDisabled,
-          }
-        : undefined,
-    };
+    return { jobId, active: isCronJobActive(jobId) };
   });
 }
 
@@ -50,7 +40,7 @@ export async function recomputeUnownedCronSchedules(
     },
     snapshot: {
       nowMs: opts?.nowMs ?? state.deps.nowMs(),
-      ownership: captureCronScheduleOwnership(state, state.store?.jobs.map((job) => job.id) ?? []),
+      ownership: captureCronScheduleOwnership(state.store?.jobs.map((job) => job.id) ?? []),
     },
     onSettled(result) {
       if (result === "unknown") {

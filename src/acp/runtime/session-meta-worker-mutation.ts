@@ -205,7 +205,7 @@ export async function commitAcpSessionMutation(
           return {
             nativeLocations: [
               context.admission.databasePath,
-              ...("kind" in input.source && input.source.kind === "ephemeral"
+              ...("kind" in input.source && input.source.kind !== "reset"
                 ? []
                 : [input.source.path]),
             ],

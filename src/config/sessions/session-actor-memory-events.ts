@@ -4,6 +4,7 @@ import { parseCompactionDetails } from "../../../packages/agent-core/src/harness
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { advanceCliHistoryBoundary, getCliHistoryWriter } from "./cli-history-boundary.js";
 import type { TranscriptEventAppendOptions } from "./session-accessor.sqlite-contract.js";
+import { pruneSessionActorMemoryReactions } from "./session-actor-memory-reactions.js";
 import type { SessionActorMemoryState } from "./session-actor-memory-state.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
@@ -255,10 +256,16 @@ export function createSessionActorMemoryEvents(options: {
         }
       : { appended: false as const };
   };
-  const replaceRows = (rows: SessionActorMemoryState["events"]) => {
-    const generation = randomUUID();
+  const replaceRows = (
+    rows: SessionActorMemoryState["events"],
+    replacement?: { preserveGeneration?: boolean },
+  ) => {
+    const generation = replacement?.preserveGeneration
+      ? state.hot.transcript.version.generation
+      : randomUUID();
     const updatedAt = Math.max(Date.now(), (state.hot.transcript.version.updatedAt ?? -1) + 1);
     state.events = rows;
+    pruneSessionActorMemoryReactions(state);
     state.hot.transcript.version = { generation, rawSeq: rows.at(-1)?.rawSeq ?? null, updatedAt };
     state.hot.transcript.watermark = { generation, maxSeq: rows.at(-1)?.rawSeq ?? null };
     const identities = new Map<string, { key: string; eventId: string; rawSeq: number }>();

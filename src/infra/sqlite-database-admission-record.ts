@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { BigIntStats } from "node:fs";
+import path from "node:path";
 import { setEnvironmentData, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
   readDatabaseIdentityBirthtime,
+  normalizeDatabasePath,
+  readDatabaseFileIdentity,
   type DatabaseFileIdentity,
 } from "./sqlite-worker-identity.js";
 
@@ -36,6 +39,7 @@ export type StagedAdmissionFact = Pick<AdmissionFact, "value" | "revision" | "sc
 };
 export type Admission = {
   identity: string;
+  physicalIdentity: DatabaseFileIdentity;
   location: string;
   descriptor: number;
   descriptorOwner: number;
@@ -99,6 +103,12 @@ function readInheritedAdmission(value: unknown): Admission | undefined {
   if (!(value.writeScopes instanceof Map)) {
     return undefined;
   }
+  let physicalIdentity: DatabaseFileIdentity;
+  try {
+    physicalIdentity = readDatabaseFileIdentity(value.physicalIdentity);
+  } catch {
+    return undefined;
+  }
   const writeScopes = new Map<string, SharedArrayBuffer>();
   for (const [key, revision] of value.writeScopes) {
     if (
@@ -120,6 +130,7 @@ function readInheritedAdmission(value: unknown): Admission | undefined {
   }
   return {
     identity: value.identity,
+    physicalIdentity,
     location: value.location,
     descriptor: value.descriptor,
     descriptorOwner: value.descriptorOwner,
@@ -229,8 +240,19 @@ export function createSqliteDatabaseAdmissionCursor(): SqliteDatabaseAdmissionCu
 
 export class SqliteDatabaseAdmissionRegistry {
   readonly records = new Map<string, Admission>();
+  private readonly locations = new Map<string, string>();
   private readonly published = new Map<string, Admission>();
   private revision = 0;
+
+  observeLocation(location: string, identity: string): void {
+    this.locations.set(normalizeDatabasePath(path.resolve(location)), identity);
+  }
+
+  forLocation(location: string): Admission | undefined {
+    const identity = this.locations.get(normalizeDatabasePath(path.resolve(location)));
+    const record = identity === undefined ? undefined : this.records.get(identity);
+    return record && !isSqliteDatabaseAdmissionRetired(record) ? record : undefined;
+  }
 
   hasSchemaAdmissionForIdentity(physicalIdentity: DatabaseFileIdentity): boolean {
     if (!physicalIdentity.key.startsWith("file:") || physicalIdentity.birthtime === undefined) {
@@ -243,6 +265,10 @@ export class SqliteDatabaseAdmissionRegistry {
   retainDescriptor(location: string, descriptor: number, opened: BigIntStats): Admission {
     const record: Admission = {
       identity: readSqliteDatabaseAdmissionIdentity(opened),
+      physicalIdentity: {
+        key: `file:${opened.dev}:${opened.ino}`,
+        birthtime: readDatabaseIdentityBirthtime(opened),
+      },
       location,
       descriptor,
       descriptorOwner: 0,
@@ -254,6 +280,7 @@ export class SqliteDatabaseAdmissionRegistry {
       facts: new Map(),
     };
     this.records.set(record.identity, record);
+    this.observeLocation(location, record.identity);
     this.publish(record);
     return record;
   }
@@ -334,6 +361,7 @@ export class SqliteDatabaseAdmissionRegistry {
       if (!record) {
         record = { ...incoming, hostRevision: undefined };
         this.records.set(incoming.identity, record);
+        this.observeLocation(incoming.location, incoming.identity);
         changed = true;
       } else if (record.generationId !== incoming.generationId) {
         // Only the host creates a generation; unrelated revocation cells cannot certify its facts.

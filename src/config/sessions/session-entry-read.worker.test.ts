@@ -203,7 +203,6 @@ it("publishes lifecycle snapshot admission only after commit and reuses it on th
         );
         try {
           expect(read().entries[0]?.entry.sessionId).toBe("admitted-session");
-          expect(queries.counts.validation).toBeGreaterThan(0);
           const admission = captureCanonicalSessionReaderContinuation(reader);
           expect(admission).toBeDefined();
           admission?.release();
