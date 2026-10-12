@@ -3,7 +3,6 @@ import { isMainSessionRecoveryReconciliationCandidate } from "../../agents/main-
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
-import { loadExactSessionEntryCandidates } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
@@ -32,7 +31,7 @@ import {
 import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
-  assertExpectedLeafActive,
+  assertExpectedLeafActiveAsync,
 } from "./chat-send-active-leaf.js";
 import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
@@ -471,24 +470,26 @@ export async function runChatSendPreAdmission(
       }
       try {
         params.assertCurrent?.();
+      } catch (error) {
+        guard.failure = { error };
+        throw error;
+      }
+    };
+    const beforeAbort = async () => {
+      try {
         if (request.p.queueMode !== "steer" && session.expectedLeafEntryId !== undefined) {
-          assertExpectedLeafActive(
+          await assertExpectedLeafActiveAsync(
             {
               canonicalKey: sessionKey,
               storePath: stopStorePath,
-              entry: loadExactSessionEntryCandidates({
-                ...(session.readSource
-                  ? { readSource: session.readSource }
-                  : { storePath: stopStorePath, agentId: session.agentId }),
-                sessionKeys: [sessionKey],
-                readOnly: true,
-              })[0]?.entry,
+              entry,
             },
             session.agentId,
             session.expectedLeafEntryId,
             session.requestedSessionId,
           );
         }
+        assertCurrent();
       } catch (error) {
         guard.failure = { error };
         throw error;
@@ -519,6 +520,7 @@ export async function runChatSendPreAdmission(
         stopReason: "stop",
         requester: resolveChatAbortRequester(client),
         assertCurrent,
+        beforeAbort,
         cascadeDescendants: true,
       });
       // Descendant cancellation aggregates errors; preserve the admission reason.
@@ -605,14 +607,6 @@ export async function runChatSendPreAdmission(
             });
             if (workStartError) {
               throw new Error(workStartError);
-            }
-            if (request.p.queueMode !== "steer" && session.expectedLeafEntryId !== undefined) {
-              assertExpectedLeafActive(
-                current,
-                session.agentId,
-                session.expectedLeafEntryId,
-                session.requestedSessionId,
-              );
             }
             captureAdmittedChatSendSessionSettings({
               commit: false,

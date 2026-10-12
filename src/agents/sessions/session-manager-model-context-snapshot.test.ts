@@ -18,7 +18,6 @@ import type { SessionActor } from "../../config/sessions/session-actor-contract.
 import { createDurableSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
 import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
 import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
-import * as transcriptReaders from "../../config/sessions/session-transcript-execution-read.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
@@ -36,6 +35,7 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
@@ -196,7 +196,7 @@ it.each(["bounded", "anchors"] as const)(
 );
 
 it.each(["unchanged", "append", "rewrite"] as const)(
-  "uses exact actor metadata after context consumption and preserves %s validation",
+  "keeps the consumed durable snapshot after a later %s without another history read",
   async (change) => {
     await withOpenClawTestState({ label: "actor-context-validation" }, async (state) => {
       const target = {
@@ -212,7 +212,7 @@ it.each(["unchanged", "append", "rewrite"] as const)(
       await withSelectedTranscriptReader(
         target,
         async () => {
-          const validated = vi.spyOn(transcriptAnchors, "readSessionTranscriptAnchorsAsync");
+          const validated = vi.spyOn(transcriptAnchors, "readSessionTranscriptAnchorsFromSource");
           try {
             const pending = SessionManager.readSessionContextAsync(target, async (messages) => {
               const selected = [...messages];
@@ -225,14 +225,8 @@ it.each(["unchanged", "append", "rewrite"] as const)(
               });
               return selected;
             });
-            if (change === "rewrite") {
-              await expect(pending).rejects.toThrow(/transcript|context/i);
-            } else {
-              await expect(pending).resolves.toEqual([original]);
-            }
-            if (change !== "rewrite") {
-              expect(validated).toHaveBeenCalledTimes(change === "unchanged" ? 0 : 1);
-            }
+            await expect(pending).resolves.toEqual([original]);
+            expect(validated).not.toHaveBeenCalled();
           } finally {
             validated.mockRestore();
           }
@@ -293,54 +287,6 @@ it("uses resident actor anchors for replay and rejects a rewritten hydrated turn
       },
       true,
     );
-  });
-});
-
-it("refuses full context after a rewrite between validation and acceptance", async () => {
-  await withOpenClawTestState({ label: "full-context-validation-reply" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "full-context-rewrite",
-      sessionKey: "agent:main:full-context-rewrite",
-      storePath: state.statePath("transcript.sqlite"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const source = await SessionManager.openAsync(target);
-    await source.appendMessageAsync(makeUserMessage("original", 1));
-    const validated = createDeferred();
-    const release = createDeferred();
-    const createReaders = transcriptReaders.createPreparedSessionTranscriptReads;
-    const spy = vi
-      .spyOn(transcriptReaders, "createPreparedSessionTranscriptReads")
-      .mockImplementation((params) => {
-        const readers = createReaders(params);
-        return {
-          ...readers,
-          readAnchors: async (input, signal) => {
-            const facts = await readers.readAnchors(input, signal);
-            if (facts.contextValidated === true) {
-              validated.resolve();
-              await release.promise;
-            }
-            return facts;
-          },
-        };
-      });
-    const pending = SessionManager.readSessionContextAsync(target, (messages) => [...messages]);
-    try {
-      await awaitGateBeforeSettlement(
-        validated.promise,
-        pending,
-        "Context validation was not reached",
-      );
-      expect(source.removeTrailingEntries((entry) => entry.type === "message")).toBe(1);
-      release.resolve();
-      await expect(pending).rejects.toThrow(/transcript|context/i);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([pending]);
-      spy.mockRestore();
-    }
   });
 });
 
@@ -473,8 +419,9 @@ it("reads full durable context through workers and preserves the deprecated sync
       }),
     ).resolves.toEqual(expected);
     const missing = { ...target, storePath: path.join(state.agentDir("main"), "absent.sqlite") };
+    const consumeMissing = vi.fn(() => "unreadable");
     await expect(
-      SessionManager.readSessionContextAsync(missing, () => "unreadable", {
+      SessionManager.readSessionContextAsync(missing, consumeMissing, {
         admission: {
           ...seeded.anchor,
           storePath: missing.storePath,
@@ -483,6 +430,7 @@ it("reads full durable context through workers and preserves the deprecated sync
         },
       }),
     ).rejects.toThrow("Session transcript changed during context read");
+    expect(consumeMissing).not.toHaveBeenCalled();
     expect(fs.existsSync(missing.storePath)).toBe(false);
     const alias = path.join(state.stateDir, "context-alias");
     const successor = path.join(state.stateDir, "missing-successor");
@@ -662,6 +610,40 @@ it.each([
     });
   },
 );
+
+it("rejects a removed user admission before the bounded reader captures its witness", async () => {
+  await withOpenClawTestState({ label: "bounded-removed-admission" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "bounded-removed-admission",
+      sessionKey: "agent:main:bounded-removed-admission",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const recorder = createUserTurnTranscriptRecorder({
+      target: { ...scope, sessionEntry: undefined },
+      input: { text: "current request", idempotencyKey: "bounded-current-input" },
+    });
+    await recorder.persistApproved();
+    const admission = recorder.getAdmissionReceipt();
+    if (!admission) {
+      throw new Error("Expected a committed user admission");
+    }
+    const source = await SessionManager.openAsync(scope);
+    await withSelectedTranscriptReader(scope, async () => {
+      expect(source.removeTrailingEntries((entry) => entry.id === admission.entryId)).toBe(1);
+      await expect(
+        SessionManager.openModelContextAsync(scope, {
+          admission,
+          limits: { maxBytes: 8192, maxEvents: 20 },
+        }),
+      ).rejects.toMatchObject({
+        name: "SessionTranscriptReadFenceError",
+        message: "Current-turn transcript admission changed",
+      });
+    });
+  });
+});
 
 it.each(["append", "rewrite"] as const)(
   "rejects a native %s before consuming bounded admitted model context",

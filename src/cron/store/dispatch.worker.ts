@@ -21,8 +21,6 @@ let queue: typeof import("./run-queue.worker.js") | undefined;
 
 const loadReceipts = createLazyRuntimeModule(() => import("./run-receipt.worker.js"));
 let receipts: typeof import("./run-receipt.worker.js") | undefined;
-const loadStartupDeferral = createLazyRuntimeModule(() => import("./startup-deferral.worker.js"));
-let startupDeferral: typeof import("./startup-deferral.worker.js") | undefined;
 const loadFinalization = createLazyRuntimeModule(() => import("./run-finalization.worker.js"));
 let finalization: typeof import("./run-finalization.worker.js") | undefined;
 
@@ -38,10 +36,22 @@ const loadExternalState = createLazyRuntimeModule(() => import("./external-state
 let externalState: typeof import("./external-state.worker.js") | undefined;
 const loadScheduler = createLazyRuntimeModule(() => import("./scheduler-state.worker.js"));
 let scheduler: typeof import("./scheduler-state.worker.js") | undefined;
-const loadStartup = createLazyRuntimeModule(() => import("./startup-plan.worker.js"));
-let startup: typeof import("./startup-plan.worker.js") | undefined;
+const loadSchedulerActor = createLazyRuntimeModule(() => import("./scheduler-actor.worker.js"));
+let schedulerActor: typeof import("./scheduler-actor.worker.js") | undefined;
+const loadJobMutations = createLazyRuntimeModule(() => import("./job-mutations.worker.js"));
+let jobMutations: typeof import("./job-mutations.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
+  if (String(type).startsWith("cron.scheduler") && !schedulerActor) {
+    return loadSchedulerActor().then((loaded) => {
+      schedulerActor = loaded;
+    });
+  }
+  if (type === "cron.prepareJobMutation" && !jobMutations) {
+    return loadJobMutations().then((loaded) => {
+      jobMutations = loaded;
+    });
+  }
   if (
     ["cron.requestRuns", "cron.drainQueue", "cron.cancelRequests"].includes(String(type)) &&
     !queue
@@ -50,19 +60,9 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
       queue = loaded;
     });
   }
-  if (type === "cron.deferStartupJobs" && !startupDeferral) {
-    return loadStartupDeferral().then((loaded) => {
-      startupDeferral = loaded;
-    });
-  }
   if (type === "cron.finalizeRuns" && !finalization) {
     return loadFinalization().then((loaded) => {
       finalization = loaded;
-    });
-  }
-  if (type === "cron.planStartup" && !startup) {
-    return loadStartup().then((loaded) => {
-      startup = loaded;
     });
   }
   if (type === "cron.recordSkippedRuns" && !scheduler) {
@@ -118,12 +118,15 @@ export function isCronStateWorkerCommand(command: {
   input: unknown;
 }): command is SqliteWorkerCommand<CronStateWorkerOperations> {
   switch (command.type) {
-    case "cron.deferStartupJobs":
+    case "cron.schedulerStart":
+    case "cron.schedulerTick":
+    case "cron.schedulerRefresh":
+    case "cron.schedulerStop":
+    case "cron.prepareJobMutation":
     case "cron.requestRuns":
     case "cron.drainQueue":
     case "cron.cancelRequests":
     case "cron.recordSkippedRuns":
-    case "cron.planStartup":
     case "cron.mutateExternalState":
     case "cron.writeScratch":
     case "cron.mutateJobs":
@@ -153,6 +156,22 @@ export function executeCronStateCommand(
   database: OpenClawStateDatabase,
 ): CronStateWorkerOperations[keyof CronStateWorkerOperations]["output"] {
   switch (command.type) {
+    case "cron.schedulerStart":
+    case "cron.schedulerTick":
+    case "cron.schedulerRefresh":
+    case "cron.schedulerStop":
+      if (!schedulerActor) {
+        throw new Error("Cron scheduler actor is not prepared");
+      }
+      if (command.type === "cron.schedulerStop") {
+        return schedulerActor.stopCronSchedulerInWorker(command.input);
+      }
+      return schedulerActor.runCronSchedulerInWorker(database, command);
+    case "cron.prepareJobMutation":
+      if (!jobMutations) {
+        throw new Error("Cron job mutation worker is not prepared");
+      }
+      return jobMutations.prepareCronJobMutationInWorker(database, command.input);
     case "cron.requestRuns":
     case "cron.drainQueue":
     case "cron.cancelRequests":
@@ -167,11 +186,6 @@ export function executeCronStateCommand(
         case "cron.cancelRequests":
           return queue.cancelCronRequestsInWorker(database, command.input);
       }
-    case "cron.deferStartupJobs":
-      if (!startupDeferral) {
-        throw new Error("Cron startup deferral worker is not prepared");
-      }
-      return startupDeferral.deferCronStartupJobsInWorker(database, command.input);
     case "cron.registerQuarantine":
       return runOpenClawStateWriteTransaction(
         ({ db }) => registerCronQuarantineInDatabase(db, command.input),
@@ -183,11 +197,6 @@ export function executeCronStateCommand(
         throw new Error("Cron scheduler worker is not prepared");
       }
       return scheduler.recordSkippedCronRunsInWorker(database, command.input);
-    case "cron.planStartup":
-      if (!startup) {
-        throw new Error("Cron startup worker is not prepared");
-      }
-      return startup.planCronStartupInWorker(database, command.input);
     case "cron.mutateExternalState":
       if (!externalState) {
         throw new Error("Cron external-state worker is not prepared");

@@ -12,11 +12,9 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
-import {
-  createPersonalGitHubOAuthLifecycle,
-  personalGitHubStatus,
-} from "./github-personal-oauth.js";
+import { createPersonalGitHubOAuthLifecycle } from "./github-personal-oauth.js";
 import type { PersonalGitHubSessionActionV2 } from "./github-personal-publication.js";
+import { personalGitHubStatusAsync as personalGitHubStatus } from "./github-personal-status.js";
 import {
   SESSION_ID,
   SESSION_KEY,
@@ -291,7 +289,7 @@ export async function restartPersonalPublicationFixture(
   fixture.profileCatalog = await preparePersonalPublicationProfileCatalog();
   fixture.placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
   await fixture.placements.recoverWorkerSessionToolOperationsAfterRestart();
-  fixture.placements.clearLocalTurnClaimsAfterRestart();
+  await fixture.placements.clearLocalTurnClaimsAfterRestartAsync();
   expect(fixture.placements.workspaceResultInstanceId()).not.toBe(
     previous.workspaceResultInstanceId(),
   );

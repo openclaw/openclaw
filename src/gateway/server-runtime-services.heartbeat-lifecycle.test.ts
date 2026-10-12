@@ -70,17 +70,19 @@ describe("scheduled heartbeat execution loading", { concurrent: false }, () => {
         if (!runOnce) {
           throw new Error("Expected the Gateway-owned heartbeat callback");
         }
-        // Exercise the callback with the real wake generation/abort context.
+        // Exercise the callback with the real wake lifetime context.
         // Scheduler dispatch has separate owner-boundary coverage.
         disposeWake = setHeartbeatWakeHandler((wake) =>
           runOnce({ cfg, agentId: "main", source: wake.source, intent: wake.intent }),
         );
-        const result = requestHeartbeatAndWait({
-          source: "manual",
-          intent: "manual",
-          agentId: "main",
-          coalesceMs: 0,
-        });
+        const request = () =>
+          requestHeartbeatAndWait({
+            source: "manual",
+            intent: "manual",
+            agentId: "main",
+            coalesceMs: 0,
+          });
+        const result = request();
         await vi.advanceTimersByTimeAsync(1);
         expect(runtimeServiceMocks.runHeartbeatOnce).not.toHaveBeenCalled();
         await loading.promise;
@@ -90,14 +92,22 @@ describe("scheduled heartbeat execution loading", { concurrent: false }, () => {
         } else if (action === "replace") {
           disposeWake = setHeartbeatWakeHandler(replacement);
           await vi.advanceTimersByTimeAsync(250);
-          await expect(result).resolves.toEqual({ status: "ran", durationMs: 77 });
+          expect(replacement).not.toHaveBeenCalled();
         }
         release.resolve();
         await vi.dynamicImportSettled();
         if (action === "stop") {
           await expect(result).resolves.toEqual({ status: "skipped", reason: "disabled" });
+        } else {
+          await expect(result).resolves.toEqual({ status: "ran", durationMs: 1 });
+          expect(replacement).not.toHaveBeenCalled();
+          const next = request();
+          await vi.advanceTimersByTimeAsync(1);
+          await expect(next).resolves.toEqual({ status: "ran", durationMs: 77 });
         }
-        expect(runtimeServiceMocks.runHeartbeatOnce).not.toHaveBeenCalled();
+        expect(runtimeServiceMocks.runHeartbeatOnce).toHaveBeenCalledTimes(
+          action === "replace" ? 1 : 0,
+        );
         expect(replacement).toHaveBeenCalledTimes(action === "replace" ? 1 : 0);
       } finally {
         release.resolve();

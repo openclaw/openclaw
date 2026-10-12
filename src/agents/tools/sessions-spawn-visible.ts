@@ -9,6 +9,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { buildDashboardSessionTitleSource } from "../../gateway/dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
@@ -25,6 +26,7 @@ import { recordSessionParticipantBestEffort } from "../../sessions/session-parti
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
+import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { prepareNativeDelegatedToolPolicy } from "../delegated-tool-policy.js";
 import { resolveAgentIdentity } from "../identity.js";
@@ -240,11 +242,11 @@ export async function maybeSpawnVisibleSession(params: {
     completionOwnerKey: params.options?.completionOwnerKey,
   });
   let assertDelegationCurrent: (() => void) | undefined = undefined;
-  const assertActive = () => {
-    params.options?.assertActive?.();
+  const assertActive = composeSessionSourceAssertion([params.options?.assertActive], (source) => {
+    source();
     params.options?.signal?.throwIfAborted();
     assertDelegationCurrent?.();
-  };
+  });
   const requesterTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg,
     key: ownership.completionRequesterSessionKey,
@@ -386,7 +388,6 @@ export async function maybeSpawnVisibleSession(params: {
           resolveRequesterPreferences({ cfg, requesterAgentId, requesterEntry }).model)
         : undefined,
   });
-  assertActive();
   if (modelPlan.status === "error") {
     return { status: "error", error: modelPlan.error };
   }
@@ -402,7 +403,6 @@ export async function maybeSpawnVisibleSession(params: {
           hasFallbackOrigin: initialSessionPatch.modelOverrideFallbackOriginModel !== undefined,
         }
       : undefined;
-  assertActive();
   const reservation = reserveChildAdmissionSlot({
     controllerSessionKey: requesterKey,
     resolveAdmission,
@@ -495,13 +495,15 @@ export async function maybeSpawnVisibleSession(params: {
         ...(worktreeName ? { worktreeName } : {}),
         ...(worktreeBaseRef ? { worktreeBaseRef } : {}),
       };
-      response = placement
-        ? await createGatewayCall("sessions.create", createParams, {
-            signal: params.options?.signal,
-            sessionMutationCommitGuard: params.options?.assertActive,
-            timeoutMs: null,
-          })
-        : await createGatewayCall("sessions.create", createParams);
+      response = await runWithAgentToolSourceExecutionScope(assertActive, () =>
+        placement
+          ? createGatewayCall("sessions.create", createParams, {
+              signal: params.options?.signal,
+              sessionMutationCommitGuard: assertActive,
+              timeoutMs: null,
+            })
+          : createGatewayCall("sessions.create", createParams),
+      );
     } catch (error) {
       const missingScope = readMissingScopeErrorDetails(
         error && typeof error === "object" && "details" in error ? error.details : undefined,
@@ -560,21 +562,25 @@ export async function maybeSpawnVisibleSession(params: {
           launchAgent: async (request, assertDispatchCurrent) => {
             if (params.options?.callGateway) {
               assertDispatchCurrent();
-              return await cloudGatewayCall("agent", request, {
-                sessionMutationCommitGuard: assertDispatchCurrent,
-                timeoutMs: null,
-              });
+              return await runWithAgentToolSourceExecutionScope(assertActive, () =>
+                cloudGatewayCall("agent", request, {
+                  sessionMutationCommitGuard: assertDispatchCurrent,
+                  timeoutMs: null,
+                }),
+              );
             }
             return (
-              await callNativeSubagentGateway(
-                {
-                  method: "agent",
-                  params: request,
-                  assertDispatchCurrent,
-                  timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
-                },
-                undefined,
-                resolveGatewayContext,
+              await runWithAgentToolSourceExecutionScope(assertActive, () =>
+                callNativeSubagentGateway(
+                  {
+                    method: "agent",
+                    params: request,
+                    assertDispatchCurrent,
+                    timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
+                  },
+                  undefined,
+                  resolveGatewayContext,
+                ),
               )
             ).response;
           },

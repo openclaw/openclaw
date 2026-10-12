@@ -23,6 +23,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
@@ -662,6 +663,7 @@ test.each([
     if (recovering && !systemActor) {
       setUserProfileRole(recovering.id, "requester");
     }
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const sourceKey = "agent:main:dashboard:creator-policy-recovery";
     const sourceStamp = {
       createdVia: "operator" as const,
@@ -768,6 +770,7 @@ test("sessions.recover cannot create a successor on an agent excluded by the cal
   const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("restricted-session-recovery@example.com");
   setUserProfileRole(profile.id, "guest");
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   const key = "agent:main:dashboard:role-denied-recovery";
   await writeSessionStore({
     entries: {

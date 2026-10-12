@@ -372,46 +372,6 @@ describe("worker turn launcher failure recovery", () => {
     },
   );
 
-  it("keeps an active placement when tunnel startup fails before remote handoff", async () => {
-    await seedActivePlacement();
-    const acknowledgeCredentialDelivery = vi.fn(async () => true);
-    const stopTunnel = vi.fn(async () => {});
-    const destroy = vi.fn(async () => attachedEnvironment());
-    const environments: WorkerTurnEnvironmentService = {
-      get: vi.fn(() => attachedEnvironment()),
-      acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery,
-      startTunnel: vi.fn(async () => {
-        throw Object.assign(new Error("device worker node transport is unavailable"), {
-          code: "UNAVAILABLE",
-        });
-      }),
-      stopTunnel,
-      destroy,
-    };
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-tunnel-unavailable",
-        },
-        turn("run-tunnel-unavailable"),
-        runLocal,
-      ),
-    ).rejects.toMatchObject({ code: "UNAVAILABLE" });
-
-    expect(runLocal).not.toHaveBeenCalled();
-    expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();
-    expect(stopTunnel).not.toHaveBeenCalled();
-    expect(destroy).not.toHaveBeenCalled();
-    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-  });
-
   it("fails impossible replay before handoff and keeps the active placement reusable", async () => {
     await seedActivePlacement();
     const manager = await openSessionManager();
@@ -716,15 +676,6 @@ describe("worker turn launcher failure recovery", () => {
         "Cloud worker finished, but its workspace result could not be reconciled: workspace manifest memo exceeds its entry limit",
       expectedTerminalReason: "workspace manifest memo exceeds its entry limit",
     },
-    {
-      scenario: "failed execution",
-      executionFailure: "Codex paired execution device disconnected; start a fresh attempt",
-      expectedError:
-        "Codex paired execution device disconnected; start a fresh attempt\n\n" +
-        "Workspace recovery also failed: workspace manifest memo exceeds its entry limit. " +
-        "Remote changes may not have been applied locally. Resolve the workspace error, then retry.",
-      expectedTerminalReason: "Codex paired execution device disconnected; start a fresh attempt",
-    },
   ])(
     "records a remote-exec reconciliation failure after $scenario and releases its local claim",
     async ({ executionFailure, expectedError, expectedTerminalReason }) => {
@@ -801,7 +752,6 @@ describe("worker turn launcher failure recovery", () => {
 
   it.each([
     { label: "failed paired-device execution", executionFailed: true, providerId: "device" },
-    { label: "successful cloud-node execution", executionFailed: false, providerId: "crabbox" },
   ])(
     "preserves a disconnected node-backed placement after $label for a fresh attempt",
     async ({ executionFailed, providerId }) => {

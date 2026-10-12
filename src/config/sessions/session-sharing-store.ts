@@ -1,4 +1,4 @@
-import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -8,7 +8,10 @@ import {
 import { resolveStateDir } from "../state-dir.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import {
@@ -43,15 +46,14 @@ function readMemorySessionMembers(
   if (!isIncognitoSessionKey(scope.sessionKey)) {
     return undefined;
   }
-  const memory = getSessionActorStorageBinding({ sessionActor: scope.sessionActor });
+  const memory = captureSessionActorStorageOwner(scope);
   if (!memory) {
     return undefined;
   }
-  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
   const current =
-    agentId === memory.agentId && scope.sessionKey.trim() === memory.actor.target.sessionKey
+    scope.sessionKey.trim() === memory.binding.actor.target.sessionKey
       ? getSessionActorStorageBinding(scope)!.actor.snapshot(memory.authority)
-      : undefined;
+      : memory.owner?.readSession(scope.sessionKey, memory.authority);
   return structuredClone({ entry: current?.entry, members: current?.members ?? [] });
 }
 

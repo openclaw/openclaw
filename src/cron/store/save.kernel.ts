@@ -92,7 +92,7 @@ export function prepareCronStoreChanges(
 }
 
 /** Both save modes fence only the definitions this mutation intends to change. */
-export function assertCronStoreChangesCurrent(
+function assertCronStoreChangesCurrent(
   prepared: PreparedCronStoreChanges,
   currentById: ReadonlyMap<string, CronStoredJob>,
   resolvedStorePath: string,

@@ -48,15 +48,17 @@ relaxing destination requirements for other outbound callers.
 
 ## Conversation route ownership
 
-Implement `messaging.resolveConversationRouteOwner(...)` when generic route
+Implement `messaging.prepareConversationRouteOwnersAsync(...)` when generic route
 matching cannot reproduce the channel's configured and runtime binding rules.
-The resolver receives the current config, account, and recorded conversation
-identity, including a delivery `target` when it differs from the routing peer.
-It must reuse the same precedence and provider identity grammar as inbound
-routing.
+Preparation receives an array of current config, account, and recorded
+conversation identities, including a delivery `target` when it differs from the
+routing peer. Await `inspectBindings(refs)` to prepare binding facts in workers,
+then return one synchronous resolver per input. Invoke the returned binding reader
+inside each resolver so committed changes invalidate ownership before an effect.
+Use the same precedence and provider identity grammar as inbound routing.
 
-Ownership inspection is synchronous and read-only. Do not refresh binding
-liveness, perform network requests, or infer missing provider facts. Return:
+Resolvers are read-only. Do not refresh binding liveness, perform network
+requests, or infer missing provider facts. Return:
 
 - `{ kind: "agent", agentId }` for an agent-owned route.
 - `{ kind: "plugin", pluginId, fallbackAgentId }` for a plugin-owned runtime
@@ -71,10 +73,14 @@ liveness, perform network requests, or infer missing provider facts. Return:
 
 Keep temporary unavailability distinct from `null`: an adapter restart is not
 proof that a previously bound conversation is unowned.
-Use `inspectConversationBinding(...)` and its `ConversationBindingInspection`
+Use `inspectConversationBindingAsync(...)` and its `ConversationBindingInspection`
 result from `openclaw/plugin-sdk/conversation-binding-inspection-runtime` for this
-available/unavailable distinction. This public inspection helper is synchronous,
-read-only, and does not refresh binding liveness.
+available/unavailable distinction outside route preparation. This public inspection
+helper is read-only and does not refresh binding liveness. The synchronous
+`inspectConversationBinding`, `resolveConversationRouteOwner`, and
+`prepareConversationRouteOwners` APIs remain deprecated compatibility until the
+next Plugin SDK major; see
+[binding migration](/plugins/sdk-migration/how-to-migrate#await-plugin-state-and-conversation-bindings).
 
 ## Account-scoped conversation binding support
 

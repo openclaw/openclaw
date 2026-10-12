@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   loadSessionEntry,
@@ -75,7 +74,7 @@ export function bindUserTurnTranscriptAnnotation(params: {
       throw new Error("current user admission is no longer available for native annotation");
     }
   };
-  const assertCurrent = () => {
+  const assertNativeCurrent = () => {
     assertLive();
     const current = loadSessionEntry({ ...target, readConsistency: "latest" });
     const { logicalTurnId: _logicalTurnId, role: _role, ...anchor } = admission;
@@ -112,7 +111,7 @@ export function bindUserTurnTranscriptAnnotation(params: {
     ) {
       throw new Error("native prompt annotation requires complete provenance");
     }
-    assertCurrent();
+    assertLive();
     // This is the existing user-source fingerprint contract, including upstream prompt bytes.
     const fingerprint = sha256HexPrefixCore(
       JSON.stringify({
@@ -144,9 +143,6 @@ export function bindUserTurnTranscriptAnnotation(params: {
           throw new Error("native prompt annotation conflicts with recorded provenance");
         }
         const next = { ...admittedMessage, __openclaw: { ...metadata, ...fields } };
-        if (!isDeepStrictEqual(redactTranscriptMessage(next, params.config), next)) {
-          throw new Error("native prompt annotation would restore redacted evidence");
-        }
         verified = true;
         return isDeepStrictEqual(next, admittedMessage) ? undefined : next;
       },
@@ -154,10 +150,10 @@ export function bindUserTurnTranscriptAnnotation(params: {
         active: "exact",
         expectedEntry: {
           lifecycleRevision: expectedLifecycleRevision,
-          activeWriterRunId: selected.activeWriterRunId ?? null,
+          activeWriterRunId: expectedWriterRunId ?? selected.activeWriterRunId ?? null,
         },
         assertCurrent: assertLive,
-        assertNativeCurrent: assertCurrent,
+        assertNativeCurrent,
       },
     );
     if (!verified) {
@@ -170,14 +166,14 @@ export function bindUserTurnTranscriptAnnotation(params: {
       owner.refresh({ ...admission }, rewritten.message);
       await waitForSessionTranscriptProjection(admission, params.abortSignal);
     }
-    assertCurrent();
+    assertLive();
     if (rewritten) {
       await publishTranscriptUpdate(admission, {
         message: rewritten.message,
         messageId: admission.entryId,
         messageSeq: admission.activeMessagePosition + 1,
       });
-      assertCurrent();
+      assertLive();
     }
   };
 }

@@ -201,7 +201,6 @@ function resolveCachedGitHubIdentityInDatabase(
 ): CachedGitHubIdentity | undefined {
   if (
     !tableExists(db, "user_profiles") ||
-    !tableExists(db, "user_profile_identities") ||
     !tableHasColumn(db, "user_profile_identities", "canonical_login")
   ) {
     return undefined;
@@ -291,12 +290,7 @@ function resolveUserProfileGitHubAttributionInDatabase(
     profiles.map((profile) => [profile.id, profile.merged_into ?? profile.id] as const),
   );
   const canonicalIds = [...new Set(canonicalBySource.values())];
-  const identities: ReturnType<typeof selectStoredGitHubIdentities> = tableExists(
-    db,
-    "user_profile_identities",
-  )
-    ? selectStoredGitHubIdentities(db, canonicalIds)
-    : new Map();
+  const identities = selectStoredGitHubIdentities(db, canonicalIds);
   const preferences = selectUserPreferenceValues(db, canonicalIds, GIT_COAUTHOR_PREFERENCE_KEY);
   return {
     identities: new Map(

@@ -2526,7 +2526,7 @@ describe("session accessor seam", () => {
     ]);
   });
 
-  it("accepts idempotent transcript replays after storage redaction", async () => {
+  it("accepts idempotent transcript replays with exact secret-shaped text", async () => {
     const scope = transcriptScope("session-redacted-replay", "agent:main:redacted-replay");
     await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
@@ -2548,7 +2548,7 @@ describe("session accessor seam", () => {
     });
 
     expect(first?.appended).toBe(true);
-    expect(JSON.stringify(first?.message)).not.toContain("sk-abcdef1234567890xyz");
+    expect(first?.message).toEqual(message);
     expect(replay).toMatchObject({
       appended: false,
       messageId: first?.messageId,

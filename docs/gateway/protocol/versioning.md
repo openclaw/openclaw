@@ -133,9 +133,13 @@ new `worktrees.recoverRemoval` and `worktrees.retireSnapshot` methods require
 
 Older CLI and SDK binaries keep their existing direct-write behavior. Routing
 does not intercept those writes, arbitrary trusted SQL, or another state root
-sharing an external database. Match CLI, Gateway, and SDK versions; callers must
-retain their existing foreign-commit freshness checks. Routing covers the named
-operations above; it does not guarantee that the Gateway is the only SQLite writer.
+sharing an external database. Match CLI, Gateway, and SDK versions. All writers
+must route through the Gateway or acquire exclusive ownership while it is
+stopped; direct writes from another process while it is running are unsupported.
+Runtime caches use in-process write receipts, not foreign-commit freshness
+checks. Routing covers the named operations above; it cannot make an older
+direct writer safe to run alongside the Gateway. See
+[Database schemas](/reference/database-schemas) for the ownership contract.
 
 The following boundaries retain their existing owners and contracts:
 

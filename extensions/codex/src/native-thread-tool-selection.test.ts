@@ -87,6 +87,7 @@ describe("native Codex thread selection", () => {
           config = { ...config };
         }
         await upsertSessionEntry({ ...identity, storePath, entry: session });
+        await options.assertCurrentAsync?.();
         options.assertCurrent!();
         return dispatch();
       });

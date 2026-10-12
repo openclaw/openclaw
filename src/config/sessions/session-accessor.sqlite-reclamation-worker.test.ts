@@ -13,7 +13,6 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -160,9 +159,9 @@ test("retains one archive Worker across refused and interleaved reclamation oper
   });
 });
 
-test.each(["path", "root"] as const)(
+test.each(["root"] as const)(
   "retires a retained Worker by the symlinked %s its requester used",
-  async (retirement) => {
+  async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const link = path.join(state.root, "state-link");
       const stateDir = expectDefined(state.env.OPENCLAW_STATE_DIR, "test state directory");
@@ -187,9 +186,7 @@ test.each(["path", "root"] as const)(
           plan,
         });
         expect(spawned).toHaveLength(1);
-        await (retirement === "path"
-          ? closeOpenClawAgentDatabaseByPathAsync(databaseOptions.path)
-          : closeOpenClawAgentDatabasesAsync(link));
+        await closeOpenClawAgentDatabasesAsync(link);
         expect(spawned[0]?.threadId).toBe(-1);
       } finally {
         vi.restoreAllMocks();

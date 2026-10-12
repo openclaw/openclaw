@@ -40,6 +40,7 @@ import {
   type ExecRequestIdentity,
   type ExecRequestOwner,
 } from "../../infra/exec-request-context.js";
+import { captureSessionEntryCurrentCheckAsync } from "../../plugin-sdk/session-binding-runtime.js";
 import {
   getConversationSession,
   normalizeSessionDeliveryState,
@@ -333,11 +334,24 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
               true,
             ));
         expect(ordinaryCommand.cancellationRequested).not.toBe(true);
+        let staleCurrent: NonNullable<
+          HandleCommandsParams["opts"]
+        >["isCommandTargetCurrent"] = () => false;
+        if (phase === "running") {
+          const current = await captureSessionEntryCurrentCheckAsync({
+            agentId: "main",
+            storePath: state.storePath,
+            sessionKey,
+          });
+          staleCurrent = Object.assign(async () => false, {
+            sessionSource: current.source,
+          });
+        }
         await expect(
           pathKind === "fast"
-            ? tryFastAbortFromMessage({ ...state, isCommandTargetCurrent: () => false })
+            ? tryFastAbortFromMessage({ ...state, isCommandTargetCurrent: staleCurrent })
             : handleStopCommand(
-                { ...state.params, opts: { isCommandTargetCurrent: () => false } },
+                { ...state.params, opts: { isCommandTargetCurrent: staleCurrent } },
                 true,
               ),
         ).rejects.toThrow("selected session changed");

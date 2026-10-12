@@ -32,6 +32,12 @@ it.each(["transition", "complete"] as const)(
       seedSubagentCompletionDelivery({ subagent: input.subagent });
       subagentRuns.set(input.subagent.runId, input.subagent);
       const registry = createEmptyPluginRegistry();
+      registry.typedHooks.push({
+        pluginId: "test",
+        hookName: "subagent_ended",
+        source: "test",
+        handler: async () => {},
+      });
       const hookRunner = createHookRunner(registry);
       const hookReached = createDeferred();
       const runtime = vi

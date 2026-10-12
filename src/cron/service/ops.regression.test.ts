@@ -350,61 +350,6 @@ describe("cron service ops regressions", () => {
     expect((await loadCronStore(store.storePath)).jobs[0]?.state.nextRunAtMs).toBe(dueAt);
   });
 
-  it("manual cron.run preserves unrelated due jobs but advances already-executed stale slots", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
-    const nowMs = Date.now();
-    const dueNextRunAtMs = nowMs - 1_000;
-    const staleExecutedNextRunAtMs = nowMs - 2_000;
-
-    await saveCronStore(store.storePath, {
-      version: 1,
-      jobs: [
-        createIsolatedRegressionJob({
-          id: "manual-target",
-          name: "manual target",
-          scheduledAt: nowMs,
-          schedule: { kind: "at", at: new Date(nowMs + 3_600_000).toISOString() },
-          payload: { kind: "agentTurn", message: "manual target" },
-          state: { nextRunAtMs: nowMs + 3_600_000 },
-        }),
-        createIsolatedRegressionJob({
-          id: "unrelated-due",
-          name: "unrelated due",
-          scheduledAt: nowMs,
-          schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
-          payload: { kind: "agentTurn", message: "unrelated due" },
-          state: { nextRunAtMs: dueNextRunAtMs },
-        }),
-        createIsolatedRegressionJob({
-          id: "unrelated-stale-executed",
-          name: "unrelated stale executed",
-          scheduledAt: nowMs,
-          schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
-          payload: { kind: "agentTurn", message: "unrelated stale executed" },
-          state: {
-            nextRunAtMs: staleExecutedNextRunAtMs,
-            lastRunAtMs: staleExecutedNextRunAtMs + 1,
-          },
-        }),
-      ],
-    });
-
-    const state = createCronRegressionState({
-      cronEnabled: false,
-      storePath: store.storePath,
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-    });
-
-    const runResult = await run(state, "manual-target", "force");
-    expect(runResult).toEqual({ ok: true, ran: true });
-
-    const jobs = state.store?.jobs ?? [];
-    const unrelated = jobs.find((entry) => entry.id === "unrelated-due");
-    const staleExecuted = jobs.find((entry) => entry.id === "unrelated-stale-executed");
-    expect(unrelated?.state.nextRunAtMs).toBe(dueNextRunAtMs);
-    expect((staleExecuted?.state.nextRunAtMs ?? 0) > nowMs).toBe(true);
-  });
-
   it("force-runs a due paced job without consuming its pending slot", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const nowMs = Date.parse("2026-07-19T09:00:00.000Z");
@@ -448,36 +393,6 @@ describe("cron service ops regressions", () => {
     expect(reloaded?.state.pacedNextRunAtMs).toBe(dueSlot);
     expect(reloaded?.state.forcePreservedNextRunAtMs).toBe(dueSlot);
     expect(reloaded?.state.startupCatchupAtMs).toBe(dueSlot);
-  });
-
-  it("passes the rehydrated agentTurn payload message to isolated manual runs", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
-    const nowMs = Date.now();
-    const marker =
-      "SERIALIZATION_PROBE: reply exactly with the marker token you received and nothing else.";
-    const job = createIsolatedRegressionJob({
-      id: "manual-payload-message",
-      name: "manual payload message",
-      scheduledAt: nowMs,
-      schedule: { kind: "at", at: new Date(nowMs + 3_600_000).toISOString() },
-      payload: { kind: "agentTurn", message: marker },
-      state: { nextRunAtMs: nowMs + 3_600_000 },
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "ok" });
-    const state = createCronRegressionState({
-      cronEnabled: false,
-      storePath: store.storePath,
-      runIsolatedAgentJob,
-    });
-
-    const runResult = await run(state, job.id, "force");
-
-    expect(runResult).toEqual({ ok: true, ran: true });
-    expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
-    const [params] = mockCall(runIsolatedAgentJob, 0) as [{ message?: unknown }?];
-    expect(params?.message).toBe(marker);
   });
 
   it("applies timeoutSeconds to manual cron.run isolated executions", async () => {

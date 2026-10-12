@@ -15,12 +15,21 @@ type CheckoutSource = {
 };
 
 async function promptPaths(options: CheckoutSource): Promise<string[] | undefined> {
-  if (!(await resolveWorktreeCheckoutKey(options, "prompt"))) {
-    return undefined;
-  }
   const tree = await options.git.worker.buffered(
-    options.repoRoot,
-    ["ls-tree", "-r", "-z", options.commit],
+    options.destination,
+    [
+      "ls-files",
+      "-z",
+      "--format=%(objectmode) blob %(objectname)%x09%(path)",
+      "--",
+      ":(top,glob)*",
+      ":(top,icase,glob).agents/**",
+      ":(top,icase,glob).codex/**",
+      ":(top,icase,glob)skills/**",
+      ":(top,icase,glob)users/*/user.md",
+      ":(top,icase,glob)users/*/.gitattributes",
+      ":(top,icase)users/.gitattributes",
+    ],
     {
       ...options.gitOptions,
       maxOutputBytes: 16 * 1024 ** 2,
@@ -30,7 +39,7 @@ async function promptPaths(options: CheckoutSource): Promise<string[] | undefine
     return undefined;
   }
   if (tree.code !== 0 || tree.termination !== "exit") {
-    throw commandError("git ls-tree", tree);
+    throw commandError("git ls-files", tree);
   }
   const selected: { path: string; oid: string }[] = [];
   for (const entry of parseGitTreePaths(tree.stdout)) {
@@ -45,20 +54,17 @@ async function promptPaths(options: CheckoutSource): Promise<string[] | undefine
     ) {
       return undefined;
     }
-    // Personal bootstrap reads users/<canonical profile>/USER.md; include its attribute ancestry.
-    const personalBootstrap =
-      normalized === "users/.gitattributes" ||
-      /^users\/[a-z0-9][a-z0-9_-]{0,127}\/(?:user\.md|\.gitattributes)$/u.test(normalized);
     if (
-      !name.includes("/") ||
-      /^(?:\.agents|\.codex|skills)\//u.test(normalized) ||
-      personalBootstrap
+      normalized.startsWith("users/") &&
+      normalized !== "users/.gitattributes" &&
+      !/^users\/[a-z0-9][a-z0-9_-]{0,127}\/(?:user\.md|\.gitattributes)$/u.test(normalized)
     ) {
-      if (!/^100(?:644|755)$/u.test(entry.mode)) {
-        return undefined;
-      }
-      selected.push({ path: name, oid: entry.oid });
+      continue;
     }
+    if (!/^100(?:644|755)$/u.test(entry.mode)) {
+      return undefined;
+    }
+    selected.push({ path: name, oid: entry.oid });
   }
   if (!selected.length || selected.length > 4096) {
     return undefined;
@@ -91,16 +97,21 @@ export async function prepareWorktreePromptFiles(
     onMaterializationStart: () => void;
   },
 ): Promise<boolean> {
-  const paths = await promptPaths(options);
-  if (!paths) {
+  if (!(await resolveWorktreeCheckoutKey(options, "prompt"))) {
     return false;
   }
+  // The complete index already serves final checkout. Let Git select only
+  // prompt inputs instead of transferring and parsing every repository path.
   options.onMaterializationStart();
   await options.git.require(
     options.destination,
     ["read-tree", "--no-recurse-submodules", options.commit],
     options.checkoutOptions,
   );
+  const paths = await promptPaths(options);
+  if (!paths) {
+    return false;
+  }
   const attributes = await options.git.worker.buffered(
     options.destination,
     ["check-attr", "--cached", "--all", "-z", "--stdin"],

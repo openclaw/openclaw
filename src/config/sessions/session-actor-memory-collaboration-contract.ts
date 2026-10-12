@@ -51,6 +51,12 @@ export type SessionActorMemoryCollaborationWrites = SharingWrites & {
   };
 };
 
+export type SessionActorMemoryCollaborationQuery = {
+  [Key in keyof SessionActorMemoryCollaborationReads]: {
+    type: Key;
+    input: SessionActorMemoryCollaborationReads[Key]["input"];
+  };
+}[keyof SessionActorMemoryCollaborationReads];
 export type SessionActorMemoryCollaborationCommand = {
   [Key in keyof SessionActorMemoryCollaborationWrites]: {
     type: Key;

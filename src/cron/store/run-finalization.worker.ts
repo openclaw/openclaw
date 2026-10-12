@@ -19,6 +19,7 @@ import type {
   CronRuntimeMutationContracts,
   CronRuntimeWorkerOperations,
 } from "./runtime-worker.types.js";
+import { settleCronStartupBatchInWorker } from "./scheduler-actor.worker.js";
 
 /** Job state and its terminal receipt share the same authoritative write transaction. */
 export function finalizeCronRunsInWorker(
@@ -118,6 +119,11 @@ export function finalizeCronRunsInWorker(
               };
             },
           });
+          const settled = settleCronStartupBatchInWorker(database, input.storeKey, policy.nowMs);
+          committed.value.upsertedJobs.push(...settled.jobs);
+          committed.value.notifications.push(...settled.notifications);
+          committed.value.logs.push(...settled.logs);
+          committed.value.changed ||= settled.jobs.length > 0;
           return { outcome: committed.value };
         } catch (error) {
           if (error instanceof CronRunReceiptRevisionError) {

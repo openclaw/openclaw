@@ -75,6 +75,14 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         const actual = await listSessionTranscriptCorpusEntriesForAgent("main", options);
 
         expect(actual).toHaveLength(2);
+        expect(actual.find((entry) => entry.artifactKind === "active-session")).toMatchObject({
+          agentId: "main",
+          sessionFile: "agent:main:cron:job-1:run:run-1",
+          sessionId: "cron-thread",
+          generatedByCronRun: true,
+          sessionKind: "cron",
+          transcriptSource: "sqlite",
+        });
         const archive = actual.find((entry) => entry.artifactKind === "archive-artifact");
         expect(archive).toMatchObject({
           sessionFile: archivePath,
@@ -190,7 +198,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         transcriptSource: "sqlite",
         updatedAtMs: persisted?.updatedAt,
       };
-      expect(await listSessionTranscriptCorpusEntriesForAgent("main", options)).toEqual([
+      await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).resolves.toEqual([
         { ...expected, sessionKind: "interactive" },
       ]);
 

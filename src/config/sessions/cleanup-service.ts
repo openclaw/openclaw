@@ -312,7 +312,7 @@ export async function runSessionsCleanup(params: {
   targets?: SessionStoreTarget[];
   reclamationMode?: "worker" | "in-process";
   assertCurrent?: () => void;
-  beforeCommitInTransaction?: () => void;
+  commitGuard?: () => void;
 }): Promise<SessionsCleanupRunResult> {
   const { cfg, opts } = params;
   params.assertCurrent?.();
@@ -393,7 +393,7 @@ export async function runSessionsCleanup(params: {
               ...missingRemovals,
               ...dmScopeRetiredRemovals,
             ];
-            // Let queued I/O run between preview/repair work and the synchronous commit.
+            // Let queued I/O run between preview/repair work and the lifecycle commit.
             await yieldToEventLoop();
             owner.assertCurrent();
             const lifecycleResult = await applySessionEntryLifecycleMutation(
@@ -401,8 +401,10 @@ export async function runSessionsCleanup(params: {
                 agentId: target.agentId,
                 storePath: target.storePath,
                 removals,
-                commitGuard: owner.assertCurrent,
-                beforeCommitInTransaction: params.beforeCommitInTransaction,
+                commitGuard: () => {
+                  owner.assertCurrent();
+                  params.commitGuard?.();
+                },
                 activeSessionKey: opts.activeKey,
                 maintenanceOverride: {
                   ...maintenance,

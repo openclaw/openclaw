@@ -265,7 +265,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     { storage: "file-backed", redact: true },
     { storage: "incognito", redact: true },
   ] as const)(
-    "retains one canonical $storage image note through configured fallback (redacted: $redact)",
+    "retains one canonical $storage image note through configured fallback (logging patterns: $redact)",
     async ({ storage, redact }) => {
       await withOpenClawTestState({ label: "settled-image-note-redaction" }, async (testState) => {
         const first = await createPersistedImageNoteFixture(mocks, testState, storage);
@@ -340,11 +340,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           if (stored?.type !== "message") {
             throw new Error("Expected a durable image failure message");
           }
-          if (redact) {
-            expect(JSON.stringify(stored.message)).not.toContain("run-1");
-          } else {
-            expect(stored.message).toMatchObject({ details: { runId: "run-1" } });
-          }
+          expect(stored.message).toMatchObject({ details: { runId: "run-1" } });
           const expected = [...previousMessages, stored.message];
           expect(fallback.result.messagesSnapshot).toEqual(expected);
           for (const attempt of attempts) {
