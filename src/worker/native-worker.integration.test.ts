@@ -13,6 +13,10 @@ import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveRuntimeWorkerUrl, resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../process/spawn-secret-input.js";
@@ -65,6 +69,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
       await gateway?.close();
       gateway = undefined;
     } finally {
+      clearRuntimeConfigSnapshot();
       cleanup();
     }
   }),
@@ -376,6 +381,7 @@ describe.skipIf(process.platform === "win32")(
     beforeEach(async ({ signal }) => {
       activeTestSignal = signal;
       gateway = await ComposedGatewayHarness.create(tempDirs.make("oc-native-gw-"));
+      setRuntimeConfigSnapshot(gateway.cfg);
       await gateway.start();
     });
 

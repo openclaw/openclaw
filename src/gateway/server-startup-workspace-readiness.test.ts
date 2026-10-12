@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
@@ -79,7 +79,7 @@ describe("Gateway workspace migration readiness", () => {
       startupConfigSnapshotRead,
     });
 
-  it("scans a cold shared store once before refusing every owned session workspace", async () => {
+  it("refuses every owned session workspace without reading its store on the main thread", async () => {
     const storePath = state.statePath("shared.sqlite");
     const sandbox = {
       mode: "all",
@@ -137,7 +137,6 @@ describe("Gateway workspace migration readiness", () => {
     ]);
     closeOpenClawAgentDatabasesForTest();
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-    const iterate = vi.spyOn(StatementSync.prototype, "iterate");
 
     const port = await getFreePort();
     const attempt = start(port).then((started) => {
@@ -153,20 +152,7 @@ describe("Gateway workspace migration readiness", () => {
     }
     await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
 
-    // The refusal ends the first workspace admission before later startup passes.
-    const canonicalScans = prepare.mock.calls.reduce((count, [sql], index) => {
-      if (!sql.includes('"retained_window"')) {
-        return count;
-      }
-      const result = prepare.mock.results[index];
-      return (
-        count +
-        iterate.mock.contexts.filter(
-          (statement) => result?.type === "return" && statement === result.value,
-        ).length
-      );
-    }, 0);
-    expect(canonicalScans).toBe(1);
+    expect(prepare.mock.calls.filter(([sql]) => sql.includes('"retained_window"'))).toEqual([]);
   });
 
   it.each(["disk", "supplied snapshot"])(

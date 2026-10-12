@@ -26,6 +26,7 @@ import {
   stageOpenClawAgentDatabaseSchemaExtension,
   supportsNodeSqliteExtensionLoading,
   tableExists,
+  withSqliteDatabaseWriteScope,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
@@ -288,7 +289,8 @@ function createPublicationBackend(
         db,
         () => {
           hooks.onBegin();
-          return run();
+          // Index writes do not change session facts. DDL still invalidates all scopes.
+          return withSqliteDatabaseWriteScope(db, [], run);
         },
         { withCommit: hooks.withCommit },
       ),
@@ -312,7 +314,9 @@ function createPublicationBackend(
       restoredBusyTimeout = false;
       let value: T;
       try {
-        value = runSqliteSingleStatementSync(db, statement);
+        value = withSqliteDatabaseWriteScope(db, [], () =>
+          runSqliteSingleStatementSync(db, statement),
+        );
       } catch (error) {
         const nativeCode = failure(error).errcode;
         // Lock refusal leaves no durable write, so the preparing host may retry.
@@ -584,12 +588,9 @@ function createPublicationBackend(
             "A session was forgotten while memory indexing was running; retry the memory index.",
           );
         }
-        const { retainedDrift } = new MemorySourceIndexKernel(db, command.input.state).replaceRows(
-          header,
-          rows,
-        );
-        facts = readMemoryDatabaseFacts(db);
-        return { retainedDrift };
+        new MemorySourceIndexKernel(db, command.input.state).replaceRows(header, rows);
+        facts = readMemoryDatabaseFacts(db, command.input.state.hasVectorTable);
+        return true;
       });
       const published = outcome.ok ? { ...outcome, facts } : outcome;
       return command.type === "source.replace.inline" ? published : finish(published);

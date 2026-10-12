@@ -528,7 +528,7 @@ function releaseCapacity(phase, reference, mirror, buildHome, servingRoot, runti
   if (phase === "fetch") demands.push([mirror, footprint]);
   if (phase !== "activate") {
     demands.push([join(servingRoot, "staging"), phase === "fetch" ? empty : footprint]);
-    // Budget all planned copy costs conservatively, even though cache cleanup precedes staging.
+    // Budget full copy costs conservatively, including growth of the retained package store.
     // A shared filesystem owes their sum, not three independent free-space checks.
     const buildDemand = phase === "build" ? footprint : empty;
     demands.push([join(buildHome, "work"), buildDemand], [join(buildHome, "cache"), buildDemand]);
@@ -561,21 +561,27 @@ function releaseCapacity(phase, reference, mirror, buildHome, servingRoot, runti
 }
 
 function sealTree(root) {
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const pathname = join(root, entry.name);
+  const pending = [root];
+  while (pending.length) {
+    const pathname = pending.pop();
     const metadata = lstatSync(pathname);
-    if (metadata.isSymbolicLink()) continue;
-    if (metadata.isDirectory()) {
-      sealTree(pathname);
+    if (metadata.isSymbolicLink()) {
       continue;
     }
-    if (!metadata.isFile()) reject(`cannot seal unsupported release entry: ${pathname}`);
-    chmodSync(pathname, (metadata.mode & 0o111) !== 0 ? 0o555 : 0o444);
-    syncPath(pathname);
+    if (metadata.isDirectory()) {
+      for (const name of readdirSync(pathname)) {
+        pending.push(join(pathname, name));
+      }
+    } else if (!metadata.isFile()) {
+      reject(`cannot seal unsupported release entry: ${pathname}`);
+    }
+    chmodSync(pathname, metadata.isDirectory() || (metadata.mode & 0o111) !== 0 ? 0o555 : 0o444);
   }
-  // Publishing a directory name cannot make its unsynced descendants durable.
-  chmodSync(root, 0o555);
-  syncPath(root);
+  // GNU sync -f uses syncfs: persist all data, modes and directory entries before publication.
+  const synced = spawnSync("sync", ["-f", "--", root], { encoding: "utf8" });
+  if (synced.status !== 0) {
+    reject(`cannot sync sealed release filesystem: ${synced.error?.message ?? synced.stderr.trim()}`);
+  }
 }
 
 function makeDirectoriesOwnerWritable(root) {

@@ -36,6 +36,7 @@ import {
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
+import { overlayEmulateMedia } from "./test/overlay-browser-commands.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -113,8 +114,7 @@ function resolveChromiumLaunchOptions(): { executablePath: string } | undefined 
 
 let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | null = null;
 
-// Re-add modal-dialog.browser (CDP media emulation) and web-awesome-accessibility.node
-// (CDP accessibility tree) after their browser-neutral replacements land.
+// The accessibility-tree suite remains Chromium-only until its CDP probe is replaced.
 const webkitTestFiles = [
   "src/components/web-awesome-dropdown.browser.test.ts",
   "src/components/web-awesome-dropdown-owner.browser.test.ts",
@@ -138,6 +138,14 @@ const webkitTestFiles = [
   "src/pages/chat/components/chat-model-picker.browser.test.tsx",
   "src/pages/chat/components/chat-pane-header.browser.test.ts",
   "src/pages/chat/components/chat-pane-versions-menu.browser.test.ts",
+  "src/components/overlay-anchor.browser.test.ts",
+  "src/components/overlay-lifecycle.browser.test.ts",
+  "src/components/overlay-shadow.browser.test.ts",
+  "src/components/solid/*.browser.test.tsx",
+  "src/components/image-lightbox.browser.test.ts",
+  "src/components/modal-dialog.browser.test.ts",
+  "src/components/sessions-hub-header.browser.test.ts",
+  "src/components/transient-container.browser.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file, here));
 
 export function createUiBrowserVitestConfig(
@@ -275,6 +283,7 @@ export function createUiBrowserVitestConfig(
       browser: {
         enabled: true,
         provider,
+        commands: { overlayEmulateMedia },
         instances: [{ browser, name: browser }],
         headless: true,
         ui: false,

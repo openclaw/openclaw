@@ -100,7 +100,9 @@ suite.define(() => {
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       for (const pane of await panes.all()) {
-        await pane.locator('.side-panel__header wa-tab[panel="dashboard"]').waitFor();
+        await pane
+          .locator('.side-panel__header .tabstrip-tab[data-tab-value="dashboard"]')
+          .waitFor();
       }
       const roots = await panes
         .locator('.sidebar-region__primary, .side-panel__panel[data-panel-slot="dashboard"]')
@@ -109,7 +111,7 @@ suite.define(() => {
       const targets = () =>
         panes.evaluateAll((elements) =>
           elements.map((pane) => {
-            const tab = pane.querySelector(".side-panel__header wa-tab[active]")!;
+            const tab = pane.querySelector(".side-panel__header .tabstrip-tab[active]")!;
             const target = document.getElementById(tab.getAttribute("aria-controls")!);
             return {
               tabId: tab.id,
@@ -245,7 +247,7 @@ suite.define(() => {
         };
         await expectPaneHeaderGeometry(page, "right");
         // Side focus never swaps or reparents either live view.
-        const dashboardTab = sideHeader.locator('wa-tab[panel="dashboard"]');
+        const dashboardTab = sideHeader.locator('.tabstrip-tab[data-tab-value="dashboard"]');
         await page.screenshot({ path: path.join(suite.artifactDir, "side-before.png") });
         for (const dock of ["right", "left", "bottom"] as const) {
           await dockChatSidePanel(page, dock);
@@ -359,7 +361,7 @@ suite.define(() => {
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
         await selectChatLayoutAction(paneHeader, /^Swap /);
         await page.locator('[data-panel-slot="terminal"][data-region="main"]').waitFor();
-        const chatTab = sideHeader.locator('wa-tab[panel="conversation"]');
+        const chatTab = sideHeader.locator('.tabstrip-tab[data-tab-value="conversation"]');
         await chatTab.click();
         await chat.waitFor();
         await chatTab.focus();

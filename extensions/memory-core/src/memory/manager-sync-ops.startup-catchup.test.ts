@@ -358,7 +358,9 @@ describe("session startup catch-up", () => {
     });
     const forgotten = await writeSqliteSession({ storePath, sessionId: "forgotten-thread" });
     await writeSqliteSession({ storePath, sessionId: "unrelated-thread" });
-    const harness = await SessionStartupCatchupHarness.create([], true);
+    const harness = await SessionStartupCatchupHarness.create([], true, false, false, {
+      session: { store: storePath },
+    });
     harness.addPendingSessionTarget({
       agentId: "main",
       sessionId: "custom-thread",
@@ -421,7 +423,9 @@ describe("session startup catch-up", () => {
       content: "replacement store target",
     });
     await configureTestSessionStore(session.storePath);
-    const harness = await SessionStartupCatchupHarness.create([]);
+    const harness = await SessionStartupCatchupHarness.create([], false, false, false, {
+      session: { store: session.storePath },
+    });
     harness.afterNextCorpusListForTest(async () => {
       await configureTestSessionStore(replacement.storePath);
     });
