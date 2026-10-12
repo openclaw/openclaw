@@ -265,20 +265,21 @@ describe("Codex local tool environment placement", () => {
         shellEnvironment,
         disableLoginShell: connection.disableLoginShell,
       };
-      const started = buildThreadStartParams(
-        createThreadRequestAttemptParams({ provider: "openai" }),
-        {
+      // These builders are synchronous here and return promises on current main.
+      // Promise.resolve accepts either shape so the start and resume requests
+      // are checked after they resolve.
+      const started = await Promise.resolve(
+        buildThreadStartParams(createThreadRequestAttemptParams({ provider: "openai" }), {
           ...threadOptions,
           cwd: workspaceDir,
           dynamicTools: [],
-        },
+        }),
       );
-      const resumed = buildThreadResumeParams(
-        createThreadRequestAttemptParams({ provider: "openai" }),
-        {
+      const resumed = await Promise.resolve(
+        buildThreadResumeParams(createThreadRequestAttemptParams({ provider: "openai" }), {
           ...threadOptions,
           threadId: "thread-invalid-github",
-        },
+        }),
       );
       for (const request of [started, resumed]) {
         const config = request.config;
@@ -387,7 +388,7 @@ function runGitHubClientStub(
           resolve({ status: exitCode, output });
           return;
         }
-        reject(error);
+        reject(new Error("GitHub client stub failed", { cause: error }));
       },
     );
   });
