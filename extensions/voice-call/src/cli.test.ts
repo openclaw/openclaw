@@ -215,6 +215,23 @@ describe("voice-call CLI status fallback", () => {
     expect(result).toMatchObject({ callId: "call-1", state: "completed" });
   });
 
+  it("reports an unreachable remote Gateway instead of reading the local store", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", "ws://gateway.example:18789");
+    callGatewayFromCliMock.mockRejectedValue(gatewayTransportError());
+    const ensureRuntime = vi.fn();
+    const program = buildProgram({}, {}, ensureRuntime);
+
+    try {
+      await expect(
+        program.parseAsync(["voicecall", "status", "--json"], { from: "user" }),
+      ).rejects.toThrow("Gateway connection at ws://127.0.0.1:18789 failed");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(loadActiveCallsFromStoreMock).not.toHaveBeenCalled();
+    expect(ensureRuntime).not.toHaveBeenCalled();
+  });
+
   it("keeps reachable gateway request failures out of the standalone runtime", async () => {
     callGatewayFromCliMock.mockRejectedValue(
       gatewayRequestError("Voice call runtime generation is retired; use the current registration"),

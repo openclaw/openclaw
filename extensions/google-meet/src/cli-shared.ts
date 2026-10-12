@@ -11,6 +11,7 @@ import {
   clampTimerTimeoutMs,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { formatDurationCompact } from "openclaw/plugin-sdk/time-runtime";
 import type { GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
@@ -181,6 +182,19 @@ export function writeStdoutJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
+// A remote Gateway owns the runtime even while this machine cannot reach it;
+// only the implicit local Gateway may be replaced by an in-process run.
+function hasConfiguredRemoteGatewayTarget(): boolean {
+  if (process.env.OPENCLAW_GATEWAY_URL?.trim()) {
+    return true;
+  }
+  try {
+    return getRuntimeConfig().gateway?.mode === "remote";
+  } catch {
+    return false;
+  }
+}
+
 function isGatewayUnavailableForLocalFallback(
   err: unknown,
   method: GoogleMeetGatewayMethod,
@@ -189,7 +203,7 @@ function isGatewayUnavailableForLocalFallback(
     // Fall back only when nothing serves the gateway URL (connect-time socket
     // failures: kind "closed" with no WS close code). A coded close (e.g. 1006
     // during restart) means a live gateway may still own Meet sessions — surface it.
-    return err.kind === "closed" && err.code === undefined;
+    return err.kind === "closed" && err.code === undefined && !hasConfiguredRemoteGatewayTarget();
   }
   // Gateway alive but the Meet methods are not registered there: run locally.
   return isGatewayClientRequestError(err) && err.message.includes(`unknown method: ${method}`);

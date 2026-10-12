@@ -11,6 +11,7 @@ import {
   clampTimerTimeoutMs,
   MAX_TIMER_TIMEOUT_MS,
 } from "openclaw/plugin-sdk/number-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "../api.js";
 import type { CallBrief } from "./call-brief.js";
@@ -39,11 +40,25 @@ const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
 const VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS = 10000;
 const VOICE_CALL_GATEWAY_POLL_INTERVAL_MS = 1000;
 
+// A remote Gateway owns the runtime even while this machine cannot reach it;
+// only the implicit local Gateway may be replaced by an in-process run.
+function hasConfiguredRemoteGatewayTarget(): boolean {
+  if (process.env.OPENCLAW_GATEWAY_URL?.trim()) {
+    return true;
+  }
+  try {
+    return getRuntimeConfig().gateway?.mode === "remote";
+  } catch {
+    return false;
+  }
+}
+
 function isGatewayUnavailableForLocalFallback(err: unknown): boolean {
   return (
     isGatewayTransportError(err) &&
     err.kind === "closed" &&
-    (err.code === undefined || err.code === 1006)
+    (err.code === undefined || err.code === 1006) &&
+    !hasConfiguredRemoteGatewayTarget()
   );
 }
 
