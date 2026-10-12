@@ -416,11 +416,7 @@ export async function handleTelegramInteractiveCallback(params: {
         },
         spooledReplayAbortSignal: participant?.abortSignal,
       });
-      if (
-        result.kind === "completed" ||
-        result.kind === "skipped" ||
-        result.kind === "cancelled"
-      ) {
+      if (result.kind === "completed" || result.kind === "skipped" || result.kind === "cancelled") {
         participant?.settle(result);
         return result.kind;
       }
