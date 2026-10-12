@@ -341,7 +341,7 @@ export function inspectSessionBindingByConversation(
 }
 
 /** One synchronous owner view per phase; no selection survives a wait or a later grant. */
-export function inspectSessionBindingsByConversations(
+function inspectSessionBindingsByConversations(
   refs: readonly ConversationRef[],
 ): SessionBindingInspection[] {
   const nativeRefs: ConversationRef[] = [];
