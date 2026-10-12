@@ -242,4 +242,14 @@ describe("GatewayChatClient connections", () => {
     setGateway({ mode: "remote", remote: { url: "wss://remote.example/rpc" } });
     await expect(resolveGatewayConnection({})).rejects.toThrow("Missing gateway auth credentials.");
   });
+
+  it("points to local chat instead of a token when no local Gateway is running", async () => {
+    loadConfig.mockReturnValue({});
+    await expect(resolveGatewayConnection({})).rejects.toThrow(
+      /No Gateway is running on this machine\.\nFix: run `openclaw chat`/,
+    );
+    // A running Gateway without stored pairing still needs a credential.
+    readActiveGatewayLockPortMock.mockResolvedValue(18789);
+    await expect(resolveGatewayConnection({})).rejects.toThrow("Missing gateway auth token.");
+  });
 });

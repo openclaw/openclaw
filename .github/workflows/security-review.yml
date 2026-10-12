@@ -5,6 +5,13 @@ on:
     types: [opened, reopened, synchronize, ready_for_review, edited, closed]
   issue_comment:
     types: [created, edited, deleted]
+  # Keep accepting already queued forwarding jobs while direct comment handling deploys.
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Pull request whose approval commands changed (accepted only from repository automation)
+        required: true
+        type: number
   workflow_run: # zizmor: ignore[dangerous-triggers] reads CI metadata only; never downloads artifacts or executes PR code
     workflows: [CI]
     types: [completed]
