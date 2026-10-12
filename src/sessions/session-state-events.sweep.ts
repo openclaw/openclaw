@@ -1,11 +1,6 @@
-import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
-import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { preparePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
-import {
-  captureSystemEventStoreCurrentCheck,
-  prepareSystemEventStorePath,
-} from "../infra/system-event-ownership.js";
+import { prepareSystemEventStorePath } from "../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
@@ -40,16 +35,7 @@ export async function sweepSessionStateWatchNotices(
       watchers.set(cursor.watcherSessionKey, cursors);
     }
     const cursors: SessionStateSweepAddress[] = [];
-    const checks: SessionEntryCurrentCheck[] = [];
-    const assertWatchersCurrent: Array<() => void> = [];
-    const assertCurrent = () => {
-      context.admission.assertCurrent();
-      for (const check of assertWatchersCurrent) {
-        check();
-      }
-    };
     for (const [sessionKey, addresses] of watchers) {
-      const isStoreCurrent = captureSystemEventStoreCurrentCheck(sessionKey);
       const storePath = await prepareSystemEventStorePath(sessionKey);
       const input = {
         sessionKey,
@@ -61,43 +47,14 @@ export async function sweepSessionStateWatchNotices(
             env: context.initializationEnvironment,
           })),
       };
-      const loaded = await withSessionEntryReadOnlyInWorker(
+      const exists = await withSessionEntryReadOnlyInWorker(
         input,
-        assertCurrent,
-        async (read, owner) =>
-          read.ok && read.value
-            ? {
-                sessionId: read.value.sessionId,
-                current: captureSessionEntryCurrentRead(input, owner),
-              }
-            : undefined,
+        () => context.admission.assertCurrent(),
+        async (read) => read.ok && Boolean(read.value),
       );
-      if (!loaded) {
-        continue;
+      if (exists) {
+        cursors.push(...addresses);
       }
-      const { sessionId, current } = loaded;
-      const check = () => {
-        current.assertSourceCurrent();
-        if (
-          (storePath !== undefined && !isStoreCurrent(storePath)) ||
-          (current.kind !== "file" && current.readCurrent()?.sessionId !== sessionId)
-        ) {
-          throw new Error("Session notice sweep lost its watcher");
-        }
-      };
-      check();
-      assertWatchersCurrent.push(check);
-      if (current.source) {
-        checks.push({
-          source: current.source,
-          assertCurrent(entry) {
-            if (entry?.sessionId !== sessionId) {
-              throw new Error("Session notice sweep watcher changed before commit");
-            }
-          },
-        });
-      }
-      cursors.push(...addresses);
     }
     if (cursors.length > 0) {
       await runSessionWatchOperation(
@@ -105,23 +62,14 @@ export async function sweepSessionStateWatchNotices(
         async (scope) => {
           const notices = await scope.execute({
             type: "sessionState.sweep",
-            input: {
-              cursors,
-              now,
-              sessionEntryCurrentSources: checks.map((check) => check.source),
-            },
+            input: { cursors, now },
           });
-          assertCurrent();
+          // Sweeping is best effort; delivery still checks its current target and store.
           for (const notice of notices) {
             enqueueSessionStateNotice(notice);
           }
         },
-        assertCurrent,
-        {
-          sources: checks.map((check) => check.source),
-          assertCurrent: (entries) =>
-            checks.forEach((check, index) => check.assertCurrent(entries[index])),
-        },
+        () => context.admission.assertCurrent(),
       );
     }
     await pruneSessionStateEvents({ context, now, force: true });

@@ -2,7 +2,12 @@ import type {
   AgentDeletionInput,
   AgentDeletionJournalTransport,
 } from "../state/agent-deletion-journal-transport.js";
-import { readAgentDeletionJournalAsync } from "../state/agent-deletion-journal.js";
+import {
+  readAgentDeletionJournalAsync,
+  type AgentDeletionJournalEntry,
+  type AgentDeletionJournalCleanupPath,
+} from "../state/agent-deletion-journal.js";
+import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
 import type { OpenClawStateWorkerLeaseContext } from "../state/openclaw-state-lease-context.js";
 import { withOpenClawStateLeaseRemoteAdmission } from "../state/openclaw-state-lease-worker-owner.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -71,4 +76,26 @@ export async function rollbackRemoteAgentDeletionJournal(
     throw new AgentDeletionCommitUncertainError("Gateway rollback returned a journal");
   }
   owner.assertCurrent();
+}
+
+/** Publish the committed path fence before observers can consume the updated journal. */
+export function fenceAgentDeletionJournalPaths(
+  owner: AgentDeletionWorkerAuthority,
+  journal: AgentDeletionJournalEntry,
+  paths:
+    | { kind: "database"; paths: string[] }
+    | { kind: "cleanup"; paths: AgentDeletionJournalCleanupPath[] },
+): Promise<void> {
+  return owner.runWithWorker(
+    (scope, guard) => scope.execute({ type: "agentDeletion.fencePaths", input: { guard, paths } }),
+    {
+      onCommitted: () => {
+        if (paths.kind === "database") {
+          journal.databasePaths = paths.paths;
+        } else {
+          journal.cleanupPaths = paths.paths;
+        }
+      },
+    },
+  );
 }

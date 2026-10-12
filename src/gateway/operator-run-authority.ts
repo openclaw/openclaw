@@ -13,7 +13,6 @@ import {
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { capturePublishedOperatorDeviceSource } from "../infra/device-pairing-publication.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
@@ -319,7 +318,6 @@ export async function captureGatewayOperatorRunAuthority(input: {
   const revocation = new AbortController();
   const subscriptions: Array<(() => void) | undefined> = [];
   let preparedProfile: Awaited<ReturnType<typeof prepareUserProfileIdentity>> | undefined;
-  let pairingSource: ReturnType<typeof capturePublishedOperatorDeviceSource> | undefined;
   const assertProfileCurrent = () => {
     try {
       const profile = preparedProfile?.readCurrentProfile();
@@ -380,7 +378,6 @@ export async function captureGatewayOperatorRunAuthority(input: {
         throw new Error("operator source authority is no longer active");
       }
       assertSources();
-      pairingSource?.assertCurrent();
       if (revoked || references === 0) {
         throw new Error("operator execution authority is no longer active");
       }
@@ -414,13 +411,6 @@ export async function captureGatewayOperatorRunAuthority(input: {
   };
   const release = releaseHold();
   try {
-    const pairedIdentity = client.internal?.operatorDeviceTokenIdentity;
-    if (pairedIdentity) {
-      pairingSource = capturePublishedOperatorDeviceSource(pairedIdentity, scopes, () =>
-        revoke(new Error("operator device pairing changed; reconnect before continuing")),
-      );
-      subscriptions.push(pairingSource.release);
-    }
     const initialRoleConfig = {
       gateway: { roles: structuredClone(initialModelConfig.gateway?.roles) },
     };

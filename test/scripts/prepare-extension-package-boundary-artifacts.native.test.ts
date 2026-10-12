@@ -5,6 +5,7 @@ import { gzipSync, gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { runNodeStep } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
@@ -16,6 +17,28 @@ import {
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
+let preparationSources: string[] | undefined;
+
+function resolvePreparationSources() {
+  // Keep source-key hashing and git indexing scoped to this fixture's executable graph.
+  return (preparationSources ??= collectRuntimeImportClosure(
+    process.cwd(),
+    [
+      "scripts/prepare-extension-package-boundary-artifacts.mts",
+      "scripts/compile-extension-boundary.mts",
+      "scripts/run-tsgo.mjs",
+      "scripts/run-tsgo.mts",
+      "scripts/generate-kysely-types.mts",
+      "scripts/ci-sdk-declarations.mts",
+      "scripts/check-extension-package-tsc-boundary.mts",
+      "scripts/tsx.mjs",
+      // These launchers are selected by URL rather than module imports.
+      "scripts/lib/managed-memory-launcher.mts",
+      "scripts/lib/managed-windows-job-launcher.mts",
+    ],
+    { includeDynamicImports: true },
+  ));
+}
 
 function copyFixtureFiles(root: string, files: string[]) {
   for (const file of files) {
@@ -59,16 +82,9 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   write("src/plugin-sdk/core.ts", 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
   copyFixtureFiles(root, [
-    "scripts/prepare-extension-package-boundary-artifacts.mts",
-    "scripts/compile-extension-boundary.mts",
-    "scripts/run-tsgo.mjs",
-    "scripts/run-tsgo.mts",
-    "scripts/generate-kysely-types.mts",
-    "scripts/tsx.mjs",
-    "scripts/windows-cmd-helpers.mjs",
-    "scripts/lib",
+    // Selected-consumer fixtures install their extra src/ tools with a narrowed SDK config.
+    ...resolvePreparationSources().filter((file) => !file.startsWith("src/")),
     "src/shared/deferred.ts",
-    "packages/normalization-core/src",
     "packages/normalization-core/package.json",
   ]);
   write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
