@@ -10,11 +10,11 @@ sidebarTitle: "Advanced"
 
 ## Advanced configuration
 
-### Cloud quota in `/usage`
+### Cloud quota in `/status`
 
 Ollama 0.40.1 and later can proxy `GET /api/balance` through a signed-in local
 server. When the `ollama` provider has a configured local `apiKey: "ollama-local"`,
-OpenClaw includes its balance in `/usage` and `openclaw status --usage`. Legacy
+OpenClaw includes its balance in chat `/status` and `openclaw status --usage`. Legacy
 plans show session and weekly usage with reset times; current plans show the
 included balance and its period reset. Purchased credits appear separately.
 

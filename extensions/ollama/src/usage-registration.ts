@@ -27,17 +27,17 @@ export function createOllamaUsageHooks(): Pick<
         return { handled: true };
       }
       const baseUrl = readProviderBaseUrl(provider) ?? OLLAMA_DEFAULT_BASE_URL;
-      if (!isLocalOllamaBaseUrl(baseUrl)) {
+      const input = provider?.apiKey;
+      if (input === undefined || input === null) {
+        if (isLocalOllamaBaseUrl(baseUrl)) {
+          return { token: OLLAMA_DEFAULT_API_KEY };
+        }
         const token = ctx.resolveApiKeyFromConfigAndStore();
         return token ? { token } : { handled: true };
       }
 
-      // The shared resolver prefers ambient OLLAMA_API_KEY over the configured
-      // local marker. Resolve only this endpoint's explicit input for LAN URLs.
-      const input = provider?.apiKey;
-      if (input === undefined || input === null) {
-        return { token: OLLAMA_DEFAULT_API_KEY };
-      }
+      // Resolve this endpoint's explicit key before ambient Cloud credentials,
+      // regardless of whether the configured server is local or public.
       const resolved = await resolveConfiguredSecretInputString({
         config: ctx.config,
         env: ctx.env,
