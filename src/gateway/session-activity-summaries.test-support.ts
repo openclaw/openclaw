@@ -12,6 +12,7 @@ export const scope = {
 };
 export async function messages(count: number, start = 0) {
   await persistSessionTranscriptTurn(scope, {
+    expectedSessionId: scope.sessionId,
     messages: Array.from({ length: count }, (_, offset) => {
       const index = start + offset;
       return {
