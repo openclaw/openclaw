@@ -3,8 +3,15 @@ name: Security Review
 on:
   pull_request_target: # zizmor: ignore[dangerous-triggers] executes trusted workflow scripts only; never checks out PR code
     types: [opened, reopened, synchronize, ready_for_review, edited, closed]
-  issue_comment:
-    types: [created, edited, deleted]
+  # ClawSweeper Dispatch owns issue_comment admission: GitHub starts one run per
+  # subscribing workflow, so it forwards only approval-command creates, edits and
+  # deletions here. Approval itself is always read from live comments.
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Pull request whose approval commands changed (accepted only from repository automation)
+        required: true
+        type: number
   workflow_run: # zizmor: ignore[dangerous-triggers] reads CI metadata only; never downloads artifacts or executes PR code
     workflows: [CI]
     types: [completed]
@@ -26,17 +33,12 @@ permissions:
 jobs:
   resolve:
     # PR prose is not an approval input. Keep base/permission changes and
-    # unknown edit payloads, plus command edits/deletions that revoke approval.
+    # unknown edit payloads. Command activity arrives as an automation dispatch;
+    # the resolver rejects dispatches whose sender is not GitHub Actions.
     if: >-
       ${{ (github.event_name != 'pull_request_target' || github.event.action != 'edited' ||
       github.event.changes.base || github.event.changes.maintainer_can_modify ||
       (!github.event.changes.title && !github.event.changes.body)) &&
-      (github.event_name != 'issue_comment' || (github.event.issue.pull_request &&
-      (contains(github.event.comment.body, '/allow-security-sensitive-change') ||
-      contains(github.event.comment.body, '/allow-dependencies-change') ||
-      (github.event.action == 'edited' &&
-      (contains(github.event.changes.body.from, '/allow-security-sensitive-change') ||
-      contains(github.event.changes.body.from, '/allow-dependencies-change')))))) &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request' ||
       github.event.workflow_run.event == 'workflow_dispatch') }}
     # Rate-limit recovery can hold a scheduled resolver for an hour. GitHub keeps one

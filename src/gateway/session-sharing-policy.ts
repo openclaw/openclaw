@@ -1,4 +1,3 @@
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   ErrorCodes,
   errorShape,
@@ -28,12 +27,15 @@ import {
 } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
-import { captureIncognitoSessionMutationFacts } from "./session-sharing-incognito.js";
+import {
+  captureIncognitoSessionMutationFacts,
+  captureSessionActorMutationFacts,
+  captureSessionSharingActorBinding,
+} from "./session-sharing-incognito.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
   withGatewaySessionStoreTarget,
-  prepareGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreCache,
 } from "./session-utils-store-lookup.js";
@@ -108,12 +110,21 @@ function captureSessionSharingIncognitoTarget(params: {
     return undefined;
   }
   const { agentId, canonicalKey } = resolveSessionStoreIdentity(params);
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+  const memory = captureSessionSharingActorBinding({
+    agentId,
+    sessionKey: canonicalKey,
+    resolved: { storePath },
+  });
+  if (memory) {
+    return { kind: "memory" as const, binding: memory, canonicalKey, storePath };
+  }
   const binding = captureIncognitoSessionBinding({
     agentId,
     sessionKey: canonicalKey,
-    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+    storePath,
   });
-  return binding && { binding, canonicalKey };
+  return binding && { kind: "native" as const, binding, canonicalKey };
 }
 
 export function resolveSessionSharingTarget(params: {
@@ -127,11 +138,20 @@ export function resolveSessionSharingTarget(params: {
 }): SessionSharingTarget | null {
   const captured = captureSessionSharingIncognitoTarget(params);
   if (captured) {
-    return captureIncognitoSessionMutationFacts(
-      captured.binding,
-      captured.canonicalKey,
-      true,
-    ).readCurrent().target;
+    const facts =
+      captured.kind === "memory"
+        ? captureSessionActorMutationFacts(
+            captured.binding,
+            captured.canonicalKey,
+            true,
+            captured.storePath,
+          )
+        : captureIncognitoSessionMutationFacts(captured.binding, captured.canonicalKey, true);
+    const target = facts.readCurrent().target;
+    if (captured.kind === "memory" && target?.readSource) {
+      params.onReadSource?.(target.readSource);
+    }
+    return target;
   }
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
@@ -166,7 +186,22 @@ export async function withSessionSharingTarget<T>(
   retainedSelection?: GatewaySessionStoreSelection,
 ): Promise<T> {
   // Prepared sharing must enforce the same configured physical target as synchronous reads.
-  captureSessionSharingIncognitoTarget(params);
+  const captured = captureSessionSharingIncognitoTarget(params);
+  if (captured?.kind === "memory") {
+    const { binding, canonicalKey } = captured;
+    const facts = captureSessionActorMutationFacts(binding, canonicalKey, true, captured.storePath);
+    const { target, members } = facts.readCurrent();
+    return consume({
+      target,
+      storageTarget: {
+        agentId: facts.location.agentId,
+        canonicalKey,
+        storePath: facts.location.path,
+      },
+      members,
+      assertCurrent: () => facts.assertCurrent(),
+    });
+  }
   const read: Parameters<typeof withGatewaySessionStoreTarget<T>>[1] = (
     selected,
     membership,
@@ -226,27 +261,6 @@ function toSessionSharingTarget(
         readSource: target.capturedReadSource,
       }
     : null;
-}
-
-/** Prepare one synchronous batch while retaining each target's failure for ordered consumption. */
-export function prepareSessionSharingTargets(params: {
-  cfg: OpenClawConfig;
-  targets: readonly { sessionKey: string; agentId?: string }[];
-}): Array<Result<SessionSharingTarget | null, unknown>> {
-  return prepareGatewaySessionStoreTargetsReadOnly({
-    cfg: params.cfg,
-    targets: params.targets.map(({ sessionKey, agentId }) => ({ key: sessionKey, agentId })),
-    projection: "list",
-  }).map((result) => {
-    if (!result.ok) {
-      return result;
-    }
-    try {
-      return ok(toSessionSharingTarget(result.value));
-    } catch (error) {
-      return err(error);
-    }
-  });
 }
 
 export type SessionSharingRoleParams = {

@@ -244,8 +244,16 @@ function resolveSelectedImageGenerationModelId(params: {
   return params.imageGenerationModelConfig.primary ?? params.selectedProvider?.defaultModel;
 }
 
-export function createImageGenerateTool(options?: MediaGenerateToolOptions): AnyAgentTool | null {
-  const context = resolveMediaGenerateToolContext("imageGenerationProviders", options, log);
+export function createImageGenerateTool(
+  options?: MediaGenerateToolOptions,
+  preparedAvailability?: boolean,
+): AnyAgentTool | null {
+  const context = resolveMediaGenerateToolContext(
+    "imageGenerationProviders",
+    options,
+    log,
+    preparedAvailability,
+  );
   if (!context) {
     return null;
   }

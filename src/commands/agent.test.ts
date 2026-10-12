@@ -100,15 +100,21 @@ vi.mock("../config/io.js", () => ({
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
 }));
 
+// mock-isolation: Command fixtures use an empty credential map instead of host auth state.
 vi.mock("../agents/auth-profiles/store-runtime.js", () => {
   const createEmptyStore = () => ({ version: 1, profiles: {} });
   return {
     ensureAuthProfileStore: vi.fn(createEmptyStore),
+    ensureAuthProfileStoreAsync: vi.fn(async () => createEmptyStore()),
+    ensureAuthProfileStoreForLocalUpdateAsync: vi.fn(async () => createEmptyStore()),
+    ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => createEmptyStore()),
     ensureAuthProfileStoreForLocalUpdate: vi.fn(createEmptyStore),
     loadAuthProfileStore: vi.fn(createEmptyStore),
     loadAuthProfileStoreForRuntime: vi.fn(createEmptyStore),
+    loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => createEmptyStore()),
     loadAuthProfileStoreForSecretsRuntime: vi.fn(createEmptyStore),
     loadAuthProfileStoreWithoutExternalProfiles: vi.fn(createEmptyStore),
+    loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => createEmptyStore()),
     saveAuthProfileStore: vi.fn(),
     updateAuthProfileStoreWithLock: vi.fn(async () => createEmptyStore()),
   };
@@ -119,10 +125,9 @@ vi.mock("../agents/auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSourceAsync: vi.fn(() => false),
 }));
 
+// mock-isolation: ordinary command fixtures forward a prepared reply mode without loading session and harness policy state.
 vi.mock("../auto-reply/reply/session-stable-reply-mode.js", () => ({
-  // Session-stable policy has owner coverage in the reply resolver suite. This
-  // command suite only owns forwarding its result into CLI binding facts.
-  resolveSessionStableReplyMode: vi.fn(() => "automatic"),
+  resolveSessionStableReplyMode: vi.fn(async () => "automatic"),
 }));
 
 vi.mock("../agents/harness/selection.js", () => ({

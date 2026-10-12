@@ -67,8 +67,8 @@ import {
   type ImageSanitizationLimits,
 } from "./image-sanitization.js";
 import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   applySecretRefHeaderSentinels,
   requireApiKey,
 } from "./model-auth.js";
@@ -124,14 +124,17 @@ async function prepareBtwRuntimeAuth(params: {
 }) {
   const { model } = params;
   const storeOptions = { profileId: params.authProfileId, allowKeychainPrompt: false };
-  const loadStore = (externalCliProviderIds?: readonly string[]) =>
+  const loadStore = async (externalCliProviderIds?: readonly string[]) =>
     externalCliProviderIds
-      ? ensureAuthProfileStore(params.agentDir, { ...storeOptions, externalCliProviderIds })
-      : ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, storeOptions);
+      ? await ensureAuthProfileStoreAsync(params.agentDir, {
+          ...storeOptions,
+          externalCliProviderIds,
+        })
+      : await ensureAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir, storeOptions);
   let store: AuthProfileStore;
   let ignoreAutoPreferredProfile = false;
   if (isOpenAIProvider(model.provider)) {
-    store = loadStore(["openai"]);
+    store = await loadStore(["openai"]);
   } else {
     const selection = {
       provider: model.provider,
@@ -143,14 +146,14 @@ async function prepareBtwRuntimeAuth(params: {
         params.authProfileIdSource === "user" ? params.authProfileId : undefined,
     };
     let externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection(selection);
-    store = loadStore(externalCliAuthScope.providerIds);
+    store = await loadStore(externalCliAuthScope.providerIds);
     if (!externalCliAuthScope.providerIds) {
       externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
         ...selection,
         store,
       });
       if (externalCliAuthScope.providerIds) {
-        store = loadStore(externalCliAuthScope.providerIds);
+        store = await loadStore(externalCliAuthScope.providerIds);
       }
     }
     ignoreAutoPreferredProfile = externalCliAuthScope.ignoreAutoPreferredProfile;
