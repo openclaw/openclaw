@@ -20,7 +20,7 @@ export type NodePermissionRequest = NodePermissionDetails & {
 /** Read native error details without loading the protocol schema registry in the UI. */
 export function readNodePermissionDetails(value: unknown): NodePermissionDetails | undefined {
   const record = asProtocolRecord(value);
-  const state = NODE_PERMISSION_STATES.find((state) => state === record?.state);
+  const state = NODE_PERMISSION_STATES.find((candidate) => candidate === record?.state);
   if (
     !record ||
     !Array.isArray(record.capabilities) ||
