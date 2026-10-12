@@ -163,6 +163,40 @@ export function packageStatUnchanged(left: BigIntStats, right: BigIntStats): boo
   );
 }
 
+/**
+ * Re-stat every observed entry and refuse the tree if any of them changed.
+ *
+ * The sweep is batched rather than strictly sequential: on a large install a
+ * one-at-a-time pass is tens of thousands of syscalls, which stretches the walk
+ * past its deadline and widens the window a concurrent writer has to change a
+ * timestamp between the walk and this check. Bounding concurrency keeps the same
+ * refusal semantics while shrinking that window.
+ */
+const DRIFT_SWEEP_CONCURRENCY = 32;
+
+async function sweepForDrift(
+  observed: ReadonlyArray<{ file: string; stat: BigIntStats }>,
+  read: <T>(operation: () => Promise<T>) => Promise<T>,
+): Promise<void> {
+  for (let start = 0; start < observed.length; start += DRIFT_SWEEP_CONCURRENCY) {
+    const batch = observed.slice(start, start + DRIFT_SWEEP_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async (entry) => {
+        try {
+          const current = await read(() => fs.lstat(entry.file, { bigint: true }));
+          return packageStatUnchanged(entry.stat, current);
+        } catch {
+          // An entry that vanished or became unreachable is drift too.
+          return false;
+        }
+      }),
+    );
+    if (results.includes(false)) {
+      throw new Error("Package rollback tree changed during verification");
+    }
+  }
+}
+
 /** Read-only, bounded observations. These do not exclude writers or seal an inode. */
 export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_MS) {
   const now = () => performance.now();
@@ -536,16 +570,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       if (!version) {
         throw new Error("Package rollback version is unavailable");
       }
-      for (const entry of observed) {
-        if (
-          !packageStatUnchanged(
-            entry.stat,
-            await read(() => fs.lstat(entry.file, { bigint: true })),
-          )
-        ) {
-          throw new Error("Package rollback tree changed during verification");
-        }
-      }
+      await sweepForDrift(observed, read);
       if (legacy) {
         for (const { file, stat } of observed) {
           const relative = path.relative(root, file).split(path.sep).join("/");
