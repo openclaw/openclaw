@@ -155,7 +155,7 @@ it.each(["operator.admin", "operator.read"])(
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it("caps remote HTTP device reads and refuses the shared Gateway token", async () => {
+it("authenticates remote HTTP reads only from the grant and refuses reusable credentials", async () => {
   await withOpenClawTestState({ label: "remote-http-device-ceiling" }, async () => {
     const scopes = ["operator.admin"];
     const requested = await requestDevicePairing({
@@ -175,10 +175,10 @@ it("caps remote HTTP device reads and refuses the shared Gateway token", async (
       },
     });
     expect(token).not.toBeNull();
-    for (const credential of [token!.token, AUTH_TOKEN.token!]) {
+    for (const credential of [token!.token, AUTH_TOKEN.token!, undefined]) {
       const req = createRequest({
         path: "/control-ui-config.json",
-        authorization: `Bearer ${credential}`,
+        ...(credential ? { authorization: `Bearer ${credential}` } : {}),
         headers: { origin: "https://ui.example.test" },
         host: "ui.example.test",
       });
@@ -198,8 +198,8 @@ it("caps remote HTTP device reads and refuses the shared Gateway token", async (
           cfg: {},
           getRuntimeConfig: () => ({}),
         });
-        if (credential === token!.token) {
-          expect(result?.authMethod).toBe("device-token");
+        if (credential === undefined) {
+          expect(result?.authMethod).toBe("remote-ingress");
           expect(result?.operatorScopes).toEqual(["operator.read"]);
         } else {
           expect(result).toBeNull();
