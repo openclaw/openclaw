@@ -290,6 +290,7 @@ export async function createDoctorMaintenanceState(options: {
           return repairDoctorSqliteNoCow({
             paths,
             stateDir,
+            env: selectedEnv,
             assertCurrent: () => assertOwnerCurrent(databasePath),
           });
         });
