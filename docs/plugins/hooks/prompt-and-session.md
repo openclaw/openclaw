@@ -329,6 +329,13 @@ decisions within a run; without a key, it hashes the instruction.
 key to avoid sharing a budget with another plugin. A harness can apply a
 tighter overall revision limit; the embedded runner allows at most three.
 
+The embedded runner honors a revision after the run has called tools, including
+tools with side effects. It rewinds only the rejected draft: completed tool
+calls and their results stay in the transcript and are not replayed. The
+revision pass is still a normal model turn, so the model can call tools again;
+the revision prompt asks it not to repeat completed work, and a plugin can
+repeat that in its `reason` or `retry.instruction`.
+
 Conversation access and prompt mutation have separate permission gates; see
 [Permissions and scope](/plugins/hooks#permissions-and-scope) before enabling these hooks.
 

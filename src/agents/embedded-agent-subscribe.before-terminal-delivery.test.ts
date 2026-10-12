@@ -216,6 +216,28 @@ describe("terminal delivery gate", () => {
       }
     },
   );
+
+  it.each([
+    { toolName: "exec", hadSideEffect: true },
+    { toolName: "read", hadSideEffect: false },
+  ])(
+    "reports the side effect of $toolName to the gate and keeps it in the replay state",
+    async ({ toolName, hadSideEffect }) => {
+      const onBeforeTerminalDelivery = vi.fn(async () => ({
+        suppressTerminalDelivery: true as const,
+      }));
+      const h = setup({ onBeforeTerminalDelivery, replaySafeToolNames: new Set(["read"]) });
+      h.tool(toolName);
+      const message = answer("Draft answer.");
+      h.message(message);
+      h.end([message]);
+      await h.drain();
+      expect(onBeforeTerminalDelivery).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ hadDeterministicSideEffect: hadSideEffect }),
+      );
+      expect(h.subscription.getReplayState().hadPotentialSideEffects).toBe(hadSideEffect);
+    },
+  );
 });
 
 describe("delivery failures", () => {

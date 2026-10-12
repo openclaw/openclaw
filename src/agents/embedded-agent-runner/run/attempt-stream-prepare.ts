@@ -269,12 +269,9 @@ function prepareStream(
               return;
             }
             if (outcome.action === "revise") {
-              if (event.hadDeterministicSideEffect) {
-                log.warn(
-                  `before_agent_finalize requested revision after potential side effects; not rewinding ` +
-                    `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
-                );
-              } else if (!event.assistantEntryId) {
+              // The revision rewinds only the rejected draft: completed tool calls and results stay
+              // on the branch and nothing is replayed, so earlier side effects do not veto it.
+              if (!event.assistantEntryId) {
                 log.warn(
                   `before_agent_finalize revision lacks a persisted assistant entry; not rewinding ` +
                     `runId=${attempt.runId} sessionId=${attempt.sessionId}`,

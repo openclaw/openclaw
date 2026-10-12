@@ -397,6 +397,60 @@ describe("prepareEmbeddedAttemptStream", () => {
     },
   );
 
+  describe("before_agent_finalize revision after side effects", () => {
+    function prepareFinalizeGate() {
+      const prepared = prepareCatalogExecutor({
+        attempt: {
+          runId: "run-finalize-effects",
+          sessionId: "session-finalize-effects",
+          maxBeforeAgentFinalizeRevisions: 3,
+          beforeAgentFinalizeRevisionAttempts: 0,
+        },
+        activeSession: {
+          agent: { hasQueuedMessages: () => false },
+          isStreaming: false,
+          messages: [],
+          pendingMessageCount: 0,
+          subscribe: () => () => {},
+        } as never,
+        hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
+      });
+      const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
+        onBeforeTerminalDelivery: (event: unknown) => Promise<unknown>;
+      };
+      return { prepared, decide: subscriptionInput.onBeforeTerminalDelivery };
+    }
+
+    it("honors a revision after side effects as a draft-only rewind", async () => {
+      mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "revise", reason: "Fix the markup" });
+      const { prepared, decide } = prepareFinalizeGate();
+      try {
+        await expect(
+          decide({ ...createBeforeFinalizeEvent(), hadDeterministicSideEffect: true }),
+        ).resolves.toEqual({ suppressTerminalDelivery: true });
+        expect(prepared.getBeforeAgentFinalizeRevisionEntryId()).toBe("canonical-entry-id");
+        expect(prepared.getBeforeAgentFinalizeRevisionReason()).toBe("Fix the markup");
+      } finally {
+        prepared.subscription.unsubscribe();
+      }
+    });
+
+    it("still ignores a revision that has no persisted assistant entry", async () => {
+      mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "revise", reason: "Fix the markup" });
+      const { prepared, decide } = prepareFinalizeGate();
+      try {
+        const { assistantEntryId: _omitted, ...event } = createBeforeFinalizeEvent();
+        await expect(decide({ ...event, hadDeterministicSideEffect: true })).resolves.toBe(
+          undefined,
+        );
+        expect(prepared.getBeforeAgentFinalizeRevisionEntryId()).toBeUndefined();
+        expect(prepared.getBeforeAgentFinalizeRevisionReason()).toBeUndefined();
+      } finally {
+        prepared.subscription.unsubscribe();
+      }
+    });
+  });
+
   it("keeps already-started steering authoritative over finalization", async () => {
     let resolveSteer: (() => void) | undefined;
     const activeSession = {

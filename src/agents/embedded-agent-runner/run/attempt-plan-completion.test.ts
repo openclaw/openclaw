@@ -389,7 +389,7 @@ it.each([
   { owner: "provider refusal", checks: 0 },
   { owner: "output limited", checks: 0 },
   { owner: "hook budget exhausted", checks: 1 },
-  { owner: "side-effecting hook revision", checks: 1 },
+  { owner: "side-effecting hook revision", checks: 0 },
 ])("preserves $owner policy with $checks completion checks", async ({ owner, checks }) => {
   const completionCheck = { unfinishedPlan: false, checked: false };
   const plan = [{ step: "Remaining repair", status: "pending" as const }];
@@ -470,6 +470,11 @@ it.each([
   expect(completionCheck.checked).toBe(checks > 0);
   if (owner === "hook budget exhausted") {
     expect(onFinalize).not.toHaveBeenCalled();
+  }
+  if (owner === "side-effecting hook revision") {
+    expect(prepared.getBeforeAgentFinalizeRevisionReason()).toContain("Check the remaining work");
+    expect(prepared.getBeforeAgentFinalizeRevisionEntryId()).toEqual(expect.any(String));
+    expect(session.messages.filter((message) => message.role === "toolResult")).toHaveLength(1);
   }
   if (checks > 0) {
     expect(prepared.getBeforeAgentFinalizeRevisionReason()).toBeUndefined();
