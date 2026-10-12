@@ -23,7 +23,7 @@ import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-se
 import { withClaudeProjectsDir } from "./cli-session-history.test-support.js";
 import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
-import { readChatHistoryMessageId } from "./session-history-tail.js";
+import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
 import { archiveSessionTranscriptPaths } from "./session-transcript-files.fs.js";
 
 it("serves a captured history prefix while both transcripts append and observes the next revision", async () => {
@@ -532,6 +532,7 @@ it("pages merged incognito CLI history without allocating SQLite", async () => {
       sessionKey: "agent:main:incognito:cli-memory",
       storePath: path.join(homeDir, "sessions.json"),
     };
+    const media = [{ kind: "image", contentType: "image/png", path: "/media/inbound/test.png" }];
     const local = [
       { role: "user", content: "repeat", timestamp: 1000, __openclaw: { id: "first", seq: 1 } },
       {
@@ -554,7 +555,7 @@ it("pages merged incognito CLI history without allocating SQLite", async () => {
         __openclaw: {
           id: "photo",
           seq: 4,
-          media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/test.png" }],
+          media,
         },
       },
     ];
@@ -586,7 +587,9 @@ it("pages merged incognito CLI history without allocating SQLite", async () => {
     const readers: CliHistoryReaders = {
       readSessionMessagesPageWithStatsAsync: async (_scope, options) => ({
         messages: local
-          .filter((message) => message.__openclaw.seq < (options.beforeSeq ?? Infinity))
+          .filter(
+            (message) => readChatHistoryMessageSeq(message)! < (options.beforeSeq ?? Infinity),
+          )
           .slice(-options.maxMessages),
         totalMessages: local.length,
         transcriptSource: "active",
@@ -638,7 +641,7 @@ it("pages merged incognito CLI history without allocating SQLite", async () => {
           __openclaw: {
             id: "photo",
             externalId: "native-photo",
-            media: local[3]!.__openclaw.media,
+            media,
           },
         },
         { content: "Native only", __openclaw: { id: "native-only" } },

@@ -260,7 +260,9 @@ async function patchSessionEntryInScope(
     options,
     sessionKey: scope.sessionKey,
   });
-  if (memory) return memory.entry;
+  if (memory) {
+    return memory.entry;
+  }
   const resolved = resolveSqliteScope(scope);
   if (databaseAgentId) {
     resolved.databaseAgentId = databaseAgentId;
@@ -318,7 +320,9 @@ async function patchSessionEntryTargetInScope(
     { ...scope, sessionKey: scope.target.canonicalKey },
     { update, options, sessionKey: scope.target.canonicalKey },
   );
-  if (memory) return memory.entry;
+  if (memory) {
+    return memory.entry;
+  }
   const source = scope.readSource;
   const resolved: ResolvedSqliteScope = source
     ? {
@@ -483,8 +487,7 @@ async function patchSqliteSessionEntrySnapshot(
         const locality: "same-store" | "cross-store" =
           !source.nativeSource &&
           source.checks.every(
-            ({ predicate }) =>
-              targetIdentity.key === `file:${String(predicate.source.databaseIdentity)}`,
+            ({ predicate }) => targetIdentity.key === `file:${predicate.source.databaseIdentity}`,
           )
             ? "same-store"
             : "cross-store";

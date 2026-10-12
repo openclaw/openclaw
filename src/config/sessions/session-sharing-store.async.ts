@@ -95,8 +95,8 @@ export async function runSessionCollaborationWrite<
       {
         authority: owner.authority,
         lifetime: {
-          assertCurrent: owner.authority.assertCurrent,
-          assertReadable: owner.authority.assertCurrent,
+          assertCurrent: () => owner.authority.assertCurrent(),
+          assertReadable: () => owner.authority.assertCurrent(),
         },
       },
       async (memory) => {

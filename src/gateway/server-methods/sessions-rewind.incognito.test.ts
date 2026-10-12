@@ -105,7 +105,7 @@ it.each(mutationMethods)("acquires memory history for unbound %s", async (method
       expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
     } finally {
       sql.restore();
-      await memorySessionActorOwners.closeDatabase(captured);
+      memorySessionActorOwners.closeDatabase(captured);
     }
   });
 });

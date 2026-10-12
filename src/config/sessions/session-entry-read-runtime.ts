@@ -96,7 +96,7 @@ export async function withSessionEntryReadOnlyInWorker<T>(
     const entry = memory.read(input.sessionKey, input.projection);
     return consume(ok(entry), {
       kind: "incognito",
-      assertCurrent: memory.assertCurrent,
+      assertCurrent: () => memory.assertCurrent(),
       source: memory.source,
     });
   }
@@ -229,7 +229,10 @@ export function createSessionEntryListReader(
 ) {
   const memory = captureMemoryExactSessionReader(input);
   if (memory) {
-    return async () => ({ entries: memory.entries("list"), assertCurrent: memory.assertCurrent });
+    return async () => ({
+      entries: memory.entries("list"),
+      assertCurrent: () => memory.assertCurrent(),
+    });
   }
   const scope = { ...input, env: cloneEnvWithPlatformSemantics(input.env ?? process.env) };
   let snapshot: SessionEntryListWorkerResult = { kind: "session-entry-list", entries: [] };
@@ -485,7 +488,7 @@ export async function withSessionEntriesFromStoreInWorker<T>(
           }
         : {}),
     };
-    return consume({ result, database, assertCurrent: memory.assertCurrent });
+    return consume({ result, database, assertCurrent: () => memory.assertCurrent() });
   }
   const request = captureSessionEntryWorkerRequest(input);
   return withSessionStoreReaderInWorker(

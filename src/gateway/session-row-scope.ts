@@ -150,7 +150,7 @@ export function createSessionRowRegistryRead(owner: {
                   ) &&
                   captured.some(
                     (store) =>
-                      `file:${String(store.identity)}` === source.identity &&
+                      `file:${store.identity}` === source.identity &&
                       store.target.agentId === source.agentId,
                   ),
               ),

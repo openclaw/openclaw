@@ -86,7 +86,7 @@ async function handleChatSendWithStorage(
     onAdmissionOwned,
     { ...options, isDirectExternalUser },
     diagnostics,
-    storage?.release,
+    storage ? () => storage.release() : undefined,
   );
   if (!setup) {
     return;

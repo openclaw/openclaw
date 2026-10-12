@@ -287,7 +287,7 @@ describe("SessionManager selected memory actor", () => {
   it("keeps the owner after the opening caller releases and releases operation handles on failure", async () => {
     const { actor, target, run, owner, storage } = await fixture("operation-lifetime");
     const acquired: Awaited<ReturnType<typeof storage.acquire>>[] = [];
-    const acquire = storage.acquire;
+    const acquire = storage.acquire.bind(storage);
     vi.spyOn(storage, "acquire").mockImplementation(async (...args) => {
       const handle = await acquire(...args);
       acquired.push(handle);

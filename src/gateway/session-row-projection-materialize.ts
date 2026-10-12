@@ -342,7 +342,10 @@ export function readSessionRowEntry(row: records.Row) {
     }
     const memory = captureSessionActorStorageOwner(
       { ...row.storeTarget, sessionKey: row.key },
-      { assertCurrent: source.assertCurrent, authorize: source.assertCurrent },
+      {
+        assertCurrent: () => source.assertCurrent(),
+        authorize: () => source.assertCurrent(),
+      },
     );
     return memory?.owner?.readSession(row.key, memory.authority)?.entry;
   }

@@ -631,8 +631,8 @@ export async function resolveSessionParentForkDecision(params: {
         {
           authority,
           lifetime: {
-            assertCurrent: authority.assertCurrent,
-            assertReadable: authority.assertCurrent,
+            assertCurrent: () => authority.assertCurrent(),
+            assertReadable: () => authority.assertCurrent(),
           },
         },
         (memory) =>

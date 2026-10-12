@@ -276,7 +276,7 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
 
 it("preserves unbound memory and durable files while an absent memory namespace stays absent", async () => {
   const nativeEnv = { OPENCLAW_STATE_DIR: dirs.make("files-native-control-") };
-  const storePath = path.join(
+  const controlStorePath = path.join(
     nativeEnv.OPENCLAW_STATE_DIR,
     "agents",
     "main",
@@ -285,7 +285,7 @@ it("preserves unbound memory and durable files while an absent memory namespace 
   );
   const originalCfg = cfg;
   await writeFile(path.join(workspace, "control.txt"), "native control\n");
-  cfg = { ...cfg, session: { store: storePath } };
+  cfg = { ...cfg, session: { store: controlStorePath } };
   setRuntimeConfigSnapshot(cfg);
   try {
     for (const sessionKey of [
@@ -293,7 +293,7 @@ it("preserves unbound memory and durable files while an absent memory namespace 
       "agent:main:durable-files",
     ]) {
       await replaceSessionEntry(
-        { sessionKey, storePath, env: nativeEnv },
+        { sessionKey, storePath: controlStorePath, env: nativeEnv },
         {
           ...entry,
           sessionId: sessionKey,

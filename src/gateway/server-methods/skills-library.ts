@@ -179,7 +179,7 @@ export async function activateLibrarySelection(
       sessionActivation: "next-turn" as const,
     };
   } finally {
-    await selected?.release?.();
+    selected?.release();
   }
 }
 
@@ -356,7 +356,7 @@ export const skillsLibraryHandlers: GatewayRequestHandlers = {
         }
         return result;
       } finally {
-        await session?.release?.();
+        session?.release();
       }
     },
   ),
@@ -387,7 +387,7 @@ export const skillsLibraryHandlers: GatewayRequestHandlers = {
           { revision: pin.revision, assertSessionAccess: session.assertCurrent },
         );
       } finally {
-        await session.release?.();
+        session.release();
       }
     },
   ),

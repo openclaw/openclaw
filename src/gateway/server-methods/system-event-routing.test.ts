@@ -95,7 +95,9 @@ describe("system-event routing", () => {
       },
       { authority, lifetime: { assertCurrent() {}, assertReadable() {} }, create: true },
     );
-    if (!binding) throw new Error("Memory session fixture was not acquired");
+    if (!binding) {
+      throw new Error("Memory session fixture was not acquired");
+    }
     try {
       expect(
         await binding.actor.storage.mutate(

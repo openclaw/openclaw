@@ -142,7 +142,9 @@ export async function withSessionManagerWrite<T>(
     detachedWriterQueues.set(manager, queues);
     return trackAsyncWork(() =>
       withSessionManagerMemoryActor(incognitoBinding, true, async (selected) => {
-        if (!selected) throw new Error("Session manager lost its memory owner");
+        if (!selected) {
+          throw new Error("Session manager lost its memory owner");
+        }
         return selected.actor.withPhase(
           "session-manager.write",
           { assertCurrent, authorize() {} },
@@ -252,7 +254,9 @@ export async function appendSessionTranscriptNote(
       { getSessionTarget: () => captured, getSessionId: () => captured.sessionId },
       async (admission) => {
         const actor = admission && !("db" in admission.database) ? admission.database : undefined;
-        if (!actor || !admission) throw new Error("Missing memory session write admission");
+        if (!actor || !admission) {
+          throw new Error("Missing memory session write admission");
+        }
         const redactionRevision = getSecretRedactionRegistryRevision();
         const redactionCurrent = captureLoggingRedactionPatternGuard(
           append.config?.logging?.redactPatterns,

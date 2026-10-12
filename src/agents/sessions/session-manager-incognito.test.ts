@@ -76,11 +76,15 @@ async function captureCommitRevocation(
 ) {
   let current = true;
   const unsubscribe = sessionChanges.subscribeFacts((change) => {
-    if ("sessionKey" in change && change.sessionKey === target.sessionKey) current = false;
+    if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
+      current = false;
+    }
   });
   try {
     await operation(() => {
-      if (!current) throw new Error("Caller revoked after commit");
+      if (!current) {
+        throw new Error("Caller revoked after commit");
+      }
     });
   } catch (error) {
     return error;
@@ -166,7 +170,9 @@ it("advances the CLI writer boundary through metadata commits and refuses revoke
     }));
     let current = true;
     const assertCurrent = () => {
-      if (!current) throw new Error("CLI writer revoked");
+      if (!current) {
+        throw new Error("CLI writer revoked");
+      }
     };
     await runWithCliHistoryWriter(
       {
@@ -228,7 +234,9 @@ it("rolls back fresh-message refusal and checks queued caller authority before m
   const refused = withSessionManagerWriteAssertion(
     manager,
     () => {
-      if (!current) throw new Error("writer revoked");
+      if (!current) {
+        throw new Error("writer revoked");
+      }
     },
     () => manager.appendCustomEntryAsync("refused"),
   );
@@ -299,8 +307,11 @@ it.each(["registry", "pattern"] as const)(
         authorize(stage: "transaction" | "commit") {
           if (stage === "commit" && !changed) {
             changed = true;
-            if (policy === "registry") registerSecretValueForRedaction(marker);
-            else patterns.push(marker);
+            if (policy === "registry") {
+              registerSecretValueForRedaction(marker);
+            } else {
+              patterns.push(marker);
+            }
           }
         },
       },

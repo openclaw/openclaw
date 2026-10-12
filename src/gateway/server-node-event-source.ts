@@ -70,8 +70,8 @@ export async function withNodeEventSessionSource(
     { sessionKey: requestedKey },
     {
       lifetime: {
-        assertCurrent: namespace.authority.assertCurrent,
-        assertReadable: namespace.authority.assertCurrent,
+        assertCurrent: () => namespace.authority.assertCurrent(),
+        assertReadable: () => namespace.authority.assertCurrent(),
       },
       authority: namespace.authority,
     },

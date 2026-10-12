@@ -236,7 +236,6 @@ export function mergeCliHistoryRow(
 ): boolean {
   const { matchExternal, matchImage, matchers, minimumOrder, consume } = store;
   const advance = (
-    imported: Pick<HistoryRow, "role" | "text" | "undecorated_text" | "routed_key">,
     matched: Pick<HistoryRow, "id" | "text" | "routed_key">,
     matchedKey?: string,
   ) => {
@@ -265,7 +264,7 @@ export function mergeCliHistoryRow(
   let duplicate = imported.external_key ? matchExternal(imported.external_key) : undefined;
   let matchedKey: string | undefined;
   if (duplicate) {
-    advance(imported, duplicate);
+    advance(duplicate);
     return true;
   }
   if (imported.image_mentions && imported.image_key) {
@@ -320,7 +319,7 @@ export function mergeCliHistoryRow(
       metadata: metadataChanged ? JSON.stringify(meta) : duplicate.metadata,
       external_key: resolveImportedExternalIdentityKey(meta) ?? null,
     });
-    advance(imported, duplicate, matchedKey);
+    advance(duplicate, matchedKey);
     return true;
   }
   return false;

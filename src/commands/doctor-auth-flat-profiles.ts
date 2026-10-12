@@ -1557,7 +1557,7 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
       const native =
         "agentId" in database ? readOpenClawAgentDatabaseIdentity(database) : undefined;
       const identity = native
-        ? { key: `file:${String(native.identity)}`, birthtime: native.birthtime }
+        ? { key: `file:${native.identity}`, birthtime: native.birthtime }
         : requireOpenClawStateDatabaseIdentity(database);
       if (identity.key !== target.identity.key) {
         throw new Error("Auth profile database generation changed after backup; retry Doctor.");

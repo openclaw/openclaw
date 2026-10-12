@@ -47,8 +47,8 @@ export function createMemoryTrajectoryRuntimeSink(
       binding?.actor ??
       (sessionKey
         ? await source.owner?.acquireExisting(sessionKey, {
-            assertCurrent: authority.assertCurrent,
-            assertReadable: authority.assertCurrent,
+            assertCurrent: () => authority.assertCurrent(),
+            assertReadable: () => authority.assertCurrent(),
           })
         : undefined);
     if (!actor) {

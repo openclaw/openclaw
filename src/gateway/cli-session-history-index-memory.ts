@@ -55,7 +55,7 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
         external.set(row.external_key, row);
       }
     };
-    this.order = [...this.messages.values()].sort((a, b) => a.id - b.id);
+    this.order = [...this.messages.values()].toSorted((a, b) => a.id - b.id);
     for (const row of this.order) {
       registerExternal(row);
       if (row.image_key) {

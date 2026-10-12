@@ -61,7 +61,9 @@ async function fixture(target = scope) {
     authority,
     create: true,
   });
-  if (!initial) throw new Error("Memory creation did not select the actor");
+  if (!initial) {
+    throw new Error("Memory creation did not select the actor");
+  }
   const actor = initial.actor;
   const created = await actor.storage!.mutate(
     {

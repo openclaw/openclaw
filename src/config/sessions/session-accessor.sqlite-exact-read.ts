@@ -290,7 +290,7 @@ export function retainSessionEntryKeyAbsence(params: {
         `Session "${params.canonicalKey}" has ambiguous stored identity. Select an unambiguous session; stored rows and history were not changed.`,
       );
     }
-    return { assertCurrent: memory.assertCurrent, release() {} };
+    return { assertCurrent: () => memory.assertCurrent(), release() {} };
   }
   const source = retainOpenClawAgentDatabaseReadOnly({
     agentId: capturedSource.agentId,

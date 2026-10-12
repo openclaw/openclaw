@@ -26,8 +26,8 @@ export async function listSessionSuggestions(
         {
           authority: memory.authority,
           lifetime: {
-            assertCurrent: memory.authority.assertCurrent,
-            assertReadable: memory.authority.assertCurrent,
+            assertCurrent: () => memory.authority.assertCurrent(),
+            assertReadable: () => memory.authority.assertCurrent(),
           },
         },
         (binding) => binding.actor.storage.read(query, binding.authority),

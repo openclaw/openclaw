@@ -109,7 +109,9 @@ it("checks current metadata at the effect without sending memory predicates to S
   const { binding, patch } = await fixture();
   await runWithSessionActorStorage(binding, async () => {
     const scope = { sessionKey, agentId: binding.agentId, storePath: binding.path };
-    const metadata = captureSessionEntryMetadataRead(scope, binding.authority.assertCurrent);
+    const metadata = captureSessionEntryMetadataRead(scope, () =>
+      binding.authority.assertCurrent(),
+    );
     const assertion = captureSessionEntrySourceAssertion({
       scope,
       expected: metadata?.readCurrent(),

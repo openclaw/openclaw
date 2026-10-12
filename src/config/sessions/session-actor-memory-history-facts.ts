@@ -298,7 +298,7 @@ export function readSessionActorMemoryHistoryFacts(
       const inputKeys = new Set(query.input.runIds.map(buildRunUserTurnIdempotencyKey));
       return navigation.visibleHistory.flatMap(({ event }, index) => {
         const message = asOptionalRecord(asOptionalRecord(event)?.message);
-        const meta = asOptionalRecord(message?.__openclaw);
+        const meta = asOptionalRecord(message?.["__openclaw"]);
         const runId = readSessionTranscriptRunId(message);
         const inputKey = message?.idempotencyKey ?? meta?.idempotencyKey;
         if (

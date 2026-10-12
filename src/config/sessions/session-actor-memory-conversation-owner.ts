@@ -44,7 +44,7 @@ export function createSessionActorMemoryConversationOwner(options: {
       editConversations() {
         return (changed ??= cloneSessionActorMemoryConversations(options.conversations()));
       },
-      entries: options.entries,
+      entries: () => options.entries(),
       get(key: string) {
         const state = options.get(key);
         if (state && !authorized.has(key)) {
@@ -106,7 +106,8 @@ export function createSessionActorMemoryConversationOwner(options: {
       // SAFETY: Cloning preserves the command key and its paired input variant.
       const captured = structuredClone(command) as SessionActorMemoryConversationCommand;
       return options.enqueue(() => {
-        const { context, commit } = transaction(authority, selectEligible);
+        const pending = transaction(authority, selectEligible);
+        const { context } = pending;
         const value =
           captured.type === "session.conversation.delivery.begin"
             ? beginSessionActorMemoryConversationDelivery(context, captured.input)
@@ -116,7 +117,7 @@ export function createSessionActorMemoryConversationOwner(options: {
         options.assertCurrent();
         authority.assertCurrent();
         const detached = structuredClone(value);
-        commit();
+        pending.commit();
         // SAFETY: The command key, input and dispatch output are paired by the closed domain contract.
         return detached as SessionActorMemoryConversationWrites[Key]["output"];
       });

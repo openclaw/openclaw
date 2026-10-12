@@ -198,8 +198,8 @@ export async function readPlacementSessionIdentityEvidence(
                 identities: group.identities,
                 env: prepared.env,
                 continuation: continuations.find(
-                  ({ path, owner }) =>
-                    path === group.database.path &&
+                  ({ path: continuationPath, owner }) =>
+                    continuationPath === group.database.path &&
                     owner.receipt.agentId === group.database.agentId,
                 )?.owner.receipt,
               });

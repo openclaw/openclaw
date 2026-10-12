@@ -48,7 +48,9 @@ async function withMemory<T>(
       create: true,
     },
   );
-  if (!binding) throw new Error("Expected memory session actor");
+  if (!binding) {
+    throw new Error("Expected memory session actor");
+  }
   memoryOwners.push(binding);
   try {
     return await runWithSessionActorStorage(binding, () => run(binding));
@@ -58,7 +60,9 @@ async function withMemory<T>(
 }
 
 afterEach(() => {
-  for (const options of memoryOwners.splice(0)) memorySessionActorOwners.closeDatabase(options);
+  for (const options of memoryOwners.splice(0)) {
+    memorySessionActorOwners.closeDatabase(options);
+  }
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -368,7 +372,7 @@ describe("incognito transcript access", () => {
         expect(
           entries
             .filter(({ entry }) => entry.archivedAt === undefined)
-            .map(({ sessionKey }) => sessionKey),
+            .map(({ sessionKey: entryKey }) => entryKey),
         ).toEqual([activeScope.sessionKey]);
         await expect(loadTranscriptEvents({ ...scope, sessionId: "archived" })).resolves.toEqual([
           event,

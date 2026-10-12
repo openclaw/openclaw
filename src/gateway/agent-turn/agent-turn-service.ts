@@ -538,7 +538,9 @@ export function createAgentTurnService(
               releaseCronContinuationClaimWithRecovery: cronContinuation.releaseWithRecovery,
             }),
           )
-          .finally(releaseSessionStorage)
+          .finally(async () => {
+            await releaseSessionStorage();
+          })
           .catch((error: unknown) => {
             preparedDispatch.releaseCallerAuthority?.();
             context.logGateway.warn(`agent execution cleanup failed: ${String(error)}`);

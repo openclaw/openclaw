@@ -714,7 +714,9 @@ test("reset deletion settles when its caller releases a memory actor during the 
     lifetime: { assertCurrent() {}, assertReadable() {} },
     authority: { assertCurrent() {}, authorize() {} },
   });
-  if (!borrowed) throw new Error("Expected the existing memory actor");
+  if (!borrowed) {
+    throw new Error("Expected the existing memory actor");
+  }
   try {
     expect(
       await deleteIncognitoSessionForReset({

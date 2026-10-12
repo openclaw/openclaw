@@ -88,14 +88,14 @@ function retainAcquisition(
   binding: Omit<SessionManagerMemoryBinding, "acquire">,
   selected: { actor: SessionActor },
 ): SessionManagerMemoryBinding {
-  const acquire = selected.actor.storage!.acquire;
-  const assertCurrent = binding.authority.assertCurrent;
+  const storage = selected.actor.storage!;
+  const assertCurrent = () => binding.authority.assertCurrent();
   return {
     ...binding,
     // Storage retains the owner factory, not a live manager handle. A new caller lifetime
     // lets this manager survive release of the caller that originally opened it.
     acquire: () =>
-      acquire(binding.target.sessionKey, { assertCurrent, assertReadable: assertCurrent }),
+      storage.acquire(binding.target.sessionKey, { assertCurrent, assertReadable: assertCurrent }),
   };
 }
 

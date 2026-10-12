@@ -57,8 +57,8 @@ export async function readSessionMembersInWorker(
         {
           authority: memory.authority,
           lifetime: {
-            assertCurrent: memory.authority.assertCurrent,
-            assertReadable: memory.authority.assertCurrent,
+            assertCurrent: () => memory.authority.assertCurrent(),
+            assertReadable: () => memory.authority.assertCurrent(),
           },
         },
         (binding) =>

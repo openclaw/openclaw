@@ -115,7 +115,9 @@ it("creates a fresh explicit incognito key under authorization captured before i
     });
     expect(resolved.error).toBeNull();
     const authorization = resolved.authorization;
-    if (!authorization) throw new Error("Expected retained session creation authorization");
+    if (!authorization) {
+      throw new Error("Expected retained session creation authorization");
+    }
     const retained = await prepareSessionSourceAuthority(authorization.assertCurrent);
     const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
     try {

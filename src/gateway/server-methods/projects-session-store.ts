@@ -2,6 +2,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
+import type { SessionActorStorageAuthority } from "../../config/sessions/session-actor-storage-contract.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import { prepareSessionRowSelection } from "../session-utils-list.js";
@@ -15,12 +16,12 @@ export function readMemoryProjectStores(assertCurrent: () => void) {
   const root = binding
     ? path.resolve(binding.path, "../../../..")
     : path.resolve(resolveStateDir());
-  const authority = {
+  const authority: SessionActorStorageAuthority = {
     assertCurrent() {
       assertCurrent();
       binding?.authority.assertCurrent();
     },
-    authorize: binding?.authority.authorize ?? (() => {}),
+    authorize: (...args) => binding?.authority.authorize(...args),
   };
   return memorySessionActorOwners
     .list()

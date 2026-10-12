@@ -272,8 +272,8 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     const actor =
       owner && sessionKey
         ? await owner.acquireExisting(sessionKey, {
-            assertCurrent: captured.authority.assertCurrent,
-            assertReadable: captured.authority.assertCurrent,
+            assertCurrent: () => captured.authority.assertCurrent(),
+            assertReadable: () => captured.authority.assertCurrent(),
           })
         : undefined;
     try {

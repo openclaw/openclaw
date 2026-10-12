@@ -110,11 +110,13 @@ export function createSessionActorTranscriptReader(
     }
     for (const [runId, messageSeq] of requested.runMessages) {
       const inputKey = buildRunUserTurnIdempotencyKey(runId);
-      const anchor = inputs.find(
-        ({ message }) =>
-          (message.idempotencyKey ?? message.__openclaw.idempotencyKey) === inputKey &&
-          !message.__openclaw.steerTargetRunId,
-      );
+      const anchor = inputs.find(({ message }) => {
+        const metadata = message["__openclaw"];
+        return (
+          (message.idempotencyKey ?? metadata.idempotencyKey) === inputKey &&
+          !metadata.steerTargetRunId
+        );
+      });
       const hidden = Boolean(
         messageSeq !== undefined &&
         anchor &&
@@ -122,14 +124,16 @@ export function createSessionActorTranscriptReader(
           anchor.message,
           subagentCoordination.isSubagentSession,
         ) &&
-        !inputs.some(
-          ({ seq, message }) =>
+        !inputs.some(({ seq, message }) => {
+          const metadata = message["__openclaw"];
+          return (
             seq > anchor.seq &&
             seq <= messageSeq &&
-            (message.__openclaw.steerTargetRunId === runId ||
+            (metadata.steerTargetRunId === runId ||
               readSessionTranscriptRunId(message) === runId) &&
-            !isSubagentCoordinationHistoryInput(message, subagentCoordination.isSubagentSession),
-        ),
+            !isSubagentCoordinationHistoryInput(message, subagentCoordination.isSubagentSession)
+          );
+        }),
       );
       let bySequence = runs.get(runId);
       if (!bySequence) {

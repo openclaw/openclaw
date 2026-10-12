@@ -108,7 +108,7 @@ export async function cleanupSessionLifecycleArtifactsCore(
                   input: { entries: plan.entries, artifacts: { input, windows: plan.windows } },
                 },
                 {
-                  authorize: memory.authority.authorize,
+                  authorize: (...args) => memory.authority.authorize(...args),
                   assertCurrent() {
                     memory.authority.assertCurrent();
                     assertDeletionCurrent();
@@ -158,7 +158,7 @@ export async function cleanupSessionLifecycleArtifactsCore(
   const source = useWorker
     ? openedIdentity
       ? {
-          key: `file:${String(openedIdentity.identity)}`,
+          key: `file:${openedIdentity.identity}`,
           birthtime: openedIdentity.birthtime,
           canonicalPath: openedIdentity.filename,
         }

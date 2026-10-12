@@ -79,8 +79,8 @@ export function captureIncognitoMemoryReader(scope: SessionTranscriptReadScope) 
         {
           authority: namespace.authority,
           lifetime: {
-            assertCurrent: namespace.authority.assertCurrent,
-            assertReadable: namespace.authority.assertCurrent,
+            assertCurrent: () => namespace.authority.assertCurrent(),
+            assertReadable: () => namespace.authority.assertCurrent(),
           },
         },
         consume,

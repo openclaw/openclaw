@@ -52,7 +52,9 @@ import { SessionManager } from "./session-manager.js";
 
 const memoryOwners: Array<{ agentId: string; path: string }> = [];
 afterEach(() => {
-  for (const owner of memoryOwners.splice(0)) memorySessionActorOwners.closeDatabase(owner);
+  for (const owner of memoryOwners.splice(0)) {
+    memorySessionActorOwners.closeDatabase(owner);
+  }
 });
 
 async function withSelectedTranscriptReader<T>(

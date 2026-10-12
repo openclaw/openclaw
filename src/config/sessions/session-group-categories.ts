@@ -24,23 +24,25 @@ export function updateSessionGroupCategoriesInWorker(params: {
   const owner = captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} });
   if (owner) {
     return (async () => {
-      const sessionKey =
+      const ownerSessionKey =
         owner.owner?.listSessions(owner.authority)[0]?.target.sessionKey ??
         (owner.binding?.agentId === owner.agentId && owner.binding.path === owner.path
           ? owner.binding.actor.target.sessionKey
           : undefined);
-      if (!sessionKey) return 0;
+      if (!ownerSessionKey) {
+        return 0;
+      }
       if (to !== undefined) {
         await ensureSessionGroupCatalog(scope.env ?? process.env);
       }
       return (
         (await withSessionActorStorage(
-          { ...scope, sessionKey },
+          { ...scope, sessionKey: ownerSessionKey },
           {
             authority: owner.authority,
             lifetime: {
-              assertCurrent: owner.authority.assertCurrent,
-              assertReadable: owner.authority.assertCurrent,
+              assertCurrent: () => owner.authority.assertCurrent(),
+              assertReadable: () => owner.authority.assertCurrent(),
             },
           },
           async (memory) => {

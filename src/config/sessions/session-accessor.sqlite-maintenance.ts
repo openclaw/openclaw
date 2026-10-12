@@ -428,8 +428,8 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
         return emptyResult();
       }
       const actor = await owner.acquireExisting(first.sessionKey, {
-        assertCurrent: authority.assertCurrent,
-        assertReadable: authority.assertCurrent,
+        assertCurrent: () => authority.assertCurrent(),
+        assertReadable: () => authority.assertCurrent(),
       });
       if (!actor) {
         return emptyResult();

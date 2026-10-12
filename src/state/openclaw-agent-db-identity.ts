@@ -85,7 +85,7 @@ export function assertOpenClawAgentDatabaseIdentity(
 ): void {
   const identity = readOpenClawAgentDatabaseIdentity(database);
   if (
-    `file:${String(identity.identity)}` !== expected.key ||
+    `file:${identity.identity}` !== expected.key ||
     (expected.birthtime !== undefined && identity.birthtime !== expected.birthtime) ||
     !isOpenClawAgentDatabasePathCurrent(database)
   ) {

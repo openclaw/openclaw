@@ -27,7 +27,9 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
 ): Promise<SessionPreviewItem[]> {
   const memory = captureSessionActorTranscriptRead(scope);
   if (memory) {
-    if (memory.missing) return [];
+    if (memory.missing) {
+      return [];
+    }
     return view === "display"
       ? (await memory.read("session.history.preview", { maxItems, maxChars })).items
       : readSessionModelPreviewItems(memory.target, maxItems, maxChars);

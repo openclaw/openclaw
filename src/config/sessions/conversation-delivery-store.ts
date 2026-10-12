@@ -144,8 +144,9 @@ function writeConversationDelivery(
           ? memory.binding
           : undefined;
       if (!binding) {
-        if (!memory.owner)
+        if (!memory.owner) {
           throw new ConversationDeliveryMissingError("Conversation delivery owner is missing");
+        }
         return type === "conversation.delivery.begin"
           ? memory.owner.mutateConversation(
               { type: "session.conversation.delivery.begin", input },
@@ -166,8 +167,9 @@ function writeConversationDelivery(
               { type: "session.conversation.delivery.transition", input },
               authority,
             );
-      if (outcome.kind === "rolled-back")
+      if (outcome.kind === "rolled-back") {
         throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
+      }
       return outcome.value;
     });
   }

@@ -22,7 +22,7 @@ export function captureNativeSessionEntryCurrentRead(
   }
   return {
     kind: memory.source ? "incognito" : "missing",
-    assertSourceCurrent: memory.assertCurrent,
+    assertSourceCurrent: () => memory.assertCurrent(),
     readCurrent() {
       return memory.read(scope.sessionKey, "list");
     },
