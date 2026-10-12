@@ -134,6 +134,27 @@ export function readResidentUserProfileRevision(profileId: string, pathname: str
   return catalog?.valid ? resolveCatalogProfile(catalog.rows, profileId) : undefined;
 }
 
+/** Sharing pickers consume the session projection's committed display catalog. */
+export function listResidentUserProfileDisplayFacts(options: OpenClawStateDatabaseOptions = {}) {
+  const catalog = profileCatalogs.get(profileCatalogPath(options));
+  const bindings = catalog && profileBindings.get(catalog.rows);
+  if (!catalog?.valid || !bindings) {
+    throw new Error("User profile catalog is not ready");
+  }
+  return [...catalog.rows.values()].map((profile) => ({
+    id: profile.id,
+    label:
+      profile.display_name?.trim() ||
+      profile.githubLogin ||
+      [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted((left, right) =>
+        Buffer.compare(Buffer.from(left), Buffer.from(right)),
+      )[0] ||
+      profile.id,
+    hasAvatar: profile.has_avatar === 1,
+    updatedAt: profile.updated_at,
+  }));
+}
+
 /** Projection readiness follows physical admission; warm checks never inspect SQLite. */
 export function isUserProfileCatalogReady(options: OpenClawStateDatabaseOptions = {}): boolean {
   const catalog = profileCatalogs.get(profileCatalogPath(options));

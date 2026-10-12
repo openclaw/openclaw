@@ -84,6 +84,35 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string }) => ({
+    entry: sessionEntries.get(params.key),
+  }),
+}));
+
+vi.mock("../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-runtime.js")>()),
+  withSessionEntriesFromStoreInWorker: async (
+    input: { sessionKeys?: readonly string[]; selection?: { sessionId: string } },
+    consume: (read: {
+      result: { entries: Array<{ sessionKey: string; entry: Record<string, unknown> }> };
+      assertCurrent: () => void;
+    }) => unknown,
+  ) =>
+    consume({
+      result: {
+        entries: [...sessionEntries].flatMap(([sessionKey, entry]) =>
+          input.sessionKeys?.includes(sessionKey) ||
+          (input.selection && entry.sessionId === input.selection.sessionId)
+            ? [{ sessionKey, entry }]
+            : [],
+        ),
+      },
+      assertCurrent: () => {},
+    }),
+}));
+
 vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: vi.fn(async () => ({ ok: true })),
 }));

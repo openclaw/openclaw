@@ -48,6 +48,7 @@ import {
 } from "../routing/session-key.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
+import { STATE_SCHEMA_MIGRATION_DESCRIPTIONS } from "../state/openclaw-state-db-contract.js";
 import { detectOpenClawStateDatabaseSchemaMigrations } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
@@ -179,10 +180,7 @@ import {
   autoMigrateLegacyStateDir,
   resolvePendingLegacyStateDirMigrationPaths,
 } from "./state-migrations.state-dir.js";
-import {
-  createStateSchemaMigrationStep,
-  describeStateSchemaMigration,
-} from "./state-migrations.state-schema.js";
+import { createStateSchemaMigrationStep } from "./state-migrations.state-schema.js";
 import { runLegacyStateMigrationSteps } from "./state-migrations.steps.js";
 import {
   detectLegacyTuiLastSessions,
@@ -559,7 +557,9 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (stateSchemaMigrations.length > 0) {
     for (const migration of stateSchemaMigrations) {
-      preview.push(`- Shared SQLite schema: ${describeStateSchemaMigration(migration)}`);
+      preview.push(
+        `- Shared SQLite schema: ${STATE_SCHEMA_MIGRATION_DESCRIPTIONS[migration.kind]}`,
+      );
     }
     preview.push(
       "- Rerun doctor after shared SQLite schema repair to detect plugin state migrations",

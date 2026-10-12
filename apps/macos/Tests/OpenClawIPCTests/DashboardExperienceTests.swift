@@ -26,18 +26,35 @@ struct DashboardExperienceTests {
                 waitForLoad: true,
                 reportErrors: false)
         }
-        await gate.waitUntilRequested()
-        let controller = try #require(manager._testController())
-        #expect(controller._testPendingNativeNavigation?.search == DashboardRouteMap.custodianOnboardingSearch)
+        do {
+            await gate.waitUntilRequested()
+            let controller = try #require(manager._testController())
+            #expect(controller._testPendingNativeNavigation?.search == DashboardRouteMap.custodianOnboardingSearch)
+            let loadingChanges = AsyncTestSignal()
+            let loadingObservation = controller.webView.observe(\.isLoading) { _, _ in
+                loadingChanges.notify()
+            }
+            defer { loadingObservation.invalidate() }
 
-        opening.cancel()
-        let result = await opening.value
-        await gate.release()
+            opening.cancel()
+            let result = await opening.value
+            // WebKit may publish the stopped load after native cancellation returns.
+            try await loadingChanges.wait("cancelled dashboard navigation") {
+                !controller.webView.isLoading
+            }
+            await gate.release()
 
-        #expect(throws: CancellationError.self) { try result.get() }
-        #expect(manager.openWindowCount(for: .primary) == 0)
-        #expect(controller._testPendingNativeNavigation == nil)
-        #expect(!controller.webView.isLoading)
+            #expect(throws: CancellationError.self) { try result.get() }
+            #expect(manager.openWindowCount(for: .primary) == 0)
+            #expect(controller._testPendingNativeNavigation == nil)
+            #expect(!controller.webView.isLoading)
+            #expect(!controller.isShowingFailurePage)
+        } catch {
+            opening.cancel()
+            await gate.release()
+            _ = await opening.value
+            throw error
+        }
     }
 
     @Test func `switching experiences retains documents and restores the selected Gateway`() async throws {

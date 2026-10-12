@@ -669,6 +669,7 @@ describe("session accessor seam", () => {
   );
 
   it("rejects a default-store transcript turn when the session id rotates mid-append", async () => {
+    setRuntimeConfigSnapshot({});
     // Caller omits storePath; resolveTranscriptTurnTarget derives the default
     // store. The guarded path must still apply so rotation is visible.
     const stateDir = path.join(tempDir, "state-rotate-default");

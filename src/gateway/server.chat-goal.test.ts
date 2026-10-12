@@ -23,6 +23,7 @@ import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-ru
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
+  collectActiveSessionWorkAdmissions,
   getSessionWorkAdmissionRelease,
   isSessionWorkAdmissionActive,
 } from "../sessions/session-lifecycle-admission.js";
@@ -241,10 +242,40 @@ async function waitForModelRun(count = 1) {
     getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] }),
   ]);
   expect(context.logGateway.error).not.toHaveBeenCalled();
-  expect(
-    runEmbeddedAgent.mock.calls,
-    JSON.stringify(vi.mocked(context.logGateway.warn).mock.calls),
-  ).toHaveLength(count);
+  let failureDiagnostic: string | undefined;
+  if (runEmbeddedAgent.mock.calls.length !== count) {
+    const entry = loadSessionEntry(scope());
+    failureDiagnostic = JSON.stringify({
+      warningCount: vi.mocked(context.logGateway.warn).mock.calls.length,
+      abortControllers: context.chatAbortControllers.size,
+      admissionScopes: [...collectActiveSessionWorkAdmissions()]
+        .filter(([, identities]) => identities.has(sessionKey))
+        .slice(0, 5)
+        .map(([activeScope, identities]) => ({
+          file: path.basename(activeScope),
+          matchesExpected: activeScope === storePath,
+          identityCount: identities.size,
+          includesExpectedSessionId: identities.has(sessionId),
+        })),
+      dedupe: [...context.dedupe]
+        .filter(([key]) => key.startsWith("chat:"))
+        .slice(0, 5)
+        .map(([key, cached]) => ({
+          key,
+          ok: cached.ok,
+          status: isRecord(cached.payload) ? cached.payload.status : undefined,
+          error: cached.error && { code: cached.error.code, message: cached.error.message },
+        })),
+      entry: entry && {
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+        status: entry.status,
+        lastRunId: entry.lastRunId,
+        abortedLastRun: entry.abortedLastRun,
+      },
+    });
+  }
+  expect(runEmbeddedAgent.mock.calls, failureDiagnostic).toHaveLength(count);
 }
 
 describe("Goal chat admission and continuation", () => {

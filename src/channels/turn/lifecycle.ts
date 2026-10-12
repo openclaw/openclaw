@@ -498,6 +498,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
     let effectivePayload = preparedPayload;
     let result: ChannelDeliveryResult | void = undefined;
     let directInfo: ChannelDeliveryInfo = info;
+    let releaseCustody: (() => void) | undefined;
     // Provider finalization may outlive the participant's async context.
     const emitMessageSentForDelivery = delivery.observeMessageSent
       ? getGroupThreadDispatchContext()
@@ -506,10 +507,11 @@ async function dispatchChannelTurnWithDeliveryOwner(
       : undefined;
     try {
       if (ownership === "routed-delivery" && operation.deliverWithProviderMessageSending) {
+        const custody = await createDirectPendingFinalCustody(effectivePayload, params.storePath);
+        releaseCustody = custody?.release;
         const providerInfo = {
           ...info,
-          ...(createDirectPendingFinalCustody(effectivePayload, params.storePath) ??
-            NO_PENDING_FINAL_CUSTODY),
+          ...(custody ?? NO_PENDING_FINAL_CUSTODY),
         };
         directInfo = providerInfo;
         result = await operation.deliverWithProviderMessageSending(effectiveValue, providerInfo);
@@ -536,7 +538,8 @@ async function dispatchChannelTurnWithDeliveryOwner(
           if (!operation.deliver) {
             throw new Error("channel delivery adapter is missing a direct deliverer");
           }
-          const custody = createDirectPendingFinalCustody(effectivePayload, params.storePath);
+          const custody = await createDirectPendingFinalCustody(effectivePayload, params.storePath);
+          releaseCustody = custody?.release;
           await custody?.onPlatformSendDispatch();
           result = await operation.deliver(effectiveValue, toCoreManagedDeliveryInfo(info));
         }
@@ -556,6 +559,12 @@ async function dispatchChannelTurnWithDeliveryOwner(
         );
       }
       throw error;
+    } finally {
+      if (releaseCustody && result?.finalization) {
+        void result.finalization.then(releaseCustody, releaseCustody);
+      } else {
+        releaseCustody?.();
+      }
     }
     const attempt: PendingChannelDeliveryAttempt = {
       state: "fulfilled",

@@ -113,6 +113,13 @@ cache refreshes. Row receipts do not grant permission, and a missing receipt is
 not proof of absence. Outside processes use the Gateway or exclusive offline
 ownership; ordinary readers do not poll for foreign commits.
 
+Memory retrieval workers borrow the existing agent read-only owner across query
+awaits and release each borrow before replying. The owner retains the idle reader
+and its prepared statements, with committed-write invalidation and physical-file
+replacement handled by its existing lifecycle. Vector-extension probing keeps a
+separate extension-capable connection. Search queries, ranking, result bounds,
+schemas, and update behavior are unchanged.
+
 Transcript readers retain bounded hot/cold facts under the existing session write
 receipts. Archive, restore, session deletion, and native writes invalidate those
 facts; an unknown receipt falls back to the durable marker. Each new transcript
@@ -457,7 +464,8 @@ Schemas, retained bytes, durability, and update behavior are unchanged.
 Bundled plugins obtain prepared currentness checks and compose entry commit guards
 through the `session-binding-runtime` facade. `captureSessionEntryCurrentCheckAsync`
 retains the selected session generation and optional conversation alternatives;
-its awaited effect check reads both in one existing reader-worker snapshot. Typed
+its awaited effect check reads both in one existing reader-worker snapshot. The
+returned `release()` ends the owning operation’s captured authority after settlement. Typed
 mutations carry the prepared source so the writer checks all alternatives in one
 batched conversation read and publishes matching branches through its transaction
 grant. Entry-only binding mutations carry `entryCurrent` through existing writer
@@ -596,7 +604,9 @@ reuses the database owner's admitted table and index facts.
 
 Durable Board writes with ordinary request callbacks use the existing worker.
 Cross-store source authority and native incognito retain their explicit native
-adapter. Board reads inside a transaction reuse its snapshot without a nested
+adapter. Cross-store writes check the captured target session identity once in
+the mutation kernel's transaction, without a second session-existence read.
+Board reads inside a transaction reuse its snapshot without a nested
 savepoint. Ambient-watch preparation uses the existing read worker; the released
 synchronous prompt adapter remains deprecated with a runtime warning.
 
@@ -1432,6 +1442,11 @@ Empty plugin-state receipts travel with native settlement instead of an addition
 early commit frame. They remain recorded at COMMIT and install before the operation
 completes. Nonempty and unknown-coverage receipts still publish immediately after
 COMMIT.
+
+Register-if-absent uses one conditional insert to preserve a live key or replace an
+expired key, including expired keys outside the bounded cleanup batch. A rejected
+capacity check rolls back both the insert and its staged receipt. The same kernel
+serves worker operations and the deprecated synchronous compatibility adapter.
 
 The Gateway retains bounded plugin-state observation rows from these receipts.
 Repeated observations reuse the stored JSON image without a worker request;
@@ -5169,6 +5184,17 @@ private rows retain facts only for the request's synchronous publication frame.
 Schemas, stored values, permissions, retention, and update behavior are unchanged.
 
 ## Migrate a caller
+
+Session node-artifact copies merge participant aggregates in their existing write
+transaction. Each upsert consumes the current destination row without a separate
+read: aliases in one store add their contributions, while retried cross-store
+repairs retain the largest count. Unknown first-input times remain unknown and
+the latest known input time survives. Ordinary durable entry creation,
+replacement, and reclamation use the existing entry or reclamation worker;
+shared kernels retain native receivers for incognito, exclusive maintenance,
+and released synchronous entry APIs. Opaque deletion callbacks are adapted to
+worker commit finalizers and do not force durable artifact SQL onto the host.
+This changes no schema, stored format, retention, or update behavior.
 
 Manual `sessions.compact` requests with `maxLines` retain their selected physical
 store and prepared caller and sharing authority through cold restoration. The

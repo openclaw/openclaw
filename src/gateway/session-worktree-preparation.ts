@@ -316,6 +316,7 @@ export async function prepareSessionWorktree(params: {
       cfg: params.cfg,
       agentId: target.agentId,
       sessionKey: target.key,
+      preparedSessionEntry: target.entry ?? null,
     }).sandboxed;
   let withSource = params.withSource;
   let withRollback = params.withRollback;

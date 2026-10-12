@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
@@ -96,7 +97,7 @@ describe("suggestion dispatch through real chat input custody", () => {
     }
     try {
       const response = await resolveSuggestion();
-      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
+      expect(fixture.beforeApprove, JSON.stringify(response.mock.calls)).toHaveBeenCalledOnce();
       expect(response).toHaveBeenCalledOnce();
       if (beforeCustody) {
         expect(await pendingAtApproval).toEqual([
@@ -124,6 +125,16 @@ describe("suggestion dispatch through real chat input custody", () => {
       });
       expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
       const recorder = await fixture.dispatchedRecorder;
+      let persistenceFailure: unknown;
+      const persistApproved = recorder.persistApproved.bind(recorder);
+      vi.spyOn(recorder, "persistApproved").mockImplementation(async (...args) => {
+        try {
+          return await persistApproved(...args);
+        } catch (error) {
+          persistenceFailure = error;
+          throw error;
+        }
+      });
       const acceptedResponse = structuredClone(response.mock.calls);
       linkEmail(email, mergedProfile.id);
       if (change === "host after custody") {
@@ -136,7 +147,10 @@ describe("suggestion dispatch through real chat input custody", () => {
       if (change === "profile after custody") {
         const transcript = loadTranscriptEventsSync(fixture.scope);
         expect(transcript).toHaveLength(fixture.activeTranscript.length + 1);
-        expect(transcript.at(-1)).toMatchObject({ message: { role: "user", content: text } });
+        expect(
+          transcript.at(-1),
+          `persistApproved failure: ${inspect(persistenceFailure, { depth: 8 })}`,
+        ).toMatchObject({ message: { role: "user", content: text } });
         expect(recorder.getAdmissionReceipt()).toBeDefined();
         expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
         const retry = await resolveSuggestion(mergedProfile.id);

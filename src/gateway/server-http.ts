@@ -290,7 +290,7 @@ export function createGatewayHttpServer(opts: {
         return undefined;
       }
 
-      if (probeKind === "outside") {
+      if (probeKind === "outside" || probeKind === "namespace") {
         await opts.waitForRequestRuntime?.();
       }
       const configSnapshot = loadGatewayConfig();

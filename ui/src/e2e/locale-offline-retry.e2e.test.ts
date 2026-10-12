@@ -70,15 +70,13 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      const picker = page.locator("#settings-language wa-select");
+      const picker = page.locator("#settings-language openclaw-select-picker");
       await picker.waitFor();
       expect(requests.size).toBe(0);
 
       for (const locale of SUPPORTED_LOCALES.slice(1)) {
-        await picker.evaluate((element, value) => {
-          (element as HTMLElement & { value: string }).value = value;
-          element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-        }, locale);
+        await picker.locator(".picker-select__trigger").click();
+        await picker.locator(`[role="option"][data-value="${locale}"]`).click();
         await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe(locale);
         expect(requests.get(locale)).toBe(1);
       }
@@ -116,13 +114,9 @@ suite.define(() => {
           "same-document";
       });
 
-      const languageSelect = page
-        .locator(".settings-row", { hasText: "Language" })
-        .locator("wa-select");
-      await languageSelect.evaluate((element) => {
-        (element as HTMLElement & { value: string }).value = "fr";
-        element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-      });
+      const languageSelect = page.locator("#settings-language openclaw-select-picker");
+      await languageSelect.locator(".picker-select__trigger").click();
+      await languageSelect.locator('[role="option"][data-value="fr"]').click();
 
       await expect.poll(() => abortedLocaleRequests).toBe(1);
       await page.locator(".settings-row__title", { hasText: "Language" }).waitFor();

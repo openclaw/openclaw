@@ -453,6 +453,14 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
       synced,
     );
     expect((await requireGit(remote, ["remote", "get-url", "origin"])).trim()).toBe(nodeOrigin);
+    await fs.writeFile(path.join(remote, "worker-commit.txt"), "node commit content\n");
+    await requireGit(remote, ["add", "worker-commit.txt"]);
+    await requireGit(remote, ["commit", "--quiet", "-m", "node-owned history"]);
+    const nodeCommit = (await requireGit(remote, ["rev-parse", "HEAD"])).trim();
+    const nodeBranch = (await requireGit(remote, ["branch", "--show-current"])).trim();
+    await requireGit(remote, ["pack-refs", "--all"]);
+    await fs.rm(path.join(remote, ".git", "shallow"));
+    await requireGit(remote, ["checkout", "--quiet", "--detach"]);
     for (const name of ["SOUL.md", "USER.md", "IDENTITY.md"]) {
       await fs.writeFile(path.join(localPath, name), `local bootstrap ${name}\n`);
     }
@@ -521,7 +529,23 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
       );
     }
     expect((await requireGit(localPath, ["rev-parse", "HEAD"])).trim()).toBe(gatewayCommit);
-    expect((await requireGit(remote, ["rev-parse", "HEAD"])).trim()).toBe(baseCommit);
+    expect((await requireGit(remote, ["rev-parse", "HEAD"])).trim()).toBe(nodeCommit);
+    expect((await requireGit(remote, ["rev-parse", `refs/heads/${nodeBranch}`])).trim()).toBe(
+      nodeCommit,
+    );
+    expect((await requireGit(remote, ["rev-parse", "--is-shallow-repository"])).trim()).toBe(
+      "false",
+    );
+    expect((await requireGit(remote, ["branch", "--show-current"])).trim()).toBe("");
+    expect((await requireGit(remote, ["remote", "get-url", "origin"])).trim()).toBe(nodeOrigin);
+    expect((await requireGit(remote, ["config", "--get", "remote.origin.fetch"])).trim()).toBe(
+      "+refs/heads/*:refs/remotes/origin/*",
+    );
+    for (const workspace of [localPath, remote]) {
+      expect(await fs.readFile(path.join(workspace, "worker-commit.txt"), "utf8")).toBe(
+        "node commit content\n",
+      );
+    }
     owner.abort();
     await expect(restored.reconcileWorkspace(request)).rejects.toThrow(
       "Node workspace transfer context is unavailable",

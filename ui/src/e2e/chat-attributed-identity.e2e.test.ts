@@ -15,6 +15,7 @@ import {
   readFooterGeometry,
   sampleMetadataReveal,
 } from "./chat-attributed-identity.test-support.ts";
+import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -241,6 +242,10 @@ suite.define(() => {
             const thread = page.locator(".chat-thread");
             await thread.focus();
             await thread.press("Home");
+            // Chromium drops a keyboard scroll that lands in the tail of the
+            // previous smooth one, so End must wait for Home to settle.
+            await waitForChatScrollIdle(page);
+            expect(await thread.evaluate((element) => element.scrollTop)).toBe(0);
             await thread.press("End");
             await expect
               .poll(() => thread.evaluate((element) => element.scrollTop))
