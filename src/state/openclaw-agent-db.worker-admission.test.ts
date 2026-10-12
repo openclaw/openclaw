@@ -75,6 +75,7 @@ function observeCallerSchemaInspections(...pathnames: string[]) {
 
 function expectAdmittedSchemaObjects(database: DatabaseSync) {
   const facts = getAdmittedSqliteSchemaFacts(database);
+  expect(facts?.textEncoding).toBe("UTF-8");
   expect(facts?.tables.has("session_nodes")).toBe(true);
   expect(facts?.indexes).toContain("idx_agent_session_nodes_updated_at");
   expect(facts?.triggers?.get("session_entry_snapshots_after_update")).toEqual({
@@ -213,6 +214,7 @@ it("admits cold storage in its worker and lends facts to every later native hand
     path: pathname,
   });
   assert(freshValidation);
+  expect(freshValidation.schema?.facts.textEncoding).toBe("UTF-8");
   expect(Atomics.load(new Int32Array(freshValidation.canonicalReady), 0)).toBe(1);
 
   // The next synchronous caller and an idle-reopened handle consume the same worker admission.
