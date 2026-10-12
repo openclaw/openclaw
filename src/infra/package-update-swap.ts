@@ -671,6 +671,7 @@ export async function swapStagedPackageInstall(
       }
     }
     activationCompleted = true;
+    await results.verifyLaunchers(shims);
     const postVerifyStep = params.postVerifyStep
       ? await runPackagePostInstallVerification(targetPackageRoot, params.postVerifyStep)
       : null;

@@ -32,7 +32,7 @@ async function writeStoredRuntime(packageRoot: string, store: string, generation
 }
 
 describe.skipIf(process.platform === "win32")("native package stage", () => {
-  it.each(["bun", "bun-launcher", "pnpm10", "pnpm11"] as const)(
+  it.each(["bun", "bun-launcher", "pnpm10", "pnpm11", "pnpm12"] as const)(
     "preserves the live %s project and executes its relocated candidate launcher",
     async (layout) => {
       await withTestDir({ prefix: "native-package-stage-" }, async (base) => {
@@ -44,11 +44,15 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         );
         const globalRoot = path.join(
           project,
-          layout === "pnpm11" ? "v11" : layout === "pnpm10" ? "5/node_modules" : "node_modules",
+          layout === "pnpm11" || layout === "pnpm12"
+            ? "v11"
+            : layout === "pnpm10"
+              ? "5/node_modules"
+              : "node_modules",
         );
         const packageRoot = path.join(
           globalRoot,
-          ...(layout === "pnpm11" ? ["group", "node_modules"] : []),
+          ...(layout === "pnpm11" || layout === "pnpm12" ? ["group", "node_modules"] : []),
           "openclaw",
         );
         const liveBinDir = path.join(base, "bin");
@@ -70,7 +74,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         await writeStoredRuntime(packageRoot, virtualStoreDir, "old");
         await fs.symlink(packageRoot, path.join(project, "owned-package"));
         await fs.symlink(path.relative(project, external), path.join(project, "shared-package"));
-        if (layout === "pnpm11") {
+        if (layout === "pnpm11" || layout === "pnpm12") {
           await fs.symlink(
             path.dirname(path.dirname(packageRoot)),
             path.join(globalRoot, "active-hash"),
@@ -156,9 +160,10 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
           }
         } else {
           const target = path.relative(stage.binDir, candidateEntry);
+          const basedir = layout === "pnpm12" ? "basedir_abs" : "basedir";
           await fs.writeFile(
             launcher,
-            `#!/bin/sh\nbasedir=$(dirname "$0")\nif [ -x "$basedir/node" ]; then\n  exec "$basedir/node" "$basedir/${target}" "$@"\nelse\n  exec node "$basedir/${target}" "$@"\nfi\n`,
+            `#!/bin/sh\n${basedir}=$(CDPATH= cd -P -- "$(dirname "$0")" && pwd -P)\nif [ -x "$${basedir}/node" ]; then\n  exec "$${basedir}/node" "$${basedir}/${target}" "$@"\nelse\n  exec node "$${basedir}/${target}" "$@"\nfi\n# cmd-shim-target=${candidateEntry}\n`,
             { mode: 0o755 },
           );
           const node = process.execPath.replaceAll("'", "'\\''");

@@ -19,6 +19,33 @@ type PreparedRuntimeRelocations = {
 };
 type RuntimeRelocations = readonly RuntimeRelocation[] | PreparedRuntimeRelocations;
 
+const launcherRelativePath = /(\$(?:basedir_abs|basedir_win|basedir)[/\\]|%~dp0\\)([^"\r\n]+)/gu;
+
+/** Check executable references, not cmd-shim-target metadata that may already be correct. */
+export async function verifyRuntimeLauncher(file: string, entryName: string): Promise<void> {
+  if ((await fs.lstat(file)).isSymbolicLink()) {
+    await fs.stat(file);
+    return;
+  }
+  const content = await fs.readFile(file, "utf8");
+  const bunLauncher = parseBunCliLauncher(content);
+  const base = content.includes("$basedir_abs")
+    ? await fs.realpath(path.dirname(file))
+    : path.dirname(file);
+  const targets = bunLauncher
+    ? [bunLauncher.entryPath]
+    : [...content.matchAll(launcherRelativePath)]
+        .map((match) => match[2]!.replaceAll("\\", path.sep))
+        .filter((relative) => path.basename(relative) === entryName && !/[$%]/u.test(relative))
+        .map((relative) => path.resolve(base, relative));
+  if (targets.length === 0) {
+    throw new Error("Cannot resolve the launcher's executable target");
+  }
+  for (const target of new Set(targets)) {
+    await fs.access(target);
+  }
+}
+
 /** Prepare once for the whole tree; never cache mutable filesystem observations. */
 export function prepareRuntimeRelocations(
   relocations: RuntimeRelocations,
@@ -102,26 +129,23 @@ export async function relocateRuntimeLauncher(
   } else {
     // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
     // Resolve them before changing the directory; absolute store/runtime paths stay external.
-    content = original.replace(
-      /(\$(?:basedir|basedir_win)[/\\]|%~dp0\\)([^"\r\n]+)/gu,
-      (match, prefix: string, relative: string) => {
-        if (/[$%]/u.test(relative)) {
-          return match;
-        }
-        const sourceTarget = path.resolve(
-          path.dirname(sourceFile),
-          relative.replaceAll("\\", path.sep),
-        );
-        const target = isPathInside(path.dirname(sourceFile), sourceTarget)
-          ? path.resolve(
-              path.dirname(destinationFile),
-              path.relative(path.dirname(sourceFile), sourceTarget),
-            )
-          : relocateRuntimePath(sourceTarget, prepared);
-        const replacement = path.relative(path.dirname(destinationFile), target);
-        return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
-      },
-    );
+    content = original.replace(launcherRelativePath, (match, prefix: string, relative: string) => {
+      if (/[$%]/u.test(relative)) {
+        return match;
+      }
+      const sourceTarget = path.resolve(
+        path.dirname(sourceFile),
+        relative.replaceAll("\\", path.sep),
+      );
+      const target = isPathInside(path.dirname(sourceFile), sourceTarget)
+        ? path.resolve(
+            path.dirname(destinationFile),
+            path.relative(path.dirname(sourceFile), sourceTarget),
+          )
+        : relocateRuntimePath(sourceTarget, prepared);
+      const replacement = path.relative(path.dirname(destinationFile), target);
+      return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
+    });
     for (const relocation of prepared.rules) {
       for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
         // NODE_PATH and the shim's target comment can carry absolute project paths.

@@ -298,6 +298,15 @@ publication are not detected. Its full fingerprint is retained for recovery;
 resumed publication and repair still verify package contents. This optimization
 applies when the installed updater contains it; older updaters keep their checks.
 
+Native pnpm updates also relocate pnpm 12 launcher paths before publishing them.
+After activation, unresolved launcher targets produce a warning with repair
+guidance without rolling back the updated package. These protections require
+the installed updater to contain the fix. If an older updater left `openclaw`
+pointing into a missing `.openclaw-update-native-*` directory, reinstall the
+same version with `pnpm add -g --force openclaw@<installed-version>` using the
+same account and global directories to recreate the launcher. Back up first
+and follow the [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun).
+
 If a pnpm-owned install fails with `IO error: not a terminal`, the installed
 updater may be triggering an interactive pnpm build-approval prompt while
 capturing its output. A newer candidate cannot repair that first update.
