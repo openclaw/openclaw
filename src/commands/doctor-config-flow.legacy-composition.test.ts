@@ -24,7 +24,7 @@ const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
 let runtimeRoot: string | undefined;
 
 async function repairConfig(configPath: string) {
-  const ctx = await prepareDoctorContext(configPath);
+  await using ctx = await prepareDoctorContext(configPath);
   await runInitialConfigWriteHealth(ctx);
   return { ...ctx.configResult, configWriteRefusal: ctx.configWriteRefusal };
 }
@@ -543,7 +543,7 @@ describe("Doctor legacy config composition", () => {
               gateway: { mode: "local" },
               plugins: { enabled: false },
             });
-            const ctx = await prepareDoctorContext(configPath);
+            await using ctx = await prepareDoctorContext(configPath);
             await withEnvAsync(
               {
                 DOCTOR_MEMORY_KEY: "rotated-memory-secret-canary",

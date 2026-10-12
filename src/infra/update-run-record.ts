@@ -128,6 +128,7 @@ export function isAcknowledgedAbandonedUpdateRun(
 export type FinishUpdateRunResult = {
   status: Exclude<UpdateRunRecord["status"], "running">;
   reason?: string;
+  nextAction?: string;
   after?: UpdateRunRecord["after"];
   downtimeMs?: number;
 };
@@ -157,6 +158,9 @@ export function finishUpdateRunRecord(
   record.status = result.status;
   record.phase = "finished";
   record.reason = result.reason ?? (result.status === "failed" ? record.reason : null);
+  if (result.nextAction !== undefined) {
+    record.origin.nextAction = result.nextAction;
+  }
   record.finishedAtMs = now;
   record.after = { ...record.after, ...result.after };
   record.downtimeMs = result.downtimeMs ?? record.downtimeMs;

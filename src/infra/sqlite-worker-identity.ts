@@ -55,6 +55,27 @@ function existingIdentity(
   };
 }
 
+/** In-process owner key only; never rewrite a configured or persisted database locator. */
+export function resolveDatabasePathKey(databasePath: string): string {
+  const missing: string[] = [];
+  let ancestor = path.resolve(databasePath);
+  while (true) {
+    try {
+      return normalizeDatabasePath(path.join(realpathSync.native(ancestor), ...missing));
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
+      missing.unshift(path.basename(ancestor));
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) {
+        throw error;
+      }
+      ancestor = parent;
+    }
+  }
+}
+
 /** Inspect a native-owner path without replacing its diagnostic for a non-file target. */
 export function inspectDatabasePathIdentitySync(
   databasePath: string,
@@ -72,29 +93,11 @@ export function inspectDatabasePathIdentitySync(
     if (!file.isFile()) {
       return undefined;
     }
-    const canonicalPath = realpathSync.native(resolvedPath);
+    const canonicalPath = resolveDatabasePathKey(resolvedPath);
     return existingIdentity(file, statSync(canonicalPath, { bigint: true }), canonicalPath);
   }
-  const missing: string[] = [];
-  let ancestor = resolvedPath;
-  while (true) {
-    try {
-      const canonicalPath = normalizeDatabasePath(
-        path.join(realpathSync.native(ancestor), ...missing),
-      );
-      return { key: `path:${canonicalPath}`, canonicalPath };
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
-      missing.unshift(path.basename(ancestor));
-      const parent = path.dirname(ancestor);
-      if (parent === ancestor) {
-        throw error;
-      }
-      ancestor = parent;
-    }
-  }
+  const canonicalPath = resolveDatabasePathKey(resolvedPath);
+  return { key: `path:${canonicalPath}`, canonicalPath };
 }
 
 /** Capture identity before yielding; worker admission requires a regular file or absent path. */

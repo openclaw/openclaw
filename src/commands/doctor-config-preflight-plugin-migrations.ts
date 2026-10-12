@@ -187,6 +187,7 @@ export function createDoctorPluginMigrationPreparation(params: {
 
   return {
     deferred: () => deferred,
+    retainedPluginIds: () => [...previousById.keys()],
     prepare,
     snapshotOptions: async () => {
       // Existing pending inputs must reach the first config read before backup selection.
@@ -268,7 +269,10 @@ export function createDoctorPluginMigrationPreparation(params: {
           if (plugin.requiresStateMigration || unavailableIds.has(plugin.pluginId)) {
             return false;
           }
-          if (inspectedStatelessPluginIds.has(plugin.pluginId)) {
+          if (
+            statelessPluginIds.has(plugin.pluginId) ||
+            inspectedStatelessPluginIds.has(plugin.pluginId)
+          ) {
             return true;
           }
           if (plugin.requiresDoctorInspection) {
@@ -277,13 +281,12 @@ export function createDoctorPluginMigrationPreparation(params: {
           // A runtime name has no plugin-owned inputs; the old collector could retain the
           // shared session locator even when no plugin migration existed for that name.
           return (
-            statelessPluginIds.has(plugin.pluginId) ||
-            (runtimePluginAliases.has(plugin.pluginId) &&
-              !plugin.validationExcludedPaths?.length &&
-              (plugin.configPaths ?? []).every(
-                (segments) =>
-                  segments.length === 2 && segments[0] === "session" && segments[1] === "store",
-              ))
+            runtimePluginAliases.has(plugin.pluginId) &&
+            !plugin.validationExcludedPaths?.length &&
+            (plugin.configPaths ?? []).every(
+              (segments) =>
+                segments.length === 2 && segments[0] === "session" && segments[1] === "store",
+            )
           );
         })
         .map((plugin) => plugin.pluginId);
@@ -306,6 +309,15 @@ export function createDoctorPluginMigrationPreparation(params: {
         return true;
       }
       for (const pluginId of resolvedPluginIds) {
+        if (statelessPluginIds.has(pluginId) || inspectedStatelessPluginIds.has(pluginId)) {
+          params.report({
+            changes: [],
+            warnings: [
+              `Plugin "${pluginId}": no plugin migration contract. No migration ran; existing data and settings have been kept.`,
+            ],
+            warningDisposition: "recoverable",
+          });
+        }
         previousById.delete(pluginId);
       }
       for (const plugin of pending) {

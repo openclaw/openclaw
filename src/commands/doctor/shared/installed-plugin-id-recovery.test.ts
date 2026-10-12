@@ -135,7 +135,7 @@ it.each([
       await fs.writeFile(leaf, leafRaw);
       const owner = await seedRecoveryOwner(state, cfg);
       const rootRaw = await fs.readFile(state.configPath, "utf8");
-      const ctx = await prepareDoctorContext(state.configPath);
+      await using ctx = await prepareDoctorContext(state.configPath);
       expect(ctx.configResult.persistCanonicalAgentRoster).toBe(true);
       expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
       expect(ctx.configResult.referenceSource?.installedPluginIdRecovery?.size).toBe(1);
@@ -245,7 +245,7 @@ it("persists the early disabled alias after Doctor repairs the same owner", asyn
           };
         },
       );
-      const ctx = await prepareDoctorContext(state.configPath);
+      await using ctx = await prepareDoctorContext(state.configPath);
       expect(repairRan).toBe(true);
       await runInitialConfigWriteHealth(ctx);
       const saved = JSON.parse(await fs.readFile(state.configPath, "utf8"));

@@ -18,9 +18,9 @@ import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 const settlement = await import("./doctor-maintenance.settlement.test-support.js");
 const { begin, boundary, cleanupBarrier, root } = settlement;
 
-it.each([false, true])(
-  "captures settled Doctor writes without attributing earlier writes (changed=%s)",
-  async (changed) => {
+it.each(["unchanged", "before", "during"])(
+  "requires unchanged fingerprints through Doctor settlement (%s)",
+  async (scenario) => {
     vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(
       async (paths) => readUpdateDatabaseGenerations(paths),
     );
@@ -30,7 +30,7 @@ it.each([false, true])(
     seed.exec("CREATE TABLE evidence(value INTEGER); INSERT INTO evidence VALUES (1)");
     seed.close();
     const databaseGenerations = readUpdateDatabaseGenerations([pathname, missing]);
-    if (changed) {
+    if (scenario === "before") {
       const foreign = new DatabaseSync(pathname);
       foreign.exec("INSERT INTO evidence VALUES (99)");
       foreign.close();
@@ -43,17 +43,21 @@ it.each([false, true])(
       databaseGenerations,
     });
     expect(maintenance?.databaseWrites).toBeUndefined();
-    const owned = new DatabaseSync(pathname);
-    owned.exec("PRAGMA journal_mode=WAL; INSERT INTO evidence VALUES (2)");
-    boundary.close.mockImplementationOnce(async () => owned.close());
+    if (scenario === "during") {
+      const owned = new DatabaseSync(pathname);
+      owned.exec("PRAGMA journal_mode=WAL; INSERT INTO evidence VALUES (2)");
+      boundary.close.mockImplementationOnce(async () => owned.close());
+    }
     await maintenance!.releaseState();
     const receipt = maintenance!.databaseWrites;
     expect(receipt).toEqual({
-      unchanged: !changed,
+      unchanged: scenario === "unchanged",
       fromGenerations: admitted,
       generations: readUpdateDatabaseGenerations([pathname, missing]),
     });
-    expect(receipt?.generations[pathname]).not.toBe(databaseGenerations[pathname]);
+    expect(receipt?.generations[pathname] === databaseGenerations[pathname]).toBe(
+      scenario === "unchanged",
+    );
     const later = new DatabaseSync(pathname);
     later.exec("INSERT INTO evidence VALUES (100)");
     later.close();

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import fsSync from "node:fs";
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { syncDirectory } from "@openclaw/fs-safe/durability";
@@ -118,10 +118,45 @@ function mockExclusiveCopyTransfer() {
   return transfer;
 }
 
+function mockUnavailableBirthtime(
+  mode: "zero" | "ctime",
+  afterTransfer?: (stagedPath: string) => Promise<void>,
+) {
+  durabilityTestState.transfer = async (options, publish) => {
+    const receipt = await publish(options);
+    expect(receipt.method).toBe("hardlink");
+    await afterTransfer?.(options.targetPath);
+    return receipt;
+  };
+  const substituteBirthtime = (stat: Stats) => {
+    // Model ctime advancing when the source link is retired, even on coarse clocks.
+    stat.birthtimeMs = mode === "zero" ? 0 : stat.ctimeMs + (stat.nlink === 1 ? 1_000 : 0);
+    return stat;
+  };
+  const fstat = fsSync.fstatSync.bind(fsSync);
+  vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) =>
+    args[1]?.bigint ? fstat(args[0], { bigint: true }) : substituteBirthtime(fstat(args[0])),
+  );
+  const lstat = fs.lstat.bind(fs);
+  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    return args[1]?.bigint
+      ? await lstat(args[0], { bigint: true })
+      : substituteBirthtime(await lstat(args[0]));
+  });
+}
+
 describe("owned SQLite snapshot transfer", () => {
-  it.each([false, true])(
-    "publishes its owned private image without duplicating it (isolated=%s)",
-    async (isolated) => {
+  it.each([
+    { isolated: false, birthtime: "native" },
+    { isolated: true, birthtime: "native" },
+    { isolated: false, birthtime: "zero" },
+    { isolated: false, birthtime: "ctime" },
+  ] as const)(
+    "publishes its owned private image without duplicating it (isolated=$isolated, birthtime=$birthtime)",
+    async ({ isolated, birthtime }) => {
+      if (birthtime !== "native") {
+        mockUnavailableBirthtime(birthtime);
+      }
       const source = new sqlite.DatabaseSync(sourcePath);
       try {
         source.exec(
@@ -170,6 +205,20 @@ describe("owned SQLite snapshot transfer", () => {
       });
     },
   );
+
+  it("rejects same-size byte changes during a ctime-fallback transfer", async () => {
+    const original = await fs.readFile(sourcePath);
+    mockUnavailableBirthtime("ctime", async (stagedPath) => {
+      const bytes = await fs.readFile(stagedPath);
+      bytes.write("changed", 0, "utf8");
+      await fs.writeFile(stagedPath, bytes);
+    });
+    await expectSnapshotFailureWithoutTarget(
+      { sourcePath, targetPath, preserveRowIds: true },
+      /hash mismatch/,
+    );
+    expect(await fs.readFile(sourcePath)).toEqual(original);
+  });
 
   it("keeps a caller-owned source independent of its published image", async () => {
     const source = new sqlite.DatabaseSync(sourcePath);

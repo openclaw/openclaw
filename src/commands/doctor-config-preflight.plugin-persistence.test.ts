@@ -219,7 +219,7 @@ describe("startup plugin persistence", () => {
         const initial = await readPluginPreflight();
         let baseSnapshot = initial.pluginMetadataSnapshot;
         const config = initial.snapshot.sourceConfig;
-        const scope = createDoctorPluginMetadataSnapshotScope({
+        await using scope = createDoctorPluginMetadataSnapshotScope({
           getBaseSnapshot: () => baseSnapshot,
         });
         const readVersion = () =>
@@ -286,7 +286,7 @@ describe("startup plugin persistence", () => {
               ).toEqual([`preflight-${name}`]);
             }
           });
-          const metadataScope = createDoctorPluginMetadataSnapshotScope({
+          await using metadataScope = createDoctorPluginMetadataSnapshotScope({
             baseSnapshot: aggregate,
           });
           // Unqualified Doctor work inherits its prepared view, not the system-agent workspace.

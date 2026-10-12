@@ -6,6 +6,7 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/codex/src/app-server/model-catalog.process.test.ts",
   "extensions/agentsapi/agentsapi-harness.persistence.test.ts",
   "extensions/openai/binary-transport.test.ts",
   "extensions/openai/tts.test.ts",

@@ -96,7 +96,7 @@ describe("Doctor model metadata corruption persistence", () => {
             record: finalizeConfigWriteAuditRecord({ base: auditBase, result: "rename" }),
           });
 
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
           expect(ctx.cfg.models?.providers?.openai?.models[0]).not.toHaveProperty("reasoning");
           await runInitialConfigWriteHealth(ctx);
@@ -124,9 +124,8 @@ describe("Doctor model metadata corruption persistence", () => {
             input: ["text", "image"],
             maxTokens: 128_000,
           });
-          expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
-            false,
-          );
+          await using rechecked = await prepareDoctorContext(configPath);
+          expect(rechecked.configResult.shouldWriteConfig).toBe(false);
         },
       );
     });

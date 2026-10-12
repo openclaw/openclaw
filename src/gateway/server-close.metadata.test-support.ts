@@ -1,9 +1,11 @@
 // Shared real Gateway metadata/cache fixture; startup joins owned audit maintenance.
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -26,6 +28,10 @@ export async function createGatewayMetadataCloseFixture(label: string) {
     label,
     layout: "home",
     env: {
+      // File isolation does not isolate native supervisor ancestry.
+      ...Object.fromEntries(SUPERVISOR_HINT_ENV_VARS.map((key) => [key, undefined])),
+      OPENCLAW_SUPERVISOR_MODE: "external",
+      OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.test.${randomUUID()}`,
       OPENCLAW_GATEWAY_PASSWORD: undefined,
       OPENCLAW_GATEWAY_TOKEN: undefined,
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",

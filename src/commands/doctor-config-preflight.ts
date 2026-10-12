@@ -99,7 +99,7 @@ async function runDoctorConfigPreflightOperation(
   const hasPendingPluginInstallConfig = (snapshot: ConfigFileSnapshot) =>
     !skipLegacyParentConfigWrite &&
     inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig).status === "valid";
-  const pluginMetadata = createDoctorPluginMetadataSnapshotScope({
+  await using pluginMetadata = createDoctorPluginMetadataSnapshotScope({
     getBaseSnapshot: () => configSnapshotRead?.pluginMetadataSnapshot,
     env: process.env,
     getDeferredPluginIds: () => pluginMigrations.deferred().map((pending) => pending.pluginId),
@@ -195,6 +195,7 @@ async function runDoctorConfigPreflightOperation(
     const refreshed = await prepareDoctorMigrationPlugins({
       cfg: automaticConfigRepair?.config ?? baseConfig,
       env: process.env,
+      retainedPluginIds: pluginMigrations.retainedPluginIds(),
       measure: options.measure,
       snapshotRead: { ...configSnapshotRead, snapshot },
       readRefreshedSnapshot: () => readConfigSnapshotForPreflight(false),

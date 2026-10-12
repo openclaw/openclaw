@@ -459,12 +459,17 @@ export class UpdateFinalizationLifecycle {
     }
   }
 
-  private finishLedger(exitCode: number): void {
+  private finishLedger(exitCode: number, deferredMaintenance?: string): void {
     if (this.runId && this.ownsRun) {
       try {
         finishUpdateRun(
           this.runId,
-          { status: exitCode ? "failed" : "succeeded", diagnostics: this.failureObservation },
+          {
+            status: exitCode ? "failed" : deferredMaintenance ? "skipped" : "succeeded",
+            reason: deferredMaintenance ? "doctor-maintenance-pending" : undefined,
+            nextAction: deferredMaintenance,
+            diagnostics: this.failureObservation,
+          },
           this.ledgerOptions,
         );
       } catch {
@@ -493,12 +498,12 @@ export class UpdateFinalizationLifecycle {
     watch?.();
   }
 
-  complete(exitCode: number): void {
+  complete(exitCode: number, deferredMaintenance?: string): void {
     if (this.completed) {
       return;
     }
     this.completed = true;
-    this.finishLedger(exitCode);
+    this.finishLedger(exitCode, deferredMaintenance);
     this.reportTimeout?.();
     if (!hasCliProcessScope()) {
       return;

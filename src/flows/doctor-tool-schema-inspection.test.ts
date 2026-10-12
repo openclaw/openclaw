@@ -3,9 +3,16 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as mcpConfig from "../agents/agent-bundle-mcp-runtime-config.js";
 import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
+import * as doctorMetadata from "../commands/doctor/shared/plugin-metadata-snapshot-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as discovery from "../plugins/discovery.js";
 import * as manifests from "../plugins/manifest-registry.js";
+import {
+  getPluginCache,
+  getPluginCacheRetirementSignal,
+  retirePluginCache,
+  type PluginCache,
+} from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -21,12 +28,14 @@ afterEach(() => {
 });
 
 it.each([
-  { mode: "doctor", fails: false },
-  { mode: "lint", fails: false },
-  { mode: "lint", fails: true },
+  { mode: "doctor", fails: false, deferred: false, borrowed: false, refusesDeferral: false },
+  { mode: "lint", fails: false, deferred: true, borrowed: false, refusesDeferral: false },
+  { mode: "lint", fails: true, deferred: false, borrowed: false, refusesDeferral: false },
+  { mode: "doctor", fails: false, deferred: false, borrowed: true, refusesDeferral: false },
+  { mode: "lint", fails: false, deferred: true, borrowed: false, refusesDeferral: true },
 ] as const)(
-  "inspects each agent through one registration in $mode with detector failure=$fails",
-  async ({ mode, fails }) => {
+  "inspects each agent through one registration in $mode with failure=$fails, deferred=$deferred, borrowed=$borrowed, rejected-deferral=$refusesDeferral",
+  async ({ mode, fails, deferred, borrowed, refusesDeferral }) => {
     await withOpenClawTestState(
       { env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
@@ -141,9 +150,28 @@ module.exports = { id, register(api) {
           },
         });
         const detectorFailure = new Error("fixture detector failed after tool inspection");
+        const deferralFailure = new Error("fixture caller refused deferred inspection ownership");
         const rejectColdRead = vi.fn(() => {
           throw new Error("cold plugin metadata read after inspection preparation");
         });
+        const observedCaches = new Set<PluginCache>();
+        const createMetadataScope = doctorMetadata.createDoctorPluginMetadataSnapshotScope;
+        const callerScope = borrowed ? createMetadataScope({ env: process.env }) : undefined;
+        const callerCache = callerScope?.run({ config: cfg }, getPluginCache);
+        const createFallback = vi
+          .spyOn(doctorMetadata, "createDoctorPluginMetadataSnapshotScope")
+          .mockImplementation((params) => {
+            const scope = createMetadataScope(params);
+            return {
+              ...scope,
+              run: (selection, operation) =>
+                scope.run(selection, () => {
+                  observedCaches.add(getPluginCache());
+                  return operation();
+                }),
+            };
+          });
+        const deferredDisposals: Array<() => Promise<void>> = [];
         const acquireInspection = pluginTools.acquirePluginToolInspectionRegistry;
         const loadMcpConfig = mcpConfig.loadSessionMcpConfig;
         vi.spyOn(pluginTools, "acquirePluginToolInspectionRegistry").mockImplementation(
@@ -164,72 +192,120 @@ module.exports = { id, register(api) {
             return inspection;
           },
         );
-        const operation = withPluginRuntimeRegistryScope(caller.registry, () =>
-          check!.detect({
-            mode,
-            cfg,
-            runtime: defaultRuntime,
-            env: process.env,
-          }),
-        );
-        if (fails) {
-          await expect(operation).rejects.toBe(detectorFailure);
-        } else {
-          const findings = await operation;
-          expect(findings).toContainEqual(
-            expect.objectContaining({
-              severity: "info",
-              path: "mcp.servers.requester",
-              requirement: "authenticated requester context",
+        try {
+          const operation = withPluginRuntimeRegistryScope(caller.registry, () =>
+            check!.detect({
+              mode,
+              cfg,
+              runtime: defaultRuntime,
+              env: process.env,
+              ...(callerScope ? { runWithPluginMetadataSnapshot: callerScope.run } : {}),
+              ...(deferred
+                ? {
+                    deferInspectionDisposal: (dispose: () => Promise<void>) => {
+                      if (refusesDeferral) {
+                        throw deferralFailure;
+                      }
+                      deferredDisposals.push(dispose);
+                    },
+                  }
+                : {}),
             }),
           );
-          expect(findings.filter((finding) => finding.target === "fleet_tool")).toEqual([
-            expect.objectContaining({
-              message: expect.stringContaining(
-                "Agent alpha tool fleet_tool from plugin fleet-tool",
-              ),
-              path: "plugins.entries.fleet-tool",
-            }),
-            expect.objectContaining({
-              message: expect.stringContaining("Agent beta tool fleet_tool from plugin fleet-tool"),
-              path: "plugins.entries.fleet-tool",
-            }),
+          if (fails || refusesDeferral) {
+            await expect(operation).rejects.toBe(fails ? detectorFailure : deferralFailure);
+          } else {
+            const findings = await operation;
+            expect(findings).toContainEqual(
+              expect.objectContaining({
+                severity: "info",
+                path: "mcp.servers.requester",
+                requirement: "authenticated requester context",
+              }),
+            );
+            expect(findings.filter((finding) => finding.target === "fleet_tool")).toEqual([
+              expect.objectContaining({
+                message: expect.stringContaining(
+                  "Agent alpha tool fleet_tool from plugin fleet-tool",
+                ),
+                path: "plugins.entries.fleet-tool",
+              }),
+              expect.objectContaining({
+                message: expect.stringContaining(
+                  "Agent beta tool fleet_tool from plugin fleet-tool",
+                ),
+                path: "plugins.entries.fleet-tool",
+              }),
+            ]);
+            expect(findings).toContainEqual(
+              expect.objectContaining({
+                target: "failed-tool",
+                requirement: expect.stringContaining("fixture registration unavailable"),
+              }),
+            );
+          }
+          if (borrowed) {
+            expect(createFallback).not.toHaveBeenCalled();
+            expect(getPluginCacheRetirementSignal(callerCache!).aborted).toBe(false);
+            expect(callerScope!.run({ config: cfg }, getPluginCache)).toBe(callerCache);
+          } else {
+            expect(observedCaches.size).toBeGreaterThan(0);
+            if (refusesDeferral) {
+              expect(deferredDisposals).toHaveLength(0);
+            }
+            if (deferred && !refusesDeferral) {
+              expect(deferredDisposals).toHaveLength(1);
+              for (const cache of observedCaches) {
+                expect(getPluginCacheRetirementSignal(cache).aborted).toBe(false);
+              }
+              await Promise.all(deferredDisposals.map((dispose) => dispose()));
+            }
+            for (const cache of observedCaches) {
+              expect(getPluginCacheRetirementSignal(cache).aborted).toBe(true);
+            }
+          }
+          expect(rejectColdRead).not.toHaveBeenCalled();
+          expect(fs.existsSync(unexpectedProbe)).toBe(false);
+          const observed = fs
+            .readFileSync(events, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          expect(
+            observed
+              .filter((row) => row.kind === "register")
+              .map((row) => row.id)
+              .toSorted((left, right) => left.localeCompare(right)),
+          ).toEqual(["failed-tool", "fleet-tool"]);
+          expect(observed.filter((row) => row.kind === "factory")).toEqual([
+            {
+              id: "fleet-tool",
+              kind: "factory",
+              agentId: "alpha",
+              workspaceDir: state.path("alpha"),
+            },
+            {
+              id: "fleet-tool",
+              kind: "factory",
+              agentId: "beta",
+              workspaceDir: state.path("beta"),
+            },
           ]);
-          expect(findings).toContainEqual(
-            expect.objectContaining({
-              target: "failed-tool",
-              requirement: expect.stringContaining("fixture registration unavailable"),
-            }),
+          expect(
+            observed
+              .filter((row) => row.kind === "dispose")
+              .map((row) => row.id)
+              .toSorted((left, right) => left.localeCompare(right)),
+          ).toEqual(["failed-tool", "fleet-tool"]);
+        } finally {
+          await Promise.all(deferredDisposals.map((dispose) => dispose()));
+          await callerScope?.[Symbol.asyncDispose]();
+          await Promise.all(
+            [...observedCaches, ...(callerCache ? [callerCache] : [])].map((cache) =>
+              retirePluginCache(cache),
+            ),
           );
         }
-        expect(rejectColdRead).not.toHaveBeenCalled();
-        expect(fs.existsSync(unexpectedProbe)).toBe(false);
-        const observed = fs
-          .readFileSync(events, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
-        expect(
-          observed
-            .filter((row) => row.kind === "register")
-            .map((row) => row.id)
-            .toSorted((left, right) => left.localeCompare(right)),
-        ).toEqual(["failed-tool", "fleet-tool"]);
-        expect(observed.filter((row) => row.kind === "factory")).toEqual([
-          {
-            id: "fleet-tool",
-            kind: "factory",
-            agentId: "alpha",
-            workspaceDir: state.path("alpha"),
-          },
-          { id: "fleet-tool", kind: "factory", agentId: "beta", workspaceDir: state.path("beta") },
-        ]);
-        expect(
-          observed
-            .filter((row) => row.kind === "dispose")
-            .map((row) => row.id)
-            .toSorted((left, right) => left.localeCompare(right)),
-        ).toEqual(["failed-tool", "fleet-tool"]);
       },
     );
   },

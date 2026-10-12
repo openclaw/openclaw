@@ -82,10 +82,14 @@ export default {
   id: ${JSON.stringify(pluginId)},
   register(api) {
     const binary = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "fixture.bin"));
+    const bytes = fs.readFileSync(binary, "utf8");
+    if (bytes !== "native fixture bytes") {
+      throw new Error("Native companion bytes changed during admission");
+    }
     fs.writeFileSync(${JSON.stringify(observedCapture)}, [
       process.env.OPENCLAW_STATE_DIR,
       binary,
-      fs.readFileSync(binary, "utf8"),
+      bytes,
     ].join("\\t"));
     api.registerTool({
       name: ${JSON.stringify(toolName)},
@@ -147,7 +151,7 @@ export default {
         const baseSnapshot = withPluginCache(parent, () =>
           loadPluginMetadataSnapshot({ config, env: state.env }),
         );
-        const prepared = createDoctorPluginMetadataSnapshotScope({
+        await using prepared = createDoctorPluginMetadataSnapshotScope({
           baseSnapshot,
           env: state.env,
         });
@@ -195,7 +199,12 @@ export default {
           ).toBe(true);
           expect(binary.startsWith(`${privateStateDir}${path.sep}`)).toBe(false);
           expect(fs.existsSync(privateStateDir)).toBe(false);
-          expect(fs.readFileSync(binary, "utf8")).toBe("native fixture bytes");
+          // Lint joins owned fallback retirement; prepared metadata borrows the caller's cache.
+          if (metadata === "default") {
+            expect(fs.existsSync(binary)).toBe(false);
+          } else {
+            expect(fs.readFileSync(binary, "utf8")).toBe("native fixture bytes");
+          }
           expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
 
           // Retirement retries pending receipts after lint has restored the caller's state view.

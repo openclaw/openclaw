@@ -1,10 +1,10 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { resolveDatabasePathKey } from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasPersistedOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
@@ -85,7 +85,7 @@ export function hasRevokedOpenClawAgentDatabaseValidation(
   pathname: string,
   received?: OpenClawAgentDatabaseValidation,
 ): boolean {
-  const previous = validatedPaths.get(path.resolve(pathname));
+  const previous = validatedPaths.get(resolveDatabasePathKey(pathname));
   return (
     (received !== undefined && Atomics.load(new Int32Array(received.valid), 0) !== 1) ||
     previous?.revoked === true ||
@@ -97,7 +97,7 @@ export function hasRevokedOpenClawAgentDatabaseValidation(
 export function getOpenClawAgentDatabaseValidation(
   database: ValidationDatabase,
 ): OpenClawAgentDatabaseValidation | undefined {
-  const entry = validatedPaths.get(path.resolve(database.path));
+  const entry = validatedPaths.get(resolveDatabasePathKey(database.path));
   if (
     !entry?.integrityVerified ||
     !entry.validation ||
@@ -114,7 +114,7 @@ export function getOpenClawAgentDatabaseValidation(
 export function getOpenClawAgentDatabaseValidationForTransfer(
   database: Pick<ValidationDatabase, "agentId" | "path">,
 ): OpenClawAgentDatabaseValidation | undefined {
-  const entry = validatedPaths.get(path.resolve(database.path));
+  const entry = validatedPaths.get(resolveDatabasePathKey(database.path));
   if (
     !entry?.integrityVerified ||
     !entry.validation ||
@@ -130,7 +130,7 @@ export function getOpenClawAgentDatabaseValidationForTransfer(
 export function captureOpenClawAgentDatabaseValidationTransfer(
   database: Pick<ValidationDatabase, "agentId" | "path">,
 ): (identity: string, received: unknown) => boolean {
-  const pathname = path.resolve(database.path);
+  const pathname = resolveDatabasePathKey(database.path);
   const existing = validatedPaths.get(pathname);
   const captured: ValidationEntry =
     existing?.agentId === database.agentId
@@ -195,7 +195,7 @@ function canonicalValidationReceipt(
   if (!pathname) {
     return undefined;
   }
-  const validation = validatedPaths.get(path.resolve(pathname))?.validation;
+  const validation = validatedPaths.get(resolveDatabasePathKey(pathname))?.validation;
   if (!validation || !matchesValidation({ ...database, path: pathname }, validation)) {
     return undefined;
   }
@@ -218,14 +218,17 @@ export function hasOpenClawAgentCanonicalValidation(
   if (
     !pathname ||
     database.db.isTransaction ||
-    validatedPaths.get(path.resolve(pathname))?.validation !== undefined ||
+    validatedPaths.get(resolveDatabasePathKey(pathname))?.validation !== undefined ||
     hasRevokedOpenClawAgentDatabaseValidation(pathname) ||
     !hasPersistedOpenClawAgentCanonicalValidation(database)
   ) {
     return false;
   }
   const canonical = createValidationReceipt({ ...database, path: pathname }, true);
-  validatedPaths.set(path.resolve(pathname), { validation: canonical, integrityVerified: false });
+  validatedPaths.set(resolveDatabasePathKey(pathname), {
+    validation: canonical,
+    integrityVerified: false,
+  });
   bindValidationLifetime({ ...database, path: pathname }, canonical);
   return true;
 }
@@ -271,7 +274,10 @@ export function adoptOpenClawAgentDatabaseValidation(
     Atomics.store(new Int32Array(validation.canonicalReady), 0, 0);
   }
   invalidateOpenClawAgentDatabaseValidation(database.path);
-  validatedPaths.set(path.resolve(database.path), { validation, integrityVerified: true });
+  validatedPaths.set(resolveDatabasePathKey(database.path), {
+    validation,
+    integrityVerified: true,
+  });
   bindValidationLifetime(database, validation);
   return true;
 }
@@ -327,20 +333,24 @@ export function setOpenClawAgentDatabaseValidation(
         hasPersistedOpenClawAgentCanonicalValidation(database)),
   );
   invalidateOpenClawAgentDatabaseValidation(database.path);
-  validatedPaths.set(path.resolve(database.path), { validation, integrityVerified: true });
+  validatedPaths.set(resolveDatabasePathKey(database.path), {
+    validation,
+    integrityVerified: true,
+  });
   bindValidationLifetime(database, validation);
   return validation;
 }
 
 export function invalidateOpenClawAgentDatabaseValidation(
   pathname: string,
-  identity = validatedPaths.get(path.resolve(pathname))?.validation?.identity,
+  identity?: string,
 ): void {
-  const resolved = path.resolve(pathname);
+  const resolved = resolveDatabasePathKey(pathname);
+  const currentIdentity = identity ?? validatedPaths.get(resolved)?.validation?.identity;
   const paths = new Set([resolved]);
-  if (identity) {
+  if (currentIdentity) {
     for (const [candidate, entry] of validatedPaths) {
-      if (entry.validation?.identity === identity) {
+      if (entry.validation?.identity === currentIdentity) {
         paths.add(candidate);
       }
     }
@@ -376,8 +386,9 @@ export function invalidateOpenClawAgentDatabaseValidationsForAgent(
 }
 
 export function clearOpenClawAgentDatabaseValidationCache(rootPath?: string): void {
+  const rootKey = rootPath === undefined ? undefined : resolveDatabasePathKey(rootPath);
   for (const pathname of validatedPaths.keys()) {
-    if (rootPath === undefined || isPathInside(rootPath, pathname)) {
+    if (rootKey === undefined || isPathInside(rootKey, pathname)) {
       invalidateOpenClawAgentDatabaseValidation(pathname);
       validatedPaths.delete(pathname);
     }

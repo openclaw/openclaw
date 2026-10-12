@@ -5,6 +5,7 @@ import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import { listAllCodexAppServerModels } from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
 import { withCodexAppServerJsonClient } from "./request.js";
+import { CodexAppServerRpcError } from "./rpc-error.js";
 
 vi.mock("./models.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./models.js")>()),
@@ -24,14 +25,16 @@ vi.mock("./auth-profile.js", async () => {
   });
 });
 
-const rpc = vi.hoisted(() => ({ request: vi.fn(), epoch: 0, client: {} }));
+const rpc = vi.hoisted(() => ({ request: vi.fn(), retire: vi.fn(), epoch: 0, client: {} }));
 vi.mock("./request.js", () => ({
   withCodexAppServerJsonClient: vi.fn(
     (_options: unknown, run: (request: unknown, client: unknown) => unknown) =>
       run(rpc.request, rpc.client),
   ),
 }));
+// mock-isolation: Keep physical clients and shared lease state outside catalog projection tests.
 vi.mock("./shared-client.js", () => ({
+  retireSharedCodexAppServerClientIfCurrent: rpc.retire,
   captureSharedCodexAppServerCatalogLifetime: () => {
     const epoch = rpc.epoch;
     return () => rpc.epoch === epoch;
@@ -68,10 +71,45 @@ describe("Codex app-server model catalog", () => {
     listModelsMock.mockReset();
     vi.mocked(withCodexAppServerJsonClient).mockClear();
     rpc.epoch += 1;
+    rpc.retire.mockClear();
     rpc.request
       .mockReset()
       .mockResolvedValue({ account: { type: "apiKey" }, requiresOpenaiAuth: true });
     owner = createCodexAppServerModelCatalog("codex");
+  });
+
+  it.each([
+    {
+      name: "unanswered account read",
+      error: Object.assign(new Error("account/read aborted"), {
+        code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
+        reason: "aborted",
+        mayHaveWritten: true,
+      }),
+      retires: true,
+    },
+    {
+      name: "pre-write deadline",
+      error: Object.assign(new Error("account/read timed out"), {
+        code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
+        reason: "timed out",
+        mayHaveWritten: false,
+      }),
+      retires: false,
+    },
+    {
+      name: "native error response",
+      error: new CodexAppServerRpcError({ code: -32603, message: "Unavailable" }, "account/read"),
+      retires: false,
+    },
+  ])("preserves discovery ownership after $name", async ({ error, retires }) => {
+    listModelsMock.mockResolvedValue({ models: [] });
+    rpc.request.mockRejectedValueOnce(error);
+    await expect(owner.load(catalogParams, undefined)).rejects.toBe(error);
+    expect(rpc.retire).toHaveBeenCalledTimes(retires ? 1 : 0);
+    if (retires) {
+      expect(rpc.retire).toHaveBeenCalledWith(rpc.client);
+    }
   });
 
   it("keeps native picker models independent of a host transport", async () => {

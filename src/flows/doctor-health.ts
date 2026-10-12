@@ -170,6 +170,8 @@ async function runDoctorHealthFlowWithResult(
     };
     return true;
   };
+  await using resources = new AsyncDisposableStack();
+  resources.defer(async () => maintenance?.release());
   try {
     if (options.repair === true || options.yes === true) {
       try {
@@ -361,6 +363,7 @@ async function runDoctorHealthFlowWithResult(
         runtime: doctorRuntime,
         prompter,
       });
+      resources.use(configResult);
       // Relocation changes the inspected scope; unchanged fleets retain their prepared facts.
       const admissionSchemas =
         schemas.agentDatabaseMigrationDiscovery &&
@@ -599,7 +602,7 @@ async function runDoctorHealthFlowWithResult(
     throw error;
   } finally {
     try {
-      await maintenance?.release();
+      await resources.disposeAsync();
     } finally {
       if (updateResult) {
         for (const change of updateResult.capture.configChanges) {

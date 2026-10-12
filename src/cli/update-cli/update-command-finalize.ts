@@ -176,8 +176,9 @@ export async function updateFinalizeCommand(
                 error instanceof DoctorMaintenanceRefusalError &&
                 error.refusal.kind === "deferred"
               ) {
+                const nextAction = `Stop the Gateway through its service owner, stop other OpenClaw processes using this state, then rerun \`${formatCliCommand("openclaw update repair")}\`.`;
                 const warnings = normalizeUpdatePostInstallDoctorWarnings([
-                  `Doctor and plugin maintenance remain pending. Resolve the maintenance refusal, then run ${formatCliCommand("openclaw update repair")}. ${error.message}`,
+                  `Doctor and plugin maintenance remain pending. ${nextAction} ${error.message}`,
                 ]);
                 lifecycle.recordWarnings(warnings);
                 defaultRuntime.error(warnings[0]);
@@ -191,9 +192,11 @@ export async function updateFinalizeCommand(
                     postUpdate: { doctor: { status: "warning", warnings } },
                   });
                 } else {
-                  defaultRuntime.log(theme.warn("Update finalization completed with warnings."));
+                  defaultRuntime.log(
+                    theme.warn(`Doctor maintenance remains pending. ${nextAction}`),
+                  );
                 }
-                lifecycle.complete(0);
+                lifecycle.complete(0, nextAction);
                 return;
               }
               if (!lifecycle.completed) {

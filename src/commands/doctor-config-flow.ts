@@ -132,14 +132,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     current: preflight.pluginMetadataSnapshot,
     inventoryChanged: pluginInstallConfigImport?.pluginInventoryChanged,
   };
-  const { createDoctorPluginMetadataSnapshotScope } =
+  const { createDoctorPluginMetadataSnapshotScope, moveDoctorPluginMetadataResources } =
     await import("./doctor/shared/plugin-metadata-snapshot-scope.js");
+  await using preparingResources = new AsyncDisposableStack();
   const pluginMetadataSnapshotScope = createDoctorPluginMetadataSnapshotScope({
     getBaseSnapshot: () => pluginMetadataSnapshotState.current,
     env: process.env,
     getDeferredPluginIds: () =>
       preflight.deferredPluginMigrations?.map((pending) => pending.pluginId) ?? [],
   });
+  preparingResources.use(pluginMetadataSnapshotScope);
   const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
   const invalidatePluginMetadataSnapshot = () => {
     // Filesystem/install repairs replace the authoritative plugin generation.
@@ -690,8 +692,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // them as "Doctor changes" only after the atomic write commits. A blocked
   // write drops them — its blocking note already states nothing was changed.
   const pendingChangePanels = changesPanelSink.drain();
+  // Later Doctor contributions and service finalization consume these callbacks.
 
   return {
+    ...moveDoctorPluginMetadataResources(preparingResources),
     ...finalized,
     ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
       ? {

@@ -161,7 +161,7 @@ export async function runInstalledLifecycle(
     const readiness = await waitForGatewayHttpReadiness({
       port: task.gatewayPort,
       attempts: Math.ceil(deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS),
-      deadlineAt: Date.now() + deadlineMs,
+      deadlineAt: performance.now() + deadlineMs,
       delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
       signal,
       onObservation: (value) => {

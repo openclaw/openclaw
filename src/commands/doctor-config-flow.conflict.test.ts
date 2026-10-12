@@ -64,7 +64,7 @@ describe("Doctor repair confirmation conflicts", () => {
           2,
         );
         let confirmationShown = false;
-        const ctx = await prepareDoctorContext(configPath, {
+        await using ctx = await prepareDoctorContext(configPath, {
           options: {},
           confirm: async ({ message }) => {
             expect(message).toBe("Apply recommended config repairs now?");
@@ -119,7 +119,7 @@ describe("Doctor repair confirmation conflicts", () => {
 
         await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
           let confirmationShown = false;
-          const ctx = await prepareDoctorContext(configPath, {
+          await using ctx = await prepareDoctorContext(configPath, {
             options: {},
             confirm: async ({ message }) => {
               expect(message).toBe("Apply recommended config repairs now?");
@@ -174,7 +174,7 @@ describe("Doctor repair confirmation conflicts", () => {
           },
           async () => {
             let confirmationShown = false;
-            const ctx = await prepareDoctorContext(configPath, {
+            await using ctx = await prepareDoctorContext(configPath, {
               options: {},
               confirm: async ({ message }) => {
                 expect(message).toBe("Apply recommended config repairs now?");

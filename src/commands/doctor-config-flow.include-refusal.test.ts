@@ -50,7 +50,7 @@ describe("doctor --fix include write ownership", () => {
             });
             await fs.writeFile(includePath, includeRaw);
             const rootRaw = await fs.readFile(configPath, "utf8");
-            const ctx = await prepareDoctorContext(configPath);
+            await using ctx = await prepareDoctorContext(configPath);
             expect(ctx.configResult.shouldWriteConfig).toBe(true);
             expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
             expect(ctx.cfg.browser).toEqual({
@@ -156,7 +156,7 @@ describe("doctor --fix include write ownership", () => {
             await fs.writeFile(defaultsPath, JSON.stringify(defaults));
           }
           const rootRaw = await fs.readFile(configPath, "utf8");
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           await captureUpdateDoctorConfigWrites(
             configPath,
             () => runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
@@ -181,9 +181,8 @@ describe("doctor --fix include write ownership", () => {
               search: { enabled: false, query: { maxResults: 7 } },
             });
           }
-          expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
-            false,
-          );
+          await using rechecked = await prepareDoctorContext(configPath);
+          expect(rechecked.configResult.shouldWriteConfig).toBe(false);
 
           await transformConfigFile({
             transform: (current) => {
@@ -280,7 +279,7 @@ describe("doctor --fix include write ownership", () => {
           await fs.writeFile(fragmentPath, fragmentRaw);
           const rootRaw = await fs.readFile(configPath, "utf-8");
 
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
           expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
           const retainedFragmentRaw =
@@ -439,7 +438,7 @@ describe("doctor --fix include write ownership", () => {
           gateway: { mode: "local" },
           plugins: { enabled: false },
         });
-        const ctx = await prepareDoctorContext(configPath);
+        await using ctx = await prepareDoctorContext(configPath);
         const originalBytes = await fs.readFile(configPath, "utf8");
         const otherPath = path.join(path.dirname(configPath), "other-openclaw.json");
         await fs.writeFile(otherPath, originalBytes);
@@ -470,7 +469,7 @@ describe("doctor --fix include write ownership", () => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {});
         await fs.unlink(configPath);
-        const ctx = await prepareDoctorContext(configPath);
+        await using ctx = await prepareDoctorContext(configPath);
         expect(ctx.configResult.referenceSource).toBeUndefined();
         expect(ctx.configResult.confirmedConfigSource).toEqual({
           path: configPath,
@@ -533,7 +532,7 @@ describe("doctor --fix include write ownership", () => {
         await fs.writeFile(includePath, includeRaw);
         const rootRaw = await fs.readFile(configPath, "utf-8");
 
-        const ctx = await prepareDoctorContext(configPath);
+        await using ctx = await prepareDoctorContext(configPath);
         // The legacy roster is a root repair; the retired knob is an include repair.
         expect(ctx.configResult.shouldWriteConfig).toBe(true);
         expect(ctx.configResult.persistCanonicalAgentRoster).toBe(true);

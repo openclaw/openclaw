@@ -1,0 +1,3852 @@
+{
+  "release": "2026.9.33",
+  "baseline": "6d0da0e59422aeee017e1e9f0300f61f6c288796",
+  "mainCut": "3f08ea94a3373110e46b8f18cc4790344af4ecb3",
+  "priorMainCut": "6d3f75a1baa71ea5f51db7150ba1eb2d6f067be1",
+  "scope": "Compatible update-related backports only; no tag, publication, schema upgrade, or merge.",
+  "inventory": {
+    "totalCommits": 5653,
+    "priorCutCommits": 5186,
+    "recentCommits": 467,
+    "patchEquivalent": 98,
+    "olderBoundedCandidates": 234,
+    "recentCandidateAndCompanionRows": 101,
+    "semanticAuditComplete": false
+  },
+  "issueSearch": {
+    "capturedAt": "2026-10-11T04:58Z",
+    "publishedVersions": [
+      "2026.6.33",
+      "2026.6.34",
+      "2026.6.35",
+      "2026.7.33",
+      "2026.7.34",
+      "2026.7.35",
+      "2026.8.33",
+      "2026.8.34",
+      "2026.8.35"
+    ],
+    "exactVersionHitCount": 85,
+    "uniqueOpenIssueCount": 74,
+    "queries": [
+      {
+        "query": "repo:openclaw/openclaw is:issue is:open \"2026.6.33\" in:title,body,comments",
+        "incomplete_results": false,
+        "total_count": 8
+      },
+      {
+        "query": "repo:openclaw/openclaw is:issue is:open \"2026.6.34\" in:title,body,comments",
+        "incomplete_results": false,
+        "total_count": 32
+      },
+      {
+        "query": "repo:openclaw/openclaw is:issue is:open \"2026.6.35\" in:title,body,comments",
+        "incomplete_results": false,
+        "total_count": 7
+      },
+      {
+        "query": "repo:openclaw/openclaw is:issue is:open \"2026.7.33\" in:title,body,comments",
+        "incomplete_results": false,
+        "total_count": 2
+      },
+      {
+        "query": "repo:openclaw/openclaw is:issue is:open \"2026.7.34\" in:title,body,comments",
+        "incomplete_results": false,
+        "total_count": 1
+      },
+      {
+        "query": "repo:openclaw/openclaw is:issue is:open \"2026.7.35\" in:title,body,comments",
+        "incomplete_results": false,
+        "total_count": 18
+      },
+      {
+        "query": "repo:openclaw/openclaw is:issue is:open \"2026.8.33\" in:title,body,comments",
+        "incomplete_results": false,
+        "total_count": 9
+      },
+      {
+        "query": "repo:openclaw/openclaw is:issue is:open \"2026.8.34\" in:title,body,comments",
+        "incomplete_results": false,
+        "total_count": 0
+      },
+      {
+        "query": "repo:openclaw/openclaw is:issue is:open \"2026.8.35\" in:title,body,comments",
+        "incomplete_results": false,
+        "total_count": 8
+      }
+    ],
+    "classifications": [
+      {
+        "number": 129735,
+        "html_url": "https://github.com/openclaw/openclaw/issues/129735",
+        "versions": [
+          "2026.6.33",
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 120103,
+        "html_url": "https://github.com/openclaw/openclaw/issues/120103",
+        "versions": [
+          "2026.6.33"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 168352,
+        "html_url": "https://github.com/openclaw/openclaw/issues/168352",
+        "versions": [
+          "2026.6.33"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 139215,
+        "html_url": "https://github.com/openclaw/openclaw/issues/139215",
+        "versions": [
+          "2026.6.33"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 96834,
+        "html_url": "https://github.com/openclaw/openclaw/issues/96834",
+        "versions": [
+          "2026.6.33"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 104992,
+        "html_url": "https://github.com/openclaw/openclaw/issues/104992",
+        "versions": [
+          "2026.6.33"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 117243,
+        "html_url": "https://github.com/openclaw/openclaw/issues/117243",
+        "versions": [
+          "2026.6.33",
+          "2026.6.34"
+        ],
+        "classification": "upgrade overwrote local package edit; not updater state-loss defect"
+      },
+      {
+        "number": 114154,
+        "html_url": "https://github.com/openclaw/openclaw/issues/114154",
+        "versions": [
+          "2026.6.33"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 154036,
+        "html_url": "https://github.com/openclaw/openclaw/issues/154036",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "explicit core upgrade UX regression; no landed main fix"
+      },
+      {
+        "number": 142813,
+        "html_url": "https://github.com/openclaw/openclaw/issues/142813",
+        "versions": [
+          "2026.6.34",
+          "2026.6.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 115642,
+        "html_url": "https://github.com/openclaw/openclaw/issues/115642",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 152760,
+        "html_url": "https://github.com/openclaw/openclaw/issues/152760",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 128100,
+        "html_url": "https://github.com/openclaw/openclaw/issues/128100",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 129209,
+        "html_url": "https://github.com/openclaw/openclaw/issues/129209",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 152876,
+        "html_url": "https://github.com/openclaw/openclaw/issues/152876",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 122659,
+        "html_url": "https://github.com/openclaw/openclaw/issues/122659",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary node execution-policy regression; latest reporter retracts SQLite theory"
+      },
+      {
+        "number": 128416,
+        "html_url": "https://github.com/openclaw/openclaw/issues/128416",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 157364,
+        "html_url": "https://github.com/openclaw/openclaw/issues/157364",
+        "versions": [
+          "2026.6.34",
+          "2026.6.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 122772,
+        "html_url": "https://github.com/openclaw/openclaw/issues/122772",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 136487,
+        "html_url": "https://github.com/openclaw/openclaw/issues/136487",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "reported post-upgrade requester-delivery defect; root cause unresolved"
+      },
+      {
+        "number": 121570,
+        "html_url": "https://github.com/openclaw/openclaw/issues/121570",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 149550,
+        "html_url": "https://github.com/openclaw/openclaw/issues/149550",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 116952,
+        "html_url": "https://github.com/openclaw/openclaw/issues/116952",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 151054,
+        "html_url": "https://github.com/openclaw/openclaw/issues/151054",
+        "versions": [
+          "2026.6.34",
+          "2026.6.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 114234,
+        "html_url": "https://github.com/openclaw/openclaw/issues/114234",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 164433,
+        "html_url": "https://github.com/openclaw/openclaw/issues/164433",
+        "versions": [
+          "2026.6.34",
+          "2026.6.35",
+          "2026.7.33",
+          "2026.7.35"
+        ],
+        "classification": "feature tracker documenting old-driver pre-staging limitations"
+      },
+      {
+        "number": 89430,
+        "html_url": "https://github.com/openclaw/openclaw/issues/89430",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 103910,
+        "html_url": "https://github.com/openclaw/openclaw/issues/103910",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 147759,
+        "html_url": "https://github.com/openclaw/openclaw/issues/147759",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 74674,
+        "html_url": "https://github.com/openclaw/openclaw/issues/74674",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 125267,
+        "html_url": "https://github.com/openclaw/openclaw/issues/125267",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 111376,
+        "html_url": "https://github.com/openclaw/openclaw/issues/111376",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 126246,
+        "html_url": "https://github.com/openclaw/openclaw/issues/126246",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 51441,
+        "html_url": "https://github.com/openclaw/openclaw/issues/51441",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 137613,
+        "html_url": "https://github.com/openclaw/openclaw/issues/137613",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 67413,
+        "html_url": "https://github.com/openclaw/openclaw/issues/67413",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 87441,
+        "html_url": "https://github.com/openclaw/openclaw/issues/87441",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 114612,
+        "html_url": "https://github.com/openclaw/openclaw/issues/114612",
+        "versions": [
+          "2026.6.34"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 152533,
+        "html_url": "https://github.com/openclaw/openclaw/issues/152533",
+        "versions": [
+          "2026.6.35"
+        ],
+        "classification": "confirmed core upgrade/service-refresh gap; intentional guard"
+      },
+      {
+        "number": 156590,
+        "html_url": "https://github.com/openclaw/openclaw/issues/156590",
+        "versions": [
+          "2026.6.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 45233,
+        "html_url": "https://github.com/openclaw/openclaw/issues/45233",
+        "versions": [
+          "2026.6.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 100309,
+        "html_url": "https://github.com/openclaw/openclaw/issues/100309",
+        "versions": [
+          "2026.7.33"
+        ],
+        "classification": "third-party plugin version false positive"
+      },
+      {
+        "number": 153401,
+        "html_url": "https://github.com/openclaw/openclaw/issues/153401",
+        "versions": [
+          "2026.7.34"
+        ],
+        "classification": "unrelated extended-version mention"
+      },
+      {
+        "number": 162074,
+        "html_url": "https://github.com/openclaw/openclaw/issues/162074",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 161378,
+        "html_url": "https://github.com/openclaw/openclaw/issues/161378",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "broad release usability regression; old extended version is rollback/control"
+      },
+      {
+        "number": 158190,
+        "html_url": "https://github.com/openclaw/openclaw/issues/158190",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 168159,
+        "html_url": "https://github.com/openclaw/openclaw/issues/168159",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "post-migration runtime lifecycle report; partial landed main fix"
+      },
+      {
+        "number": 162790,
+        "html_url": "https://github.com/openclaw/openclaw/issues/162790",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 160959,
+        "html_url": "https://github.com/openclaw/openclaw/issues/160959",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 158653,
+        "html_url": "https://github.com/openclaw/openclaw/issues/158653",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 159857,
+        "html_url": "https://github.com/openclaw/openclaw/issues/159857",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 168585,
+        "html_url": "https://github.com/openclaw/openclaw/issues/168585",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "post-migration startup regression; no landed fix identified"
+      },
+      {
+        "number": 165270,
+        "html_url": "https://github.com/openclaw/openclaw/issues/165270",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 147129,
+        "html_url": "https://github.com/openclaw/openclaw/issues/147129",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 122019,
+        "html_url": "https://github.com/openclaw/openclaw/issues/122019",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "product preflight tracker containing concrete old-state migration report"
+      },
+      {
+        "number": 158550,
+        "html_url": "https://github.com/openclaw/openclaw/issues/158550",
+        "versions": [
+          "2026.7.35",
+          "2026.8.33"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 155191,
+        "html_url": "https://github.com/openclaw/openclaw/issues/155191",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 156571,
+        "html_url": "https://github.com/openclaw/openclaw/issues/156571",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 157989,
+        "html_url": "https://github.com/openclaw/openclaw/issues/157989",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 143524,
+        "html_url": "https://github.com/openclaw/openclaw/issues/143524",
+        "versions": [
+          "2026.7.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 165967,
+        "html_url": "https://github.com/openclaw/openclaw/issues/165967",
+        "versions": [
+          "2026.8.33",
+          "2026.8.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 162362,
+        "html_url": "https://github.com/openclaw/openclaw/issues/162362",
+        "versions": [
+          "2026.8.33"
+        ],
+        "classification": "downgrade TO extended-stable, not upgrade FROM it"
+      },
+      {
+        "number": 165226,
+        "html_url": "https://github.com/openclaw/openclaw/issues/165226",
+        "versions": [
+          "2026.8.33",
+          "2026.8.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 162606,
+        "html_url": "https://github.com/openclaw/openclaw/issues/162606",
+        "versions": [
+          "2026.8.33"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 165458,
+        "html_url": "https://github.com/openclaw/openclaw/issues/165458",
+        "versions": [
+          "2026.8.33"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 116052,
+        "html_url": "https://github.com/openclaw/openclaw/issues/116052",
+        "versions": [
+          "2026.8.33"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 132525,
+        "html_url": "https://github.com/openclaw/openclaw/issues/132525",
+        "versions": [
+          "2026.8.33"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 161976,
+        "html_url": "https://github.com/openclaw/openclaw/issues/161976",
+        "versions": [
+          "2026.8.33"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 165961,
+        "html_url": "https://github.com/openclaw/openclaw/issues/165961",
+        "versions": [
+          "2026.8.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 162085,
+        "html_url": "https://github.com/openclaw/openclaw/issues/162085",
+        "versions": [
+          "2026.8.35"
+        ],
+        "classification": "old-state migration/cleanup report with same-machine extended-stable control; owner design unresolved"
+      },
+      {
+        "number": 165025,
+        "html_url": "https://github.com/openclaw/openclaw/issues/165025",
+        "versions": [
+          "2026.8.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 161227,
+        "html_url": "https://github.com/openclaw/openclaw/issues/161227",
+        "versions": [
+          "2026.8.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 164895,
+        "html_url": "https://github.com/openclaw/openclaw/issues/164895",
+        "versions": [
+          "2026.8.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      },
+      {
+        "number": 56349,
+        "html_url": "https://github.com/openclaw/openclaw/issues/56349",
+        "versions": [
+          "2026.8.35"
+        ],
+        "classification": "ordinary defect/feature/release mention; no explicit extended-source upgrade evidence found in body/bounded relevant comments"
+      }
+    ]
+  },
+  "selectedGroups": [
+    {
+      "group": "canonical-service-home",
+      "sources": [
+        "68834d21c435361630421e0cc24207df5d62719b"
+      ],
+      "reason": "Independent process home and OPENCLAW_HOME comparison against OS account home; retain state/config/profile/native-service fences. Existing home helpers present.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/config/paths.ts",
+        "src/infra/gateway-supervision.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/config/paths.ts",
+        "src/infra/gateway-supervision.ts"
+      ]
+    },
+    {
+      "group": "doctor-explicit-store-agent",
+      "sources": [
+        "8a04eb61ae46ee8e1728110e64573871efb6ab46"
+      ],
+      "reason": "Forward agent/allAgents with explicit store into existing selector.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/commands/doctor-session-sqlite-targets.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/commands/doctor-session-sqlite-targets.ts"
+      ]
+    },
+    {
+      "group": "snapshot-birthtime",
+      "sources": [
+        "d4ce3b2f33d41e8322a38c31430c9ce0e97a44c2"
+      ],
+      "reason": "Adapt only sameFileStatFingerprint from renamed main sqlite-snapshot-file.ts: identity plus size; final byte verification remains.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/infra/sqlite-snapshot.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/infra/sqlite-snapshot.ts"
+      ]
+    },
+    {
+      "group": "plugin-restart-state",
+      "sources": [
+        "6636dd6709bdbace1b6b72c3a86ff664bbdec244"
+      ],
+      "reason": "Shutdown is restart cleanup, not persistent disable/removal. Preserve persistent state for final and surviving-owner retirement; settled callback failures become named warnings after required work drains, while session-store lost-state and retained-resource failures remain fatal.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/plugins/runtime.ts",
+        "src/gateway/server-close.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/plugins/runtime.ts",
+        "src/gateway/server-close.ts"
+      ]
+    },
+    {
+      "group": "legacy-doctor-custody",
+      "sources": [
+        "725da12cc31cbb923ca9884beddb316e3ca4ac32"
+      ],
+      "reason": "Adapt 3 private hunks into sync baseline owner: empty run ID uses Doctor anchorOwner for command admission and receipt comparison. Do not import async-worker refactor.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/infra/update-managed-command-custody.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/infra/update-managed-command-custody.ts"
+      ]
+    },
+    {
+      "group": "stopped-gateway-rollback-drain",
+      "sources": [
+        "a7d90b3957226e12b2fe5d86bf557c01e618a589"
+      ],
+      "reason": "After initial failed status, verified stopped unit and free loopback port finish through guarded native stop; baseline lacks main explicitDrain mode.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/cli/update-cli/update-command-service-drain.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/cli/update-cli/update-command-service-drain.ts"
+      ]
+    },
+    {
+      "group": "stable-pnpm-service-launcher",
+      "sources": [
+        "9b46148b26804c213e23b11e3974278128ab1d2b"
+      ],
+      "reason": "Use existing resolvePnpmGlobalInstallOwner for .pnpm realpath; verify stable package-root link equals selected root and choose accessible stable entrypoint. Fall back unchanged if not verified.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/daemon/program-args.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/daemon/program-args.ts"
+      ]
+    },
+    {
+      "group": "backup-without-native-vec",
+      "sources": [
+        "058de57ceb6da44c9f82c09b40e1b473f3647e6b"
+      ],
+      "reason": "Remove native sqlite-vec loads and allowExtension from backup/integrity validation opens; retain SQLite shadow tables and structural/index/FK checks. Optional diagnostics-only source hunk is separate.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/commands/doctor-migration-backup.ts",
+        "src/infra/sqlite-snapshot.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/commands/doctor-migration-backup.ts",
+        "src/infra/sqlite-snapshot.ts",
+        "src/infra/update-candidate-state.diagnostics.ts"
+      ]
+    },
+    {
+      "group": "backup-bound-to-verified-bytes",
+      "sources": [
+        "0783e3f28d4eb7bd3d38142a6b61975bcb972a66"
+      ],
+      "reason": "Partial source already present: baseline snapshots return sha256/sizeBytes, but updater rehashes pathname. Consume returned verified digest/size instead, remove redundant sha256File read.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/infra/update-database-backup.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/infra/update-database-backup.ts"
+      ]
+    },
+    {
+      "group": "extended-stable-cross-os-tooling",
+      "sources": [
+        "7a438dc93ec0b80882cd40d217fd9d1508f8fea3"
+      ],
+      "reason": "Full remaining tooling group, not root-registry reapply: include and sha-bind candidate root, set extended-stable dist-tag, route only extended baseline x candidate via bare package spec. Keep candidate-self-update tarball contract separate.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "scripts/lib/cross-os-release-checks/companions.ts",
+        "scripts/lib/cross-os-release-checks/config.ts",
+        "scripts/lib/cross-os-release-checks/lanes.ts",
+        "scripts/openclaw-cross-os-release-checks.ts"
+      ],
+      "compatibleProductionPaths": [
+        "scripts/lib/cross-os-release-checks/companions.ts",
+        "scripts/lib/cross-os-release-checks/config.ts",
+        "scripts/lib/cross-os-release-checks/lanes.ts",
+        "scripts/openclaw-cross-os-release-checks.ts"
+      ]
+    },
+    {
+      "group": "stateless-plugin-confirmation",
+      "sources": [
+        "87abb5e76f17b35d5d7b654cfdc3265744a6ca8e",
+        "96d37e971f033c3ee4aefa4bef2f80d616d2f969"
+      ],
+      "reason": "Retained installed stateless plugins remain pending because baseline inspects/completes only selected IDs and requires Doctor inspection before explicit stateless proof. Forward existing retained IDs and stateless metadata from87abb; reorder existing completion after real state-migration/unavailable blockers and persist through current expected-generation/lease transaction. Do not add reasoned settlements/schema/API. Report only after successful existing persistence.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/commands/doctor-config-preflight-migrations.ts",
+        "src/commands/doctor-config-preflight-plugin-migrations.ts",
+        "src/commands/doctor-config-preflight-plugin-verification.ts",
+        "src/commands/doctor-config-preflight.ts",
+        "src/commands/doctor/shared/plugin-migration-availability.ts",
+        "src/commands/doctor/shared/plugin-update-config-migration.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/commands/doctor-config-preflight-migrations.ts",
+        "src/commands/doctor-config-preflight-plugin-migrations.ts",
+        "src/commands/doctor-config-preflight-plugin-verification.ts",
+        "src/commands/doctor-config-preflight.ts",
+        "src/commands/doctor/shared/plugin-migration-availability.ts"
+      ]
+    },
+    {
+      "group": "unattributed-doctor-writes",
+      "sources": [
+        "65a3cce3b9ba7778c06dcee3e4f0ef8845c5b619"
+      ],
+      "reason": "Compare expected initial database generations with final capture generations when deriving unchanged; do not advance expectedGenerations from unattributed external writes. Existing unchanged receipt prevents unsafe rollback. Candidate-side fail-closed safety fix.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/infra/update-doctor-result.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/infra/update-doctor-result.ts"
+      ]
+    },
+    {
+      "group": "rehearsal-avatar-projection",
+      "sources": [
+        "80322af5c7e5b606a172b9082756fd12f2151d1b"
+      ],
+      "reason": "Project valid local workspace identity avatars into isolated candidate workspace using the same existing validation predicate and source workspace resolver. Preserve outside-path invalidity and URL/data/non-workspace meaning; no new config surface.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/config/validation-core.ts",
+        "src/infra/update-candidate-paths.ts",
+        "src/infra/update-candidate-rehearsal.ts",
+        "src/shared/avatar-policy.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/config/validation-core.ts",
+        "src/infra/update-candidate-paths.ts",
+        "src/infra/update-candidate-rehearsal.ts",
+        "src/shared/avatar-policy.ts"
+      ]
+    },
+    {
+      "group": "monotonic-readiness-clock",
+      "sources": [
+        "823fbf745d4e79bba4871eda8e2ab2e58993cac8"
+      ],
+      "reason": "Use performance.now for private health-probe absolute deadline and all four production caller deadlines. Keep bounded attempts and wall-clock reporting separate. No one-caller-only cutover.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/cli/daemon-cli/restart-health-probe.ts",
+        "src/cli/daemon-cli/start-health.ts",
+        "src/cli/update-cli/update-command-readiness.ts",
+        "src/cli/update-cli/update-repair-command.ts",
+        "src/infra/update-run-interruption-health.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/cli/daemon-cli/restart-health-probe.ts",
+        "src/cli/daemon-cli/start-health.ts",
+        "src/cli/update-cli/update-command-readiness.ts",
+        "src/cli/update-cli/update-repair-command.ts",
+        "src/infra/update-run-interruption-health.ts"
+      ]
+    },
+    {
+      "group": "retained-authority-untouched-preparation",
+      "sources": [
+        "94975271e351ce67ac99bdde0d09826bbec4b757",
+        "76beb568588720ed7d9cfafc4c8730637afe7532"
+      ],
+      "reason": "Retain assertCurrent while inspecting stopped service under original execution; forward existing assertion into database revalidation. For legacy Linux expected stopped service missing managerUID but with environment, use caller geteuid only for retained stopped boundary. Separately retire only exact unchanged-original prepared/null-intent/no-publication or aborted journal under original lease, fence, admission, assertCurrent and current preflight/disarm/retire owner. No supersession/archive helper.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/cli/update-cli/update-command-candidate-validation.ts",
+        "src/cli/update-cli/update-command-database-context.ts",
+        "src/cli/update-cli/update-command-execution.ts",
+        "src/cli/update-cli/update-command-service-maintenance.ts",
+        "src/cli/update-cli/update-repair-command.ts",
+        "src/infra/package-update-activation.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/cli/update-cli/update-command-database-context.ts",
+        "src/cli/update-cli/update-command-execution.ts",
+        "src/cli/update-cli/update-command-service-maintenance.ts",
+        "src/cli/update-cli/update-repair-command.ts",
+        "src/infra/package-update-activation.ts"
+      ]
+    },
+    {
+      "group": "deferred-repair-ledger",
+      "sources": [
+        "688c0c53e43599620e5917715106e5e2f4f7d245"
+      ],
+      "reason": "Typed recoverable Doctor maintenance refusal must not be recorded as succeeded when Doctor did not run. Pass deferred guidance through existing lifecycle finish input, classify owned zero-exit pending repair as existing skipped status and use existing origin.nextAction. Omit main-only public repair-failed classification helper.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/cli/update-cli/update-command-finalize.ts",
+        "src/cli/update-cli/update-finalization-lifecycle.ts",
+        "src/infra/update-failure-public-codes.ts",
+        "src/infra/update-run-record.ts",
+        "src/infra/update-run-report.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/cli/update-cli/update-command-finalize.ts",
+        "src/cli/update-cli/update-finalization-lifecycle.ts",
+        "src/infra/update-run-record.ts",
+        "src/infra/update-run-report.ts"
+      ]
+    },
+    {
+      "group": "recorded-linked-plugin-availability",
+      "sources": [
+        "468a57d3837b6df6e3a10231ecea35a54f3edfc6"
+      ],
+      "reason": "An available linked plugin is skipped by npm convergence yet unnecessarily deferred in preflight Doctor, so its plugin-owned migration may not run during update.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/commands/doctor/shared/plugin-migration-availability.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/commands/doctor/shared/plugin-migration-availability.ts"
+      ]
+    },
+    {
+      "group": "bundled-load-path-churn",
+      "sources": [
+        "76aabd1052a37c743910212da9e2060f707c2074"
+      ],
+      "reason": "Doctor strips canonical bundled load paths that candidate plugin convergence re-adds, causing update config churn and redundant post-plugin Doctor work. Candidate-side fix uses existing shipped update markers.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/plugins/update-channel.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/plugins/update-channel.ts"
+      ]
+    },
+    {
+      "group": "timed-out-codex-discovery-retirement",
+      "sources": [
+        "e7ec72eb23c57265ea4980648e5762b2d59e70c9"
+      ],
+      "reason": "After migrated fleets reopen, timed-out written model/account discovery retains pooled Codex app-server process pairs. Parent issue research attributes this symptom to 7.35 fleet upgrades (#168159/#168585); this fixes a candidate-runtime resource leak, not an installed-driver preactivation defect.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "extensions/codex/src/app-server/model-catalog.ts"
+      ],
+      "compatibleProductionPaths": [
+        "extensions/codex/src/app-server/model-catalog.ts"
+      ]
+    },
+    {
+      "group": "canonical-database-validation-identity",
+      "sources": [
+        "efd06539cff04ea24c877b59909c504980a23cd9"
+      ],
+      "reason": "A symlinked state directory can give restart reader proof and subsequent admission different map keys, refusing a valid Gateway reopen after upgrade/restart. Rollback drains matching captured physical aliases through lexical native close owners; it does not redirect cleanup through a retargeted locator.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/infra/sqlite-worker-identity.ts",
+        "src/state/openclaw-agent-db-validation-cache.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/infra/sqlite-worker-identity.ts",
+        "src/state/openclaw-agent-db-validation-cache.ts",
+        "src/state/openclaw-agent-db-lifecycle.ts",
+        "src/infra/update-database-restore.ts"
+      ]
+    },
+    {
+      "group": "doctor-metadata-and-contribution-lifetimes",
+      "sources": [
+        "01ead786dc19b1cf9921dfcf90917206d876dfc1",
+        "310bce6a751791a9f61ce7a3bfcb3fd79653642b"
+      ],
+      "reason": "Private metadata caches/captured plugin contracts created by Doctor survive inspection; candidate preflight/full Doctor can leak scopes across update.; Repairs 01 lifecycle bug: loadAndMaybeMigrateDoctorConfig returns plugin callbacks that full Doctor still needs, but function-local await using has already revoked their contracts.",
+      "status": "integrated-compatible-adaptation; see coordinated PR for final-head proof",
+      "upstreamProductionPaths": [
+        "src/commands/doctor-config-flow.ts",
+        "src/commands/doctor-config-preflight.ts",
+        "src/commands/doctor/shared/plugin-metadata-snapshot-scope.ts",
+        "src/flows/doctor-health-startup.ts",
+        "src/flows/doctor-health.ts"
+      ],
+      "compatibleProductionPaths": [
+        "src/commands/doctor-config-flow.ts",
+        "src/commands/doctor-config-preflight.ts",
+        "src/commands/doctor/shared/plugin-metadata-snapshot-scope.ts",
+        "src/flows/doctor-health.ts",
+        "src/flows/doctor-tool-schema-runtime.ts"
+      ]
+    }
+  ],
+  "sourceCommits": [
+    {
+      "sha": "01ead786dc19b1cf9921dfcf90917206d876dfc1",
+      "url": "https://github.com/openclaw/openclaw/commit/01ead786dc19b1cf9921dfcf90917206d876dfc1",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix(doctor): retire private metadata captures after inspection"
+    },
+    {
+      "sha": "058de57ceb6da44c9f82c09b40e1b473f3647e6b",
+      "url": "https://github.com/openclaw/openclaw/commit/058de57ceb6da44c9f82c09b40e1b473f3647e6b",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix(doctor): keep the pre-migration backup when the sqlite-vec extension cannot load on this host (#165820)"
+    },
+    {
+      "sha": "0783e3f28d4eb7bd3d38142a6b61975bcb972a66",
+      "url": "https://github.com/openclaw/openclaw/commit/0783e3f28d4eb7bd3d38142a6b61975bcb972a66",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix(update): bind rollback backups to verified snapshot bytes (#162383)"
+    },
+    {
+      "sha": "310bce6a751791a9f61ce7a3bfcb3fd79653642b",
+      "url": "https://github.com/openclaw/openclaw/commit/310bce6a751791a9f61ce7a3bfcb3fd79653642b",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix(doctor): keep plugin contracts alive through finalization"
+    },
+    {
+      "sha": "468a57d3837b6df6e3a10231ecea35a54f3edfc6",
+      "url": "https://github.com/openclaw/openclaw/commit/468a57d3837b6df6e3a10231ecea35a54f3edfc6",
+      "upstreamAuthor": "Ayaan Zaidi",
+      "subject": "fix: avoid deferring available linked plugins during updates (#168190)"
+    },
+    {
+      "sha": "65a3cce3b9ba7778c06dcee3e4f0ef8845c5b619",
+      "url": "https://github.com/openclaw/openclaw/commit/65a3cce3b9ba7778c06dcee3e4f0ef8845c5b619",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix(update): refuse automatic restore after unattributed Doctor-time database writes (#160167)"
+    },
+    {
+      "sha": "6636dd6709bdbace1b6b72c3a86ff664bbdec244",
+      "url": "https://github.com/openclaw/openclaw/commit/6636dd6709bdbace1b6b72c3a86ff664bbdec244",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix(gateway): stop treating restarts as plugin removal (#164975)"
+    },
+    {
+      "sha": "68834d21c435361630421e0cc24207df5d62719b",
+      "url": "https://github.com/openclaw/openclaw/commit/68834d21c435361630421e0cc24207df5d62719b",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix: allow Doctor repair with canonical service home overrides (#160056)"
+    },
+    {
+      "sha": "688c0c53e43599620e5917715106e5e2f4f7d245",
+      "url": "https://github.com/openclaw/openclaw/commit/688c0c53e43599620e5917715106e5e2f4f7d245",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix(update): stop reporting a repair as succeeded when Doctor could not run (#167714)"
+    },
+    {
+      "sha": "725da12cc31cbb923ca9884beddb316e3ca4ac32",
+      "url": "https://github.com/openclaw/openclaw/commit/725da12cc31cbb923ca9884beddb316e3ca4ac32",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix(update): admit Doctor started by legacy updaters without a run ID (#167833)"
+    },
+    {
+      "sha": "76aabd1052a37c743910212da9e2060f707c2074",
+      "url": "https://github.com/openclaw/openclaw/commit/76aabd1052a37c743910212da9e2060f707c2074",
+      "upstreamAuthor": "Ayaan Zaidi",
+      "subject": "fix: stop bundled plugin config churn during updates (#168226)"
+    },
+    {
+      "sha": "76beb568588720ed7d9cfafc4c8730637afe7532",
+      "url": "https://github.com/openclaw/openclaw/commit/76beb568588720ed7d9cfafc4c8730637afe7532",
+      "upstreamAuthor": "Dallin Romney",
+      "subject": "fix(update): recover stopped legacy managed services (#166232)"
+    },
+    {
+      "sha": "7a438dc93ec0b80882cd40d217fd9d1508f8fea3",
+      "url": "https://github.com/openclaw/openclaw/commit/7a438dc93ec0b80882cd40d217fd9d1508f8fea3",
+      "upstreamAuthor": "Dallin Romney",
+      "subject": "fix: validate extended-stable package upgrades (#161450)"
+    },
+    {
+      "sha": "80322af5c7e5b606a172b9082756fd12f2151d1b",
+      "url": "https://github.com/openclaw/openclaw/commit/80322af5c7e5b606a172b9082756fd12f2151d1b",
+      "upstreamAuthor": "nitinjwadhawan",
+      "subject": "fix(update): updates fail when agent avatars use absolute workspace paths (#164638)"
+    },
+    {
+      "sha": "823fbf745d4e79bba4871eda8e2ab2e58993cac8",
+      "url": "https://github.com/openclaw/openclaw/commit/823fbf745d4e79bba4871eda8e2ab2e58993cac8",
+      "upstreamAuthor": "SunnyShu",
+      "subject": "fix(cli): keep gateway readiness deadline on the monotonic clock (#155799)"
+    },
+    {
+      "sha": "87abb5e76f17b35d5d7b654cfdc3265744a6ca8e",
+      "url": "https://github.com/openclaw/openclaw/commit/87abb5e76f17b35d5d7b654cfdc3265744a6ca8e",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix: finish stateless plugin upgrade confirmations (#161535)"
+    },
+    {
+      "sha": "8a04eb61ae46ee8e1728110e64573871efb6ab46",
+      "url": "https://github.com/openclaw/openclaw/commit/8a04eb61ae46ee8e1728110e64573871efb6ab46",
+      "upstreamAuthor": "Alix-007",
+      "subject": "fix(doctor): preserve explicit session store agent selector (#156907)"
+    },
+    {
+      "sha": "94975271e351ce67ac99bdde0d09826bbec4b757",
+      "url": "https://github.com/openclaw/openclaw/commit/94975271e351ce67ac99bdde0d09826bbec4b757",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix(update): keep retained service authority after a stopped-free inspection and let repair retire untouched preparations (#164997)"
+    },
+    {
+      "sha": "96d37e971f033c3ee4aefa4bef2f80d616d2f969",
+      "url": "https://github.com/openclaw/openclaw/commit/96d37e971f033c3ee4aefa4bef2f80d616d2f969",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix(doctor): settle deferred migrations for installed plugins without a migration contract (#167699)"
+    },
+    {
+      "sha": "9b46148b26804c213e23b11e3974278128ab1d2b",
+      "url": "https://github.com/openclaw/openclaw/commit/9b46148b26804c213e23b11e3974278128ab1d2b",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix(daemon): pin service launchers to the stable pnpm package link (#167905)"
+    },
+    {
+      "sha": "a7d90b3957226e12b2fe5d86bf557c01e618a589",
+      "url": "https://github.com/openclaw/openclaw/commit/a7d90b3957226e12b2fe5d86bf557c01e618a589",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix(update): skip the maintenance drain when rollback finds the Gateway already stopped (#167649)"
+    },
+    {
+      "sha": "d4ce3b2f33d41e8322a38c31430c9ce0e97a44c2",
+      "url": "https://github.com/openclaw/openclaw/commit/d4ce3b2f33d41e8322a38c31430c9ce0e97a44c2",
+      "upstreamAuthor": "Jay Zhou",
+      "subject": "fix(doctor): pre-migration snapshot fails on Linux hosts that do not report file birthtime (#164363)"
+    },
+    {
+      "sha": "e7ec72eb23c57265ea4980648e5762b2d59e70c9",
+      "url": "https://github.com/openclaw/openclaw/commit/e7ec72eb23c57265ea4980648e5762b2d59e70c9",
+      "upstreamAuthor": "Peter Steinberger",
+      "subject": "fix(codex): reap clients after model discovery times out (#168365)"
+    },
+    {
+      "sha": "efd06539cff04ea24c877b59909c504980a23cd9",
+      "url": "https://github.com/openclaw/openclaw/commit/efd06539cff04ea24c877b59909c504980a23cd9",
+      "upstreamAuthor": "Ayaan Zaidi",
+      "subject": "fix(state): symlinked state roots fail after Gateway restart (#168361)"
+    }
+  ],
+  "olderCandidateDecisions": [
+    {
+      "sha": "cd6c9c8e92836bd4b3df01088dc4209021160eb1",
+      "subject": "fix: restore the Gateway after activation Doctor fails (#160671)",
+      "decision": "blocked",
+      "group": "migrated-gateway-recovery"
+    },
+    {
+      "sha": "8e66b0b6c8d1e8022f3f1ebaee532f405897549d",
+      "subject": "fix: preserve plugin settings through update recovery (#160344)",
+      "decision": "already-covered",
+      "group": "plugin-settings-recovery"
+    },
+    {
+      "sha": "7a17d8ccbc13844fb74fb875792a62077312ceef",
+      "subject": "fix(update): preserve failure history during database rollback (#160614)",
+      "decision": "blocked",
+      "group": "rollback-failure-history"
+    },
+    {
+      "sha": "f2715ed30db3396b5f3814c1d325467ad5e72664",
+      "subject": "fix(state): state read worker loads the whole Gateway graph (+486 MB RSS) (#161003)",
+      "decision": "already-covered",
+      "group": "state-read-worker-graph"
+    },
+    {
+      "sha": "6c92ece5beeab4f1b975394c1ec62270dc9dfbfd",
+      "subject": "fix(update): large npm installs cannot finish updating (#161001)",
+      "decision": "already-covered",
+      "group": "large-package-integrity"
+    },
+    {
+      "sha": "8a04eb61ae46ee8e1728110e64573871efb6ab46",
+      "subject": "fix(doctor): preserve explicit session store agent selector (#156907)",
+      "decision": "recommend-adaptation",
+      "group": "doctor-explicit-store-agent"
+    },
+    {
+      "sha": "e694fa756e3d57777e15e81c80012ac078205540",
+      "subject": "fix: protect live Gateways sharing an update installation (#160663)",
+      "decision": "blocked",
+      "group": "shared-install-publication"
+    },
+    {
+      "sha": "5a19f3608c28baf0a890526c82bf4e09f5dde32b",
+      "subject": "fix(update): preserve candidate admission SQLite artifacts",
+      "decision": "already-covered",
+      "group": "artifact-preserving-admission"
+    },
+    {
+      "sha": "1eded5274e2e757f03b7259bcbd4edc40edba3b3",
+      "subject": "fix(doctor): require positive ownership before stopped-service activation (#160083)",
+      "decision": "blocked",
+      "group": "stopped-service-ownership"
+    },
+    {
+      "sha": "0703c215a416f866b49a7f113fff7834abafd84a",
+      "subject": "fix: refuse incompatible Windows 9.4 schema upgrades (#160718)",
+      "decision": "already-covered",
+      "group": "windows-94-schema-refusal"
+    },
+    {
+      "sha": "8953498f8d9a129d6ebb69d6bbd4ad8e16fa1ba7",
+      "subject": "fix(update): prepare source replacements before service stop (#161110)",
+      "decision": "blocked",
+      "group": "source-preparation-before-stop"
+    },
+    {
+      "sha": "f7462d559f11f83ac71286ba2d4ef396d09ce1fd",
+      "subject": "fix(doctor): reclaim captures beside unrelated runtime processes (#160158)",
+      "decision": "blocked",
+      "group": "process-census-capture-reclaim"
+    },
+    {
+      "sha": "e47d0ce424bcb800dec2112ec57192026724eea0",
+      "subject": "fix(update): preserve original state before direct updates (#161044)",
+      "decision": "blocked",
+      "group": "direct-original-capture"
+    },
+    {
+      "sha": "c3bcba68ef329da496c585d9d76d94699e6ee95b",
+      "subject": "fix(doctor): report missing transcript archive copies (#161233)",
+      "decision": "blocked",
+      "group": "transcript-archive-report"
+    },
+    {
+      "sha": "f70c61dba0c1fa82b75fe46609cd2fcba345bd0e",
+      "subject": "fix(update): guide inspection of unresolved captures (#161292)",
+      "decision": "skip-nonfunctional",
+      "group": "capture-guidance"
+    },
+    {
+      "sha": "ce38326114369bfb6f032c462d27bf37e0dfdf01",
+      "subject": "fix(update): settle candidate progress before cleanup (#161104)",
+      "decision": "blocked",
+      "group": "async-progress-settlement"
+    },
+    {
+      "sha": "1794d8b4ef8dde46f39a16da2bdbcf0bf2b519ef",
+      "subject": "fix(update): retain caller legacy plan during service selection",
+      "decision": "blocked",
+      "group": "admitted-legacy-plan"
+    },
+    {
+      "sha": "2d260ac811d301c07bc2be89e3d34679d5309075",
+      "subject": "fix(update): keep native service identities during discovery (#161238)",
+      "decision": "blocked",
+      "group": "native-service-discovery"
+    },
+    {
+      "sha": "ecb13ad18dfd305d7d8605c68b2f5144e72ead58",
+      "subject": "fix(update): refuse runtime repair while shared outputs are in use (#161239)",
+      "decision": "blocked",
+      "group": "shared-output-publication"
+    },
+    {
+      "sha": "b36eb3e7b11afb2774d1f6ab41977df4713269ff",
+      "subject": "fix(update): refresh configuration through update admission",
+      "decision": "blocked",
+      "group": "admission-config-refresh"
+    },
+    {
+      "sha": "2bbf4a893881adadcb590317096397370e7097d6",
+      "subject": "fix(update): accept database plans from older updaters (#161411)",
+      "decision": "not-affected",
+      "group": "older-plan-owner-dialect"
+    },
+    {
+      "sha": "2a0a65c4ae69c40b57029eea577689c6f17a93bc",
+      "subject": "fix(update): break the update admission import cycle through the type leaf",
+      "decision": "not-affected",
+      "group": "direct-original-capture"
+    },
+    {
+      "sha": "ec9f4865045bbcfd15cd891468bea3b126005ad5",
+      "subject": "fix(update): finish recovery without waiting for an absent Gateway (#161426)",
+      "decision": "blocked",
+      "group": "absent-gateway-finalization"
+    },
+    {
+      "sha": "87abb5e76f17b35d5d7b654cfdc3265744a6ca8e",
+      "subject": "fix: finish stateless plugin upgrade confirmations (#161535)",
+      "decision": "recommend-adaptation",
+      "group": "stateless-plugin-confirmation"
+    },
+    {
+      "sha": "ed25898341ccc689530cc7e1c71fc61a47eb2ec7",
+      "subject": "fix(doctor): complete offline NOCOW repairs after handle drainage (#161501)",
+      "decision": "not-affected",
+      "group": "nocow-offline-repair"
+    },
+    {
+      "sha": "a4af3a002042f5ed6e1f78857e79f1d413ef48a2",
+      "subject": "fix(doctor): Codex bwrap check misses loopback denials that break sandboxed shells (#161692)",
+      "decision": "outside-request",
+      "group": "codex-sandbox-runtime"
+    },
+    {
+      "sha": "86733c84cc2019250d009ea6f75b5cceccfd0fc4",
+      "subject": "fix(windows): skip foreign scheduled tasks during Gateway discovery",
+      "decision": "already-covered",
+      "group": "foreign-windows-tasks"
+    },
+    {
+      "sha": "0b3de8ae20b2e5dbf8da14c7ca34cc51d802b088",
+      "subject": "fix(update): settle service receipts and interrupted rollback (#161851)",
+      "decision": "blocked",
+      "group": "service-receipt-rollback"
+    },
+    {
+      "sha": "9a5d08effa30fa39cfcedba65c110003db2aa3c9",
+      "subject": "fix(doctor): stop repeated warnings for archived Workshop backups (#161586)",
+      "decision": "outside-request",
+      "group": "workshop-archive-warning"
+    },
+    {
+      "sha": "6830c82ea080767b8953edce13a3e543eed419da",
+      "subject": "fix(update): preserve invocation paths across package replacement",
+      "decision": "blocked",
+      "group": "invocation-paths"
+    },
+    {
+      "sha": "5381128b68b26dd988514958b6e445a55f782d67",
+      "subject": "fix(update): reduce oversized sealed recovery packages (#161919)",
+      "decision": "blocked",
+      "group": "sealed-recovery-footprint"
+    },
+    {
+      "sha": "05d3c90776e02dcf04044496a54652d6598b933a",
+      "subject": "fix(update): restore Windows task autostart after cancellation (#161990)",
+      "decision": "blocked",
+      "group": "windows-autostart-cancellation"
+    },
+    {
+      "sha": "7c5997006c892b87432233f57c87188e97426e44",
+      "subject": "fix(update): restore Windows autostart after cancellation (#162050)",
+      "decision": "blocked",
+      "group": "windows-autostart-cancellation"
+    },
+    {
+      "sha": "503de53d455c6101e5194a7c960c2c110f434add",
+      "subject": "fix(update): explain the bridge release for retired config (#162150)",
+      "decision": "already-covered",
+      "group": "bridge-release-guidance"
+    },
+    {
+      "sha": "f46120bca9ce1f16a6ec23e3a375c9d4116e08dd",
+      "subject": "fix(doctor): preserve prior cron run-log archives (#162152)",
+      "decision": "blocked",
+      "group": "cron-legacy-archive"
+    },
+    {
+      "sha": "588b5d7d50b78250148110f070d9deb55f4ace1d",
+      "subject": "fix: avoid slow requester checks during Doctor repairs (#162200)",
+      "decision": "blocked",
+      "group": "doctor-requester-policy"
+    },
+    {
+      "sha": "65a3cce3b9ba7778c06dcee3e4f0ef8845c5b619",
+      "subject": "fix(update): refuse automatic restore after unattributed Doctor-time database writes (#160167)",
+      "decision": "recommend-adaptation",
+      "group": "unattributed-doctor-writes"
+    },
+    {
+      "sha": "b5555b0bd9ed987d09fcdd5375031c023f25db7c",
+      "subject": "fix(update): retry the Windows backup rename on transient locks (#162231)",
+      "decision": "blocked",
+      "group": "windows-backup-rename"
+    },
+    {
+      "sha": "9a62cc8e644d1faa9d4ee109c874a0e43ccbf424",
+      "subject": "fix(update): exclude and retire historical package backups (#162246)",
+      "decision": "blocked",
+      "group": "historical-package-backups"
+    },
+    {
+      "sha": "04c454312779def7be7ff1f84ae5ec50241700b5",
+      "subject": "fix(doctor): keep long integrity checks responsive (#162213)",
+      "decision": "blocked",
+      "group": "long-integrity-inspection"
+    },
+    {
+      "sha": "f525f462414f9d5e03d2bdfc4de86d254152a29a",
+      "subject": "fix(update): use candidate snapshot worker and warn on plugin parse errors (#162298)",
+      "decision": "blocked",
+      "group": "candidate-snapshot-worker"
+    },
+    {
+      "sha": "b4836fcbb48728ecd493ec9276e67b68c0e022d9",
+      "subject": "fix(state): stop treating ctime-as-birthtime hosts as database generation changes (#162305)",
+      "decision": "already-covered",
+      "group": "linux-birthtime-policy"
+    },
+    {
+      "sha": "9680e57a9631b6a7060b9d4642bffb9f9fbc3000",
+      "subject": "fix(update): reclaim dead managed-service handoff leases with census evidence (#160488)",
+      "decision": "blocked",
+      "group": "managed-handoff-census-repair"
+    },
+    {
+      "sha": "0783e3f28d4eb7bd3d38142a6b61975bcb972a66",
+      "subject": "fix(update): bind rollback backups to verified snapshot bytes (#162383)",
+      "decision": "recommend-adaptation",
+      "group": "backup-bound-verified-bytes"
+    },
+    {
+      "sha": "504d2905d69c4761408968b9902426676079f529",
+      "subject": "fix(models): apply downloaded catalogs without a Gateway restart (#158000)",
+      "decision": "outside-request",
+      "group": "live-model-catalog"
+    },
+    {
+      "sha": "9fb7ba202992b7547339b0654791c49522b1c5a5",
+      "subject": "fix(doctor): keep session repair iterative on deep canonical owner chains (#162321)",
+      "decision": "already-covered",
+      "group": "iterative-session-owner-chain"
+    },
+    {
+      "sha": "6e6458a98ff3894117b0449a64b6dbfd1ca348d1",
+      "subject": "fix(update): stop snapshotting the state database on every progress poll (#162345)",
+      "decision": "blocked",
+      "group": "progress-snapshot-amplification"
+    },
+    {
+      "sha": "558d38a3db5ed6e87480e4ba5240c003d6f3740f",
+      "subject": "fix(doctor): never write the gateway auth token into config in plaintext (#162372)",
+      "decision": "blocked",
+      "group": "plaintext-auth-repair"
+    },
+    {
+      "sha": "d51d17d6da5a0cd052e1b9e0799b718a87f3cc06",
+      "subject": "fix(update): gate candidate canary progress markers behind the updater handshake (#162344)",
+      "decision": "blocked",
+      "group": "canary-runtime-markers"
+    },
+    {
+      "sha": "bbe0d114e4e06678a65a49479c6e9c8e920b500f",
+      "subject": "fix(update): avoid terminal errors during pnpm updates (#161920)",
+      "decision": "blocked",
+      "group": "pnpm-terminal-recovery"
+    },
+    {
+      "sha": "a6d34637326a040d714ccdb5d8cb9ccf19e13c6d",
+      "subject": "fix(update): skip the Gateway readiness wait when restart is disabled (#162327)",
+      "decision": "blocked",
+      "group": "no-restart-readiness"
+    },
+    {
+      "sha": "5cf24affb0c1c78e400426490c03956f21649f12",
+      "subject": "fix(update): report which retained package entries changed during rollback verification (#162365)",
+      "decision": "blocked",
+      "group": "rollback-report-entrypoints"
+    },
+    {
+      "sha": "f885caa955f023a496be46105d0b421ea1cc112a",
+      "subject": "fix(update): accept legacy numeric lease identities once, then pin exact bigint identities (#162245)",
+      "decision": "blocked",
+      "group": "legacy-numeric-identity"
+    },
+    {
+      "sha": "2e5f998331197b2313bb1d49a61361ada6a6e699",
+      "subject": "fix(doctor): retain migrations written by supported releases (#162430)",
+      "decision": "blocked",
+      "group": "config-migration-policy"
+    },
+    {
+      "sha": "82fe5e962f72a54bc80c43cb9b2a116228bafb3b",
+      "subject": "fix(update): retain final verification progress until reporting",
+      "decision": "blocked",
+      "group": "final-progress-receipt"
+    },
+    {
+      "sha": "9863e3f97ab4ad345ebbdcb575e6d310b13d40a1",
+      "subject": "fix(update): settle Windows WAL before rollback snapshot capture",
+      "decision": "superseded",
+      "group": "pre-capture-checkpoint"
+    },
+    {
+      "sha": "72a976e2731338f61a775ff1a1847606999173e0",
+      "subject": "fix(windows): recognize gateways with literal native arguments (#160680)",
+      "decision": "blocked",
+      "group": "windows-native-arguments"
+    },
+    {
+      "sha": "c77a055f08646bd1a5f59a845fa627b69003b40c",
+      "subject": "fix: avoid duplicate SQLite copies during update rehearsal (#162403)",
+      "decision": "blocked",
+      "group": "snapshot-transfer-copy-count"
+    },
+    {
+      "sha": "0ac1c241fba8cb0e255a907e5f23e523ec579a43",
+      "subject": "fix(update): allow database rollback after WAL checkpoints (#162599)",
+      "decision": "blocked",
+      "group": "wal-checkpoint-rollback"
+    },
+    {
+      "sha": "d417b5202305f4f796e8e62586dfd05d57e1b242",
+      "subject": "fix: avoid duplicate database backups during update rehearsals (#162429)",
+      "decision": "blocked",
+      "group": "rehearsal-backup-dedup"
+    },
+    {
+      "sha": "9a0146355c023f05d271834446a9b08830c81ad1",
+      "subject": "fix: share unchanged SQLite pages across update recovery files (#162466)",
+      "decision": "blocked",
+      "group": "sqlite-page-sharing"
+    },
+    {
+      "sha": "4d1890a3cdc3b8f31ac70bb63e19723fee0cc6a9",
+      "subject": "fix(doctor): recheck SQLite inventory after open-file validation",
+      "decision": "not-affected",
+      "group": "nocow-offline-repair"
+    },
+    {
+      "sha": "3771e26e8102dac31440549022c23641be2685c3",
+      "subject": "fix(doctor): defer unrequested NOCOW rewrites during updates (#162786)",
+      "decision": "not-affected",
+      "group": "nocow-offline-repair"
+    },
+    {
+      "sha": "b5dd0b887ca5a7e79027f1e0511a6884f3b0ae9d",
+      "subject": "fix(doctor): close Doctor-owned SQLite handles before the NOCOW store rewrite (#162809)",
+      "decision": "not-affected",
+      "group": "nocow-offline-repair"
+    },
+    {
+      "sha": "f833bb42560b5dc00b75bd134799c215436fc6c5",
+      "subject": "fix(update): await progress receipts before advancing commands (#162098)",
+      "decision": "blocked",
+      "group": "async-progress-settlement"
+    },
+    {
+      "sha": "08498ec40de5803d77eafb728ef675d0034c13c1",
+      "subject": "fix(cron): stale automatic tool lists block scheduled jobs from tools their owner has (#162432)",
+      "decision": "outside-request",
+      "group": "scheduled-tool-authority"
+    },
+    {
+      "sha": "a4a78b738e381d31f199fef83aad2c3876f746ae",
+      "subject": "fix(update): package activation recovery rejects Bun-hosted installs (#162586)",
+      "decision": "blocked",
+      "group": "bun-sealed-recovery"
+    },
+    {
+      "sha": "d188233947af77e0325ae94c7a9b9cb9ac552307",
+      "subject": "fix(talk): preserve inherited realtime settings on upgrade (#162644)",
+      "decision": "blocked",
+      "group": "legacy-realtime-config"
+    },
+    {
+      "sha": "b66471a26d9a453b6b599eb7cb6f5bfb87269cda",
+      "subject": "fix: preserve databases on rollback and capture failed update status (#162726)",
+      "decision": "blocked",
+      "group": "database-rollback-preservation"
+    },
+    {
+      "sha": "335d435bded0cc29ecd3d2758a8759822ba7c5ca",
+      "subject": "fix(update): keep progress writes from invalidating snapshots (#162604)",
+      "decision": "blocked",
+      "group": "async-progress-settlement"
+    },
+    {
+      "sha": "d89da7595d0d6c51f4e17b5631114023e49f931b",
+      "subject": "fix(cron): keep legacy repair in Doctor (#160448)",
+      "decision": "blocked",
+      "group": "cron-doctor-only-repair"
+    },
+    {
+      "sha": "302dbadcb82a5fea2d64b565a9d111d81984da36",
+      "subject": "fix(doctor): batch the NOCOW open-file check and close agent databases before the rewrite (#162919)",
+      "decision": "not-affected",
+      "group": "nocow-offline-repair"
+    },
+    {
+      "sha": "4f0541eb4691d155027d4febbe9e304a6e947127",
+      "subject": "fix: prevent delegated work from stopping silently (#162567)",
+      "decision": "outside-request",
+      "group": "delegated-agent-reliability"
+    },
+    {
+      "sha": "931c7b40b2e49790ad14a6299a87ddab76afe6f8",
+      "subject": "fix(test): first test or hook times out while compiled worker subprocesses prepare (#162792)",
+      "decision": "outside-request",
+      "group": "test-harness-preload"
+    },
+    {
+      "sha": "dc73f4bb40e5d63a7f5b57049bfe30a10df3296f",
+      "subject": "fix(daemon): report the selected launchd job state (#162838)",
+      "decision": "blocked",
+      "group": "launchd-selected-job"
+    },
+    {
+      "sha": "272d76b3203fae74d8c20f6db64147c99774f32d",
+      "subject": "fix(update): report the terminated rehearsal step instead of an inference-route failure (#162883)",
+      "decision": "skip-nonfunctional",
+      "group": "canary-timeout-guidance"
+    },
+    {
+      "sha": "ee6e666d262f8ee43e9acfbc158780e5d0502703",
+      "subject": "fix(update): replay transferred progress receipts through the async writer (#162909)",
+      "decision": "not-affected",
+      "group": "async-progress-settlement"
+    },
+    {
+      "sha": "4f575823aad2b2dd5874a697d6bad70842e5aad3",
+      "subject": "fix: Doctor leaves abandoned updater runtimes behind (#162886)",
+      "decision": "blocked",
+      "group": "abandoned-runtime-cleanup"
+    },
+    {
+      "sha": "57396d3cfef392c5acdeefa8f6f9ebf144b78b73",
+      "subject": "fix(doctor): recover a zero-byte retained transcript from its backup siblings (#162946)",
+      "decision": "blocked",
+      "group": "empty-retained-transcript"
+    },
+    {
+      "sha": "c4228dc7eeab585d4fb1c1cd4a07ea4f16a3bad0",
+      "subject": "fix(cli): openclaw command fails to start on Bun-only installs without Node (#162541)",
+      "decision": "blocked",
+      "group": "bun-cli-bootstrap"
+    },
+    {
+      "sha": "4418ca069b0c171dcdde4fff1f064270d3d2e397",
+      "subject": "fix(update): avoid false rollback refusals after Doctor errors (#163008)",
+      "decision": "blocked",
+      "group": "pre-capture-checkpoint"
+    },
+    {
+      "sha": "6ced196f957fef52040ed0f91a32a738b939ae4f",
+      "subject": "fix(doctor): retire verified session receipts and inventory migration backups (#162771)",
+      "decision": "blocked",
+      "group": "verified-session-receipt-retirement"
+    },
+    {
+      "sha": "9b0a90e3b9eb7c39ce15d493c45e82641e6489ee",
+      "subject": "fix(auth): keep canonical credentials and rotation state through Doctor normalization (#162958)",
+      "decision": "blocked",
+      "group": "canonical-auth-normalization"
+    },
+    {
+      "sha": "48f475d653223c41b6ddcdb1f3d904aef7a07d3a",
+      "subject": "fix(doctor): preserve symlinks during the NOCOW store rewrite (#163023)",
+      "decision": "not-affected",
+      "group": "nocow-offline-repair"
+    },
+    {
+      "sha": "2558513216f8f63eae76aefa35a05f730793aa41",
+      "subject": "fix(update): clarify runtime failures and recorded health (#162887)",
+      "decision": "skip-nonfunctional",
+      "group": "runtime-report-guidance"
+    },
+    {
+      "sha": "4c7d05d917325b77836455a55837ecb2b1b23eef",
+      "subject": "fix(runtime): make Bun diagnostics and Node worker builds portable (#162537)",
+      "decision": "blocked",
+      "group": "bun-worker-portability"
+    },
+    {
+      "sha": "4809de9b6addbe985cc31a903ad27f15fd1d3a6f",
+      "subject": "fix(update): make global-install failures actionable and retry stale dependency caches (#163039)",
+      "decision": "blocked",
+      "group": "npm-cache-recovery"
+    },
+    {
+      "sha": "b2b61883450864f3a168373a9b2336e7e05aa26e",
+      "subject": "fix(update): canonicalize package activation paths (#163086)",
+      "decision": "superseded",
+      "group": "activation-path-canonicalization"
+    },
+    {
+      "sha": "16c76279cb4803e8d169121f3e4c92b46c301ff4",
+      "subject": "fix(update): enable incremental SQLite reclamation during maintenance (#163105)",
+      "decision": "blocked",
+      "group": "sqlite-reclamation"
+    },
+    {
+      "sha": "6265a452f8b596cc25d39bc62dcb555a980d9d25",
+      "subject": "fix(update): support Bun updates with managed Node (#163227)",
+      "decision": "blocked",
+      "group": "bun-managed-node"
+    },
+    {
+      "sha": "9fc095cae88889df55309cf4bfd73fe7920f09c9",
+      "subject": "fix(sessions): preserve details after background writes (#163030)",
+      "decision": "outside-request",
+      "group": "session-background-details"
+    },
+    {
+      "sha": "079b9cca16e4661808fd197bcc34b8e7f4c09c47",
+      "subject": "fix(update): keep scoped pnpm resolvable when a candidate Node is prepended (#163310)",
+      "decision": "superseded",
+      "group": "git-node-path-order"
+    },
+    {
+      "sha": "03766af008a91585107bf7777ccd01adada7181a",
+      "subject": "fix: keep update chat messages short and helpful (#163318)",
+      "decision": "outside-request",
+      "group": "chat-update-wording"
+    },
+    {
+      "sha": "dc342b615e1fc78ccf03197853fc9e1981bccf72",
+      "subject": "fix(runtime): disable Bun auto-install at OpenClaw's own Bun launch owners (#163270)",
+      "decision": "outside-request",
+      "group": "bun-runtime-auto-install"
+    },
+    {
+      "sha": "8f364a7e80f6f4b9bb62f0cf6defca360fbb403a",
+      "subject": "fix(update): settle Doctor writers before recovering migrated Gateways (#162614)",
+      "decision": "blocked",
+      "group": "migrated-gateway-recovery"
+    },
+    {
+      "sha": "0f470aecdc1208c34df6f233371ff1d6e7484d25",
+      "subject": "fix(process): separate command custody types from settlement",
+      "decision": "skip-nonfunctional",
+      "group": "custody-type-leaf"
+    },
+    {
+      "sha": "7e7edf47af78199c1885b80aeabd9356693052ea",
+      "subject": "fix(update): keep the selected candidate Node first without displacing scoped launchers (#163380)",
+      "decision": "blocked",
+      "group": "git-node-path-order"
+    },
+    {
+      "sha": "2cdfb61689b7667ed08e3692a7b140ba3b2a2754",
+      "subject": "fix(update): keep original capture discovery best effort (#163344)",
+      "decision": "not-affected",
+      "group": "direct-original-capture"
+    },
+    {
+      "sha": "36c2c5a32a09bd1ed201831b3a4965a5f623acde",
+      "subject": "fix(exec): migrate legacy approval policy before runtime reads (#162687)",
+      "decision": "blocked",
+      "group": "legacy-exec-approval"
+    },
+    {
+      "sha": "4dc04b14f0bf466c4d777f8f676edffccd6ba9b9",
+      "subject": "fix(gateway): recover update status after startup Git timeouts (#163500)",
+      "decision": "blocked",
+      "group": "startup-update-history"
+    },
+    {
+      "sha": "0eca3d020e1a927143c5d851c95c39098c1fdf0f",
+      "subject": "fix(doctor): read update admission policy through a bounded independent reader (#163369)",
+      "decision": "blocked",
+      "group": "bounded-doctor-admission"
+    },
+    {
+      "sha": "f1d9422fbd6aca41ae908be2c06a4e5493e2aee8",
+      "subject": "fix(update): tolerate undeclared ancestor-only dependencies in the rehearsal copy and pause repeated auto-update failures (#163541)",
+      "decision": "blocked",
+      "group": "rehearsal-dependencies-auto-backoff"
+    },
+    {
+      "sha": "f1be74485a89e8bf36055cf7cffd6ff2439da50d",
+      "subject": "fix(sessions): retain Doctor repair for July provider aliases (#163171)",
+      "decision": "blocked",
+      "group": "july-session-provider-alias"
+    },
+    {
+      "sha": "a1903fca5bdbbc953d97ae5de9031822ae6b9547",
+      "subject": "fix(update): canonicalize temporarily absent package roots (#163479)",
+      "decision": "already-covered",
+      "group": "activation-path-canonicalization"
+    },
+    {
+      "sha": "22f4d8ffbfb2285b126703c3955cc2fddd3f10e0",
+      "subject": "fix(update): keep registry mutations and Doctor repairs working when update-history reconciliation cannot run (#163608)",
+      "decision": "blocked",
+      "group": "history-reconciliation-best-effort"
+    },
+    {
+      "sha": "2e99109a931d7aa9ce71e2e0584005ea757f8612",
+      "subject": "fix(doctor): migrate memory vectors one row at a time and keep native crash diagnostics (#163640)",
+      "decision": "blocked",
+      "group": "memory-vector-migration"
+    },
+    {
+      "sha": "c271d1747f262f7564ccae7b92f5d7e47b1058bc",
+      "subject": "fix: show the installed version after Git updates (#163683)",
+      "decision": "skip-nonfunctional",
+      "group": "git-version-report"
+    },
+    {
+      "sha": "71b857a75b52b64bded377bda4f53086897a8283",
+      "subject": "fix(cli): preserve blank snapshot argument diagnostics",
+      "decision": "skip-nonfunctional",
+      "group": "snapshot-argument-guidance"
+    },
+    {
+      "sha": "b37936459a68b39081647320093207b038efec10",
+      "subject": "fix(update): finish unfinished agent migrations at Gateway start and deliver update outcomes durably (#163803)",
+      "decision": "blocked",
+      "group": "startup-agent-migration-notices"
+    },
+    {
+      "sha": "32e3a009596cef52ec8257d4e8ae1388c56aabdd",
+      "subject": "fix(doctor): stop repair when admitted originals cannot be verified (#163808)",
+      "decision": "not-affected",
+      "group": "direct-original-capture"
+    },
+    {
+      "sha": "67fca112f8dfacf88f79b5f2a1cb2b6378e2ff41",
+      "subject": "fix(doctor): stop flagging operator drop-ins as unknown service definition drift (#163847)",
+      "decision": "blocked",
+      "group": "operator-drop-in-audit"
+    },
+    {
+      "sha": "ecee1affa92f88a792913ada8815f9b604f9b503",
+      "subject": "fix(doctor): admit disposable update rehearsals before repair (#163869)",
+      "decision": "not-affected",
+      "group": "direct-original-capture"
+    },
+    {
+      "sha": "408987260140b81abe855c1da97bbebaa307f4fd",
+      "subject": "fix(doctor): preserve WhatsApp account routing during updates (#163974)",
+      "decision": "blocked",
+      "group": "whatsapp-update-routing"
+    },
+    {
+      "sha": "d5c4c19fe1863dc84badedec8cbbbec4906a4855",
+      "subject": "fix: stop logging successful update progress as errors (#162270)",
+      "decision": "skip-nonfunctional",
+      "group": "progress-log-severity"
+    },
+    {
+      "sha": "c7c937abfea22f17be5cac24bfc906d4d91368f6",
+      "subject": "fix(webhooks): preserve callbacks while retiring implicit ports (#162759)",
+      "decision": "blocked",
+      "group": "legacy-webhook-migration"
+    },
+    {
+      "sha": "dd66b67807344d7754de8f7bc29af7c9e9e59bf7",
+      "subject": "fix(cli): keep gateway lifecycle commands working with an invalid config (#164158)",
+      "decision": "blocked",
+      "group": "invalid-config-lifecycle"
+    },
+    {
+      "sha": "97f01e21cbf1e8ebfc4c4868c5b0ee0d1f5cff77",
+      "subject": "fix: preserve schema worker causes in update reports (#164169)",
+      "decision": "blocked",
+      "group": "schema-worker-error-chain"
+    },
+    {
+      "sha": "b978fc0e0e7107b1a6bfa00989557e0aa51d2641",
+      "subject": "fix(startup): leave webhook config migrations to Doctor",
+      "decision": "not-affected",
+      "group": "legacy-webhook-migration"
+    },
+    {
+      "sha": "48ff3d1efde5fbb0bb534693c6bcc448cad7d796",
+      "subject": "fix(update): derive recovery guidance from the recorded serving verdict (#164193)",
+      "decision": "skip-nonfunctional",
+      "group": "serving-verdict-guidance"
+    },
+    {
+      "sha": "260a31989937cb1ac3d2d0a2280a65ef5312a81a",
+      "subject": "fix(doctor): keep state repairs running with an externally managed read-only config (#164235)",
+      "decision": "blocked",
+      "group": "external-readonly-config"
+    },
+    {
+      "sha": "2093e8aabfe6776117be3bed0cd9494c71a9e87b",
+      "subject": "fix(update): log cleanup progress without error severity (#163477)",
+      "decision": "skip-nonfunctional",
+      "group": "progress-log-severity"
+    },
+    {
+      "sha": "02dad3a3eacd7ef5776e6ad5590ea98e3bff171e",
+      "subject": "fix(doctor): report a still-starting Gateway as a warning after repair (#164261)",
+      "decision": "superseded",
+      "group": "doctor-starting-warning"
+    },
+    {
+      "sha": "a596d146f9b71c93a4473c4701bd1de60a70f3ed",
+      "subject": "fix(update): keep the cleanup progress line out of --json output (#164312)",
+      "decision": "skip-nonfunctional",
+      "group": "json-progress-output"
+    },
+    {
+      "sha": "aa298d3a515ca85dc0970aacda0403d67ec2a097",
+      "subject": "fix(update): publish the repair deadline result when the Gateway is still starting (#164337)",
+      "decision": "blocked",
+      "group": "repair-startup-deadline"
+    },
+    {
+      "sha": "55e3daa31530a9e4e91d2483c757cc00ed9263e6",
+      "subject": "fix(whatsapp): migrate unscoped credentials through Doctor (#163203)",
+      "decision": "blocked",
+      "group": "whatsapp-legacy-credentials"
+    },
+    {
+      "sha": "fc7e71bad25845ba8c23ddd6f3c44ded11a9f427",
+      "subject": "fix(update): preserve failure reasons after report redaction (#164264)",
+      "decision": "blocked",
+      "group": "failure-code-redaction"
+    },
+    {
+      "sha": "f79dac86bd4a9bb97bf99a5a69a04c603c0eeac6",
+      "subject": "fix(update): accept a re-linked launcher during the swap and keep triage usable without safe mode (#164438)",
+      "decision": "blocked",
+      "group": "relinked-launcher-admission"
+    },
+    {
+      "sha": "06da0de86c0a27dc1e92995f9d0a2428880ce90c",
+      "subject": "fix(gateway): reclaim a dead owner lease with the same liveness evidence as the state lock (#164546)",
+      "decision": "blocked",
+      "group": "dead-gateway-owner-lease"
+    },
+    {
+      "sha": "4bcd6956b0a431b3d7024f1ad13095947c242bf8",
+      "subject": "fix(doctor): quarantine an unusable agent deletion journal instead of blocking the update (#164509)",
+      "decision": "blocked",
+      "group": "agent-deletion-journal-quarantine"
+    },
+    {
+      "sha": "97bd060cdbe019247b2605bb1ef6b11afc45c30e",
+      "subject": "fix(voice-call): refuse retired state before update activation (#164330)",
+      "decision": "blocked",
+      "group": "voice-call-retired-state"
+    },
+    {
+      "sha": "8ea8bb11a5bd5c0fa66665861c10b49aaf8ed989",
+      "subject": "fix(doctor): drain agent databases before maintenance release (#164503)",
+      "decision": "blocked",
+      "group": "doctor-agent-drain"
+    },
+    {
+      "sha": "68d4dc6fd63b1a91adc36f3f8200a81f88e4180d",
+      "subject": "fix(update): never strand a non-root update on launcher ownership (#164636)",
+      "decision": "blocked",
+      "group": "nonroot-launcher-publication"
+    },
+    {
+      "sha": "54cfa2f8647c66fa34d72ad149a316caf8b8f6e4",
+      "subject": "fix(doctor): include nested maintenance failure diagnostics",
+      "decision": "skip-nonfunctional",
+      "group": "maintenance-error-guidance"
+    },
+    {
+      "sha": "070b7479dc3f488b13b7cf210e7ff529a9b2ff7e",
+      "subject": "fix(update): hand the private Node runtime to npm lifecycle children (#164677)",
+      "decision": "blocked",
+      "group": "npm-lifecycle-node"
+    },
+    {
+      "sha": "775ea5ca9f26f07a9b8978ee308a98d229424c8d",
+      "subject": "fix(update): degrade candidate verification at integrity limits instead of refusing the update (#164504)",
+      "decision": "blocked",
+      "group": "integrity-budget-degradation"
+    },
+    {
+      "sha": "301a040200d10e65813c434a57364c5eb79e7b97",
+      "subject": "fix(daemon): recover a disabled Windows Gateway task from doctor and name it in status (#164728)",
+      "decision": "blocked",
+      "group": "disabled-windows-task"
+    },
+    {
+      "sha": "243f7d475691ea237382ed5e1a4c2ab0ad3cc9f0",
+      "subject": "fix(update): name each candidate check before running it (#164746)",
+      "decision": "blocked",
+      "group": "named-canary-receipts"
+    },
+    {
+      "sha": "f0af328d2475d499cb551f6d97347ad016b5bdd0",
+      "subject": "fix(update): judge publication identity on the published objects and refuse at admission (#164797)",
+      "decision": "blocked",
+      "group": "publication-object-identity"
+    },
+    {
+      "sha": "61ef2a47fdc5858a38f83f3f8d03af0bb8afe2ce",
+      "subject": "fix(update): surface the child's refusal reason through the managed handoff (#164782)",
+      "decision": "blocked",
+      "group": "child-refusal-transport"
+    },
+    {
+      "sha": "d06201dd8dba9cdafa3c4dd11993f8c2d0432350",
+      "subject": "fix(update): complete the package swap across devices instead of rolling back on EXDEV (#164769)",
+      "decision": "blocked",
+      "group": "cross-device-publication-tree"
+    },
+    {
+      "sha": "a0a1f184a3867aa4dd3493a743e0c59a4ebfbecd",
+      "subject": "fix(update): settle recovery after lease database replacement (#164849)",
+      "decision": "blocked",
+      "group": "activation-custody-supersession"
+    },
+    {
+      "sha": "685fdc1f57c499f394e9dd5adab4e70caf120c69",
+      "subject": "fix(cli): drain shared-state owners before a command exits (#164853)",
+      "decision": "blocked",
+      "group": "worker-native-drain"
+    },
+    {
+      "sha": "4d2617d425ab247a2f55a18523da8cc6a483746c",
+      "subject": "fix(update): identify unsafe recovery objects in failure reports (#164858)",
+      "decision": "skip-nonfunctional",
+      "group": "unsafe-object-guidance"
+    },
+    {
+      "sha": "59a39dc89f54cf7df387f42b5a716bfff09fcc3a",
+      "subject": "fix(doctor): import sessions from completed V2 receipts without artifact identity (#164867)",
+      "decision": "already-covered",
+      "group": "v2-session-receipt-compatibility"
+    },
+    {
+      "sha": "d47ee981f47b0cfddec29b2eaacc9c686c2f2902",
+      "subject": "fix(update): settle only this Doctor's commands in managed custody (#164868)",
+      "decision": "already-covered",
+      "group": "foreign-doctor-custody"
+    },
+    {
+      "sha": "c90b91b3e4c8962a9bb2491e96f62020f3290bed",
+      "subject": "fix(cli): pin prepared child invocations to the launcher's resolved release (#164998)",
+      "decision": "blocked",
+      "group": "prepared-cli-launcher-pin"
+    },
+    {
+      "sha": "94975271e351ce67ac99bdde0d09826bbec4b757",
+      "subject": "fix(update): keep retained service authority after a stopped-free inspection and let repair retire untouched preparations (#164997)",
+      "decision": "recommend-adaptation",
+      "group": "retained-authority-untouched-preparation"
+    },
+    {
+      "sha": "327dc38387b6afa8c8d62b4f6c8c9975143331d3",
+      "subject": "fix(macos): fence Gateway recovery installs with the observed runtime pin (#165044)",
+      "decision": "blocked",
+      "group": "macos-recovery-runtime-pin"
+    },
+    {
+      "sha": "cb102cd09141cc9ced7d05e2541ee8fc6fb3c55f",
+      "subject": "fix(update): skip unnecessary fetches for cached commit targets (#165060)",
+      "decision": "skip-nonfunctional",
+      "group": "cached-git-target-optimization"
+    },
+    {
+      "sha": "81fd86410e1e993762288a1c47f40599340879ce",
+      "subject": "fix(update): finish deferred model repair for the admitted run (#165148)",
+      "decision": "blocked",
+      "group": "admitted-model-retirement"
+    },
+    {
+      "sha": "5ae6497da4f2f7cf4e3494c1de7a126d9f719940",
+      "subject": "fix(update): settle recovery when the handoff lease database is missing (#165238)",
+      "decision": "blocked",
+      "group": "activation-custody-supersession"
+    },
+    {
+      "sha": "1bef972018600c97a344e71c024c4ffe201cd60e",
+      "subject": "fix: repair legacy config on identical-package updates (#165242)",
+      "decision": "blocked",
+      "group": "identical-package-legacy-config"
+    },
+    {
+      "sha": "d33802d47e266cfdfd50aa448956c013c0c3d827",
+      "subject": "fix(update): fall back to a byte copy when the file-clone ioctl is denied (#165257)",
+      "decision": "blocked",
+      "group": "denied-clone-fallback"
+    },
+    {
+      "sha": "e7edee1790d64f6a394eaa769ec46cd57baf8ab4",
+      "subject": "fix(doctor): resolve the Claude CLI binary the way the runtime does (#165273)",
+      "decision": "outside-request",
+      "group": "claude-cli-discovery"
+    },
+    {
+      "sha": "592c0824ab7c822c4f4db592fcad31785f891892",
+      "subject": "fix: replace running Windows services safely on reinstall (#165261)",
+      "decision": "blocked",
+      "group": "windows-reinstall-running-unit"
+    },
+    {
+      "sha": "ef5f7c199dd793b3b9ca6378c3e343babb2d68e2",
+      "subject": "fix(macos): size the LaunchAgent exit timeout to the Gateway drain budget (#165320)",
+      "decision": "blocked",
+      "group": "launchd-exit-budget"
+    },
+    {
+      "sha": "8d66187f090f1451e7035f4e49c4e5f47171bff0",
+      "subject": "fix(doctor): wait on and reclaim a stale Gateway lock like Gateway startup (#165355)",
+      "decision": "blocked",
+      "group": "stale-gateway-lock-repair"
+    },
+    {
+      "sha": "eb893a87b638de44e572d03325657d0e52986c10",
+      "subject": "fix(windows): install an unattended-capable Gateway task and size readiness to cold boot (#165163)",
+      "decision": "blocked",
+      "group": "windows-unattended-task"
+    },
+    {
+      "sha": "689bda012dae1fd39862098df4e3393590be89c5",
+      "subject": "fix(doctor): keep the caller's own maintenance window out of the shared lock wait (#165417)",
+      "decision": "blocked",
+      "group": "doctor-own-maintenance-wait"
+    },
+    {
+      "sha": "078d0140c9c367ba315a862defd0a0621f220f6f",
+      "subject": "fix(doctor): updates no longer refuse unreferenced retired OAuth sidecars (#165420)",
+      "decision": "blocked",
+      "group": "unreferenced-oauth-sidecars"
+    },
+    {
+      "sha": "17e945fb8220f0a44aec34eb9e150e6a6fdab9df",
+      "subject": "fix(ci): restore failing runtime and test lint checks",
+      "decision": "outside-request",
+      "group": "ci-lint-repair"
+    },
+    {
+      "sha": "98c200e21defd37049d5dd6f6c5a5c61eccaeb51",
+      "subject": "fix(update): retain completion errors without a lint suppression (#165536)",
+      "decision": "skip-nonfunctional",
+      "group": "completion-error-refactor"
+    },
+    {
+      "sha": "91dc92261fda821f9991493bec8f90a8b5cfaefe",
+      "subject": "fix: preserve Windows runtime pins with task working directories (#165538)",
+      "decision": "blocked",
+      "group": "windows-working-directory-pin"
+    },
+    {
+      "sha": "fb84dd57fd5746fb078ade93e79f58a4f2f57274",
+      "subject": "fix(update): let repair settle a publication whose live package already serves the candidate (#165607)",
+      "decision": "blocked",
+      "group": "live-candidate-publication-settlement"
+    },
+    {
+      "sha": "553841e490220a6c723da84a4fdd3caf0dcb2a11",
+      "subject": "fix(update): avoid inflated counts in shallow checkouts (#165316)",
+      "decision": "skip-nonfunctional",
+      "group": "shallow-git-counts"
+    },
+    {
+      "sha": "8ce839b1653c4964e42ef3dce36a185ea844c75e",
+      "subject": "fix(update): refuse before mutating when the managed unit is masked and never roll back for a masked restart (#165747)",
+      "decision": "blocked",
+      "group": "masked-systemd-unit"
+    },
+    {
+      "sha": "292c78d743d056f9543b8c61bb1ad087f7ac940e",
+      "subject": "fix: doctor updates recover archives without leaving gateways stopped (#165854)",
+      "decision": "blocked",
+      "group": "doctor-archive-maintenance"
+    },
+    {
+      "sha": "e5b62e7c791427a300d0049d33918501605f1a80",
+      "subject": "fix(daemon): verify launchd membership natively when launchctl denies PID domains (#163317)",
+      "decision": "blocked",
+      "group": "native-launchd-coalition"
+    },
+    {
+      "sha": "b898c261539dbbdbaedfe2c7b681dbc37fe6481a",
+      "subject": "fix(cli): use plain language for connection checks (#165740)",
+      "decision": "skip-nonfunctional",
+      "group": "connection-check-wording"
+    },
+    {
+      "sha": "75779e39d6bc97f40ec6db0081caf4317d98564d",
+      "subject": "fix(update): accept unchanged plugin files after hard-link capture (#165982)",
+      "decision": "not-affected",
+      "group": "direct-original-capture"
+    },
+    {
+      "sha": "b5d202d49f508b9ff2dc392775d0fc9d0525d3aa",
+      "subject": "fix(update): avoid duplicate snapshots during candidate readiness (#166126)",
+      "decision": "blocked",
+      "group": "candidate-readiness-copy-count"
+    },
+    {
+      "sha": "76beb568588720ed7d9cfafc4c8730637afe7532",
+      "subject": "fix(update): recover stopped legacy managed services (#166232)",
+      "decision": "recommend-adaptation",
+      "group": "retained-authority-untouched-preparation"
+    },
+    {
+      "sha": "058de57ceb6da44c9f82c09b40e1b473f3647e6b",
+      "subject": "fix(doctor): keep the pre-migration backup when the sqlite-vec extension cannot load on this host (#165820)",
+      "decision": "recommend-adaptation",
+      "group": "backup-without-native-vec"
+    },
+    {
+      "sha": "59834998f25bacb0fadee2028cf720cf8cdd3b97",
+      "subject": "fix(update): restart the Gateway and record the interruption when the updater is signaled mid-activation (#165863)",
+      "decision": "blocked",
+      "group": "signaled-mid-activation"
+    },
+    {
+      "sha": "4e9a106d1a2b1f12bd294b69388661899e9e97af",
+      "subject": "fix(update): let the operator's explicit TMPDIR win over the service default when planning the candidate snapshot (#165830)",
+      "decision": "blocked",
+      "group": "operator-scratch-placement"
+    },
+    {
+      "sha": "ae6fdc20d3ba6af7b2194b2353c30c7e83ef2803",
+      "subject": "fix(doctor): classify command-payload cron jobs as non-tool-bearing in the scheduled authority check (#166384)",
+      "decision": "outside-request",
+      "group": "cron-tool-bearing-authority"
+    },
+    {
+      "sha": "390fcec17863174dda480f563f87927738b9ee24",
+      "subject": "fix(doctor): migrate legacy session entry state before SQLite import (#165866)",
+      "decision": "not-affected",
+      "group": "legacy-session-entry-import"
+    },
+    {
+      "sha": "3a90ed1c39d0a2fd0decebda818eb72ce8ee69cf",
+      "subject": "fix(doctor): reconcile residual legacy session imports on an already-migrated store instead of stopping Doctor (#166397)",
+      "decision": "blocked",
+      "group": "residual-legacy-session-import"
+    },
+    {
+      "sha": "2d26ebd9fbb847ed9ef0a0bcef98d815517df134",
+      "subject": "fix(update): settle a completed package receipt whose filesystem device id changed instead of blocking future updates (#166394)",
+      "decision": "blocked",
+      "group": "completed-receipt-identity-drift"
+    },
+    {
+      "sha": "e7546f2e40cc1d75d3a253fae40243be0eea8548",
+      "subject": "fix(update): treat channel health-collection timeouts as warnings during post-update verification (#165852)",
+      "decision": "blocked",
+      "group": "channel-health-timeout"
+    },
+    {
+      "sha": "bbc8ea2ebc90873a63505942b6766e22fe8f7394",
+      "subject": "fix(doctor): write the pre-repair state capture on filesystems that reject RENAME_NOREPLACE (#166425)",
+      "decision": "not-affected",
+      "group": "direct-original-capture"
+    },
+    {
+      "sha": "634440e2e9257d04b4d153db3419ff01336e3760",
+      "subject": "fix(plugins): settle deferred plugin migrations whose owner is unavailable and whose protected config is empty (#165861)",
+      "decision": "blocked",
+      "group": "unavailable-plugin-settlement"
+    },
+    {
+      "sha": "eebfed78f7b71161188e0ecca022b0083305e341",
+      "subject": "fix(update): name the failing preflight check, the resolved install, and the detected runtime when refusing (#166410)",
+      "decision": "blocked",
+      "group": "preflight-runtime-diagnostics"
+    },
+    {
+      "sha": "a2e44be9f830e0c63f5904a50f1956b43aa0114c",
+      "subject": "fix(update): reduce slow prevalidation for large plugin trees (#166317)",
+      "decision": "blocked",
+      "group": "large-plugin-prevalidation"
+    },
+    {
+      "sha": "a86dd383534f8b3b6d1ebdc7e4b7601db65c6ad3",
+      "subject": "fix(doctor): retain interrupted capture publication evidence (#166495)",
+      "decision": "not-affected",
+      "group": "direct-original-capture"
+    },
+    {
+      "sha": "ccf5aba97cb14847961d4fb35d45a27c262948e8",
+      "subject": "fix(doctor): stop treating the memory reindex lock as a held agent database (#166517)",
+      "decision": "blocked",
+      "group": "memory-lock-agent-discovery"
+    },
+    {
+      "sha": "efcb55c8536490afbedc3d71cb7b3f1b575f75e2",
+      "subject": "fix(update): bind the Windows candidate executor by its handoff identity instead of process ancestry (#166530)",
+      "decision": "blocked",
+      "group": "windows-executor-binding"
+    },
+    {
+      "sha": "28c5d198851330906aa6feafc3effc3682021a15",
+      "subject": "fix(update): restart the Gateway after a refused finalize step instead of trusting an older stop receipt (#166548)",
+      "decision": "blocked",
+      "group": "refused-finalize-stop-receipt"
+    },
+    {
+      "sha": "800fce298ba8d91f97932bd31308e3efaf876855",
+      "subject": "fix(update): record why a managed-service update handoff failed (#166540)",
+      "decision": "skip-nonfunctional",
+      "group": "managed-handoff-failure-report"
+    },
+    {
+      "sha": "f2c5ed82c5f1066b4716c30de790cbe056ce7098",
+      "subject": "fix(update): explain partial clone dry-run targets (#166577)",
+      "decision": "skip-nonfunctional",
+      "group": "partial-clone-dry-run-guidance"
+    },
+    {
+      "sha": "c9c023fbb12d8bfde61af4a228a9170e4f8b3f9b",
+      "subject": "fix(plugins): admit recovery for an unfinished plugin migration and fall back to the exact npm release when ClawHub lags (#166588)",
+      "decision": "blocked",
+      "group": "plugin-recovery-clawhub-fallback"
+    },
+    {
+      "sha": "2d6024975f2dc1246ca2fe4be1b144142626659d",
+      "subject": "fix(update): refuse a Windows update that needs elevation immediately and name it as the cause (#166695)",
+      "decision": "blocked",
+      "group": "windows-elevation-preflight"
+    },
+    {
+      "sha": "3ac5189b94461aac254aae9ee638e769204314ab",
+      "subject": "fix(state): serialize wake and hook database admission (#166860)",
+      "decision": "outside-request",
+      "group": "wake-hook-state-admission"
+    },
+    {
+      "sha": "b7969ee4f9e0870cdb16b56a54394053681c8bcb",
+      "subject": "fix(state): give one actionable answer for state written by a newer release and keep status reads read-only (#166963)",
+      "decision": "blocked",
+      "group": "newer-state-readonly-status"
+    },
+    {
+      "sha": "80322af5c7e5b606a172b9082756fd12f2151d1b",
+      "subject": "fix(update): updates fail when agent avatars use absolute workspace paths (#164638)",
+      "decision": "recommend-adaptation",
+      "group": "rehearsal-avatar-projection"
+    },
+    {
+      "sha": "bfe4540e85d6aae760bf5a85473ef5250d00cb86",
+      "subject": "fix(update): stop the managed systemd Gateway with the same bounded sequence as gateway stop (#167040)",
+      "decision": "blocked",
+      "group": "bounded-systemd-stop"
+    },
+    {
+      "sha": "817084f156a6df22528f17172b7536f2641bd9be",
+      "subject": "fix(update): repair turns time out before running tools (#166847)",
+      "decision": "blocked",
+      "group": "update-repair-tool-timeout"
+    },
+    {
+      "sha": "24c3201e57cb5a0036362557b4c26c2ddf9c3ea9",
+      "subject": "fix(doctor): keep the owner target kind when migrating legacy channel owners (#167059)",
+      "decision": "blocked",
+      "group": "legacy-channel-owner-kind"
+    },
+    {
+      "sha": "977b46b22f21a1dbb98be73ba2fac779642ae817",
+      "subject": "fix(update): admit managed handoff writers through the coordinator lock before pinning the protective reader (#167051)",
+      "decision": "blocked",
+      "group": "coordinator-handoff-writer"
+    },
+    {
+      "sha": "823fbf745d4e79bba4871eda8e2ab2e58993cac8",
+      "subject": "fix(cli): keep gateway readiness deadline on the monotonic clock (#155799)",
+      "decision": "recommend-adaptation",
+      "group": "monotonic-readiness-clock"
+    },
+    {
+      "sha": "3be885108e5e7c846ee6c97cb3d0a8d206b47ba0",
+      "subject": "fix(doctor): keep lint and JSON Doctor read-only on existing state (#166857)",
+      "decision": "blocked",
+      "group": "readonly-doctor-mode"
+    },
+    {
+      "sha": "3ed1e21065eaf2eaa7fb9ce1ed31cebc0a236372",
+      "subject": "fix: recover completed package publications with changed rollback evidence (#167302)",
+      "decision": "superseded",
+      "group": "completed-receipt-identity-drift"
+    },
+    {
+      "sha": "4821885e5b4d961ac0f01af1aa816e875ee3193f",
+      "subject": "fix(update): make completed recovery evidence best effort (#167330)",
+      "decision": "blocked",
+      "group": "completed-receipt-identity-drift"
+    },
+    {
+      "sha": "8879e5ef4b98e7ff17b0ac04e7695f66f3e143b2",
+      "subject": "fix(update): separate completed recovery history from pending work (#167358)",
+      "decision": "blocked",
+      "group": "completed-history-vs-pending"
+    },
+    {
+      "sha": "0ac773b4382d31ca13c6e15b5a85716d59309a01",
+      "subject": "fix(update): bound private SQLite snapshot amplification during candidate validation on a live install (#167451)",
+      "decision": "blocked",
+      "group": "private-snapshot-amplification"
+    },
+    {
+      "sha": "5b4fb7292031dc3695a6fae10fd044814c5d3ca4",
+      "subject": "fix(update): show every recorded update warning in the summary, report and status (#167509)",
+      "decision": "skip-nonfunctional",
+      "group": "warning-report-completeness"
+    },
+    {
+      "sha": "40d57f8dc8f5d97a019b89bba36457efa1678369",
+      "subject": "fix(gateway): settle restart intents and update reports in workers (#167572)",
+      "decision": "blocked",
+      "group": "worker-restart-intents"
+    },
+    {
+      "sha": "a7d90b3957226e12b2fe5d86bf557c01e618a589",
+      "subject": "fix(update): skip the maintenance drain when rollback finds the Gateway already stopped (#167649)",
+      "decision": "recommend-adaptation",
+      "group": "stopped-gateway-rollback-drain"
+    },
+    {
+      "sha": "afbc4ad548955473b59d438f04d9cad31873da64",
+      "subject": "fix(secrets): point retired auth profile migrations at doctor --fix (#167650)",
+      "decision": "skip-nonfunctional",
+      "group": "retired-auth-guidance"
+    },
+    {
+      "sha": "eda09031d5963c8147db8f5eeee0afc61e493196",
+      "subject": "fix(doctor): keep approval-first Skill Workshop setups from writing skills unreviewed (#167641)",
+      "decision": "outside-request",
+      "group": "workshop-approval-learning"
+    },
+    {
+      "sha": "4c6b10b08032dbc5d85851771212d27c1224b3c4",
+      "subject": "fix(doctor): settle a deferred session import receipt bound to a different database instead of blocking (#167538)",
+      "decision": "blocked",
+      "group": "foreign-db-session-import-receipt"
+    },
+    {
+      "sha": "a5ab772bf92c17102028f7117429fc1086727be7",
+      "subject": "fix: recover agent databases after orphan session window repair (#167366)",
+      "decision": "blocked",
+      "group": "orphan-session-window-repair"
+    },
+    {
+      "sha": "1b8a273987baaa637c394560257414327882b4df",
+      "subject": "fix(update): settle a prepared activation whose live package already serves the candidate (#167648)",
+      "decision": "blocked",
+      "group": "live-candidate-publication-settlement"
+    },
+    {
+      "sha": "96d37e971f033c3ee4aefa4bef2f80d616d2f969",
+      "subject": "fix(doctor): settle deferred migrations for installed plugins without a migration contract (#167699)",
+      "decision": "recommend-adaptation",
+      "group": "stateless-plugin-confirmation"
+    },
+    {
+      "sha": "b464d49019995ec229595bdcbba9d3b61ff035f7",
+      "subject": "fix(doctor): verify a restarted Gateway by its health, not its listener (#167713)",
+      "decision": "not-affected",
+      "group": "generic-doctor-health"
+    },
+    {
+      "sha": "688c0c53e43599620e5917715106e5e2f4f7d245",
+      "subject": "fix(update): stop reporting a repair as succeeded when Doctor could not run (#167714)",
+      "decision": "recommend-adaptation",
+      "group": "deferred-repair-ledger"
+    },
+    {
+      "sha": "0513aeae6a87b5c9d9b16b5f623d23d5d830940f",
+      "subject": "fix(update): defer state verification instead of failing when --no-restart leaves the Gateway running (#167760)",
+      "decision": "blocked",
+      "group": "no-restart-state-contention"
+    },
+    {
+      "sha": "fa84b1009dd03a8eff7fa16f2f87c7985e22878a",
+      "subject": "fix(triage): prescribe update repair when package activation recovery is pending (#167782)",
+      "decision": "blocked",
+      "group": "triage-pending-activation"
+    },
+    {
+      "sha": "4938f90b94a574ac7629b227f6097c6d63a3ce9b",
+      "subject": "fix(update): explain which managed handoff lease identity changed (#167794)",
+      "decision": "skip-nonfunctional",
+      "group": "handoff-identity-guidance"
+    },
+    {
+      "sha": "2c5b2ccaa77624ec0f229e08e67777cca892756e",
+      "subject": "fix(update): clarify report operator wording (#167802)",
+      "decision": "skip-nonfunctional",
+      "group": "report-operator-wording"
+    },
+    {
+      "sha": "725da12cc31cbb923ca9884beddb316e3ca4ac32",
+      "subject": "fix(update): admit Doctor started by legacy updaters without a run ID (#167833)",
+      "decision": "recommend-adaptation",
+      "group": "legacy-doctor-custody"
+    },
+    {
+      "sha": "d13b1c5b825ebe9214453cbd453060194446f016",
+      "subject": "fix(doctor): keep automatic Skill Workshop learning for approval-policy configs (#167846)",
+      "decision": "outside-request",
+      "group": "workshop-approval-learning"
+    },
+    {
+      "sha": "bfe4592a7e8195d277ef14f3a458cf7396bc125e",
+      "subject": "fix: doctor service repair promises defaults it cannot apply (#166950)",
+      "decision": "skip-nonfunctional",
+      "group": "service-repair-preview"
+    },
+    {
+      "sha": "bb5a405cf6480e149db0b6f4c4adc4b89c3922cc",
+      "subject": "fix: surface gateway startup failures in service diagnostics (#166946)",
+      "decision": "skip-nonfunctional",
+      "group": "service-startup-diagnostics"
+    },
+    {
+      "sha": "9b46148b26804c213e23b11e3974278128ab1d2b",
+      "subject": "fix(daemon): pin service launchers to the stable pnpm package link (#167905)",
+      "decision": "recommend-adaptation",
+      "group": "stable-pnpm-service-launcher"
+    },
+    {
+      "sha": "06ecc309f5550a52acea2f6a82b918537996ccbf",
+      "subject": "fix: doctor misses configured Tailscale startup prerequisites (#166947)",
+      "decision": "blocked",
+      "group": "tailscale-doctor-prerequisites"
+    },
+    {
+      "sha": "4eff44b9db20166242b6532b70b4d4801fc30d2d",
+      "subject": "fix: interactive doctor repairs race a managed gateway (#166948)",
+      "decision": "outside-request",
+      "group": "interactive-doctor-custody"
+    },
+    {
+      "sha": "6f32dc60dae989c6aef7c5a4b12cb2fd04af82a1",
+      "subject": "fix(update): reclaim dead legacy child-lineage handoff leases in update repair (#168043)",
+      "decision": "blocked",
+      "group": "managed-handoff-census-repair"
+    },
+    {
+      "sha": "d12658c4c9dd155bc9199950d03cdd2d3eb065fe",
+      "subject": "fix(doctor): skip redundant continuation writes inside service inspection deadlines (#168069)",
+      "decision": "blocked",
+      "group": "doctor-continuation-write-budget"
+    },
+    {
+      "sha": "e048d9d952d6d9016718af7828bd153385459d0a",
+      "subject": "fix(doctor): preserve installed plugins when path safety checks block them (#168111)",
+      "decision": "blocked",
+      "group": "blocked-plugin-discovery"
+    },
+    {
+      "sha": "0c91469b2dabc593638e7080b6674fda5f1dee3b",
+      "subject": "fix: Doctor maintenance fails when state inspection is slow (#168161)",
+      "decision": "blocked",
+      "group": "slow-service-inspection-budget"
+    },
+    {
+      "sha": "efa552b9cef854d4f0b74eb8119ae9035f4fb79b",
+      "subject": "fix(update): leave live current handoff owners alone in update repair (#168197)",
+      "decision": "blocked",
+      "group": "managed-handoff-census-repair"
+    },
+    {
+      "sha": "e36dfd716be6a1d0dbb640f696c2be7c518d0e36",
+      "subject": "fix: warn when session search is configured but disabled (#160320)",
+      "decision": "outside-request",
+      "group": "session-search-warning"
+    },
+    {
+      "sha": "b7a1dc960249d50b5a9e6f590f900802f2c83502",
+      "subject": "fix(update): expose immutable receipts and recovery in status (#168203)",
+      "decision": "blocked",
+      "group": "immutable-status-recovery"
+    }
+  ],
+  "recentCandidateDecisions": [
+    {
+      "sha": "76aabd1052a37c743910212da9e2060f707c2074",
+      "subject": "fix: stop bundled plugin config churn during updates (#168226)",
+      "decision": "P1: recommend narrow adaptation",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "468a57d3837b6df6e3a10231ecea35a54f3edfc6",
+      "subject": "fix: avoid deferring available linked plugins during updates (#168190)",
+      "decision": "P1: recommend narrow adaptation",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "efd06539cff04ea24c877b59909c504980a23cd9",
+      "subject": "fix(state): symlinked state roots fail after Gateway restart (#168361)",
+      "decision": "P1: recommend existing-owner adaptation",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "83579fdb473aafd4274b1677a10a77679de1b389",
+      "subject": "fix(state): keep reader cleanup bound to captured database paths",
+      "decision": "P1 companion invariant only; no full pick",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "01ead786dc19b1cf9921dfcf90917206d876dfc1",
+      "subject": "fix(doctor): retire private metadata captures after inspection",
+      "decision": "P1: coherent group with 310 plus owned standalone fallback",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "310bce6a751791a9f61ce7a3bfcb3fd79653642b",
+      "subject": "fix(doctor): keep plugin contracts alive through finalization",
+      "decision": "P1: mandatory companion to 01",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "3f08ea94a3373110e46b8f18cc4790344af4ecb3",
+      "subject": "fix(doctor): give startup prompts distinct export names",
+      "decision": "Exclude: main split-prompt follow-up",
+      "audit_depth": "Commit diff / target owner presence"
+    },
+    {
+      "sha": "c18792f49117442d21af6902df73ba46f751b0ea",
+      "subject": "fix(memory): plugin disposal stalls while session startup discovery runs (#168229)",
+      "decision": "P2: reasonable narrow cleanup adaptation; relevant to Doctor group if disposal proof stalls",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "587a19170f3c333ad94507212e1ea18ec7c52d18",
+      "subject": "fix(sessions): register disk-budget worker as a runtime process entrypoint (#168310)",
+      "decision": "Carry forward: compiled-test worker fix; September update applicability unproven",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "91e419061c30c6e67c3e12706f320eeb6cf3aba4",
+      "subject": "fix(status): report foreign Gateway port holders promptly (#161106)",
+      "decision": "P2: narrow truthful diagnostic exit; not updater fail-fast",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "aa42103a719b2d432ff2513159e65a652be4c451",
+      "subject": "fix(update): restore Gateway readiness before optional Doctor inspections (#168350)",
+      "decision": "P2: opt-in future-updater downtime adaptation, NOT first-upgrade rescue",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "ffe4496afa4f39145aeff60315aa5ed2edc9b56a",
+      "subject": "fix(update): keep post-activation inspection label internal (#168451)",
+      "decision": "Companion only if aa group selected",
+      "audit_depth": "Commit diff / dependency owner presence"
+    },
+    {
+      "sha": "434fc09bf24f64eaa33f24a28cde60815db9322b",
+      "subject": "fix(ci): budget the post-activation inspection update handoff",
+      "decision": "Build gate companion only if aa group selected",
+      "audit_depth": "Commit path/diff screening"
+    },
+    {
+      "sha": "b2e11a28fcdedcff22f5595941edee94ab4a4619",
+      "subject": "fix(update): ride out a briefly locked state database during updates (#168210)",
+      "decision": "P2: source-missing recovery/contended-ledger adaptation; do not drop as refactor",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "eae2e5421daa5b0647126830917df8772ab35f70",
+      "subject": "fix(update): recover blocked updates after completed receipt identity drift (#168388)",
+      "decision": "P2: prioritize coherent completed-receipt recovery adaptation with older lane",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "73f2255d77f02cc097c4e597a0022ae1c5d6275b",
+      "subject": "fix(update): FreeBSD package recovery refuses repair and retire (#168775)",
+      "decision": "P2: coherent FreeBSD sealed-package-helper adaptation",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "1bc9624c8aa6db5c6c08f80ef0fb9febcf5ed67d",
+      "subject": "fix(node): keep paired credentials after service enrollment (#168653)",
+      "decision": "P2: existing node enrollment credential adaptation",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "84e59beb3c89b0187c09900f05545b1cea87bde4",
+      "subject": "fix(node): keep npx-installed services outside the npm cache (#168644)",
+      "decision": "P2: durable npx service install adaptation",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "8832904b171a34dd5b134f9985208d2ecabea24f",
+      "subject": "fix(gateway): avoid blocking stops on native skills watcher cleanup (#168273)",
+      "decision": "P2: narrow macOS predecessor-stop watcher adaptation",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "4f1158a559a3fb1e17b2dcc1e3e9534026a97585",
+      "subject": "fix(update): cleanup ignores original-state update captures (#168177)",
+      "decision": "Defer full pick; adapt only if parent carries matching original-capture owner",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "e86845769895c9b417ce7846787a6f1a85106725",
+      "subject": "fix(plugins): Windows Gateway startup stalls capturing installed plugin files (#168313)",
+      "decision": "Defer full pick; bounded Windows fastpath adaptation possible",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "f022ca53c0a8778387a0dc231b9052f806a92d9d",
+      "subject": "fix(plugins): speed up external TypeScript plugin startup (#168391)",
+      "decision": "Exclude full pick: performance capture architecture, no narrow proven update rescue",
+      "audit_depth": "Production diff + target architecture screen"
+    },
+    {
+      "sha": "51e7ca28cb945c522ad7e1ca994790fba5eeed12",
+      "subject": "refactor: simplify plugin capture custody plumbing (#168096)",
+      "decision": "Exclude: refactor only",
+      "audit_depth": "Production diff / owner context"
+    },
+    {
+      "sha": "65eb3267904764fa4b5e4c91a4b6db048a3cb154",
+      "subject": "fix(sqlite): refuse Apple's system SQLite for Bun on macOS (#168564)",
+      "decision": "Exclude blanket refusal: new runtime policy",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "163104ac31bb56972a3ec7e43c175786059d855b",
+      "subject": "refactor(control-ui): reload open tabs after updates instead of keeping old builds (#168105)",
+      "decision": "Exclude full pick: UI retention/removal policy refactor",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "30f3135ca5a4217cabd657ae29849e7a7431b95f",
+      "subject": "fix(plugins): preserve config for unchanged policy requests (#168633)",
+      "decision": "P3: reasonable small adjacent config-churn fix",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "4b5f6f99a563a2463cd9b0359129fa0290cc71c9",
+      "subject": "fix(doctor): migrate hosted Ollama provider references (#168782)",
+      "decision": "P2 candidate: adapt hosted Ollama migration in existing plugin owner; DO NOT public SDK pick",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "4754d394130ae9106c863e97c31392fba6bd614f",
+      "subject": "fix(gateway): resume main sessions after missed restart markers (#168651)",
+      "decision": "P3: broader post-restart session recovery adaptation only if issue-backed",
+      "audit_depth": "Production diff + existing owner screen"
+    },
+    {
+      "sha": "38fee354e63626edea4ce6f620461acc15d571f4",
+      "subject": "fix: prevent session admission stack overflows in large fleets (#168354)",
+      "decision": "Exclude full pick: main-only plural admission regression",
+      "audit_depth": "Full source diff + full target singular admission/lifecycle owner + all-src absent-symbol search + introducing-commit history"
+    },
+    {
+      "sha": "9eb38c76cd864951e8981512b96dfed6a6c26d0a",
+      "subject": "fix: preserve live SQLite locks during agent file reads (#168274)",
+      "decision": "Exclude broad main worker cutover; isolated read-tool invariant may be independently issue-backed",
+      "audit_depth": "Production diff + architectural boundary screen"
+    },
+    {
+      "sha": "98813c23905e68b41e5c58e72e3ee554986d7ab1",
+      "subject": "fix: finish shutdown without disabling V8 compilers (#168587)",
+      "decision": "Exclude full pick: very broad shutdown/compiler lifecycle cutover",
+      "audit_depth": "Production diff/large scope + target architecture screen"
+    },
+    {
+      "sha": "77224e7672cd03216b24f6793146183703ac3094",
+      "subject": "fix: show update canary and Doctor phase timings (#168290)",
+      "decision": "Exclude from first functional group: diagnostic timing",
+      "audit_depth": "Production diff / behavior classification"
+    },
+    {
+      "sha": "5c63a7867a80cad74d2c5e6b982e3210ce39d757",
+      "subject": "fix: retain updater preparation and service handoff timings (#168409)",
+      "decision": "Exclude from first functional group: diagnostic timing",
+      "audit_depth": "Production diff / behavior classification"
+    },
+    {
+      "sha": "5861fe788ef5ed0acba609884d1dccfc7e0f31fd",
+      "subject": "fix(update): explain immutable migration coverage (#168295)",
+      "decision": "Exclude: absent immutable/new witness model",
+      "audit_depth": "Changed production diff / target owner absence"
+    },
+    {
+      "sha": "ec2c1fa02cd6cef871315ed53e0df469921d62f1",
+      "subject": "fix(update): isolate immutable release builds from runtime privileges (#168237)",
+      "decision": "Exclude: absent immutable/new witness model",
+      "audit_depth": "Changed production diff / target owner absence"
+    },
+    {
+      "sha": "974443a0a9036368eb26878e9566762777d7d761",
+      "subject": "fix(update): verify migration preservation against original backups (#168321)",
+      "decision": "Exclude: absent immutable/new witness model",
+      "audit_depth": "Changed production diff / target owner absence"
+    },
+    {
+      "sha": "db6449d3f6091740dbddcf02fdc0e34dc94ca424",
+      "subject": "fix(state): satisfy Kysely guardrails for migration witness",
+      "decision": "Exclude: absent immutable/new witness model",
+      "audit_depth": "Changed production diff / target owner absence"
+    },
+    {
+      "sha": "bfe58537cadc92d945e053406942a600a96b37c0",
+      "subject": "fix(update): retain immutable release provenance for inspection (#168403)",
+      "decision": "Exclude: absent immutable/new witness model",
+      "audit_depth": "Changed production diff / target owner absence"
+    },
+    {
+      "sha": "b96c661becbce19eaeed6334b55ec44ea4e96b39",
+      "subject": "fix(update): reject unverifiable session listings after activation (#168561)",
+      "decision": "Exclude: absent immutable/new witness model",
+      "audit_depth": "Changed production diff / target owner absence"
+    },
+    {
+      "sha": "c70bc6d286318a1cfb31f83cab0ccb08417e3f39",
+      "subject": "fix(update): allow Doctor to retire Workshop proposal tables (#168577)",
+      "decision": "Exclude: Team skill controller, not core production",
+      "audit_depth": "Full diff / paths"
+    },
+    {
+      "sha": "072215c388c00b1d7195af764d46b2606266b14d",
+      "subject": "fix(updater): bundle the interim Team deployment controller (#168319)",
+      "decision": "Exclude: interim Team deployment controller, not core updater",
+      "audit_depth": "Diff/path screen"
+    },
+    {
+      "sha": "217d8bfb7cfa06a5a6c7d3381f92cbae7b269eac",
+      "subject": "fix(release): record 2026.10.1 updater compatibility (#168740)",
+      "decision": "Exclude: release compatibility inventory only",
+      "audit_depth": "Paths/diff screen"
+    },
+    {
+      "sha": "c6d71fae0ed1c0f7968c8d05c410345246af235b",
+      "subject": "fix(release): make update compatibility coverage test-only (#168836)",
+      "decision": "Exclude product; release proof/tooling adaptation only if gates need",
+      "audit_depth": "Paths/diff screen"
+    },
+    {
+      "sha": "7d0f600c03e9de340c5825a02d27aed67ad95bda",
+      "subject": "fix(migrate): refuse imports while the Gateway owns local state (#168419)",
+      "decision": "Exclude full pick: new offline ownership policy/module",
+      "audit_depth": "Production diff/target owner screen"
+    },
+    {
+      "sha": "b7940621a3fdd14e9944050d6b5a7189445e073f",
+      "subject": "fix(claws): require exclusive offline state ownership (#168586)",
+      "decision": "Exclude full pick: new claws offline ownership subsystem",
+      "audit_depth": "Paths/target owner screen"
+    },
+    {
+      "sha": "2bf99df55c7e9b148fe5296255882baa1f4a65df",
+      "subject": "fix(cli): guard config and agent writes at command boundaries (#168417)",
+      "decision": "Exclude full pick: broad local mutation boundary policy",
+      "audit_depth": "Production diff/target owner screen"
+    },
+    {
+      "sha": "31b1db6273053ad23e8fa6a0268bfe1e5fdac94a",
+      "subject": "fix(cli): guard local plugin state writes at command boundaries (#168757)",
+      "decision": "Exclude full pick: broad local plugin mutation policy",
+      "audit_depth": "Production diff/target owner screen"
+    },
+    {
+      "sha": "e40606fdea96135758ec5bc0b1a355d08ead0c7e",
+      "subject": "fix(cli): keep Memory and Matrix state consistent with the Gateway (#168471)",
+      "decision": "Exclude full pick: worker/CLI ownership migration with SDK expansion",
+      "audit_depth": "Production diff/architecture screen"
+    },
+    {
+      "sha": "1d76f57d4be51c372f996ebf8166274af9e5d203",
+      "subject": "improve: reduce SQLite work during chat turns (#167965)",
+      "decision": "Exclude full pick: major single-owner SQLite cutover",
+      "audit_depth": "Production diff/architecture screen"
+    },
+    {
+      "sha": "076e337b0fa925bb2bdd8e7a39330729b405a641",
+      "subject": "refactor: move native binding preparation to workers (#168479)",
+      "decision": "Exclude full pick: native binding worker refactor",
+      "audit_depth": "Diff/path architecture screen"
+    },
+    {
+      "sha": "626eeac26d62c8ab45b09218b2216c27a9eea00d",
+      "subject": "chore(deps): update fs-safe to 0.26.0 (#168629)",
+      "decision": "Exclude dependency bump without separate necessity/proof",
+      "audit_depth": "Full dependency diff + target manifest"
+    },
+    {
+      "sha": "5a44564c988637008abbf1c868e127356dd868bd",
+      "subject": "fix(commands): use monotonic clock for remote Gateway restart deadline (#168087)",
+      "decision": "P3: small existing-owner restart-adjacent adaptation",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "3e4c7ccc60e0b5409430b0c9213be9b3f01eca1e",
+      "subject": "fix(doctor): stop node-hosting warnings for local-only gateways (#168218)",
+      "decision": "P3: diagnostic-only optional; not update repair",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "1ac5ebc04789ec97e017f185fbf85786cac5d0d4",
+      "subject": "fix(ui): retire stale plugin inspection during uninstall",
+      "decision": "Already equivalent: no backport",
+      "audit_depth": "Production diff and target owner/caller inspection"
+    },
+    {
+      "sha": "243b6dbf63d2d4c1bc7622ce67cd26c023c1bd64",
+      "subject": "fix(plugins): remove unused ownership migration binding",
+      "decision": "Exclude: unused local deletion only",
+      "audit_depth": "Full 20-line diff"
+    },
+    {
+      "sha": "6b13e9e4142d02427949b5ffbb10db574997686e",
+      "subject": "perf(models): avoid repeated policy loading after hot reload (#168733)",
+      "decision": "Exclude full pick: hot-reload performance/cache ownership",
+      "audit_depth": "Production diff + target owner presence"
+    },
+    {
+      "sha": "b2754b485721ad2ef75efc37f1a09acd1f895512",
+      "subject": "fix(cli): report plugin command action failures (#168850)",
+      "decision": "P3: plugin CLI actionable failure diagnostics; adjacent, not update behavior",
+      "audit_depth": "Production diff / owner screen"
+    },
+    {
+      "sha": "ac93c14ffd6f70fd357eb89c284665a7493e59d2",
+      "subject": "fix: keep the composer visible while new chats start (#165091)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "b43da95af1513b59c19df2c3390c78fc9909e29e",
+      "subject": "test(e2e): accept Doctor pinning ownerless legacy cron jobs to their historical owner (#168314)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "7c0d4070a293c644ededc6fc16dd1f6a52539e58",
+      "subject": "chore(ui): validate overlay and focus contracts in WebKit (#168269)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "7fd6d6738ce1c6116f4ecdd7f869323f24ecd0eb",
+      "subject": "fix(tooling): preserve cleanup custody across nested supervisors",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "b04bf1bb6966a37cdc96798a76b0fb5ef48f761c",
+      "subject": "refactor(scripts): consolidate repeated helper flows (#168331)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "cdeb1e37adc6ecfba8db436f5372c37799d2f931",
+      "subject": "refactor: deslop agent tools and macOS leftovers (#168168)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "a9c69209f96fc98b009c47071f10ab540630bee2",
+      "subject": "chore(ui): enable Solid 2 alongside Lit (#168305)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "e12c0d260e23f48a70542c7c462be567495aa5f7",
+      "subject": "chore(ui): inventory and ratchet total Lit migration debt (#168297)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "325d7f33facbacf7cd593680dcd23c9ea9f86447",
+      "subject": "fix(ui): run WebKit overlay contracts without expected failures (#168385)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "a18a8a8a264437a81f1956e110c91c2df9d02b93",
+      "subject": "chore(ui): enforce Solid 2 lint rules (#168376)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "aef080bdcf5c922d40ff64c1aa5617402167c4ac",
+      "subject": "perf(crabbox): reuse warm images for empty workspaces (#168371)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "34128f148ebeabfb55adc9cd0bcbc8117db90ff7",
+      "subject": "fix(acp): preserve complete answers after tool commentary (#168201)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "8f9e5ce1d3fb18d7d37272a5cab43af447f3b9a6",
+      "subject": "feat(plugins): support Solid Control UI views (#168408)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "235df0bd2196bc2c4534180fe4aa5e3eb0c03ab1",
+      "subject": "fix(ui): retain test coverage when files use TSX (#168337)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "23cf1bc3b6d22f5451af5931681c505bd66b1c1f",
+      "subject": "refactor(canvas): keep A2UI independent of the Control UI renderer (#168473)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "c4e70bc82a5f70dd817540b72b139d37975dcb64",
+      "subject": "fix(workboard): keep CLI changes visible to the running Gateway (#168457)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "9cd23e6067c84433439d14166b15c132ddcc1983",
+      "subject": "fix(sessions): avoid repeated host compaction after native compaction (#168051)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "a9d10dc7df4681052c158dd760176e975c0d10e0",
+      "subject": "fix(tooling): retain cleanup custody through runner shutdown",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "2cd5dea12c8666e5fd5f81e036ffa68ed32824f9",
+      "subject": "improve(reef): reduce native state database work (#168340)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "fe97707c28a6a590ee0ce96d51c61a547e1e40cf",
+      "subject": "refactor: deslop extensions, infra and core service leftovers (#168496)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "493a499b86e3bde756fe3937e20e4447080987e7",
+      "subject": "fix(tooling): return a promise from every cleanup release path",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "cbaa9abada322a516ede6864ca0f924bca6845b1",
+      "subject": "feat(codex): prefer newer installed Codex for ChatGPT discovery (#168228)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "f39e6610bfa3e71b0cd2b49efc0939c939912c83",
+      "subject": "fix(ci): keep the installed Codex selection type module-private",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "457515502e84954c8061f9b151d63d92770d2a29",
+      "subject": "feat: generate PostgreSQL DDL from canonical SQLite schemas (#168219)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "21f5711b9c6607ab565d2d66b6a233780884e96d",
+      "subject": "refactor: deslop plugin core and smaller runtime leftovers (#168220)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "7924f12c75f5e5208a52432583000ed772616b22",
+      "subject": "refactor(sessions): move bundled session mutations to worker-owned SDK operations (#168453)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "3add6f6a8695607957b888189cb4cc9430454285",
+      "subject": "fix(ai): stream completions text live when reasoning precedes it (#150685)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "19ac11902cdcdd23e91be0028aae1f2b7b7b13c8",
+      "subject": "feat(msteams): support multiple bot accounts (#112811)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "a1c1610b1907a3750f623297af19dedd425f7399",
+      "subject": "build: add shrink-only SQLite dialect ratchet (#168382)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "44e9f45f4ed5271cd8347183baafb837a969a765",
+      "subject": "feat(ui): add visual parity capture and reports (#168597)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "6b5284f579371f0e372b6c1882f863df19ffdb57",
+      "subject": "feat(plugin-sdk): add worker-owned keyed state (#168478)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "9870a1a9d97f06893235c706d3912372ac8186df",
+      "subject": "fix(sessions): avoid false indexing state in completed searches (#168550)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "5c7004136d9c723db89bd1e4666c571b515dd7b3",
+      "subject": "refactor: resolve persisted channel accounts asynchronously (#168481)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "0d4a332ea0c01e668e06ff2d87fdb0a4e6524959",
+      "subject": "refactor(workboard): render the browser UI with Solid 2 (#168606)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "eacb8374294679e92720e39196b09b9e767fc9ac",
+      "subject": "feat(plugin-sdk): add worker-owned conversation binding APIs (#168483)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "52adcc9ca6ad1202413fb7c6e8247bebc46170e3",
+      "subject": "docs(ui): add the Solid 2 skill with guides and migration lessons",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "7562fd2b90129bef6674cc72247458da060c1d02",
+      "subject": "docs: identify the SDK migrations behind surface budgets",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "4d77effe1e2afef6bb6e08364c75f8bbf0c27493",
+      "subject": "refactor(worker): simplify private protocol validation (#168737)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "17a04f2148c7a7cac6fb0b695f28d91a521df6c1",
+      "subject": "fix: preserve Claude CLI tools after exec completion (#168670)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "3666e847aac206c4f1a8805d97de96861c9c56ca",
+      "subject": "fix: serialized tool-call XML leaks into chat replies (#138204)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "fa3cde1f3ce95336f2f4549f74fd1f0a69475b72",
+      "subject": "fix: use Claude Code native models for CLI selections (#168728)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "f73493e43dfbf2bbc62a59fcf44135278783eff0",
+      "subject": "feat(ui): add guarded Lit-to-Solid codemod (#168720)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "fb147568c9dc8bccea0a1260047c9a38cbd34753",
+      "subject": "refactor(worker): unify text and thinking stream updates (#168853)",
+      "decision": "Exclude from update bug-fix group",
+      "audit_depth": "Subject + full paths + production diff screen (not exhaustive native proof)"
+    },
+    {
+      "sha": "e7ec72eb23c57265ea4980648e5762b2d59e70c9",
+      "subject": "fix(codex): reap clients after model discovery times out (#168365)",
+      "decision": "P1: recommend narrow issue-backed discovery retirement adaptation",
+      "audit_depth": "Full production diff + pinned target callback, classifier, graceful lease owner and request-finalizer reads"
+    }
+  ],
+  "qualification": {
+    "state": "Unreleased backport implementation checkpoint; not full release qualification",
+    "authoredAt": "2026-10-12T02:49:17.989448+00:00",
+    "finalHeadEvidenceOwner": "The coordinated backport PR body and exact-head CI record own combined suites, static/review gates, readable SDK/config comparison, full package build, and packed published-driver proof. Those outcomes are not inferred from this authored checkpoint.",
+    "publishedUpgradeCells": [],
+    "plannedPublishedUpgradeCell": {
+      "baseline": "openclaw@2026.8.35",
+      "candidate": "packed 2026.9.33 from final committed head",
+      "lane": "published-upgrade-survivor",
+      "scenario": "base",
+      "channelPolicy": "The maintained recipe authors stable policy before its real old-driver file-tag update; this is not extended-stable dist-tag selection.",
+      "restart": "manual",
+      "rootManagedVps": false,
+      "liveModels": false
+    },
+    "nativeProof": [
+      {
+        "group": "timed-out-codex-discovery-retirement",
+        "before": "1 native owning-process failure; sibling request remained usable",
+        "after": "1 native process test passed; both processes reaped, sibling lease retained",
+        "nativeWallSeconds": 81.517,
+        "unitAfter": 22,
+        "unitWallSeconds": 137.174,
+        "limit": "Synthetic native app-server protocol process, not 773-agent fleet qualification; earlier unit collection/opaque-fixture errors are not product negative controls"
+      },
+      {
+        "group": "backup-bound-to-verified-bytes",
+        "beforeFailed": 2,
+        "beforePassed": 6,
+        "afterPassed": 8,
+        "wallSeconds": 46.365,
+        "contract": "Published metadata describes the frozen verified snapshot, including modified/replaced destination negative controls"
+      },
+      {
+        "group": "doctor-metadata-and-contribution-lifetimes",
+        "nativeCustodyAfterPassed": 2,
+        "floorLifetimeAfterPassed": 5,
+        "floorLifetimeWallSeconds": 241.161,
+        "contract": "Final schema/refusal replay includes real callback-registration refusal and borrowed liveness; two native default/borrowed capture cases retain raw operator rows and receipt paths; floor lifetime proof includes full-service finalization order",
+        "finalSchemaAndNativeAfterPassed": 12,
+        "finalSchemaAndNativeWallSeconds": 148.626,
+        "finalDeferredRegistrationRefusalBaseline": "Owned retirement failed on unchanged production after the original refusal error propagated correctly; 124.454 seconds"
+      },
+      {
+        "group": "recovery-groups",
+        "uniqueJoinedSelectedAfterCases": 45,
+        "finalServiceReplayPassed": 7,
+        "finalServiceReplayWallSeconds": 171.944,
+        "contract": "Avatar, all-four-caller monotonic deadlines, pending finalization, and untouched retirement/service authority; prior fixture failures and interrupted before runs are not aggregate green proof"
+      }
+    ],
+    "unqualified": [
+      "all nine published source versions",
+      "extended-stable registry selection by the representative file-tag fixture",
+      "Windows large-database seal recovery",
+      "all historical plugin inventories",
+      "773-agent fleet/capacity limits",
+      "live provider lanes",
+      "cross-OS release matrix",
+      "soak",
+      "publication"
+    ],
+    "excludedOrInterruptedProof": "An earlier broad plugin baseline invocation was interrupted after observed failures/timeouts; it is not counted as passed. Fixture collection failures and cold transformation costs are not behavior proof.",
+    "integrationControls": {
+      "firstCombinedReplay": {
+        "selectedFiles": 456,
+        "fileInvocations": 248,
+        "filesPassed": 241,
+        "filesFailed": 4,
+        "filesSkipped": 3,
+        "casesPassed": 4045,
+        "casesFailed": 5,
+        "casesSkipped": 24,
+        "remainingFilesUnrun": 208,
+        "state": "failed; not final-head proof"
+      },
+      "aliasOwnerDeltaControl": {
+        "backportedOwners": {
+          "passed": 2,
+          "failed": 1,
+          "commandWallSeconds": 111.462
+        },
+        "mergedBaselineOwnersOnly": {
+          "passed": 1,
+          "skipped": 8,
+          "commandWallSeconds": 74.2
+        },
+        "scope": "Only two alias-validation owners reverted; all other backports and original assertions retained. Temporary test logging removed."
+      },
+      "doctorDisposerRuntimeControl": {
+        "nodeVersions": [
+          "24.16.0",
+          "24.21.0"
+        ],
+        "result": "A bound native disposer is rejected by AsyncDisposableStack.use; a closure for the exact same retained owner is admitted and settles."
+      },
+      "stableDriverFixture": "Pin only the early-request lifecycle fixture to shipped 2026.9.9; production channel policy, assertions and budgets retained.",
+      "restartRecoveredOwningClosure": {
+        "originalSelectedFiles": 483,
+        "originalSelectedFilesExercised": 483,
+        "initialFailingCases": 4,
+        "state": "Original closure exercised, not a first-run aggregate-green claim. Three inherited Doctor native-service fixture failures and one missing compatible plugin survivor hunk were corrected and replayed. Earlier Node/V8 crash is retained as a failed execution."
+      },
+      "doctorAdmissionNativeIsolation": {
+        "fixture": "Unique nonexistent native LaunchAgent label; private HOME alone does not detach launchd ancestry. Production behavior, strict state manifest/schema assertions, cleanup owners and deadlines remain unchanged.",
+        "passed": 17,
+        "commandWallSeconds": 99.335,
+        "liveServiceMutation": "None performed by this recovery; no claim is made about the prior failed fixture native command outcome."
+      },
+      "pluginRestartRegisteredClose": {
+        "source": "6636dd6709bdbace1b6b72c3a86ff664bbdec244",
+        "before": {
+          "failed": 5,
+          "passed": 2,
+          "commandWallSeconds": 214.597
+        },
+        "after": {
+          "filesPassed": 18,
+          "casesPassed": 181,
+          "casesSkipped": 1,
+          "registeredClosePassed": 7,
+          "registeredCloseSingleWorkerWallSeconds": 142.625,
+          "owningSiblingsWallSeconds": 347.629
+        },
+        "contract": "Survivor and final owner state retention; named settled callback warnings; fatal session-store and retained-resource controls; required joins, native deadlines and September final/cache modes retained.",
+        "limits": "Linux-only managed SIGTERM case skipped on macOS. Fixtures use unique native service identities and explicit external supervision; no real service/platform qualification claimed."
+      },
+      "interruptedIndependentReview": {
+        "exit": 143,
+        "state": "Terminated before any structured report; not a clean review. Current-source replacement review belongs to final PR evidence."
+      }
+    }
+  },
+  "canonicalBranch": "extended-stable/2026.9.33",
+  "stagingBranch": "backport/2026.9.33-updates",
+  "intendedTag": "v2026.9.33",
+  "intendedPublicationInventory": [
+    {
+      "packageDir": ".",
+      "name": "openclaw",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/acpx",
+      "name": "@openclaw/acpx",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/amazon-bedrock",
+      "name": "@openclaw/amazon-bedrock-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/amazon-bedrock-mantle",
+      "name": "@openclaw/amazon-bedrock-mantle-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/anthropic-vertex",
+      "name": "@openclaw/anthropic-vertex-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/arcee",
+      "name": "@openclaw/arcee-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/baseten",
+      "name": "@openclaw/baseten-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/brave",
+      "name": "@openclaw/brave-plugin",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/buzz",
+      "name": "@openclaw/buzz",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/byteplus",
+      "name": "@openclaw/byteplus-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/cerebras",
+      "name": "@openclaw/cerebras-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/chutes",
+      "name": "@openclaw/chutes-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/clickclack",
+      "name": "@openclaw/clickclack",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/cloudflare-ai-gateway",
+      "name": "@openclaw/cloudflare-ai-gateway-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/codex",
+      "name": "@openclaw/codex",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/cohere",
+      "name": "@openclaw/cohere-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/comfy",
+      "name": "@openclaw/comfy-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/copilot",
+      "name": "@openclaw/copilot",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/cua-computer",
+      "name": "@openclaw/cua-computer",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/deepinfra",
+      "name": "@openclaw/deepinfra-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/deepseek",
+      "name": "@openclaw/deepseek-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/diagnostics-otel",
+      "name": "@openclaw/diagnostics-otel",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/diagnostics-prometheus",
+      "name": "@openclaw/diagnostics-prometheus",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/diffs",
+      "name": "@openclaw/diffs",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/diffs-language-pack",
+      "name": "@openclaw/diffs-language-pack",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/discord",
+      "name": "@openclaw/discord",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/duckduckgo",
+      "name": "@openclaw/duckduckgo-plugin",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/exa",
+      "name": "@openclaw/exa-plugin",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/facetime",
+      "name": "@openclaw/facetime",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/featherless",
+      "name": "@openclaw/featherless-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/feishu",
+      "name": "@openclaw/feishu",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/firecrawl",
+      "name": "@openclaw/firecrawl-plugin",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/fireworks",
+      "name": "@openclaw/fireworks-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/fish-audio-speech",
+      "name": "@openclaw/fish-audio-speech",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/gmi",
+      "name": "@openclaw/gmi-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/google-meet",
+      "name": "@openclaw/google-meet",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/googlechat",
+      "name": "@openclaw/googlechat",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/gradium",
+      "name": "@openclaw/gradium-speech",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/groq",
+      "name": "@openclaw/groq-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/imessage",
+      "name": "@openclaw/imessage",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/inworld",
+      "name": "@openclaw/inworld-speech",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/irc",
+      "name": "@openclaw/irc",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/kilocode",
+      "name": "@openclaw/kilocode-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/kimi-coding",
+      "name": "@openclaw/kimi-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/line",
+      "name": "@openclaw/line",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/llama-cpp",
+      "name": "@openclaw/llama-cpp-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/lobster",
+      "name": "@openclaw/lobster",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/logbook",
+      "name": "@openclaw/logbook",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/longcat",
+      "name": "@openclaw/longcat-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/matrix",
+      "name": "@openclaw/matrix",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/mattermost",
+      "name": "@openclaw/mattermost",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/memory-lancedb",
+      "name": "@openclaw/memory-lancedb",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/memory-wiki",
+      "name": "@openclaw/memory-wiki",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/meta",
+      "name": "@openclaw/meta-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/mistral",
+      "name": "@openclaw/mistral-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/moonshot",
+      "name": "@openclaw/moonshot-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/msteams",
+      "name": "@openclaw/msteams",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/mxc",
+      "name": "@openclaw/mxc-sandbox",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/nextcloud-talk",
+      "name": "@openclaw/nextcloud-talk",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/nostr",
+      "name": "@openclaw/nostr",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/novita",
+      "name": "@openclaw/novita-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/onepassword",
+      "name": "@openclaw/onepassword",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/onnx",
+      "name": "@openclaw/onnx",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/opencode",
+      "name": "@openclaw/opencode-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/opencode-go",
+      "name": "@openclaw/opencode-go-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/openshell",
+      "name": "@openclaw/openshell-sandbox",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/parallel",
+      "name": "@openclaw/parallel-plugin",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/perplexity",
+      "name": "@openclaw/perplexity-plugin",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/pixverse",
+      "name": "@openclaw/pixverse-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/qianfan",
+      "name": "@openclaw/qianfan-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/qwen",
+      "name": "@openclaw/qwen-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/radius",
+      "name": "@openclaw/radius-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/raft",
+      "name": "@openclaw/raft",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/searxng",
+      "name": "@openclaw/searxng-plugin",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/signal",
+      "name": "@openclaw/signal",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/slack",
+      "name": "@openclaw/slack",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/slack-huddles",
+      "name": "@openclaw/slack-huddles",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/sms",
+      "name": "@openclaw/sms",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/stepfun",
+      "name": "@openclaw/stepfun-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/synology-chat",
+      "name": "@openclaw/synology-chat",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/synthetic",
+      "name": "@openclaw/synthetic-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/tavily",
+      "name": "@openclaw/tavily-plugin",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/team-reports",
+      "name": "@openclaw/team-reports",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/teams-meetings",
+      "name": "@openclaw/teams-meetings",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/tencent",
+      "name": "@openclaw/tencent-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/tlon",
+      "name": "@openclaw/tlon",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/tokenjuice",
+      "name": "@openclaw/tokenjuice",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/twitch",
+      "name": "@openclaw/twitch",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/typesafe",
+      "name": "@openclaw/typesafe",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/venice",
+      "name": "@openclaw/venice-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/vercel-ai-gateway",
+      "name": "@openclaw/vercel-ai-gateway-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/voice-call",
+      "name": "@openclaw/voice-call",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/volcengine",
+      "name": "@openclaw/volcengine-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/voyage",
+      "name": "@openclaw/voyage-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/vydra",
+      "name": "@openclaw/vydra-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/whatsapp",
+      "name": "@openclaw/whatsapp",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/xiaomi",
+      "name": "@openclaw/xiaomi-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/zai",
+      "name": "@openclaw/zai-provider",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/zalo",
+      "name": "@openclaw/zalo",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/zalouser",
+      "name": "@openclaw/zalouser",
+      "version": "2026.9.33"
+    },
+    {
+      "packageDir": "extensions/zoom-meetings",
+      "name": "@openclaw/zoom-meetings",
+      "version": "2026.9.33"
+    }
+  ],
+  "publicationAuthority": "None: package versions and intended inventory only; no tag, publish, merge, native-app or ClawHub publication.",
+  "decisionNotes": "Candidate-decision rows preserve the bounded source-screen audit phase. Selected groups record the compatible implementation set; neither screen completes the full mainline semantic audit."
+}

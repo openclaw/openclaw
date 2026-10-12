@@ -87,9 +87,9 @@ describe("prepared channel account policy entry points", () => {
 
   it.each([undefined, "named-token"])(
     "Doctor binding repair honors its scoped account rule (token=%s)",
-    (token) => {
+    async (token) => {
       const cfg = createPolicyConfig({ "Work Phone": { token, enabled: false } });
-      const scope = createDoctorPluginMetadataSnapshotScope({});
+      await using scope = createDoctorPluginMetadataSnapshotScope({});
       const sourceConfigBeforeMigrations = {
         agents: { list: [{ id: "ops" }, { id: "research" }] },
       };
@@ -109,12 +109,12 @@ describe("prepared channel account policy entry points", () => {
     },
   );
 
-  it("outbound media limits select the canonical collision winner for a spaced alias", () => {
+  it("outbound media limits select the canonical collision winner for a spaced alias", async () => {
     const cfg = createPolicyConfig({
       "Work Phone": { token: "alias-token", mediaMaxMb: 2 },
       "work-phone": { token: "winner-token", mediaMaxMb: 3 },
     });
-    const scope = createDoctorPluginMetadataSnapshotScope({});
+    await using scope = createDoctorPluginMetadataSnapshotScope({});
     const bytes = scope.run({ config: cfg }, () =>
       resolveOutboundMediaMaxBytes({ cfg, channel, accountId: "Work Phone" }),
     );

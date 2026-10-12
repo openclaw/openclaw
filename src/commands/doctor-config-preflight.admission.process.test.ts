@@ -445,6 +445,8 @@ describe("startup admission before persistent writes", () => {
           PATH: process.env.PATH,
           HOME: root,
           USERPROFILE: root,
+          // A private HOME does not detach the subprocess from its native launchd ancestry.
+          OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.test.${path.basename(root)}`,
           OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_WORKSPACE_DIR:

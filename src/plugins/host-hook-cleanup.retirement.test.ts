@@ -13,91 +13,115 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import {
   clearActivePluginRegistry,
+  createPluginRegistryOwner,
   disposePluginRegistryInstances,
   setActivePluginRegistry,
 } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
 describe("plugin retirement session-store ownership", () => {
-  it.each(["stable", "replace", "direct", "clear-command", "explicit"] as const)(
-    "keeps the retiring configuration across admitted work (%s)",
-    async (mode) => {
-      await withOpenClawTestState({ label: "plugin-retirement-config" }, async (state) => {
-        const oldPath = state.path("old-custom", "sessions.json");
-        const newPath = state.path("new-custom", "sessions.json");
-        const cfg: OpenClawConfig = {
-          agents: { list: [{ id: "main", default: true }] },
-          session: { store: oldPath },
-        };
-        setRuntimeConfigSnapshot(cfg, cfg);
-        const scope = (storePath: string) => ({
-          agentId: "main",
-          sessionKey: "agent:main:config-retirement",
-          storePath,
+  it.each([
+    "stable",
+    "replace",
+    "direct",
+    "clear-command",
+    "explicit",
+    "gateway-owner",
+    "gateway-survivor",
+  ] as const)("keeps the retiring configuration across admitted work (%s)", async (mode) => {
+    await withOpenClawTestState({ label: "plugin-retirement-config" }, async (state) => {
+      const oldPath = state.path("old-custom", "sessions.json");
+      const newPath = state.path("new-custom", "sessions.json");
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }] },
+        session: { store: oldPath },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const scope = (storePath: string) => ({
+        agentId: "main",
+        sessionKey: "agent:main:config-retirement",
+        storePath,
+      });
+      for (const [storePath, value] of [
+        [oldPath, "old"],
+        [newPath, "successor"],
+      ] as const) {
+        await replaceSessionEntry(scope(storePath), {
+          sessionId: "config-retirement",
+          updatedAt: 1,
+          pluginExtensions: { fixture: { value }, other: { value: "preserve" } },
         });
-        for (const [storePath, value] of [
-          [oldPath, "old"],
-          [newPath, "successor"],
-        ] as const) {
-          await replaceSessionEntry(scope(storePath), {
-            sessionId: "config-retirement",
-            updatedAt: 1,
-            pluginExtensions: { fixture: { value }, other: { value: "preserve" } },
-          });
-        }
-        const registry = createEmptyPluginRegistry();
-        const record = createPluginRecord({ id: "fixture" });
-        registry.plugins.push(record);
-        const instance = new PluginInstance(record.id, { record, registry });
-        setActivePluginRegistry(registry);
-        const release = createDeferredCore();
-        const call =
-          mode === "clear-command"
-            ? withPluginCommandExecution(registry, () => release.promise)
-            : instance.run(() => release.promise);
-        let retirement: Promise<unknown> | undefined;
-        try {
-          if (mode === "explicit" || mode === "direct") {
-            retirement = createPluginHostRegistryRetirement({
-              ...(mode === "explicit" ? { cfg } : {}),
-              previousRegistry: registry,
-            })();
-          } else if (mode === "clear-command") {
-            retirement = clearActivePluginRegistry();
-          } else {
+      }
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id: "fixture" });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { record, registry });
+      setActivePluginRegistry(registry);
+      const registryOwner =
+        mode === "gateway-owner" || mode === "gateway-survivor"
+          ? createPluginRegistryOwner(registry)
+          : undefined;
+      let survivorOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;
+      const release = createDeferredCore();
+      const call =
+        mode === "clear-command"
+          ? withPluginCommandExecution(registry, () => release.promise)
+          : instance.run(() => release.promise);
+      let retirement: Promise<unknown> | undefined;
+      try {
+        if (registryOwner) {
+          if (mode === "gateway-survivor") {
             const successor = createEmptyPluginRegistry();
             setActivePluginRegistry(successor);
-            retirement = disposePluginRegistryInstances(registry, successor, {
-              cleanupPersistentState: true,
-            });
+            survivorOwner = createPluginRegistryOwner(successor);
           }
-          let finished = false;
-          retirement = retirement.then(() => {
-            finished = true;
+          retirement = registryOwner.close();
+        } else if (mode === "explicit" || mode === "direct") {
+          retirement = createPluginHostRegistryRetirement({
+            ...(mode === "explicit" ? { cfg } : {}),
+            previousRegistry: registry,
+          })();
+        } else if (mode === "clear-command") {
+          retirement = clearActivePluginRegistry();
+        } else {
+          const successor = createEmptyPluginRegistry();
+          setActivePluginRegistry(successor);
+          retirement = disposePluginRegistryInstances(registry, successor, {
+            cleanupPersistentState: true,
           });
-          await Promise.resolve();
-          expect(finished).toBe(false);
-          if (mode !== "stable") {
-            const next = { ...cfg, session: { store: newPath } };
-            setRuntimeConfigSnapshot(next, next);
-          }
-          release.resolve();
-          await Promise.all([call, retirement]);
-          expect(loadSessionEntry(scope(oldPath))?.pluginExtensions).toEqual({
-            other: { value: "preserve" },
-          });
-          expect(loadSessionEntry(scope(newPath))?.pluginExtensions).toEqual({
-            fixture: { value: "successor" },
-            other: { value: "preserve" },
-          });
-        } finally {
-          release.resolve();
-          await Promise.allSettled([call, retirement]);
-          await clearActivePluginRegistry();
         }
-      });
-    },
-  );
+        let finished = false;
+        retirement = retirement.then(() => {
+          finished = true;
+        });
+        await Promise.resolve();
+        expect(finished).toBe(false);
+        if (mode !== "stable" && !registryOwner) {
+          const next = { ...cfg, session: { store: newPath } };
+          setRuntimeConfigSnapshot(next, next);
+        }
+        release.resolve();
+        await Promise.all([call, retirement]);
+        expect(loadSessionEntry(scope(oldPath))?.pluginExtensions).toEqual({
+          ...(mode === "clear-command" || registryOwner ? { fixture: { value: "old" } } : {}),
+          other: { value: "preserve" },
+        });
+        expect(loadSessionEntry(scope(newPath))?.pluginExtensions).toEqual({
+          fixture: { value: "successor" },
+          other: { value: "preserve" },
+        });
+      } finally {
+        release.resolve();
+        await Promise.allSettled([
+          call,
+          retirement,
+          registryOwner?.close(),
+          survivorOwner?.close(),
+        ]);
+        await clearActivePluginRegistry();
+      }
+    });
+  });
 });
 
 it.each(

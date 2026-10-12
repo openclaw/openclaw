@@ -14,11 +14,10 @@ import { resolveSandboxDockerEnv, resolveSandboxScope } from "../agents/sandbox/
 import { getContainerEnvFileEntryIssue } from "../infra/container-env-file.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
-  hasAvatarUriScheme,
   isAvatarDataUrl,
   isAvatarHttpUrl,
+  isAvatarWorkspacePath,
   isPathWithinRoot,
-  isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
 import {
   formatUnsafeGatewayTailscaleNoAuthMessage,
@@ -182,7 +181,7 @@ function validateIdentityAvatar(
     if (!avatar || isAvatarDataUrl(avatar) || isAvatarHttpUrl(avatar)) {
       continue;
     }
-    if (avatar.startsWith("~") || (hasAvatarUriScheme(avatar) && !isWindowsAbsolutePath(avatar))) {
+    if (!isAvatarWorkspacePath(avatar)) {
       issues.push(
         createIdentityAvatarIssue(
           source,

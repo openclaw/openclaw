@@ -212,7 +212,7 @@ export async function runUpdateLeaseChild(): Promise<void> {
       const { defaultRuntime: runtime } = await import("../../runtime.js");
       const options = { repair: true, nonInteractive: true, workspaceSuggestions: false };
       const prompter = createDoctorPrompter({ runtime, options });
-      const configResult = await loadAndMaybeMigrateDoctorConfig({
+      await using configResult = await loadAndMaybeMigrateDoctorConfig({
         options,
         prompter,
         runtime,

@@ -512,7 +512,11 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
                 await clearActivePluginRegistry(previous);
               } else {
                 const retainedRegistry = survivor?.activeRegistry ?? null;
-                retirePluginRegistryIfUnused(previous, () => retainedRegistry);
+                preparePluginRegistryRetirement(
+                  previous,
+                  () => retainedRegistry,
+                  false,
+                )?.retireIfUnused();
               }
               return await waitForPluginRegistryRetirement(previous);
             }));
@@ -663,7 +667,8 @@ export async function clearActivePluginRegistry(
               disposePluginRegistryInstances(previousRegistry, () => state.activeRegistry, {
                 cfg,
                 runContextCleanup,
-                cleanupPersistentState: true,
+                // Registry retirement is not an explicit plugin removal.
+                cleanupPersistentState: false,
               }),
             );
           }

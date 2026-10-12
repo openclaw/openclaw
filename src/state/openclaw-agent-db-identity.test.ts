@@ -8,6 +8,7 @@ import {
   readOpenClawAgentDatabaseIdentity,
   type OpenClawAgentDatabaseClaim,
 } from "./openclaw-agent-db-identity.js";
+import { closeOpenClawAgentDatabaseAliasesByPathAsync } from "./openclaw-agent-db-lifecycle.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -76,6 +77,31 @@ it.runIf(process.platform !== "win32")(
     const { claim: current } = retain(alias);
     expect(current.identity).toBe(replacementIdentity);
     expect(claim.isCurrent()).toBe(false);
+  },
+);
+
+it.runIf(process.platform !== "win32").each(["canonical", "alias"] as const)(
+  "drains rollback aliases by captured identity without closing their retargeted successor (%s)",
+  async (selection) => {
+    const original = openOpenClawAgentDatabase({ agentId: "main", env });
+    const alias = path.join(directory, "rollback-alias.sqlite");
+    fs.symlinkSync(original.path, alias);
+    const aliased = openOpenClawAgentDatabase({ agentId: "main", env, path: alias });
+    const replacement = openOpenClawAgentDatabase({
+      agentId: "main",
+      env,
+      path: path.join(directory, "rollback-replacement.sqlite"),
+    });
+    fs.unlinkSync(alias);
+    fs.symlinkSync(replacement.path, alias);
+
+    await closeOpenClawAgentDatabaseAliasesByPathAsync(
+      selection === "canonical" ? original.path : alias,
+    );
+
+    expect(original.db.isOpen).toBe(false);
+    expect(aliased.db.isOpen).toBe(false);
+    expect(replacement.db.isOpen).toBe(true);
   },
 );
 

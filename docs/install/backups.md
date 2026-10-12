@@ -27,6 +27,11 @@ The databases are written while the Gateway runs, and raw file copies of a
 live database can be torn or corrupt. Every supported path below captures
 committed state safely.
 
+SQLite snapshots, including Doctor's pre-migration backups and backup reuse on
+retry, preserve vector memory tables without loading the native `sqlite-vec`
+extension. Backup creation does not depend on the host's native vector support;
+vector search still requires a compatible extension.
+
 <Warning>
   Backups contain auth profiles, channel and provider credentials, session
   history, and other sensitive records. Store them encrypted, restrict the

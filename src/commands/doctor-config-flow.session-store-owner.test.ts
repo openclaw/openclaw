@@ -62,7 +62,7 @@ describe("Doctor session-store owner recovery", () => {
         await fs.writeFile(`${configPath}.bak.1`, JSON.stringify(fixture(home, "ops")));
         await fs.writeFile(`${configPath}.bak.2`, JSON.stringify(fixture(home, "research")));
         const prompter = recoveryPrompter(async () => accept);
-        const ctx = await prepareDoctorContext(configPath, { prompter });
+        await using ctx = await prepareDoctorContext(configPath, { prompter });
         expect(prompter.confirmRuntimeRepair).toHaveBeenCalledWith({
           message: expect.stringContaining(`${configPath}.bak.1`),
           initialValue: false,
@@ -97,7 +97,7 @@ describe("Doctor session-store owner recovery", () => {
       const configPath = await writeOpenClawConfig(home, fixture(home));
       await fs.writeFile(`${configPath}.bak`, JSON.stringify(fixture(home, "ops")));
       await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }, async () => {
-        const ctx = await prepareDoctorContext(configPath, {
+        await using ctx = await prepareDoctorContext(configPath, {
           options: { repair: true, yes: true, nonInteractive: true },
         });
         expect(ctx.cfg.agents?.defaults?.sessionStore?.agentId).toBeUndefined();
@@ -131,7 +131,7 @@ describe("Doctor session-store owner recovery", () => {
           await fs.writeFile(`${configPath}.bak.1`, JSON.stringify(fixture(home, "research")));
         }
         const prompter = recoveryPrompter(async () => true);
-        const ctx = await prepareDoctorContext(configPath, { prompter });
+        await using ctx = await prepareDoctorContext(configPath, { prompter });
         expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
         expect(ctx.cfg.agents?.defaults?.sessionStore?.agentId).toBeUndefined();
         if (scenario === "retired-agent") {
@@ -160,7 +160,7 @@ describe("Doctor session-store owner recovery", () => {
         JSON.stringify(fixture(home, "ops", path.join(formerDir, "sessions.json"))),
       );
       const prompter = recoveryPrompter(async () => true);
-      const ctx = await prepareDoctorContext(configPath, { prompter });
+      await using ctx = await prepareDoctorContext(configPath, { prompter });
       expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
       expect(ctx.cfg.agents?.defaults?.sessionStore?.agentId).toBeUndefined();
     });
@@ -175,7 +175,7 @@ describe("Doctor session-store owner recovery", () => {
         await fs.writeFile(configPath, edited);
         return true;
       });
-      const ctx = await prepareDoctorContext(configPath, { prompter });
+      await using ctx = await prepareDoctorContext(configPath, { prompter });
       await runInitialConfigWriteHealth(ctx);
       await expect(fs.readFile(configPath, "utf8")).resolves.toBe(edited);
       expect(ctx.configWriteRefusal).toBe("config-conflict");

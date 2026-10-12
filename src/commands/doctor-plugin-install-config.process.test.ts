@@ -133,7 +133,7 @@ describe("Doctor retired plugin install config", () => {
       const { runWriteConfigHealth } = await import(${JSON.stringify(writerUrl.href)});
       const { loadAndMaybeMigrateDoctorConfig } = await import(${JSON.stringify(configFlowUrl)});
       const runtime = { log() {}, error() {}, exit(code) { throw new Error(String(code)); } };
-      const configResult = await loadAndMaybeMigrateDoctorConfig({
+      await using configResult = await loadAndMaybeMigrateDoctorConfig({
         options: {}, confirm: async () => true, runtime,
       });
       const cfg = configResult.cfg;
@@ -195,7 +195,7 @@ describe("Doctor retired plugin install config", () => {
       const { seedInstalledPluginIndex } = await import(${JSON.stringify(seedUrl)});
       const runtime = { log() {}, error() {}, exit(code) { throw new Error(String(code)); } };
       const options = { repair: true, nonInteractive: true, workspaceSuggestions: false };
-      const configResult = await loadAndMaybeMigrateDoctorConfig({
+      await using configResult = await loadAndMaybeMigrateDoctorConfig({
         options, confirm: async () => true, runtime,
       });
       const ctx = {

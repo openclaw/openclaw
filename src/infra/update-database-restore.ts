@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawAgentDatabaseAliasesByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { drainAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
 import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
 import { publishFileExclusive, sha256File } from "./directory-durability.js";
@@ -72,7 +72,7 @@ async function withDatabaseExclusion<T>(
     }
     // Local handles retain lexical ownership even when discovery canonicalizes a directory link.
     return drainAgentDatabaseResources({ path: pathname }, async () => {
-      await closeOpenClawAgentDatabaseByPathAsync(pathname);
+      await closeOpenClawAgentDatabaseAliasesByPathAsync(pathname);
       assertOwned();
       return drain(index + 1);
     });
