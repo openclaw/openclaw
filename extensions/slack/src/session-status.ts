@@ -12,6 +12,18 @@ type SlackSessionStatus = "processing" | "active" | "suspended";
 const MISSING_STOP_SUBSCRIPTION = "missing_agent_session_stopped_event_subscription";
 let warnedMissingStopSubscription = false;
 
+function recognizedSessionStatus(value: string | undefined): string | undefined {
+  switch (value) {
+    case "processing":
+    case "active":
+    case "suspended":
+    case "closed":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
 export async function setSlackSessionStatus(params: {
   client: WebClient;
   channelId: string;
@@ -48,6 +60,13 @@ export async function setSlackSessionStatus(params: {
         ),
       );
     }
+    const status = recognizedSessionStatus(response.status);
+    const agentStatus = recognizedSessionStatus(response.agent_status);
+    logVerbose(
+      `slack session status: requested=${params.status} accepted=${response.ok === true}` +
+        (status ? ` status=${status}` : "") +
+        (agentStatus ? ` agent_status=${agentStatus}` : ""),
+    );
     return response.ok ? { ok: true, title: response.title } : { ok: false };
   } catch (error) {
     logVerbose(

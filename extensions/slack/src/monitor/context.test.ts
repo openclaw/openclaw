@@ -687,6 +687,49 @@ describe("createSlackMonitorContext Agent View state", () => {
 });
 
 describe("Slack session status and titles", () => {
+  it("logs only recognized status response fields without request or response data", async () => {
+    const apiCall = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: "processing",
+        agent_status: "active",
+        title: "private response title",
+        token: "private response token",
+        channel_id: "private response channel",
+        thread_ts: "private response thread",
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: "unrecognized private status",
+        agent_status: "closed",
+      });
+    const ctx = createTestContext({ appClient: { apiCall } as unknown as App["client"] });
+
+    expect(
+      await ctx.setSlackSessionStatus({
+        channelId: "D123",
+        threadTs: "10.000",
+        status: "active",
+        title: "private request title",
+      }),
+    ).toBe(true);
+    expect(
+      await ctx.setSlackSessionStatus({
+        channelId: "D123",
+        threadTs: "10.000",
+        status: "processing",
+      }),
+    ).toBe(false);
+
+    expect(logVerboseMock.mock.calls).toEqual([
+      [
+        "slack session status: requested=active accepted=true status=processing agent_status=active",
+      ],
+      ["slack session status: requested=processing accepted=false agent_status=closed"],
+    ]);
+  });
+
   it.each(["processing"] as const)("writes %s only for a thread", async (status) => {
     const apiCall = vi.fn().mockResolvedValue({ ok: true });
     const ctx = createTestContext({ appClient: { apiCall } as unknown as App["client"] });
