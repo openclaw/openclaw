@@ -1,4 +1,5 @@
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { StoredMessageReactionSummary } from "./session-reaction-store.types.js";
 import type { SessionSuggestionListParams } from "./session-sharing-store.types.js";
 
 export type SessionMembersWorkerInput = {
@@ -31,4 +32,9 @@ export type SessionReactionsWorkerInput = {
   sessionKey: string;
   sessionId: string;
   env: NodeJS.ProcessEnv;
+};
+
+export type SessionReactionsWorkerResult = {
+  kind: "session-reactions";
+  reactions: Record<string, StoredMessageReactionSummary[]>;
 };

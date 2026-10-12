@@ -868,13 +868,13 @@ User-turn transcript recorders also provide optional
 `completeProcessingAsync(outcome)` and `waitForPendingInputSettlement()` methods.
 Await processing completion before publishing its outcome. Completion records
 processing separately from transcript consumption; it does not append or consume
-the pending input. The synchronous `completeProcessing` callback shipped in
-`v2026.9.8` retains its immediate result for existing SDK consumers. It and the
-underlying pending-input receipt's `complete` method are deprecated in favor of
-`completeProcessingAsync` and `completeAsync`. Native completion warns once per
-plugin and remains supported until the next Plugin SDK major. The host
-uses that legacy callback only when a supplied recorder has no async companion,
-never after an async failure or an undefined async result.
+the pending input. Core-created recorders and pending-input receipts complete
+through their awaited methods. The synchronous `completeProcessing` callback
+shipped in `v2026.9.8` remains accepted on plugin-supplied recorders until the next
+Plugin SDK major. It is deprecated in favor of `completeProcessingAsync`, and
+using it warns once per plugin. The host uses that legacy callback only when a
+supplied recorder has no async companion, never after an async failure or an
+undefined async result.
 
 `finishPendingInput(disposition)` still revokes prompt custody synchronously.
 After calling it, await `waitForPendingInputSettlement()` when available before

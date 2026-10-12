@@ -16,11 +16,8 @@ import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-
 import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { prepareSessionCreatorProfile } from "../session-creator.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
-import {
-  resolveSessionSharingRole,
-  resolveSessionSharingTarget,
-  sharingIdentity,
-} from "../session-sharing.js";
+import { sharingIdentity } from "../session-sharing-policy.js";
+import { resolveSessionSharingRole, resolveSessionSharingTarget } from "../session-sharing.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 

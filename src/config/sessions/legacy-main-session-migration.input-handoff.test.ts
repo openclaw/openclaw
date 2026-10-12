@@ -121,7 +121,7 @@ function createInputHandoff(sharedStore = false) {
         ).toMatchObject({ appended: true, messageId: aggregate.inputId });
       }
       if (params.completion) {
-        receipt.complete!(params.completion);
+        await receipt.completeAsync!(params.completion);
       }
     } finally {
       receipt.finish(params.disposition ?? "interrupted");

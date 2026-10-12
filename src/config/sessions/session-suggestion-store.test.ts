@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
-import { upsertSessionEntryCore } from "./session-accessor.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "./session-accessor.js";
 import {
   addSessionSuggestionInWorker as addSessionSuggestion,
   claimSessionSuggestionDispatchInWorker as claimSessionSuggestionDispatch,
@@ -21,10 +21,12 @@ async function resolvePendingSuggestion(params: {
   state: "accepted" | "dismissed";
   expectedSessionId: string;
 }) {
+  const expectedEntry = loadSessionEntry(params.scope)!;
   const claim = await claimSessionSuggestionDispatch(params.scope, {
     id: params.id,
     resolution: params.state === "accepted" ? "edit" : "dismiss",
     expectedSessionId: params.expectedSessionId,
+    expectedEntry,
   });
   return claim?.kind === "claimed"
     ? await finalizeSessionSuggestionClaim(params.scope, {
@@ -32,6 +34,7 @@ async function resolvePendingSuggestion(params: {
         token: claim.token,
         state: params.state,
         expectedSessionId: params.expectedSessionId,
+        expectedEntry,
       })
     : null;
 }
@@ -123,11 +126,13 @@ describe("session suggestion store", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
     const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
     await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+    const expectedEntry = loadSessionEntry(scope)!;
     await addSessionSuggestion(scope, {
       id: "suggestion",
       authorId: "alice",
       text: "do this",
       expectedSessionId: "session-a",
+      expectedEntry,
     });
     await expect(
       addSessionSuggestion(scope, {
@@ -136,6 +141,29 @@ describe("session suggestion store", () => {
         expectedSessionId: "session-b",
       }),
     ).rejects.toThrow(/session changed/);
+
+    await expect(
+      addSessionSuggestion(scope, {
+        authorId: "alice",
+        text: "conflicting expected instance",
+        expectedSessionId: "session-b",
+        expectedEntry,
+      }),
+    ).rejects.toThrow(/session changed/);
+    await upsertSessionEntryCore(scope, {
+      sessionId: "session-a",
+      visibility: "suggest",
+      updatedAt: 2,
+    });
+    await expect(
+      addSessionSuggestion(scope, {
+        authorId: "alice",
+        text: "stale sharing authority",
+        expectedSessionId: "session-a",
+        expectedEntry,
+      }),
+    ).rejects.toThrow(/session changed/);
+    expect((await listSessionSuggestions(scope)).map((item) => item.id)).toEqual(["suggestion"]);
 
     await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 2 });
     expect(await listSessionSuggestions(scope)).toEqual([]);

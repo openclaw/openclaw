@@ -12,8 +12,6 @@ export type SessionPendingInputReceipt = {
   assertLifetimeCurrent?: () => void;
   finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
   completion?: AgentRunTerminalOutcome;
-  /** @deprecated Use completeAsync. Removed in the next Plugin SDK major. */
-  complete?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome;
   completeAsync?: (outcome: AgentRunTerminalOutcome) => Promise<AgentRunTerminalOutcome>;
   settled?: () => Promise<void>;
 };
