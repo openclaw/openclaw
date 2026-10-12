@@ -6,6 +6,7 @@ import {
   stripInternalRuntimeContext,
 } from "../../internal-runtime-context.js";
 import {
+  appendCurrentInboundContext,
   attachSteeringRuntimeContext,
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
@@ -90,6 +91,37 @@ describe("runtime context prompt submission", () => {
     ).toBe("Current room event\n\nHello");
     expect(buildCurrentInboundPrompt({ context: { text: "  " }, prompt: "Hello" })).toBe("Hello");
   });
+
+  it.each([" ", "\n\n"] as const)(
+    "preserves full and resumed prompt boundaries with late context (%j)",
+    (promptJoiner) => {
+      const context = {
+        text: "History\n\n#42:",
+        resumableText: "#42:",
+        promptJoiner,
+      };
+      const added = appendCurrentInboundContext(context, [
+        { kind: "runtime-instruction", text: "Use the selected item." },
+      ]);
+      for (const preferResumableText of [false, true]) {
+        const prompt = buildCurrentInboundPrompt({
+          context: added,
+          prompt: "Tldr",
+          preferResumableText,
+        });
+        expect(prompt).toContain("Use the selected item.");
+        expect(prompt.includes("History")).toBe(!preferResumableText);
+        expect(prompt).toContain(
+          promptJoiner === " " ? "#42: Tldr" : "#42:\n\nUse the selected item.\n\nTldr",
+        );
+      }
+      expect(added.fragments).toContainEqual({
+        kind: "runtime-instruction",
+        text: "Use the selected item.",
+      });
+      expect(context.text).toBe("History\n\n#42:");
+    },
+  );
 
   it("carries producer provenance in hidden custom messages and hides their display", () => {
     const text = "Conversation info: channel=telegram";
