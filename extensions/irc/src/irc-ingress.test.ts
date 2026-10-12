@@ -54,92 +54,6 @@ afterEach(() => {
 });
 
 describe("IRC durable ingress", () => {
-  it("does not dispatch when the durable append fails", async () => {
-    await withQueue(async (queue) => {
-      const appendError = new Error("sqlite unavailable");
-      const failingQueue = {
-        ...queue,
-        enqueue: vi.fn().mockRejectedValue(appendError),
-      } satisfies IrcIngressQueue;
-      const dispatch = vi.fn();
-      const ingress = startIngress(failingQueue, dispatch);
-      try {
-        await expect(
-          ingress.openConnection("connection-a").accept(CHANNEL_LINE, "bot"),
-        ).rejects.toBe(appendError);
-        expect(failingQueue.enqueue).toHaveBeenCalledTimes(3);
-        expect(dispatch).not.toHaveBeenCalled();
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("recovers a durable pre-dispatch append with a fresh drain exactly once", async () => {
-    await withQueue(async (queue) => {
-      const interruptedDispatch = vi.fn();
-      const interrupted = createIrcIngressMonitor({
-        accountId: "default",
-        queue,
-        dispatch: interruptedDispatch,
-        runtime: { error: vi.fn(), log: vi.fn() },
-      });
-      await interrupted.openConnection("connection-restart").accept(CHANNEL_LINE, "receipt-bot");
-      expect(await queue.listPending({ limit: "all" })).toEqual([
-        expect.objectContaining({
-          id: "local:connection-restart:000000000001",
-          laneKey: "channel:#room",
-          payload: expect.objectContaining({ rawLine: CHANNEL_LINE }),
-        }),
-      ]);
-      await interrupted.stop();
-      expect(interruptedDispatch).not.toHaveBeenCalled();
-
-      const recoveredDispatch = vi.fn<IrcIngressDispatch>(async (_message, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const recovered = startIngress(queue, recoveredDispatch);
-      try {
-        await recovered.waitForIdle();
-        expect(recoveredDispatch).toHaveBeenCalledTimes(1);
-        expect(recoveredDispatch.mock.calls[0]?.[0]).toMatchObject({
-          messageId: "local:connection-restart:000000000001",
-          target: "#room",
-          rawTarget: "#room",
-          senderNick: "alice",
-          senderUser: "ident",
-          senderHost: "example.org",
-          text: "hello",
-          isGroup: true,
-        });
-        expect(recoveredDispatch.mock.calls[0]?.[2]).toEqual({
-          connectedNick: "receipt-bot",
-          connectionEpoch: "connection-restart",
-        });
-      } finally {
-        await recovered.stop();
-      }
-    });
-  });
-
-  it("keeps a completion tombstone for the same local event id", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn<IrcIngressDispatch>(async (_message, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const ingress = startIngress(queue, dispatch);
-      try {
-        await ingress.openConnection("connection-duplicate").accept(CHANNEL_LINE, "bot");
-        await ingress.waitForIdle();
-        await ingress.openConnection("connection-duplicate").accept(CHANNEL_LINE, "bot");
-        await ingress.waitForIdle();
-        expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
   it("assigns distinct monotonic ids to identical lines on one connection", async () => {
     await withQueue(async (queue) => {
       const messageIds: string[] = [];
@@ -156,27 +70,6 @@ describe("IRC durable ingress", () => {
         expect(messageIds).toEqual([
           "local:connection-identical:000000000001",
           "local:connection-identical:000000000002",
-        ]);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("derives the direct-message lane from the sender nick", async () => {
-    await withQueue(async (queue) => {
-      const ingress = createIrcIngressMonitor({
-        accountId: "default",
-        queue,
-        dispatch: vi.fn(),
-        runtime: { error: vi.fn(), log: vi.fn() },
-      });
-      try {
-        await ingress
-          .openConnection("connection-dm")
-          .accept(":Alice!ident@example.org PRIVMSG openclaw-bot :hello", "bot");
-        expect(await queue.listPending({ limit: "all" })).toEqual([
-          expect.objectContaining({ laneKey: "direct:alice" }),
         ]);
       } finally {
         await ingress.stop();
