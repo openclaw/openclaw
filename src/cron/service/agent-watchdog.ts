@@ -198,7 +198,13 @@ export function createCronAgentWatchdog(params: {
   };
 }
 
-/** Joins timeout cleanup and command settlement without wedging the cron lane. */
+/**
+ * Joins timeout cleanup and command settlement without wedging the cron lane.
+ *
+ * The guard only bounds how long the lane waits. Completing this request never
+ * proves the original execution stopped: the settlement owner (run receipt) is
+ * what reports the run settled, and it keeps the job fenced until then.
+ */
 export async function settleTimedOutCronRun(
   state: CronServiceState,
   job: CronJob,
@@ -210,6 +216,19 @@ export async function settleTimedOutCronRun(
   if (!cleanupPromise && !commandSettlement) {
     return;
   }
+  // Record the timeout with execution context: the original run may still be
+  // executing while the lane moves on (#137215).
+  state.deps.log.warn(
+    {
+      jobId: job.id,
+      jobName: job.name,
+      timeoutMs,
+      executionPhase: execution?.phase,
+      executionProvider: execution?.provider,
+      executionModel: execution?.model,
+    },
+    "cron: job timed out; requesting cancellation of the original execution",
+  );
   const cleanup = cleanupPromise?.catch((err: unknown) => {
     state.deps.log.warn(
       { jobId: job.id, err: String(err) },
