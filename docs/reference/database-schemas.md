@@ -56,13 +56,12 @@ Native SQLite initialization reads the loaded library's version and extension
 capability in one query before admitting real state databases. Auth-profile
 readers install their lock-wait timeout at connection open.
 Quarantine decision readers and writers set their existing lock-wait timeout at connection
-open. The quarantine store's format is admitted once per physical database per
-process, while existing guards retain the indexed durable quarantine-row lookup
-in one SQLite snapshot and validate any recorded file generation.
-A separate inspection process can admit a target before the Gateway's verifier
-confirms corruption; its next guard must observe that recorded refusal even when
-the target's physical identity is unchanged. Quarantine rows retain their pathname
-scope, and aliases still share physical format, schema, and integrity facts.
+open. The quarantine store's format and each target's decision are loaded once
+per physical store. Record and clear operations publish the committed decision
+through the existing in-process admission facts, including absence, so ordinary
+guards do not repeat the durable lookup. Explicit Doctor inspection reads disk,
+and recorded refusals still validate their file generation. Quarantine rows retain
+their pathname scope, and aliases still share physical format, schema, and integrity facts.
 The persisted schema, WAL safety, and recovery behavior are unchanged.
 
 Agent database opens apply private file and directory modes. Warm reads and writes

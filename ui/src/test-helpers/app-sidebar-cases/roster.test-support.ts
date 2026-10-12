@@ -142,6 +142,11 @@ export async function mountRoster(
 }
 
 export async function settleRoster(sidebar: SidebarLifecycleState) {
+  if ("__vitest_browser__" in globalThis) {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+  }
   await sidebar.updateComplete;
   await vi.dynamicImportSettled();
   await settleLitElements(sidebar.querySelectorAll<LitElement>("openclaw-sidebar-agent-roster"));

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
@@ -17,6 +16,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readMemoryPreimages, storeMemoryPreimage } from "./dreaming-consolidation-artifacts.js";
 import { readMemoryOriginsInWorker } from "./memory-entry-origin-reads.js";
@@ -29,6 +29,11 @@ import {
   reserveMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
+import {
+  ensureMemorySessionTombstones,
+  hasMemorySessionTombstone,
+  recordMemorySessionTombstonesInDatabase,
+} from "./memory-session-tombstones.js";
 import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
 import * as cpuRuntime from "./memory/manager-cpu-worker-runtime.js";
 import { buildPromotionMarker } from "./short-term-promotion-memory-write.js";
@@ -266,6 +271,39 @@ describe("memory entry origins", () => {
     expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
   });
 
+  it("publishes committed tombstones and forgets facts when their table is recreated", () => {
+    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    ensureMemorySessionTombstones(db);
+    expect(hasMemorySessionTombstone(db, "main", "committed")).toBe(false);
+    recordMemorySessionTombstonesInDatabase(db, {
+      agentId: "main",
+      sessionIds: ["committed"],
+    });
+    expect(hasMemorySessionTombstone(db, "main", "committed")).toBe(true);
+    expect(
+      recordMemorySessionTombstonesInDatabase(db, {
+        agentId: "other",
+        sessionIds: ["committed"],
+      }),
+    ).toBe(0);
+    expect(hasMemorySessionTombstone(db, "other", "committed")).toBe(false);
+    expect(() =>
+      runSqliteImmediateTransactionSync(db, () => {
+        recordMemorySessionTombstonesInDatabase(db, {
+          agentId: "main",
+          sessionIds: ["rolled-back"],
+        });
+        expect(hasMemorySessionTombstone(db, "main", "rolled-back")).toBe(true);
+        throw new Error("rollback tombstone");
+      }),
+    ).toThrow("rollback tombstone");
+    expect(hasMemorySessionTombstone(db, "main", "rolled-back")).toBe(false);
+    expect(hasMemorySessionTombstone(db, "main", "committed")).toBe(true);
+    db.exec("DROP TABLE memory_session_tombstones");
+    ensureMemorySessionTombstones(db);
+    expect(hasMemorySessionTombstone(db, "main", "committed")).toBe(false);
+  });
+
   it("filters origins and tombstones by selections larger than SQLite's parameter limit", async () => {
     const variableLimit = openOpenClawAgentDatabase({ agentId: "main" })
       .db.prepare("PRAGMA compile_options")
@@ -325,7 +363,7 @@ describe("memory entry origins", () => {
     expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([kept]);
   });
 
-  it("bounds tombstone query rows and bytes while preserving membership across pages", async () => {
+  it("bounds tombstone replies while reusing committed membership across pages", async () => {
     const sessionIds = Array.from({ length: 513 }, (_, index) => `forgotten-${index}`);
     sessionIds[255] = `long-${"x".repeat(64 * 1024)}`;
     sessionIds[256] = "nul-\0-🦞";
@@ -335,57 +373,15 @@ describe("memory entry origins", () => {
       reason: "x".repeat(1024),
       createdAt: 1_000,
     });
-    const reads: Array<{ rows: number; bytes: number }> = [];
-    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the intercepted statement receiver.
-    const all = StatementSync.prototype.all;
-    const observedAll = vi.spyOn(StatementSync.prototype, "all").mockImplementation(function (
-      this: StatementSync,
-      ...args
-    ) {
-      const rows = Reflect.apply(all, this, args);
-      if (this.sourceSQL.includes('"memory_session_tombstones"')) {
-        reads.push({ rows: rows.length, bytes: Buffer.byteLength(JSON.stringify(rows)) });
-      }
-      return rows;
-    });
-    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the intercepted statement receiver.
-    const iterate = StatementSync.prototype.iterate;
-    const observedIterate = vi
-      .spyOn(StatementSync.prototype, "iterate")
-      .mockImplementation(function (this: StatementSync, ...args) {
-        const iterator = Reflect.apply(iterate, this, args);
-        if (this.sourceSQL.includes('"memory_session_tombstones"')) {
-          const read = { rows: 0, bytes: 2 };
-          reads.push(read);
-          // Retain the native iterator and its return() cleanup, including before the first row.
-          const next = iterator.next.bind(iterator);
-          iterator.next = (...parameters) => {
-            const result = next(...parameters);
-            if (!result.done) {
-              read.bytes +=
-                Buffer.byteLength(JSON.stringify(result.value)) + (read.rows > 0 ? 1 : 0);
-              read.rows += 1;
-            }
-            return result;
-          };
-        }
-        return iterator;
-      });
-    try {
+    expect(
       readMemoryOriginsInWorker({
         kind: "session-tombstones",
         agentId: "main",
         stateDir,
         databasePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
         sessionIds,
-      });
-      expect(reads.length).toBeGreaterThan(0);
-      expect(Math.max(...reads.map((read) => read.rows))).toBeLessThanOrEqual(256);
-      expect(Math.max(...reads.map((read) => read.bytes))).toBeLessThanOrEqual(4096);
-    } finally {
-      observedIterate.mockRestore();
-      observedAll.mockRestore();
-    }
+      }),
+    ).toEqual({ kind: "session-tombstones", indices: Array.from({ length: 256 }, (_, i) => i) });
     expect(
       await findForgottenMemorySessionIds({
         agentId: "main",
