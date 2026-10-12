@@ -21,9 +21,9 @@ import { pruneExpiredMiniAppEntries, type TelegramMiniAppLaunchTickets } from ".
 import { isTelegramMiniAppOwner } from "./owner.js";
 import { renderTelegramMiniAppPage, TELEGRAM_MINIAPP_EXPIRED_MESSAGE } from "./page.js";
 import {
+  describeTelegramMiniAppUrlError,
   resolveTelegramMiniAppUrls,
   TELEGRAM_MINIAPP_PATH_PREFIX,
-  TELEGRAM_MINIAPP_URL_ERROR,
 } from "./url.js";
 
 const AUTH_PATH = `${TELEGRAM_MINIAPP_PATH_PREFIX}auth`;
@@ -141,8 +141,8 @@ async function handleAuth(
   let urls;
   try {
     urls = await resolveTelegramMiniAppUrls({ cfg });
-  } catch {
-    return sendResponse(res, 503, TELEGRAM_MINIAPP_URL_ERROR);
+  } catch (err) {
+    return sendResponse(res, 503, describeTelegramMiniAppUrlError(err));
   }
   if (!(await isTelegramMiniAppOwner({ cfg, accountId, userId: validated.userId }))) {
     return sendResponse(res, 403, "Restricted to the bot owner.");

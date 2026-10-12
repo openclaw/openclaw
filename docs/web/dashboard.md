@@ -95,7 +95,7 @@ If you used `/dashboard` for the Mini App in an earlier release, see the
 
 Requirements:
 
-- `gateway.tailscale.mode: "serve"` or `"funnel"` so Telegram gets an HTTPS Mini App URL.
+- An HTTPS Mini App URL for Telegram: an https `gateway.publicOrigin` (for a reverse proxy or tunnel; keep the origin in any explicit `gateway.controlUi.allowedOrigins` list and the proxy in `gateway.trustedProxies`), or `gateway.tailscale.mode: "serve"` or `"funnel"`.
 - The Telegram sender must be the bot owner: a numeric Telegram user ID in `commands.ownerAllowFrom` or the selected account's effective `channels.telegram.allowFrom`.
 - Run `/controlui` in a DM with the bot. Group invocations only tell you to open the command in DM and do not include a button.
 - Docker installs: Serve/Funnel modes require the gateway to bind loopback next to `tailscaled`, which bridge networking with published ports cannot satisfy. Run the gateway container with `network_mode: host` and mount the host `tailscaled` socket (`/var/run/tailscale`) plus the `tailscale` CLI into the container.
@@ -107,7 +107,7 @@ receive the administrator grant reserved for handoffs issued directly by the Gat
 Non-goals for v1:
 
 - Telegram Web iframe is unsupported.
-- Tailscale Serve/Funnel is the only supported published URL path.
+- Published URLs come only from an https `gateway.publicOrigin` or Tailscale Serve/Funnel. With both configured, the public origin is used only when `gateway.controlUi.allowedOrigins` is unset or admits it; otherwise the Tailscale URL is kept.
 
 <a id="if-you-see-unauthorized-1008"></a>
 
