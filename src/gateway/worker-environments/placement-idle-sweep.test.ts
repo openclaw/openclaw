@@ -150,10 +150,8 @@ describe("worker placement idle suspension", () => {
     const sql = observeHostDataSql();
     try {
       expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
-      expect(sql.queries.length).toBeGreaterThan(0);
-      const beforeSweep = sql.queries.length;
       await idleSweep.sweep();
-      expect(sql.queries.slice(beforeSweep)).toEqual([]);
+      expect(sql.queries).toEqual([]);
     } finally {
       sql.restore();
     }
