@@ -22,11 +22,9 @@ export function normalizeOllamaToolCallName(
   options: { availableToolNames?: ReadonlySet<string> } = {},
 ): string {
   const trimmed = rawName.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
   const availableToolNames = options.availableToolNames;
-  if (availableToolNames?.has(trimmed)) {
+  // The shipped dispatcher is a durable name, not a tools.call prefix.
+  if (!trimmed || trimmed === "tool_call" || availableToolNames?.has(trimmed)) {
     return trimmed;
   }
   if (availableToolNames) {

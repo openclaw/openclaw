@@ -373,20 +373,18 @@ it.each(["function", "allowed_tools"] as const)(
   },
 );
 
-it("keeps the canonical dispatcher and completed legacy replay names unchanged", async () => {
-  const input = context(["dispatch_action", "tool_search", "exec"], "tool_call");
+it.each(["exec", "call"])("keeps legacy dispatcher replay unchanged beside %s", async (name) => {
+  const input = context(["dispatch_action", "tool_search", name], "tool_call");
   input.systemPrompt = "Call dispatch_action with id and args.";
   const saved = structuredClone(input);
   respond("dispatch_action");
   const stream = await createOllamaStreamFn(model.baseUrl)(model, input);
   expect((await stream.result()).content[0]).toMatchObject({ name: "dispatch_action" });
   const request = readRequest();
-  expect(request.tools.map((tool: { function: { name: string } }) => tool.function.name)).toEqual([
-    "dispatch_action",
-    "exec",
-    "tool_search",
-  ]);
-  expect(request.messages[0].content).toBe(input.systemPrompt);
+  expect(request.tools.map((tool: { function: { name: string } }) => tool.function.name)).toEqual(
+    ["dispatch_action", name === "call" ? "openclaw_call" : name, "tool_search"].toSorted(),
+  );
+  expect(request.messages[0].content).not.toContain("openclaw_tool_call");
   expect(request.messages[2].tool_calls[0].function.name).toBe("tool_call");
   expect(request.messages[3].tool_name).toBe("tool_call");
   expect(input).toEqual(saved);
