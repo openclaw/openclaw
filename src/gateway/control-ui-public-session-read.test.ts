@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -14,7 +15,13 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  collectPublicSessionAttachments,
+  readPublicSessionAttachment,
+} from "./control-ui-public-session-attachments.js";
+import { projectPublicSessionItems } from "./control-ui-public-session-project.js";
+import {
   isPublicSessionShareActive as readActive,
+  readPublicSessionMessage,
   readPublicSessionShare as readShare,
 } from "./control-ui-public-session-read.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
@@ -61,7 +68,7 @@ async function withPublicTestState(run: () => Promise<void>) {
   });
 }
 
-async function seed(messages: string[], target = locator) {
+async function seed(messages: unknown[], target = locator) {
   await upsertSessionEntryCore(target, {
     sessionId: target.sessionId,
     updatedAt: 1,
@@ -74,7 +81,7 @@ async function seed(messages: string[], target = locator) {
       type: "message",
       id: `message-${index}`,
       parentId: index ? `message-${index - 1}` : null,
-      message: { role: "user", content },
+      message: typeof content === "string" ? { role: "user", content } : content,
     })),
   ]);
   projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
@@ -98,24 +105,79 @@ describe("anonymous published session reader", () => {
     });
   });
 
-  it("pages exact published history using source positions rather than rendered counts", async () => {
+  it("pages fifty visible items and retains source positions for the older link", async () => {
     await withPublicTestState(async () => {
       await seed(Array.from({ length: 205 }, (_, index) => `Message ${index}`));
       const latest = await readPublicSessionShare(cfg, locator);
       expect(latest).toMatchObject({
         title: "Public example",
         totalMessages: 205,
-        olderOffset: 100,
+        olderOffset: 50,
         truncated: false,
       });
-      expect(latest?.messages).toHaveLength(100);
-      expect(latest?.messages[0]).toMatchObject({ content: "Message 105" });
+      expect(latest?.messages).toHaveLength(50);
+      expect(latest?.messages[0]).toMatchObject({ content: "Message 155" });
       const older = await readPublicSessionShare(cfg, locator, { offset: latest?.olderOffset });
-      expect(older?.olderOffset).toBe(200);
-      expect(older?.messages[0]).toMatchObject({ content: "Message 5" });
-      const first = await readPublicSessionShare(cfg, locator, { offset: older?.olderOffset });
+      expect(older?.olderOffset).toBe(100);
+      expect(older?.messages[0]).toMatchObject({ content: "Message 105" });
+      const first = await readPublicSessionShare(cfg, locator, { offset: 200 });
       expect(first?.messages).toHaveLength(5);
       expect(first?.olderOffset).toBeUndefined();
+    });
+  });
+
+  it("fills pages across hidden rows without splitting tool runs or repeating visible items", async () => {
+    await withPublicTestState(async () => {
+      await seed(
+        Array.from({ length: 40 }, (_, index) => [
+          { role: "user", content: `Question ${index}` },
+          ...Array.from({ length: 3 }, (_unused, call) => [
+            { role: "assistant", content: [{ type: "thinking", thinking: "Private" }] },
+            {
+              role: "assistant",
+              content: [{ type: "toolCall", id: `${index}-${call}`, name: "read", arguments: {} }],
+            },
+            { role: "toolResult", toolCallId: `${index}-${call}`, content: "Private output" },
+          ]).flat(),
+          { role: "assistant", content: `Answer ${index}` },
+        ]).flat(),
+      );
+      const pages = [];
+      let offset = 0;
+      do {
+        const page = await readPublicSessionShare(cfg, locator, { offset });
+        expect(page).not.toBeNull();
+        pages.unshift(projectPublicSessionItems(page!.messages));
+        offset = page!.olderOffset ?? 0;
+      } while (offset);
+      expect(pages.map((page) => page.length)).toEqual([20, 50, 50]);
+      const items = pages.flat();
+      expect(items.filter((item) => item.kind === "message").map((item) => item.text)).toEqual(
+        Array.from({ length: 40 }, (_, index) => [`Question ${index}`, `Answer ${index}`]).flat(),
+      );
+      const runs = items.filter((item) => item.kind === "tools");
+      expect(runs).toHaveLength(40);
+      expect(runs.every((run) => run.calls.length === 3)).toBe(true);
+    });
+  });
+
+  it("reads only the exact current published entry and rechecks revocation before releasing it", async () => {
+    await withPublicTestState(async () => {
+      await seed(["First", "Second"]);
+      const read = (entryId: string, target = locator) =>
+        readPublicSessionMessage(cfg, target, { entryId, projection: currentProjection() });
+      expect(await read("message-0")).toMatchObject({ content: "First" });
+      expect(await read("missing")).toBeNull();
+      expect(await read("message-0", { ...locator, shareId: "b".repeat(48) })).toBeNull();
+      const original = transcriptReaders.readSessionMessageByIdAsync;
+      vi.spyOn(transcriptReaders, "readSessionMessageByIdAsync").mockImplementationOnce(
+        async (...args) => {
+          const result = await original(...args);
+          await patchSessionEntryCore(locator, () => ({ publicShare: undefined }));
+          return result;
+        },
+      );
+      expect(await read("message-1")).toBeNull();
     });
   });
 
@@ -130,6 +192,59 @@ describe("anonymous published session reader", () => {
       const oldest = await readPublicSessionShare(cfg, locator, { offset: 2 });
       expect(oldest?.messages).toMatchObject([{ content: "Oldest" }]);
       expect(oldest?.olderOffset).toBeUndefined();
+    });
+  });
+
+  it("publishes large inline-image descriptors while preserving captions, tools and exact media", async () => {
+    await withPublicTestState(async () => {
+      const png = createNoisyPngBuffer(1024, 1024);
+      const data = png.toString("base64");
+      expect(data.length).toBeGreaterThan(1024 * 1024);
+      const call = {
+        type: "toolCall",
+        id: "read-call",
+        name: "read",
+        arguments: { path: "notes.md" },
+      };
+      await seed([
+        "Oldest",
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Model caption" },
+            { type: "image", mimeType: "image/png", data },
+            call,
+          ],
+          openclawDisplayContent: [
+            { type: "text", text: "Displayed caption" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data } },
+          ],
+        },
+        "Newest",
+      ]);
+      const latest = await readPublicSessionShare(cfg, locator);
+      expect(latest?.messages).toMatchObject([{ content: "Newest" }]);
+      expect(latest?.olderOffset).toBe(1);
+      const page = await readPublicSessionShare(cfg, locator, { offset: latest?.olderOffset });
+      expect(page).toMatchObject({ olderOffset: 2 });
+      expect(page?.messages).toHaveLength(1);
+      expect(page?.messages[0]).toMatchObject({
+        content: [{ text: "Model caption" }, { type: "image", omitted: true }, call],
+        openclawDisplayContent: [{ text: "Displayed caption" }, { type: "image", omitted: true }],
+      });
+      expect(JSON.stringify(page?.messages).length).toBeLessThan(1024 * 1024);
+      expect(collectPublicSessionAttachments(page?.messages[0])).toEqual([
+        { id: "content-1", name: "Image", image: true },
+      ]);
+      const exact = await readPublicSessionMessage(cfg, locator, {
+        entryId: "message-1",
+        projection: currentProjection(),
+      });
+      const loaded = await readPublicSessionAttachment(exact, "content-1", locator);
+      expect(loaded?.equals(png)).toBe(true);
+      expect(
+        (await readPublicSessionShare(cfg, locator, { offset: page?.olderOffset }))?.messages,
+      ).toMatchObject([{ content: "Oldest" }]);
     });
   });
 

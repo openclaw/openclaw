@@ -32,6 +32,7 @@ export function createControlUiSessionRoutes(options: {
     matches(pathname: string, rawUrl?: string) {
       if (
         isControlUiPublicSessionPath(pathname, basePath) ||
+        pathname === `${basePath}/share/session/media` ||
         pathname === controlUiSessionEntryPath(basePath)
       ) {
         return true;
@@ -88,6 +89,16 @@ export function createControlUiSessionRoutes(options: {
           req.url = originalUrl;
         }
       };
+      if (pathname === `${basePath}/share/session/media`) {
+        return (
+          await import("./control-ui-public-session-media.js")
+        ).serveControlUiPublicSessionMedia({
+          ...params,
+          basePath,
+          projection,
+          gate: publicGate(),
+        });
+      }
       if (isControlUiPublicSessionPath(pathname, basePath)) {
         return serveControlUiPublicSession({ ...params, basePath, projection, gate: publicGate() });
       }

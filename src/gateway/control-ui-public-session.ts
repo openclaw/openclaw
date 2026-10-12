@@ -9,6 +9,7 @@ import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
+import { buildPublicSessionMediaBaseUrl } from "./control-ui-public-session-attachments.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
 import { PUBLIC_SESSION_CONTENT_SECURITY_POLICY } from "./control-ui-public-session-render.js";
 import { resolveControlUiShareOrigin } from "./control-ui-share.js";
@@ -111,6 +112,7 @@ export async function serveControlUiPublicSession(params: {
       ]),
       document: {
         latestUrl,
+        mediaBaseUrl: buildPublicSessionMediaBaseUrl(basePath, publicShare.token),
         canonicalUrl,
         assetBasePath: basePath,
         cardUrl: `${origin}${basePath}/share/card.png`,

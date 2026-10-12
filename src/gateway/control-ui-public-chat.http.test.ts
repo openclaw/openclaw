@@ -8,10 +8,11 @@ import { sessionNavigationTarget } from "../../ui/src/lib/sessions/route-navigat
 import { computeInlineScriptHashes } from "./control-ui-csp.js";
 import { AUTH_TOKEN, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-const { resolveSession, reader, active } = vi.hoisted(() => ({
+const { resolveSession, reader, active, mediaToken } = vi.hoisted(() => ({
   resolveSession: vi.fn(),
   reader: vi.fn(),
   active: vi.fn(),
+  mediaToken: vi.fn(),
 }));
 vi.mock(import("./control-ui-session-path-resolve.js"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -21,6 +22,10 @@ vi.mock(import("./control-ui-public-session-read.js"), async (importOriginal) =>
   ...(await importOriginal()),
   readPublicSessionShare: reader,
   isPublicSessionShareActive: active,
+}));
+vi.mock(import("./control-ui-public-session-token.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  mintExistingPublicSessionShareToken: mediaToken,
 }));
 vi.mock(import("./session-row-projection-access.js"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -81,6 +86,7 @@ beforeEach(() => {
     truncated: false,
   });
   active.mockReset().mockReturnValue(true);
+  mediaToken.mockReset().mockResolvedValue("v1.YWJj");
 });
 afterEach(() => {
   for (const instance of servers.splice(0)) {
@@ -89,6 +95,13 @@ afterEach(() => {
 });
 
 describe("canonical anonymous HTTP entry", () => {
+  it("keeps published text available when no token identity is present", async () => {
+    mediaToken.mockResolvedValue(null);
+    const response = await request(server());
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain("Published answer");
+  });
+
   it("reloads the exact Incognito address produced by in-app navigation", async () => {
     const sessionKey = "agent:main:dashboard:incognito-12345678-aaaa-4000-8000-000000000001";
     const target = sessionNavigationTarget({
