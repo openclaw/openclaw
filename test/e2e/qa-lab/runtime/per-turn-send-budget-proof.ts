@@ -2,7 +2,7 @@ export const REQUIRED_TURN_SEND_SCENARIO_IDS = [
   "sanity",
   "soft-nudge",
   "hard-cap",
-  "suppressed-not-charged",
+  "rejected-not-charged",
   "idempotent-replay",
   "concurrent-cap",
   "concurrent-replay",

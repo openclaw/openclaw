@@ -253,16 +253,16 @@ function instructionTextDeclaresTool(text: string, name: string) {
 // Marker `QA-PTSB-SEND` is unique to that fixture, so this never affects other prompts.
 //
 // Optional `outcomes=` maps each planned send (1-based) to a delivery shape: `ok`
-// sends a visible `${marker}-${sequence}` payload; `suppress` sends an empty message
-// so real core delivery returns deliveryStatus "suppressed" (no_visible_payload). This
-// lets an e2e prove a delivered-nothing send does not charge the budget at the real
+// sends a visible `${marker}-${sequence}` payload; `reject` sends an empty message,
+// which the message tool rejects after the per-turn budget reserved it. This lets an
+// e2e prove a send that never reached delivery does not charge the budget at the real
 // boundary. Absent `outcomes`, every planned send is `ok`.
 export function extractPerTurnSendBudgetDirective(text: string): {
   tool: "message" | "conversations_send";
   count: number;
   marker: string;
   ref?: string;
-  outcomes?: ("ok" | "suppress")[];
+  outcomes?: ("ok" | "reject")[];
 } | null {
   const match =
     /QA-PTSB-SEND\s+tool=(message|conversations_send)\s+count=(\d+)\s+marker=([A-Za-z0-9._-]+)(?:\s+ref=(conv_[a-f0-9]{32}))?(?:\s+outcomes=([a-z,]+))?/u.exec(
@@ -284,7 +284,7 @@ export function extractPerTurnSendBudgetDirective(text: string): {
   const outcomes = match[5]
     ?.split(",")
     .map((token) => token.trim())
-    .filter((token): token is "ok" | "suppress" => token === "ok" || token === "suppress");
+    .filter((token): token is "ok" | "reject" => token === "ok" || token === "reject");
   return {
     tool,
     count,

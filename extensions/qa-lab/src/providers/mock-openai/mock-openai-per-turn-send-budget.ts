@@ -7,10 +7,10 @@ import {
   extractPerTurnSendBudgetDirective,
   extractPerTurnSendBudgetRepeatDirective,
 } from "./mock-openai-directives.js";
+import { extractLastMatchingUserTurn } from "./mock-openai-input.js";
 
 export function resolvePerTurnSendBudgetResponse<T>(params: {
-  allInputText: string;
-  input: readonly ResponsesInputItem[];
+  input: ResponsesInputItem[];
   hasDeclaredTool: (tool: string) => boolean;
   buildToolCallEventsWithArgs: (name: string, args: Record<string, unknown>) => T;
   buildDuplicateToolCallEventsWithArgs: (
@@ -20,23 +20,32 @@ export function resolvePerTurnSendBudgetResponse<T>(params: {
   ) => T;
   buildAssistantEvents: (text: string) => T;
 }): T | undefined {
+  // Both fixtures are turn-scoped: the directive is read from the latest user turn only and
+  // only calls planned after it count. A session that runs several QA-PTSB turns replays
+  // earlier turns' directives and calls in its transcript; reading the whole transcript
+  // would resolve an older turn's directive and count its sends.
+  const turn = extractLastMatchingUserTurn(params.input);
+  if (!turn) {
+    return undefined;
+  }
+  const turnItems = params.input.slice(turn.index + 1);
   // Per-turn send-budget fixture (QA-PTSB-SEND): emit one `message`/`conversations_send`
   // per continuation round to the same target until `count` sends have been planned this
   // turn, then finalize with text. Placed before the scenario chain so the unique marker
-  // wins outright; counting prior planned calls in `input` is how one turn fans out into
+  // wins outright; counting this turn's planned calls is how one turn fans out into
   // several sequential sends that all charge the same run-scoped ledger slot.
-  const perTurnSendBudget = extractPerTurnSendBudgetDirective(params.allInputText);
+  const perTurnSendBudget = extractPerTurnSendBudgetDirective(turn.text);
   if (perTurnSendBudget && params.hasDeclaredTool(perTurnSendBudget.tool)) {
-    const priorPlannedSends = params.input.filter(
+    const priorPlannedSends = turnItems.filter(
       (item) => item.type === "function_call" && item.name === perTurnSendBudget.tool,
     ).length;
     if (priorPlannedSends < perTurnSendBudget.count) {
       const sequence = priorPlannedSends + 1;
-      // `suppress` emits an empty message so real core delivery returns
-      // deliveryStatus "suppressed" (no_visible_payload); that send must not charge
-      // the per-turn budget. Any other outcome sends a visible markered payload.
+      // `reject` emits an empty message, which the message tool rejects ("send requires
+      // text or media or location") after the budget reserved it; that send must not
+      // charge the per-turn budget. Any other outcome sends a visible markered payload.
       const outcome = perTurnSendBudget.outcomes?.[sequence - 1] ?? "ok";
-      const suppressed = outcome === "suppress";
+      const rejected = outcome === "reject";
       const sendArgs =
         perTurnSendBudget.tool === "conversations_send"
           ? {
@@ -45,7 +54,7 @@ export function resolvePerTurnSendBudgetResponse<T>(params: {
             }
           : {
               action: "send",
-              message: suppressed ? "" : `${perTurnSendBudget.marker}-${sequence}`,
+              message: rejected ? "" : `${perTurnSendBudget.marker}-${sequence}`,
               // In message_tool_only mode a delivered source-reply send with
               // `final !== false` terminates the turn (resolveMessageToolSourceReplyFinal
               // in embedded-agent-message-tool-source-reply.ts). This fixture fans out
@@ -65,9 +74,9 @@ export function resolvePerTurnSendBudgetResponse<T>(params: {
   // per-turn cap blocks the second byte-identical send (distinct idempotency key)
   // instead of admitting it as an idempotent replay. Placed beside QA-PTSB-SEND so
   // its unique marker wins before the scenario chain.
-  const perTurnSendBudgetRepeat = extractPerTurnSendBudgetRepeatDirective(params.allInputText);
+  const perTurnSendBudgetRepeat = extractPerTurnSendBudgetRepeatDirective(turn.text);
   if (perTurnSendBudgetRepeat && params.hasDeclaredTool("message")) {
-    const priorMessageSends = params.input.filter(
+    const priorMessageSends = turnItems.filter(
       (item) => item.type === "function_call" && item.name === "message",
     ).length;
     if (priorMessageSends === 0) {
