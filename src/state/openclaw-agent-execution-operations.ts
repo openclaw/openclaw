@@ -1,6 +1,8 @@
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
-import type { SessionEntryReplacementCommit } from "../config/sessions/session-accessor.sqlite-replacement-types.js";
-import type { SessionEntryReplacementCandidate } from "../config/sessions/session-accessor.sqlite-replacement-types.js";
+import type {
+  SessionEntryReplacementCandidate,
+  SessionEntryReplacementCommit,
+} from "../config/sessions/session-accessor.sqlite-replacement-types.js";
 import type { ResolvedTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import type {
   SessionEntryCohortRequest,
