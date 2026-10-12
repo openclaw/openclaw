@@ -125,6 +125,185 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  const claudeStopHookFeedback = (text: string) => ({
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text }] },
+    parent_tool_use_id: null,
+  });
+
+  const claudeStopHookNotification = (key: string) => ({
+    type: "system",
+    subtype: "notification",
+    key,
+    text: "Stop hook error occurred",
+  });
+
+  const claudeToolResult = (toolUseId: string) => ({
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: toolUseId, content: "ok" }],
+    },
+    parent_tool_use_id: null,
+  });
+
+  const claudeToolUseStart = (toolUseId: string, name: string) =>
+    claudeStreamEvent({
+      type: "content_block_start",
+      content_block: { type: "tool_use", id: toolUseId, name },
+    });
+
+  it("delivers only the rewrite when a Stop-hook bounce routes through a tool", () => {
+    const result = parseCliJsonl(
+      joinJsonlFrames(
+        { type: "init", session_id: "session-stop-hook-tool" },
+        claudeMessageStart("m1"),
+        claudeTextDelta("A"),
+        claudeStreamEvent({ type: "message_stop" }),
+        claudeStopHookFeedback("Stop hook feedback:\nRewrite your reply."),
+        claudeStopHookNotification("stop-hook-error"),
+        claudeMessageStart("m2"),
+        claudeToolUseStart("t1", "Read"),
+        claudeStreamEvent({ type: "message_stop" }),
+        claudeToolResult("t1"),
+        claudeMessageStart("m3"),
+        claudeTextDelta("B"),
+        claudeStreamEvent({ type: "message_stop" }),
+        { type: "result", session_id: "session-stop-hook-tool", result: "B" },
+      ),
+      {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "local-cli",
+    );
+
+    expect(result?.text).toBe("B");
+  });
+
+  it("keeps a bounced silent-token rewrite from re-delivering the refused draft", () => {
+    const result = parseCliJsonl(
+      joinJsonlFrames(
+        { type: "init", session_id: "session-stop-hook-silent" },
+        claudeMessageStart("m1"),
+        claudeTextDelta("A"),
+        claudeStreamEvent({ type: "message_stop" }),
+        claudeStopHookFeedback("Stop hook feedback:\nRewrite your reply."),
+        claudeMessageStart("m2"),
+        claudeToolUseStart("t1", "Read"),
+        claudeStreamEvent({ type: "message_stop" }),
+        claudeToolResult("t1"),
+        claudeMessageStart("m3"),
+        claudeTextDelta("NO_REPLY"),
+        claudeStreamEvent({ type: "message_stop" }),
+        { type: "result", session_id: "session-stop-hook-silent", result: "NO_REPLY" },
+      ),
+      {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "local-cli",
+    );
+
+    expect(result?.text).toBe("NO_REPLY");
+  });
+
+  it("treats each Stop-hook bounce in a turn as its own segment boundary", () => {
+    const result = parseCliJsonl(
+      joinJsonlFrames(
+        { type: "init", session_id: "session-stop-hook-twice" },
+        claudeMessageStart("m1"),
+        claudeTextDelta("A"),
+        claudeStreamEvent({ type: "message_stop" }),
+        claudeStopHookFeedback("Stop hook feedback:\nRewrite your reply."),
+        claudeMessageStart("m2"),
+        claudeToolUseStart("t1", "Read"),
+        claudeTextDelta("B"),
+        claudeStreamEvent({ type: "message_stop" }),
+        claudeToolResult("t1"),
+        claudeStopHookFeedback("Stop hook feedback:\nRewrite it again."),
+        claudeMessageStart("m3"),
+        claudeTextDelta("C"),
+        claudeStreamEvent({ type: "message_stop" }),
+        { type: "result", session_id: "session-stop-hook-twice", result: "C" },
+      ),
+      {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "local-cli",
+    );
+
+    expect(result?.text).toBe("C");
+  });
+
+  it("keeps delivering the whole correction when a bounce rewrites without a tool", () => {
+    const result = parseCliJsonl(
+      joinJsonlFrames(
+        { type: "init", session_id: "session-stop-hook-no-tool" },
+        claudeMessageStart("m1"),
+        claudeTextDelta("A"),
+        claudeStreamEvent({ type: "message_stop" }),
+        claudeStopHookFeedback("Stop hook feedback:\nRewrite your reply."),
+        claudeMessageStart("m2"),
+        claudeTextDelta("B"),
+        claudeStreamEvent({ type: "message_stop" }),
+        { type: "result", session_id: "session-stop-hook-no-tool", result: "B" },
+      ),
+      {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "local-cli",
+    );
+
+    expect(result?.text).toBe("B");
+  });
+
+  it("does not treat a subagent text record or a non-stop-hook notification as a bounce", () => {
+    const result = parseCliJsonl(
+      joinJsonlFrames(
+        { type: "init", session_id: "session-stop-hook-nonbounce" },
+        claudeMessageStart("m1"),
+        claudeTextDelta("Draft."),
+        claudeStreamEvent({ type: "message_stop" }),
+        {
+          type: "user",
+          message: { role: "user", content: [{ type: "text", text: "Subagent progress note." }] },
+          parent_tool_use_id: "subagent-1",
+        },
+        claudeStopHookNotification("tool-progress"),
+        claudeMessageStart("m2"),
+        claudeToolUseStart("t1", "Read"),
+        claudeStreamEvent({ type: "message_stop" }),
+        claudeToolResult("t1"),
+        claudeMessageStart("m3"),
+        claudeTextDelta("TEST DONE"),
+        claudeStreamEvent({ type: "message_stop" }),
+        { type: "result", session_id: "session-stop-hook-nonbounce", result: "TEST DONE" },
+      ),
+      {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "local-cli",
+    );
+
+    // No bounce happened, so the pre-tool draft stays connected to the final
+    // message exactly as it was before the boundary classification existed.
+    expect(result?.text).toBe("Draft.\n\nTEST DONE");
+  });
+
   it("continues transcript reparses past an interim result", () => {
     const result = parseCliJsonl(
       joinJsonlFrames(

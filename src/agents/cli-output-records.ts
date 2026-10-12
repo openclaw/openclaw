@@ -380,6 +380,33 @@ export function isClaudeSubagentRecord(parsed: Record<string, unknown>): boolean
   return parsed.parent_tool_use_id != null;
 }
 
+// A Claude Code Stop-hook rejection replays the refused draft back to the model
+// as a top-level user text record ("Stop hook feedback: …") and/or a system
+// notification keyed `stop-hook`, always between the rejected message and the
+// rewrite. Tool results never carry a text block alongside them, so requiring
+// text and no tool_result keeps real tool-result records out of this
+// classification.
+export function isClaudeStopHookFeedbackRecord(parsed: Record<string, unknown>): boolean {
+  if (parsed.type === "system") {
+    return (
+      parsed.subtype === "notification" &&
+      typeof parsed.key === "string" &&
+      parsed.key.startsWith("stop-hook")
+    );
+  }
+  if (parsed.type !== "user" || !isRecord(parsed.message)) {
+    return false;
+  }
+  const content = parsed.message.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return (
+    content.some((block) => isRecord(block) && block.type === "text") &&
+    !content.some((block) => isRecord(block) && block.type === "tool_result")
+  );
+}
+
 const CLAUDE_FOREGROUND_AGENT_TOOL_NAMES = new Set(["Agent", "Task"]);
 
 export function isClaudeForegroundAgentToolName(name: string): boolean {
