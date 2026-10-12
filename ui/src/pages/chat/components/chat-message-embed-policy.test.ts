@@ -11,7 +11,7 @@ import { renderStreamGroupParts } from "./chat-message-stream.ts";
 
 describe("assistant message embed policy", () => {
   it.each(["persisted", "streaming"] as const)(
-    "revokes YouTube playback on policy, source, and session changes in %s messages",
+    "preserves YouTube playback on refresh and revokes it on policy, source, and session changes in %s messages",
     async (surface) => {
       vi.stubGlobal(
         "ResizeObserver",
@@ -69,6 +69,8 @@ describe("assistant message embed policy", () => {
       const first = await show();
       expect(first.querySelector("iframe")).toBeNull();
       const firstFrame = await play(first);
+      expect(await show()).toBe(first);
+      expect(first.querySelector("iframe")).toBe(firstFrame);
       await show("strict");
       expect(firstFrame.isConnected).toBe(false);
       expect(first.querySelector("button")).toBeNull();
