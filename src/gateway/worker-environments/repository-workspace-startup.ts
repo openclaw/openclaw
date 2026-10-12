@@ -9,7 +9,7 @@ import type {
   WorkerTunnelHandle,
   WorkerWorkspaceSyncRequest,
 } from "./tunnel-contract.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
 
 /** Prepare source on the worker and durably accept its initial state before activation. */
 export async function syncSessionRepositoryWorkspace(params: {
@@ -56,15 +56,17 @@ export async function syncSessionRepositoryWorkspace(params: {
   params.assertCurrent();
   const github = prepared
     ? undefined
-    : await prepareWorkerGitHubBinding({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        assertCurrent: () => {
-          params.assertCurrent();
-          return true;
-        },
-      });
+    : (
+        await prepareGitHubPublicationFact({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          assertCurrent: () => {
+            params.assertCurrent();
+            return true;
+          },
+        })
+      )?.github;
   params.assertCurrent();
   const source: Extract<WorkerWorkspaceSyncRequest["source"], { kind: "repository" }> = {
     kind: "repository",

@@ -14,11 +14,20 @@ import { withIncognitoSessionBinding } from "../config/sessions/session-incognit
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import {
-  hasSupportedGitHubPublicationTarget,
-  prepareGitHubPublicationAvailability,
-} from "./github-publication-availability.js";
+import { hasSupportedGitHubPublicationTarget } from "./github-publication-availability.js";
+import { prepareGitHubPublicationFact } from "./worker-environments/worker-github-binding.js";
 
+async function prepareGitHubPublicationAvailability(
+  params: Parameters<typeof prepareGitHubPublicationFact>[0],
+) {
+  return (await prepareGitHubPublicationFact(params))?.available ?? false;
+}
+
+const identity = {
+  source: "system-detected",
+  account: { login: "test" },
+  env: { GH_TOKEN: "synthetic" },
+};
 const mocks = vi.hoisted(() => ({
   session: vi.fn(),
   sessionRead: vi.fn(),
@@ -55,6 +64,7 @@ vi.mock("../agents/github-tool-identity.js", () => ({
   prepareGitHubPublicationIdentity: mocks.identity,
   prepareGitHubPublicationOptionsIdentity: mocks.identity,
   matchesPreparedGitHubPublicationIdentity: () => true,
+  resolveConfiguredGitHubToolIdentity: () => undefined,
 }));
 // mock-isolation: Exclude OAuth credentials and network activity from this reader fixture.
 vi.mock("./github-oauth-lifecycle.js", () => ({
@@ -99,7 +109,7 @@ beforeEach(async () => {
   mocks.admittedSessionRead.mockReset().mockImplementation(async () => ({
     entries: [{ sessionKey: session.sessionKey, entry: mocks.session().entry }],
   }));
-  mocks.identity.mockReset().mockResolvedValue({ source: "system-configured" });
+  mocks.identity.mockReset().mockResolvedValue(identity);
   await insertRegistryWorktree(process.env, worktree);
 });
 
@@ -183,7 +193,7 @@ it.each(["unbound", "replaced-session", "replaced-lifecycle", "replaced-writer"]
 it("rejects a worktree retired while publication identity is prepared", async () => {
   mocks.identity.mockImplementationOnce(async () => {
     await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
-    return { source: "system-configured" };
+    return identity;
   });
   expect(await prepareGitHubPublicationAvailability(session)).toBe(false);
 });
@@ -241,7 +251,7 @@ it.each(["session", "identity"] as const)(
     } else {
       mocks.identity.mockImplementationOnce(async () => {
         retarget();
-        return { source: "system-configured" };
+        return identity;
       });
     }
     expect(await prepareGitHubPublicationAvailability(session)).toBe(true);
@@ -293,7 +303,7 @@ it("qualifies bound private worktrees without host session SQL and refuses a cha
             worktree: { id: worktree.id, repoRoot: worktree.repoRoot, branch: "replacement" },
           }),
         );
-        return { source: "system-configured" };
+        return identity;
       });
       expect(await prepareGitHubPublicationAvailability(selected)).toBe(false);
       sql.expectIdle();

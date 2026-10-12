@@ -31,7 +31,7 @@ import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.j
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
-import { prepareWorkerGitHubBinding } from "./worker-environments/worker-github-binding.js";
+import { prepareGitHubPublicationFact } from "./worker-environments/worker-github-binding.js";
 import { applyStagedWorkerWorkspace } from "./worker-environments/workspace-reconcile-apply.js";
 
 /** Explicit Gateway moves and failed-placement recovery restore only accepted source results. */
@@ -158,15 +158,17 @@ async function materializeCapturedRepositoryWorkspace(
     },
   );
   assertCurrent();
-  const github = await prepareWorkerGitHubBinding({
-    sessionId: params.sessionId,
-    sessionKey: initial.canonicalKey,
-    agentId: params.agentId,
-    assertCurrent: () => {
-      assertCurrent();
-      return true;
-    },
-  });
+  const github = (
+    await prepareGitHubPublicationFact({
+      sessionId: params.sessionId,
+      sessionKey: initial.canonicalKey,
+      agentId: params.agentId,
+      assertCurrent: () => {
+        assertCurrent();
+        return true;
+      },
+    })
+  )?.github;
   // Optional launch binding absorbs unavailable auth, including a thrown owner
   // assertion. A closed move must never proceed as an anonymous clone.
   assertCurrent();

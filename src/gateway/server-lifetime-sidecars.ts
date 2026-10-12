@@ -5,6 +5,7 @@ import {
   createGitHubOAuthLifecycle,
   installActiveGitHubOAuthLifecycle,
 } from "./github-oauth-lifecycle.js";
+import { startGitHubPublicationDiscovery } from "./github-publication-discovery.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
 import {
   broadcastChatMetadataChanged,
@@ -14,6 +15,7 @@ import { attachSessionChangeEventLifetime } from "./server-methods/session-chang
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { startIncognitoSessionLifetime } from "./session-incognito-lifetime.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 
 type GatewayChatMetadataLifecycle = Awaited<ReturnType<typeof createGatewayChatMetadataLifecycle>>;
 
@@ -61,6 +63,12 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
   params.gatewayRequestContext.githubOAuthService = githubOAuth;
   const uninstallGitHubOAuth = installActiveGitHubOAuthLifecycle(githubOAuth);
   if (!params.minimalTestGateway) {
+    params.publishSidecars(
+      startGitHubPublicationDiscovery({
+        scheduler: params.scheduler,
+        projection: getSessionRowProjection(params.gatewayRequestContext),
+      }),
+    );
     githubOAuth.start();
   }
   params.publishSidecars({

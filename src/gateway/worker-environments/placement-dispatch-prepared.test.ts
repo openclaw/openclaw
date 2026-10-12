@@ -37,12 +37,13 @@ import {
   readSessionRepositoryArtifacts,
   stageSessionRepositoryCheckpoint,
 } from "./session-repository-checkpoints.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
-vi.mock("./worker-github-binding.js", () => ({ prepareWorkerGitHubBinding: vi.fn() }));
+// mock-isolation: Workspace startup supplies a synthetic identity without credential discovery.
+vi.mock("./worker-github-binding.js", () => ({ prepareGitHubPublicationFact: vi.fn() }));
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
@@ -532,7 +533,7 @@ describe("prepared worker dispatch", () => {
       onTestFinished(() => {
         vi.unstubAllEnvs();
       });
-      vi.mocked(prepareWorkerGitHubBinding).mockResolvedValue(undefined);
+      vi.mocked(prepareGitHubPublicationFact).mockResolvedValue(undefined);
       const stagingRoot = path.join(support.testState.root, "checkpoint-source");
       await fs.mkdir(stagingRoot);
       await fs.writeFile(path.join(stagingRoot, "tracked.txt"), "pinned source\n");

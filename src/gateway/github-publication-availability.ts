@@ -491,39 +491,6 @@ export async function readLocalGitHubPublicationWorktreeOwner(
   };
 }
 
-export async function prepareGitHubPublicationAvailability(params: {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  sessionTarget?: AgentRunSessionTarget;
-  assertCurrent?: () => boolean;
-}): Promise<boolean> {
-  try {
-    const assertCurrent = () => {
-      if (params.assertCurrent?.() === false) {
-        throw new GitHubPublicationSessionChangedError();
-      }
-    };
-    assertCurrent();
-    const prepared = await prepareGitHubPublicationWorkspaceOwner(params, {
-      sessionTarget: params.sessionTarget,
-      assertCurrent,
-    });
-    const initial = prepared.initial;
-    assertCurrent();
-    const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId);
-    assertCurrent();
-    const current = await prepared.read();
-    assertCurrent();
-    return (
-      sameGitHubPublicationWorkspace(initial, current) &&
-      matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity })
-    );
-  } catch {
-    return false;
-  }
-}
-
 /** Discovery validates the same registered repository identity as publication, without GitHub I/O. */
 export async function prepareGitHubPublicationRepositoryIdentity(params: {
   worktree: ManagedWorktreeRecord;

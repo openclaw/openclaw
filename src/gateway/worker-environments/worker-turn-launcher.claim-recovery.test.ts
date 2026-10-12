@@ -1,13 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type MockInstance,
-} from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
@@ -36,7 +27,6 @@ import {
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { canRedispatchFailedWorkerPlacement } from "./session-placement-lifecycle.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
-import * as workerGitHubBinding from "./worker-github-binding.js";
 import { createWorkerPlacementRedispatch } from "./worker-placement-redispatch.js";
 import {
   ENVIRONMENT_ID,
@@ -316,7 +306,6 @@ describe("worker pre-launch claim recovery", () => {
   it.each([
     "workspace resolution",
     "workspace queue",
-    "GitHub binding",
     "execution-start publication",
     "workspace mutation",
     "dispatch",
@@ -540,7 +529,6 @@ describe("worker pre-launch claim recovery", () => {
         }
       },
     };
-    let github: MockInstance<typeof workerGitHubBinding.prepareWorkerGitHubBinding> | undefined;
     let blocked: Promise<unknown> | undefined;
     let successor: Promise<unknown> | undefined;
     let recovery: Promise<unknown> | undefined;
@@ -553,15 +541,6 @@ describe("worker pre-launch claim recovery", () => {
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       blockSecond = true;
-      if (stage === "GitHub binding") {
-        github = vi
-          .spyOn(workerGitHubBinding, "prepareWorkerGitHubBinding")
-          .mockImplementationOnce(async () => {
-            entered.resolve();
-            await resume.promise;
-            return undefined;
-          });
-      }
       if (stage === "workspace queue") {
         queuedBlocker = coordinator.run(ENVIRONMENT_ID, () => resume.promise);
       }
@@ -684,7 +663,6 @@ describe("worker pre-launch claim recovery", () => {
       resume.resolve();
       finishSuccessor.resolve();
       await Promise.allSettled([blocked, successor, queuedBlocker, recovery]);
-      github?.mockRestore();
       operation.complete();
       first.preparedRunAdmission.close();
       second.preparedRunAdmission.close();
