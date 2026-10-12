@@ -433,6 +433,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/worker-turn-attachments.boundary.test.ts",
   "src/gateway/worker-environments/worker-turn-context-engine.test.ts",
   "src/gateway/worker-environments/worker-turn-detached-context.test.ts",
+  "src/gateway/worker-environments/worker-turn-early-final.test.ts",
   "src/gateway/worker-environments/worker-turn-execution.test.ts",
   "src/gateway/worker-environments/worker-turn-launcher-build-recovery.test.ts",
   "src/gateway/worker-environments/worker-turn-launcher-claim-admission.test.ts",

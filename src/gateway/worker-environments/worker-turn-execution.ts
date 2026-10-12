@@ -11,6 +11,7 @@ import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools
 import type { EmbeddedAttemptSteeringLease } from "../../agents/embedded-agent-runner/run/attempt-prompt-build.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/run/context-engine-admission.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import {
@@ -74,6 +75,7 @@ export async function executeWorkerTurn(
     environments: WorkerTurnEnvironmentService;
     assertRunCurrent: () => void;
     onTerminal: () => void;
+    onReply: (result: EmbeddedAgentRunResult) => void;
   },
 ) {
   const { placement, turn: input } = params;

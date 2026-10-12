@@ -1,3 +1,4 @@
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import type { SandboxContext } from "../../agents/sandbox/types.js";
 import { withRequiredSessionPlacement } from "../../agents/session-placement-admission.js";
@@ -12,8 +13,10 @@ import {
 } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
+import { logWarn } from "../../logger.js";
 import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-contract.js";
 import { StaleWorkerBuildError } from "./admission.js";
@@ -30,6 +33,7 @@ import {
   WorkerRunnerUnavailableError,
   WorkerTunnelOwnerDisconnectedError,
 } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 import {
   assertWorkerPlacementCompactionAllowed,
   claimWorkerTurn,
@@ -148,7 +152,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       });
     },
     async executeTurn(claim, inputTurn, runLocal, onAdmitted, assertRunCurrent) {
-      return await withRequiredSessionPlacement(
+      const reply = createDeferredCore<EmbeddedAgentRunResult>();
+      let replyDelivered = false;
+      const execution = withRequiredSessionPlacement(
         claim,
         {
           config: inputTurn.config,
@@ -468,6 +474,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 onTerminal: () => {
                   terminalAtMs = Date.now();
                 },
+                onReply: (result: EmbeddedAgentRunResult) => {
+                  replyDelivered = true;
+                  reply.resolve(result);
+                },
                 placement,
                 placements: options.placements,
                 workspace,
@@ -715,6 +725,12 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           }
         },
       );
+      void execution.catch((error: unknown) => {
+        if (replyDelivered) {
+          logWarn(`Cloud worker background settlement failed: ${boundedWorkerError(error)}`);
+        }
+      });
+      return await Promise.race([reply.promise, execution]);
     },
   };
   return provider;
