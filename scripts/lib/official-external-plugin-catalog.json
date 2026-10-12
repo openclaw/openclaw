@@ -757,6 +757,24 @@
       }
     },
     {
+      "name": "@openclaw/smol-sandbox",
+      "description": "OpenClaw smol machines sandbox backend",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "smol",
+          "label": "smol machines Sandbox"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/smol-sandbox",
+          "npmSpec": "@openclaw/smol-sandbox",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.9"
+        }
+      }
+    },
+    {
       "name": "@openclaw/tavily-plugin",
       "description": "OpenClaw Tavily plugin",
       "source": "official",
