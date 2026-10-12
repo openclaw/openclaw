@@ -17,6 +17,89 @@ vi.mock("../../utils/message-channel.js", async (importOriginal) => ({
 }));
 
 describe("normalizeMessageActionInput", () => {
+  const routedThreadContext = {
+    currentChannelProvider: "discord",
+    currentChatType: "channel" as const,
+    currentChannelId: "channel:parent",
+    currentMessagingTarget: "channel:thread",
+    currentMessageId: "thread",
+  };
+
+  it.each([
+    "send",
+    "upload-file",
+    "sendAttachment",
+    "sendWithEffect",
+    "thread-reply",
+    "poll",
+  ] as const)("routes an implicit %s to the effective reply conversation", (action) => {
+    expect(
+      normalizeMessageActionInput({
+        action,
+        args: { channel: "discord" },
+        toolContext: routedThreadContext,
+      }),
+    ).toMatchObject({ target: "channel:thread", to: "channel:thread" });
+  });
+
+  it.each(["read", "react", "edit", "delete"] as const)(
+    "keeps the native message conversation for an implicit %s",
+    (action) => {
+      expect(
+        normalizeMessageActionInput({
+          action,
+          args: { channel: "discord", messageId: "thread" },
+          toolContext: routedThreadContext,
+          targetAliasSpec: { aliases: ["messageId"], deliveryTargetAliases: [] },
+        }),
+      ).toMatchObject({ target: "channel:parent", to: "channel:parent", messageId: "thread" });
+    },
+  );
+
+  it.each([
+    { target: "channel:parent" },
+    { to: "channel:parent" },
+    { channelId: "channel:parent" },
+    { target: "channel:other" },
+  ])("preserves an explicit destination alongside an effective thread: %j", (args) => {
+    const target = "target" in args ? args.target : "to" in args ? args.to : args.channelId;
+    expect(
+      normalizeMessageActionInput({
+        action: "send",
+        args: { channel: "discord", ...args },
+        toolContext: routedThreadContext,
+      }),
+    ).toMatchObject({ target, to: target });
+  });
+
+  it.each(["heartbeat", "agent:main:subagent:worker", "channel:agent:main:main"])(
+    "falls back to the native route when effective delivery target %s is internal",
+    (currentMessagingTarget) => {
+      expect(
+        normalizeMessageActionInput({
+          action: "send",
+          args: { channel: "discord" },
+          toolContext: { ...routedThreadContext, currentMessagingTarget },
+        }),
+      ).toMatchObject({ target: "channel:parent", to: "channel:parent" });
+    },
+  );
+
+  it("uses the messaging recipient for a direct send while retaining native resource routing", () => {
+    const toolContext = {
+      ...routedThreadContext,
+      currentChatType: "direct" as const,
+      currentChannelId: "channel:dm",
+      currentMessagingTarget: "user:recipient",
+    };
+    expect(
+      normalizeMessageActionInput({ action: "send", args: { channel: "discord" }, toolContext }),
+    ).toMatchObject({ target: "user:recipient", to: "user:recipient" });
+    expect(
+      normalizeMessageActionInput({ action: "read", args: { channel: "discord" }, toolContext }),
+    ).toMatchObject({ target: "channel:dm", to: "channel:dm" });
+  });
+
   type NormalizeMessageActionInputCase = {
     input: Parameters<typeof normalizeMessageActionInput>[0];
     expectedFields?: Record<string, unknown>;

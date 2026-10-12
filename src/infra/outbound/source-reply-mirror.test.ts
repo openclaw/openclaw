@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import {
   beginTerminalSourceReplyDelivery,
   isDeliveredCurrentSourceReply,
@@ -99,6 +100,176 @@ beforeEach(() => {
   channelPluginMocks.getChannelPlugin.mockReset();
   channelPluginMocks.getLoadedChannelPlugin.mockReset();
   transcriptMocks.append.mockClear();
+});
+
+describe("effective reply conversation delivery", () => {
+  const toolContext = {
+    currentChannelProvider: "discord",
+    currentChatType: "channel" as const,
+    currentChannelId: "channel:parent",
+    currentMessagingTarget: "channel:thread",
+    // A Discord starter message and its newly created thread share an id.
+    currentMessageId: "thread",
+  };
+  const autoThreadSource = {
+    action: "send",
+    channel: "discord",
+    cfg: {},
+    sessionKey: "agent:main:discord:channel:thread",
+    toolContext,
+  };
+
+  beforeEach(() => {
+    const plugin = {
+      threading: {
+        matchesToolContextTarget: ({
+          target,
+          toolContext: context,
+        }: {
+          target: string;
+          toolContext: { currentChannelId?: string; currentMessagingTarget?: string };
+        }) =>
+          [context.currentChannelId, context.currentMessagingTarget].some(
+            (current) => current?.replace(/^channel:/, "") === target.replace(/^channel:/, ""),
+          ),
+      },
+    };
+    channelPluginMocks.getChannelPlugin.mockReturnValue(plugin);
+    channelPluginMocks.getLoadedChannelPlugin.mockReturnValue(plugin);
+    transcriptMocks.append.mockClear();
+  });
+
+  afterEach(() => {
+    channelPluginMocks.getChannelPlugin.mockReset();
+    channelPluginMocks.getLoadedChannelPlugin.mockReset();
+  });
+
+  it("normalizes the first implicit tool send to the thread and mirrors its delivered reply", async () => {
+    const actionParams = normalizeMessageActionInput({
+      action: "send",
+      args: { channel: "discord", message: "first reply" },
+      toolContext,
+    });
+    expect(actionParams).toMatchObject({ target: "channel:thread", to: "channel:thread" });
+    const params = {
+      ...autoThreadSource,
+      actionParams,
+      deliveredPayload: { ok: true, messageId: "sent", channelId: "thread" },
+    };
+    expect(isDeliveredCurrentSourceReply(params)).toBe(true);
+    await expect(mirrorDeliveredSourceReplyToTranscript(params)).resolves.toBe(true);
+    expect(transcriptMocks.append).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: autoThreadSource.sessionKey, text: "first reply" }),
+    );
+  });
+
+  it.each([undefined, { parts: [] }, { parts: [], replyToId: "thread" }])(
+    "does not count or mirror an explicit parent send with receipt %j",
+    async (receipt) => {
+      const actionParams = normalizeMessageActionInput({
+        action: "send",
+        args: { channel: "discord", target: "channel:parent", message: "parent reply" },
+        toolContext,
+      });
+      expect(actionParams.to).toBe("channel:parent");
+      const params = {
+        ...autoThreadSource,
+        actionParams,
+        deliveredPayload: { ok: true, messageId: "sent", channelId: "parent", receipt },
+      };
+      expect(isDeliveredCurrentSourceReply(params)).toBe(false);
+      await expect(mirrorDeliveredSourceReplyToTranscript(params)).resolves.toBe(false);
+      expect(transcriptMocks.append).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a parent receipt even when the requested target is the thread", () => {
+    expect(
+      isDeliveredCurrentSourceReply({
+        ...autoThreadSource,
+        actionParams: { target: "channel:thread" },
+        deliveredPayload: { ok: true, messageId: "sent", channelId: "parent" },
+      }),
+    ).toBe(false);
+  });
+
+  it.each(["heartbeat", "agent:main:subagent:worker", "channel:agent:main:main"])(
+    "matches the usable native fallback without reaccepting invalid messaging target %s",
+    (currentMessagingTarget) => {
+      const fallbackContext = { ...toolContext, currentMessagingTarget };
+      const actionParams = normalizeMessageActionInput({
+        action: "send",
+        args: { channel: "discord", message: "fallback reply" },
+        toolContext: fallbackContext,
+      });
+      expect(actionParams.to).toBe("channel:parent");
+      expect(
+        isDeliveredCurrentSourceReply({
+          ...autoThreadSource,
+          toolContext: fallbackContext,
+          actionParams,
+          deliveredPayload: { ok: true, messageId: "sent", channelId: "parent" },
+        }),
+      ).toBe(true);
+      expect(
+        isDeliveredCurrentSourceReply({
+          ...autoThreadSource,
+          toolContext: fallbackContext,
+          actionParams: { target: currentMessagingTarget },
+          deliveredPayload: { ok: true, messageId: "sent" },
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("keeps native DM channel and user recipient aliases eligible for direct replies", () => {
+    for (const target of ["channel:dm", "user:recipient"]) {
+      expect(
+        isDeliveredCurrentSourceReply({
+          ...autoThreadSource,
+          toolContext: {
+            ...toolContext,
+            currentChatType: "direct",
+            currentChannelId: "channel:dm",
+            currentMessagingTarget: "user:recipient",
+          },
+          actionParams: { target },
+          deliveredPayload: { ok: true, messageId: "sent", channelId: "dm" },
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("preserves parent-channel placement for message-addressed threads", () => {
+    channelPluginMocks.getLoadedChannelPlugin.mockReturnValue({
+      threading: { threadAddressing: "message" },
+    });
+    expect(
+      isDeliveredCurrentSourceReply({
+        ...autoThreadSource,
+        toolContext: { ...toolContext, currentThreadTs: "thread" },
+        actionParams: { target: "channel:parent" },
+        deliveredPayload: {
+          ok: true,
+          messageId: "sent",
+          channelId: "parent",
+          receipt: { threadId: "thread" },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("still counts a terminal reaction on the original native starter message", () => {
+    expect(
+      isDeliveredCurrentSourceReply({
+        ...autoThreadSource,
+        action: "react",
+        actionParams: { target: "channel:parent", messageId: "thread", emoji: "✅" },
+        sourceReplyFinal: true,
+        deliveredPayload: { ok: true },
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("source reply receipts", () => {
