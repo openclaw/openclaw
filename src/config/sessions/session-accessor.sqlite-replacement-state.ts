@@ -193,10 +193,14 @@ export function boundSessionEntryReplacementPublication(
   publication: SessionEntryReplacementPublication,
   envelope: unknown = publication,
 ): void {
-  if (!publication.fullEntries || hasSessionEntryPublicationCapacity(envelope)) {
+  if (
+    (!publication.fullEntries && !publication.actorPostimages) ||
+    hasSessionEntryPublicationCapacity(envelope)
+  ) {
     return;
   }
   delete publication.fullEntries;
+  delete publication.actorPostimages;
   if (publication.source) {
     delete publication.source.writeToken;
   }
