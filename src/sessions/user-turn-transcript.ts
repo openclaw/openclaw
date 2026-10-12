@@ -406,8 +406,11 @@ export function createUserTurnTranscriptRecorder(
               notifyMessagePersisted(committed.message);
             },
           });
-        // Collection can resolve its media lazily during admission. Bind custody
-        // here too so the canonical append always consumes the exact sources.
+        // Queued input prepares current custody before its worker transaction;
+        // consumed input can still mirror its committed bytes after custody closes.
+        if (pendingInput?.state === "queued" && pendingInput.runAsync) {
+          return await pendingInput.runAsync(persist);
+        }
         return await (pendingInput
           ? withSessionPendingInputPersistence(pendingInput, persist)
           : persist());

@@ -10,6 +10,7 @@ import type {
   SessionGoalOperation,
   SessionGoalOperationResult,
 } from "../../config/sessions/goals-operations.js";
+import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { withSessionPendingInputAuthorityGuard } from "../../config/sessions/session-pending-input-authority.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
@@ -75,6 +76,8 @@ async function handleChatSendWithOptions(
     sessionMutationAuthorization,
     sessionMutationCommitGuard,
   } = handlerOptions;
+  const releaseSessionAuthorization =
+    sessionMutationAuthorization?.takeRelease?.() ?? sessionMutationAuthorization?.release;
   using diagnostics =
     readChatSendDiagnostics(handlerOptions) ?? startChatSendDiagnostics(context.logGateway);
   const isDirectExternalUser =
@@ -84,11 +87,24 @@ async function handleChatSendWithOptions(
     onAdmissionOwned,
     { ...options, isDirectExternalUser },
     diagnostics,
-  );
+  ).catch((error: unknown) => {
+    releaseSessionAuthorization?.();
+    throw error;
+  });
   if (!setup) {
+    releaseSessionAuthorization?.();
     return;
   }
   const { request, session, admission } = setup;
+  admission.setPendingInputCleanup(() => releaseSessionAuthorization?.());
+  using admittedCleanup = {
+    dispatched: false,
+    [Symbol.dispose]() {
+      if (!this.dispatched) {
+        admission.cleanupAdmittedRun();
+      }
+    },
+  };
   const { p, systemInputProvenance, reconnectResumeRequested } = request;
   const { clientRunId, cfg, storePath, entry, sessionKey, sessionRoutingChanged, selectedAgent } =
     session;
@@ -148,17 +164,6 @@ async function handleChatSendWithOptions(
     turnKind: request.turnKind,
   };
   const cronCreatorAuthority = externalAuthorityAdmission?.resolve(externalAdmissionParams);
-  const dashboardAuthority = createChatSendDashboardAuthority({
-    admission,
-    session,
-    client,
-    context,
-    hasCurrentClientAuthority,
-    sessionMutationCommitGuard,
-    externalAuthorityAdmission,
-    externalAdmissionParams,
-  });
-  const assertDashboardReadCurrent = dashboardAuthority.assertReadCurrent;
 
   const admissionStartedAt = Date.now();
   const terminalizeRestartSafeAdmission = (terminalState: RestartSafeChatTerminalState) =>
@@ -172,6 +177,7 @@ async function handleChatSendWithOptions(
   let inputAdmissionAttempted = false;
   let replyAdmissionTicket: ReturnType<typeof reserveReplyAdmissionTicket>;
   let releaseBeforeDispatch: void | (() => void) = undefined;
+  let dashboardAuthority: Awaited<ReturnType<typeof createChatSendDashboardAuthority>> | undefined;
   try {
     const assertCustodyLifetimeCurrent = () => {
       admission.assertWorkAdmissionCurrent();
@@ -219,10 +225,31 @@ async function handleChatSendWithOptions(
       recorder: userTurnRecorder,
       replyContextFieldsPromise,
     } = userTurn;
+    let needsSessionCreationBinding = !entry;
+    const withUserTurnInputPublication = <T>(run: () => Promise<T>) =>
+      admission.withInputCommitPublication(
+        run,
+        entry
+          ? undefined
+          : (source, committedEntry) => {
+              sessionMutationAuthorization?.recordCreatedSession?.({
+                agentId: session.agentId,
+                sessionKey,
+                storePath,
+                sessionId: admittedSessionId,
+                lifecycleRevision: committedEntry.lifecycleRevision,
+                readSource: source,
+                entry: committedEntry,
+              });
+              needsSessionCreationBinding = false;
+            },
+      );
     const persistGatewayUserTurnTranscript = (
       ...args: Parameters<typeof persistUserTurnTranscript>
-    ) => admission.withInputCommitPublication(() => persistUserTurnTranscript(...args));
-    dashboardAuthority.bindPromptRecorder(userTurnRecorder);
+    ) => withUserTurnInputPublication(() => persistUserTurnTranscript(...args));
+    const persistGatewayUserTurnTranscriptBestEffort = (
+      ...args: Parameters<typeof userTurn.persistBestEffort>
+    ) => withUserTurnInputPublication(() => userTurn.persistBestEffort(...args));
     bindPreparedMediaRecorder(userTurnRecorder);
     phase?.mark("preparation");
     const preparedUserTurn = prepareChatSendUserTurn({
@@ -262,6 +289,8 @@ async function handleChatSendWithOptions(
         }
         await userTurnRecorder.waitForPendingInputSettlement?.();
       } finally {
+        dashboardAuthority?.release();
+        releaseSessionAuthorization?.();
         void preparedUserTurn
           .discardUnreferencedMedia(userTurnRecorder.getPendingInputMessage?.())
           .catch((error: unknown) =>
@@ -438,6 +467,19 @@ async function handleChatSendWithOptions(
       );
     }
 
+    dashboardAuthority = await createChatSendDashboardAuthority({
+      admission,
+      session,
+      client,
+      context,
+      hasCurrentClientAuthority,
+      sessionMutationCommitGuard,
+      sessionMutationAuthorization,
+      externalAuthorityAdmission,
+      externalAdmissionParams,
+    });
+    const assertDashboardReadCurrent = dashboardAuthority.assertReadCurrent;
+    dashboardAuthority.bindPromptRecorder(userTurnRecorder);
     phase?.mark("preparation");
     if (messageInjectionTarget) {
       invalidateSkillAuthoringForOtherRequester(
@@ -596,6 +638,18 @@ async function handleChatSendWithOptions(
       },
       cronCreatorAuthority,
       assertDashboardReadCurrent,
+      ...(needsSessionCreationBinding && sessionMutationAuthorization?.bindCreation
+        ? {
+            bindSessionCreation: (operation: SessionEntryCreationOperation) => {
+              sessionMutationAuthorization.bindCreation?.(
+                { sessionKey, agentId: session.agentId },
+                operation,
+              );
+              return sessionMutationAuthorization.assertCurrent;
+            },
+            onSessionCreated: sessionMutationAuthorization.recordCreatedSession,
+          }
+        : {}),
       externalAuthorityAdmission,
       injection: {
         beginCapturedMessageInjection,
@@ -609,9 +663,15 @@ async function handleChatSendWithOptions(
         chatSendTiming,
       },
       turn: preparedUserTurn,
-      userTurn,
+      userTurn: {
+        ...userTurn,
+        persist: persistGatewayUserTurnTranscript,
+        persistBestEffort: persistGatewayUserTurnTranscriptBestEffort,
+      },
     });
+    admittedCleanup.dispatched = true;
   } catch (err) {
+    dashboardAuthority?.release();
     releaseBeforeDispatch?.();
     replyAdmissionTicket?.release();
     await handleChatSendSetupError({

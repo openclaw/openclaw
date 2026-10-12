@@ -2,11 +2,12 @@ import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createShouldEmitVerboseProgress } from "./dispatch-from-config.harness-defaults.js";
 
-it("reads committed verbose policy without main-thread SQL and retains caller revocation", async () => {
+it("uses prepared verbose policy and committed receipts without querying", async () => {
   await withOpenClawTestState({ label: "dispatch-verbose-worker" }, async ({ env }) => {
     setRuntimeConfigSnapshot({});
     const sessionKey = "agent:main:verbose-worker";
@@ -18,10 +19,16 @@ it("reads committed verbose policy without main-thread SQL and retains caller re
     });
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     let current = true;
-    const progress = await createShouldEmitVerboseProgress({
+    const entry = await readSessionEntryReadOnlyInWorker({
       agentId: "main",
       storePath: database.path,
       sessionKey,
+    });
+    const progress = createShouldEmitVerboseProgress({
+      agentId: "main",
+      storePath: database.path,
+      sessionKey,
+      initialExplicitLevel: entry?.verboseLevel,
       fallbackLevel: "on",
       assertCurrent: () => {
         if (!current) {
@@ -29,6 +36,8 @@ it("reads committed verbose policy without main-thread SQL and retains caller re
         }
       },
     });
+    using resources = new DisposableStack();
+    resources.defer(progress.release);
     expect(await progress.shouldEmitAsync()).toBe(false);
     for (const level of ["full", "off"] as const) {
       await upsertSessionEntryCore(scope, {

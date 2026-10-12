@@ -60,7 +60,18 @@ describe("dispatch Stop before provider allocation", () => {
     { identity: "legacy-session-alias", inherited: false },
     { identity: REQUEST.sessionKey, inherited: true },
   ])("preserves active $identity work (inherited: $inherited)", async ({ identity, inherited }) => {
-    moveDestinationMocks.resolveGatewaySessionTarget().storeKeys.push("legacy-session-alias");
+    const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+      "./session-utils-store-worker.js",
+    );
+    moveDestinationMocks.prepareGatewaySessionTarget.mockImplementation((params) =>
+      targetReader.resolveGatewaySessionStoreTargetInWorker({
+        ...params,
+        onSelected: (target) => {
+          target.storeKeys.push("legacy-session-alias");
+          params.onSelected?.(target);
+        },
+      }),
+    );
     workspace.preflight.mockReset().mockResolvedValue(undefined);
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const environments = support.createService(support.createProvider());
@@ -136,15 +147,17 @@ describe("dispatch Stop before provider allocation", () => {
           },
         },
       );
-      const sessionUtils =
-        await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
-      const sessionTarget = sessionUtils.resolveGatewaySessionStoreTargetWithStore({
+      const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+        "./session-utils-store-worker.js",
+      );
+      const sessionTarget = await targetReader.resolveGatewaySessionStoreTargetInWorker({
         cfg: { ...support.testState.config, session: { store: storePath } },
         key: REQUEST.sessionKey,
         agentId: REQUEST.agentId,
-        exactRead: true,
       });
-      moveDestinationMocks.resolveGatewaySessionTarget.mockReturnValue(sessionTarget);
+      moveDestinationMocks.prepareGatewaySessionTarget.mockImplementation(
+        targetReader.resolveGatewaySessionStoreTargetInWorker,
+      );
       runtimeFactoryMocks.createDispatch.mockImplementation((options) =>
         actual.createWorkerPlacementDispatchService({
           ...options,
@@ -479,11 +492,15 @@ describe("dispatch Stop before provider allocation", () => {
       const events: string[] = [];
       let observeQueue = false;
       const target = moveDestinationMocks.resolveGatewaySessionTarget();
-      moveDestinationMocks.resolveGatewaySessionTarget.mockImplementation(() => {
+      const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+        "./session-utils-store-worker.js",
+      );
+      moveDestinationMocks.prepareGatewaySessionTarget.mockImplementation(async (params) => {
+        const prepared = await targetReader.resolveGatewaySessionStoreTargetInWorker(params);
         if (observeQueue) {
           queued.resolve();
         }
-        return target;
+        return prepared;
       });
       const pause = async <T>(run: () => Promise<T>): Promise<T> => {
         beforeBarrier.resolve();

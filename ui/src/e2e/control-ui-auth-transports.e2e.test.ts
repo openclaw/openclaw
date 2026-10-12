@@ -530,7 +530,7 @@ async function createBrowserPage(
   // Browser startup shares CI shard CPU. Bound navigation and the first
   // rendered interaction separately; transport assertions stay narrow.
   const confirmation = page.locator("openclaw-gateway-url-confirmation");
-  await confirmation.waitFor({ timeout: controlUiSettleTimeoutMs });
+  await confirmation.getByRole("dialog").waitFor({ timeout: controlUiSettleTimeoutMs });
   expect(await confirmation.textContent()).toContain(gatewayUrl);
   expect(proxy.evidence).toHaveLength(evidenceStartIndex);
   await confirmation

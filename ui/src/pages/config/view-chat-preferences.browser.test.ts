@@ -25,23 +25,31 @@ describe("chat appearance preferences", () => {
     expect(props.onAppearanceChange).toHaveBeenCalledTimes(1);
   });
 
-  it("retains an uncommitted width while other appearance settings refresh", () => {
+  it("keeps uncommitted text drafts through unrelated settings refreshes", () => {
     const { container, props } = renderAppearance({});
-    const input = container.querySelector<HTMLInputElement>("[data-settings-chat-message-width]")!;
-    input.focus();
-    input.value = "max-content";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const width = container.querySelector<HTMLInputElement>("[data-settings-chat-message-width]");
+    const terminal = container.querySelector<HTMLInputElement>("[data-settings-terminal-font]");
+    expect(width).not.toBeNull();
+    expect(terminal).not.toBeNull();
 
-    renderConfigInto({ ...props, chatShowTaskProgress: false }, container);
-    expect(container.querySelector("[data-settings-chat-message-width]")).toBe(input);
-    expect(input.value).toBe("max-content");
+    width!.focus();
+    width!.value = "max-content";
+    width!.dispatchEvent(new Event("input", { bubbles: true }));
+    terminal!.value = "Iosevka";
+    renderConfigInto({ ...props, connected: true, chatShowTaskProgress: false }, container);
+    expect(container.querySelector("[data-settings-chat-message-width]")).toBe(width);
+    expect(width!.value).toBe("max-content");
+    expect(terminal!.value).toBe("Iosevka");
     expect(props.onAppearanceChange).not.toHaveBeenCalled();
 
-    input.dispatchEvent(new Event("change", { bubbles: true }));
+    width!.dispatchEvent(new Event("change", { bubbles: true }));
     expect(props.onAppearanceChange).toHaveBeenCalledWith({ chatMessageMaxWidth: "max-content" });
-
-    renderConfigInto({ ...props, chatMessageMaxWidth: "48rem" }, container);
-    expect(input.value).toBe("48rem");
+    renderConfigInto(
+      { ...props, chatMessageMaxWidth: "48rem", terminalFontFamily: "Menlo" },
+      container,
+    );
+    expect(width!.value).toBe("48rem");
+    expect(terminal!.value).toBe("Menlo");
   });
 
   it("marks browser follow-up overrides and resets them to the server", () => {

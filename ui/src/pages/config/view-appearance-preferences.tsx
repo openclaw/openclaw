@@ -211,8 +211,6 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
   );
 }
 export function ChatPreferencesSection(props: ConfigProps) {
-  // Unrelated preference refreshes must not replace the draft before blur commits it.
-  const messageWidth = createMemo(() => props.chatMessageMaxWidth ?? "");
   const followUpSelection = createMemo(() => props.chatFollowUpMode ?? "server");
   const serverQueueMode = createMemo(() => props.serverQueueMode ?? t("chat.followUpModeLoading"));
   const followUpDescription = createMemo(() =>
@@ -222,6 +220,9 @@ export function ChatPreferencesSection(props: ConfigProps) {
         })
       : undefined,
   );
+  // The value binding rewrites the DOM whenever it reruns. Track only the stored
+  // width so unrelated settings refreshes keep an uncommitted draft.
+  const messageWidth = createMemo(() => props.chatMessageMaxWidth ?? "");
   const messageWidthDefaultDescription = (
     <SettingsDefaultDescription
       value={UI_APPEARANCE_DEFAULTS.chatMessageMaxWidth}

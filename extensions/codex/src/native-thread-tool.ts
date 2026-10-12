@@ -226,6 +226,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                 errorMessage: "Codex native thread ownership changed; retry the request.",
               })
             : undefined;
+        using _ = { [Symbol.dispose]: () => prepared?.release() };
         options.context.assertInvocationCurrent?.();
         const archiveSession = archiveThreadId ? currentSession() : undefined;
         if (archiveThreadId && !archiveSession) {

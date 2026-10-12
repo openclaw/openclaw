@@ -40,7 +40,7 @@ export async function readSessionEntryInWorker(
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void,
   onReadTarget?: (target: SessionEntryTargetPatchScope) => void,
   reader?: SessionEntryCohortReader,
-) {
+): Promise<SessionEntry | undefined> {
   if (reader) {
     return readAdmittedSessionEntry(reader, input, assertCallerCurrent, onReadTarget);
   }

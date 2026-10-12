@@ -698,6 +698,12 @@ installing physical workspace dependencies, including links whose runner cache
 was already cleared. It preserves external package caches and unrelated
 dependency links.
 
+Linux hydration also installs the Control UI E2E browser prerequisites with CI's
+commands: Playwright Chromium and FFmpeg, plus WebKit with its system dependencies.
+It removes group/other write from the owned workspace ancestry and `.artifacts`,
+and later run commands inherit `umask go-w` while preserving stricter masks.
+Full UI E2E on AWS and Hetzner leases needs no manual runner repair.
+
 Native Windows daemon hydration retains its external dependency junction because
 released Crabbox native Windows delete-sync replaces workspace contents. Move
 that route to physical workspace dependencies only with a Crabbox sync version

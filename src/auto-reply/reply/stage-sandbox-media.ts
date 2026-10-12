@@ -99,6 +99,8 @@ export async function stageSandboxMedia(params: {
     ).backend === "ssh"
       ? await resolveSandboxContext(sandboxParams)
       : null;
+  using sandboxLifetime = { [Symbol.dispose]: () => sshSandbox?.[Symbol.dispose]?.() };
+  void sandboxLifetime;
   const sandbox = forceRemoteCache
     ? null
     : (sshSandbox ?? (await ensureSandboxWorkspaceForSession(sandboxParams)));

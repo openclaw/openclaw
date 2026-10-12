@@ -48,7 +48,16 @@ function assertSandboxCwd(requestedCwd: string | undefined, workspaceDir: string
 export function resolveHarnessWorkspace(
   workspaceDir: string,
   params: Pick<WorkspaceSandboxParams, "cwd" | "sessionRoot">,
-  prepared: Awaited<ReturnType<typeof resolveAttemptWorkspaceSandbox>> | undefined,
+  prepared:
+    | Pick<
+        Awaited<ReturnType<typeof resolveAttemptWorkspaceSandbox>>,
+        | "sandbox"
+        | "resolvedWorkspace"
+        | "effectiveWorkspace"
+        | "effectiveCwd"
+        | "sessionPermissionRoot"
+      >
+    | undefined,
   sandbox: Awaited<ReturnType<typeof resolveSandboxContext>> | undefined,
 ) {
   const projected =
@@ -77,8 +86,20 @@ export async function preparePluginHarnessWorkspace(
       ...params,
       placementSandbox: placement.sandbox,
     });
-    placement.assertCurrent();
-    return { ...placement, workspace };
+    try {
+      placement.assertCurrent();
+      return {
+        ...placement,
+        workspace,
+        [Symbol.dispose]: () => {
+          workspace[Symbol.dispose]();
+          placement[Symbol.dispose]();
+        },
+      };
+    } catch (error) {
+      workspace[Symbol.dispose]();
+      throw error;
+    }
   } catch (error) {
     placement[Symbol.dispose]();
     throw error;
@@ -130,51 +151,61 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
             preparedRuntimeStatus: sandboxRuntimeStatus,
           })
         : null;
-      assertCurrent();
-      const projectedWorkspace = sandbox?.enabled && sandbox.workspaceSource === "managed-worktree";
-      const effectiveWorkspace =
-        sandbox?.enabled && (sandbox.workspaceAccess !== "rw" || projectedWorkspace)
-          ? (sandbox.workspaceCwd ?? sandbox.workspaceDir)
-          : resolvedWorkspace;
-      const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-      // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
-      // the agent's canonical workspace as their permission boundary.
-      const sessionPermissionRoot = projectedWorkspace
-        ? sandbox.workspaceDir
-        : (params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)));
-      const sessionPermissionPolicy = params.permissionMode
-        ? {
-            root: sessionPermissionRoot,
-            mode: params.permissionMode,
-          }
-        : undefined;
-      if (sandbox?.enabled) {
-        assertSandboxCwd(requestedCwd, resolvedWorkspace);
+      try {
+        assertCurrent();
+        const projectedWorkspace =
+          sandbox?.enabled && sandbox.workspaceSource === "managed-worktree";
+        const effectiveWorkspace =
+          sandbox?.enabled && (sandbox.workspaceAccess !== "rw" || projectedWorkspace)
+            ? (sandbox.workspaceCwd ?? sandbox.workspaceDir)
+            : resolvedWorkspace;
+        const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+        // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
+        // the agent's canonical workspace as their permission boundary.
+        const sessionPermissionRoot = projectedWorkspace
+          ? sandbox.workspaceDir
+          : (params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)));
+        const sessionPermissionPolicy = params.permissionMode
+          ? {
+              root: sessionPermissionRoot,
+              mode: params.permissionMode,
+            }
+          : undefined;
+        if (sandbox?.enabled) {
+          assertSandboxCwd(requestedCwd, resolvedWorkspace);
+        }
+        assertCurrent();
+        if (effectiveWorkspace !== resolvedWorkspace) {
+          await fs.mkdir(effectiveWorkspace, { recursive: true });
+        }
+        assertCurrent();
+        return {
+          effectiveCwd: sandbox?.enabled
+            ? effectiveWorkspace
+            : (requestedCwd ?? effectiveWorkspace),
+          effectiveFsWorkspaceOnly:
+            params.requireWorkspaceOnly === true ||
+            resolveEffectiveToolFsWorkspaceOnly({
+              cfg: params.config,
+              agentId: sessionAgentId,
+            }),
+          effectiveWorkspace,
+          resolvedWorkspace,
+          sessionPermissionRoot,
+          sessionPermissionPolicy,
+          sandbox,
+          ...(sandboxRuntimeStatus ? { sandboxRuntime: sandboxRuntimeStatus } : {}),
+          sandboxReport: sandboxRuntimeStatus
+            ? { mode: sandboxRuntimeStatus.mode, sandboxed: sandboxRuntimeStatus.sandboxed }
+            : undefined,
+          sandboxSessionKey,
+          sessionAgentId,
+          [Symbol.dispose]: () => sandbox?.[Symbol.dispose]?.(),
+        };
+      } catch (error) {
+        sandbox?.[Symbol.dispose]?.();
+        throw error;
       }
-      assertCurrent();
-      if (effectiveWorkspace !== resolvedWorkspace) {
-        await fs.mkdir(effectiveWorkspace, { recursive: true });
-      }
-      assertCurrent();
-      return {
-        effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
-        effectiveFsWorkspaceOnly:
-          params.requireWorkspaceOnly === true ||
-          resolveEffectiveToolFsWorkspaceOnly({
-            cfg: params.config,
-            agentId: sessionAgentId,
-          }),
-        effectiveWorkspace,
-        resolvedWorkspace,
-        sessionPermissionRoot,
-        sessionPermissionPolicy,
-        sandbox,
-        sandboxReport: sandboxRuntimeStatus
-          ? { mode: sandboxRuntimeStatus.mode, sandboxed: sandboxRuntimeStatus.sandboxed }
-          : undefined,
-        sandboxSessionKey,
-        sessionAgentId,
-      };
     });
   return params.placementSandbox
     ? prepareWorkspace()

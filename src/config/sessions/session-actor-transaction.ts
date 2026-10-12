@@ -4,19 +4,28 @@ import {
   sqliteSessionIdWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
+import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
 
-let current: { database: DatabaseSync; state: SessionActorStoredState } | undefined;
+type PublishTranscript = (authority: SessionTranscriptAuthority) => SessionTranscriptAuthority;
+let current:
+  | {
+      database: DatabaseSync;
+      state: SessionActorStoredState;
+      publishTranscript?: PublishTranscript;
+    }
+  | undefined;
 
 /** Lends a private working copy only for the writer's synchronous transaction. */
 export function withSessionActorTransactionState<T>(
   database: { db: DatabaseSync },
   state: SessionActorStoredState,
   run: () => T,
+  publishTranscript?: PublishTranscript,
 ): T {
   if (!database.db.isTransaction || current) {
     throw new Error("Session actor facts require one owning synchronous transaction");
   }
-  current = { database: database.db, state };
+  current = { database: database.db, state, publishTranscript };
   try {
     const result = withSqliteDatabaseWriteScope(
       database.db,
@@ -35,6 +44,16 @@ export function withSessionActorTransactionState<T>(
   } finally {
     current = undefined;
   }
+}
+
+/** Enrich the mutation owner's one final authority receipt before it is published. */
+export function prepareSessionActorTranscriptAuthority(
+  database: { db: DatabaseSync },
+  authority: SessionTranscriptAuthority,
+): SessionTranscriptAuthority {
+  return current?.database === database.db && current.publishTranscript
+    ? current.publishTranscript(authority)
+    : authority;
 }
 
 /** Unbound native and SDK callers keep their existing database readers. */

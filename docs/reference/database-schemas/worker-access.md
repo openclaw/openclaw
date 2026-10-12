@@ -113,6 +113,13 @@ cache refreshes. Row receipts do not grant permission, and a missing receipt is
 not proof of absence. Outside processes use the Gateway or exclusive offline
 ownership; ordinary readers do not poll for foreign commits.
 
+Memory retrieval workers borrow the existing agent read-only owner across query
+awaits and release each borrow before replying. The owner retains the idle reader
+and its prepared statements, with committed-write invalidation and physical-file
+replacement handled by its existing lifecycle. Vector-extension probing keeps a
+separate extension-capable connection. Search queries, ranking, result bounds,
+schemas, and update behavior are unchanged.
+
 Transcript readers retain bounded hot/cold facts under the existing session write
 receipts. Archive, restore, session deletion, and native writes invalidate those
 facts; an unknown receipt falls back to the durable marker. Each new transcript
@@ -139,7 +146,7 @@ Bounded transcript hydration retains its result in the existing session actor
 replica. Complete active paths advance from committed append receipts, including
 the stored payload byte lengths; repeated reads and recent reply anchors can then
 use that replica without another history-worker request. Incomplete windows,
-capacity overflow, rewrites, rewinds, compaction, archive changes, and deletion
+capacity overflow, content rewrites, rewinds, compaction, archive changes, and deletion
 return to the canonical reader. The projection shares the actor's eviction and
 write-receipt invalidation lifecycle and does not change schemas, stored formats,
 retention, or update behavior.
@@ -149,7 +156,30 @@ retaining its transcript. Participant changes keep transcript payloads private
 until the next actor snapshot confirms the same transcript version. Reply
 delivery can read committed anchor facts after the actor handle is released;
 the delivery caller still owns current authorization. Reset boundaries, session
-replacement, and transcript edits continue to invalidate retained context.
+replacement, and content edits continue to invalidate retained context.
+
+Exact metadata rewrites that preserve transcript admission and navigation carry
+their canonical replacement rows in the existing committed authority receipt.
+The resident actor updates its payloads and mutation timestamp in that same
+transaction; the main-thread replica installs those rows without another worker
+read. This includes an identical model-prompt capture after hydration. Rollback
+leaves stored messages unchanged and retains the database owner's failed-write
+cache invalidation. Cold actors, content or topology changes, unknown writes,
+and byte-limit overflow retain the canonical reader. No extra receipt,
+freshness query, permission grant, or stored format is introduced.
+
+Trajectory append and retention writers publish the session and trajectory
+sequence range they changed. Their trajectory-only SQL declares no session-row
+or transcript changes, so it does not invalidate unrelated actor facts. Durable
+runtime appends always use the existing agent execution worker. Transcript
+appends, content rewrites, rewind, compaction, archive/restore, deletion, and unknown
+writes retain their session-scoped invalidation or committed actor update.
+
+Activity-summary batches also reuse the actor's complete retained linear context
+at its committed write token. The replica and worker share incremental batch
+selection, including byte limits and omitted-content handling. Incomplete or
+invalidated context uses the bounded worker reader; the replica adds no separate
+cache, stored format, retention rule, or permission grant.
 
 Parent forks use the existing session-entry worker for both transcript copying
 and child-row commits. Internal fork transformations are data patches, not native
@@ -434,7 +464,8 @@ Schemas, retained bytes, durability, and update behavior are unchanged.
 Bundled plugins obtain prepared currentness checks and compose entry commit guards
 through the `session-binding-runtime` facade. `captureSessionEntryCurrentCheckAsync`
 retains the selected session generation and optional conversation alternatives;
-its awaited effect check reads both in one existing reader-worker snapshot. Typed
+its awaited effect check reads both in one existing reader-worker snapshot. The
+returned `release()` ends the owning operation’s captured authority after settlement. Typed
 mutations carry the prepared source so the writer checks all alternatives in one
 batched conversation read and publishes matching branches through its transaction
 grant. Entry-only binding mutations carry `entryCurrent` through existing writer
@@ -573,7 +604,9 @@ reuses the database owner's admitted table and index facts.
 
 Durable Board writes with ordinary request callbacks use the existing worker.
 Cross-store source authority and native incognito retain their explicit native
-adapter. Board reads inside a transaction reuse its snapshot without a nested
+adapter. Cross-store writes check the captured target session identity once in
+the mutation kernel's transaction, without a second session-existence read.
+Board reads inside a transaction reuse its snapshot without a nested
 savepoint. Ambient-watch preparation uses the existing read worker; the released
 synchronous prompt adapter remains deprecated with a runtime warning.
 
@@ -1409,6 +1442,11 @@ Empty plugin-state receipts travel with native settlement instead of an addition
 early commit frame. They remain recorded at COMMIT and install before the operation
 completes. Nonempty and unknown-coverage receipts still publish immediately after
 COMMIT.
+
+Register-if-absent uses one conditional insert to preserve a live key or replace an
+expired key, including expired keys outside the bounded cleanup batch. A rejected
+capacity check rolls back both the insert and its staged receipt. The same kernel
+serves worker operations and the deprecated synchronous compatibility adapter.
 
 The Gateway retains bounded plugin-state observation rows from these receipts.
 Repeated observations reuse the stored JSON image without a worker request;
@@ -5146,6 +5184,17 @@ private rows retain facts only for the request's synchronous publication frame.
 Schemas, stored values, permissions, retention, and update behavior are unchanged.
 
 ## Migrate a caller
+
+Session node-artifact copies merge participant aggregates in their existing write
+transaction. Each upsert consumes the current destination row without a separate
+read: aliases in one store add their contributions, while retried cross-store
+repairs retain the largest count. Unknown first-input times remain unknown and
+the latest known input time survives. Ordinary durable entry creation,
+replacement, and reclamation use the existing entry or reclamation worker;
+shared kernels retain native receivers for incognito, exclusive maintenance,
+and released synchronous entry APIs. Opaque deletion callbacks are adapted to
+worker commit finalizers and do not force durable artifact SQL onto the host.
+This changes no schema, stored format, retention, or update behavior.
 
 Manual `sessions.compact` requests with `maxLines` retain their selected physical
 store and prepared caller and sharing authority through cold restoration. The

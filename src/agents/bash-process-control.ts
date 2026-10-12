@@ -110,11 +110,19 @@ export function captureExecRequestCancellation(
     owners: [...owners],
     // Ancestry selects descendants without rewriting completed model receipts.
     requestRunIds: [...new Set([...owners].flatMap((owner) => Array.from(owner.turnRunIds)))],
-    cancel() {
+    cancel(select: (identity: ExecRequestIdentity) => boolean = () => true) {
       if (cancelled || owners.size === 0) {
         return false;
       }
       cancelled = true;
+      for (const owner of owners) {
+        if (!select(owner.identity)) {
+          owners.delete(owner);
+        }
+      }
+      if (owners.size === 0) {
+        return false;
+      }
       cancelExecRequestOwners([...owners]);
       for (const session of listExecSessionsForCancellation().filter(matching)) {
         removeNotifyOnExit(session);

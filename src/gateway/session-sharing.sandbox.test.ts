@@ -9,6 +9,7 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import {
   authorizeResolvedSessionMutation,
   resolveSessionMutationAuthorization,
@@ -134,8 +135,14 @@ describe("session sharing sandbox requirements", () => {
           ? { key: hostSessionKey }
           : { sessionKey: hostSessionKey };
         expect(
-          resolveSessionMutationAuthorization({ client: guest, method, requestParams, context })
-            .error,
+          (
+            await resolveSessionMutationAuthorizationAsync({
+              client: guest,
+              method,
+              requestParams,
+              context,
+            })
+          ).error,
           method,
         ).toMatchObject({ code: "FORBIDDEN", message: expect.stringMatching(/sandbox/i) });
       }

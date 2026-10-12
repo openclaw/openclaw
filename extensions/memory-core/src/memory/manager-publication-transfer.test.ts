@@ -31,6 +31,7 @@ import type {
   MemorySourceIndexReplacement,
   MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
+import { memoryChunkRowId } from "./manager-source-index-kernel.js";
 
 const owners: MemoryIndexDatabase[] = [];
 const fixtureWriters = new Map<MemoryIndexDatabase, DatabaseSync>();
@@ -752,7 +753,7 @@ describe("bounded memory publication transfer", () => {
     ).toEqual(inputs.map((input) => ({ path: input.entry.path, text: input.chunks[0]!.text })));
   });
 
-  it("publishes a session delta that keeps retained rows and reports retained drift", async () => {
+  it("publishes planned removals and keeps unchanged session rows searchable", async () => {
     const owner = await createOwner();
     ensureMemorySessionTombstones(fixtureWriter(owner));
     const [template] = replacement().chunks;
@@ -768,7 +769,7 @@ describe("bounded memory publication transfer", () => {
       hash: string,
       chunks: ReturnType<typeof turn>[],
       retained: ReturnType<typeof turn>[] = [],
-    ): MemorySourceIndexReplacement => ({
+    ): Extract<MemorySourceIndexReplacement, { source: "sessions" }> => ({
       ...replacement(),
       source: "sessions",
       agentId: "main",
@@ -792,13 +793,14 @@ describe("bounded memory publication transfer", () => {
     );
     const [first] = rows();
     const delta = session("v2", [turn(3)], [turn(1)]);
+    delta.removedIds = [memoryChunkRowId("sessions", delta.entry.path, turn(2), delta.model)];
     await expect(
       owner.replaceSource(
         delta,
         () => undefined,
         async () => true,
       ),
-    ).resolves.toMatchObject({ retainedDrift: false });
+    ).resolves.toBe(true);
     expect(rows()).toEqual([
       first,
       expect.objectContaining({ start_line: 3, text: "turn 3 Violetmarker" }),
@@ -807,17 +809,13 @@ describe("bounded memory publication transfer", () => {
       { count: 2 },
     );
 
-    fixtureWriter(owner).prepare("DELETE FROM memory_index_chunks WHERE start_line = 1").run();
-    await expect(
-      owner.replaceSource(
-        session("v3", [turn(4)], [turn(1)]),
-        () => undefined,
-        async () => true,
-      ),
-    ).resolves.toMatchObject({ retainedDrift: true });
-    expect(owner.db.prepare("SELECT hash FROM memory_index_sources").all()).toEqual([
-      { hash: "v2" },
-    ]);
+    expect(
+      owner.db
+        .prepare(
+          "SELECT start_line FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker' ORDER BY start_line",
+        )
+        .all(),
+    ).toEqual([{ start_line: 1 }, { start_line: 3 }]);
   });
 
   it.each([8, 4 * 1024 * 1024 + 1])(

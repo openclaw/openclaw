@@ -206,6 +206,9 @@ describe("session member picker identities", () => {
         { type: "human", id: profileOnly.id, label: "Profile only" },
       ];
       const scans = vi.spyOn(combinedStore, "loadCombinedSessionStoreForGatewayCore");
+      const profileReads = vi
+        .spyOn(userProfileReads, "listProfiles")
+        .mockRejectedValue(new Error("Profile worker enumeration is unavailable"));
       const parse = JSON.parse;
       let unrelatedDecodes = 0;
       const parsed = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
@@ -229,6 +232,7 @@ describe("session member picker identities", () => {
       } finally {
         parsed.mockRestore();
         scans.mockRestore();
+        profileReads.mockRestore();
       }
       expect(
         authorizeResolvedSessionMutation({
@@ -547,7 +551,7 @@ describe("session sharing authority", () => {
   });
 
   it.each(["session.members.list", "session.members.add"] as const)(
-    "rechecks the current manager after profile enumeration for %s",
+    "rechecks the current manager after projection preparation for %s",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
@@ -566,17 +570,16 @@ describe("session sharing authority", () => {
         const client = identifiedClient(owner.id);
         const requestContext = context(vi.fn());
         await initializeSessionReadContext(requestContext);
+        const projection = getSessionRowProjection(requestContext)!;
+        const preparation =
+          method === "session.members.list" ? "prepareSelection" : "ensureMaterialized";
+        const prepare = projection[preparation].bind(projection);
         const ready = createDeferredCore();
         const release = createDeferredCore();
-        const enumerate = userProfileReads.listProfiles;
-        const read = vi.spyOn(userProfileReads, "listProfiles").mockImplementationOnce(async () => {
-          const profiles = await enumerate().catch((error: unknown) => {
-            ready.reject(error);
-            throw error;
-          });
+        const read = vi.spyOn(projection, preparation).mockImplementationOnce(async () => {
+          await prepare();
           ready.resolve();
           await release.promise;
-          return profiles;
         });
         const respond = vi.fn();
         const pending = sessionSharingHandlers[method]!({

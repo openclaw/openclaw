@@ -207,6 +207,10 @@ const nonRuntimeMemberForwards = new Map([
 // These exact declarations consume their inline callbacks synchronously.
 const synchronousScopes = new Map<string, ReadonlyMap<string, number>>([
   [
+    "src/agents/subagents/spawn/subagent-session-store-legacy.ts",
+    new Map([["withLegacySessionCapabilityRead", 0]]),
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-participants.native.ts",
     new Map([["recordSessionParticipantWithAliasRead", 2]]),
   ],

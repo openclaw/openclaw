@@ -23,7 +23,6 @@ import {
   createGatewayMethodRegistry,
 } from "../methods/registry.js";
 import { coreGatewayHandlers, handleGatewayRequest } from "../server-methods.js";
-import * as sharingPreparation from "../session-sharing-preparation.js";
 import * as resolution from "./artifacts-session-resolution.js";
 import { assistantFileMessage } from "./artifacts.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -248,7 +247,6 @@ async function exercise(
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       return;
     }
-    const sessionReads = vi.spyOn(sharingPreparation, "prepareSessionMutationFacts");
     const preparing = createDeferred();
     const release = createDeferred();
     const prepare = resolution.prepareArtifactSessionResolution;
@@ -272,13 +270,8 @@ async function exercise(
       await preparing.promise;
       expect(respond).not.toHaveBeenCalled();
       expect(guard).toHaveBeenCalled();
-      const readsBeforeRelease = {
-        session: sessionReads.mock.calls.length,
-        transcript: boundaries.visit.mock.calls.length,
-      };
-      expect(readsBeforeRelease).toEqual(
-        secondPreparation ? { session: 1, transcript: 1 } : { session: 0, transcript: 0 },
-      );
+      const transcriptReadsBeforeRelease = boundaries.visit.mock.calls.length;
+      expect(transcriptReadsBeforeRelease).toBe(secondPreparation ? 1 : 0);
       changeAuthority();
       expect(captured.isCurrent()).toBe(
         change !== "device revoked" && change !== "caller replaced",
@@ -303,8 +296,7 @@ async function exercise(
           },
         ]);
         expect(respond).not.toHaveBeenCalled();
-        expect(sessionReads).toHaveBeenCalledTimes(readsBeforeRelease.session);
-        expect(boundaries.visit).toHaveBeenCalledTimes(readsBeforeRelease.transcript);
+        expect(boundaries.visit).toHaveBeenCalledTimes(transcriptReadsBeforeRelease);
         expect(boundaries.managed).not.toHaveBeenCalled();
         expect(boundaries.managedUrl).not.toHaveBeenCalled();
       }
