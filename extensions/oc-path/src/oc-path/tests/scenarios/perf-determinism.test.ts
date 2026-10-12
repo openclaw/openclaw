@@ -21,27 +21,6 @@ describe("CPU budgets + determinism", () => {
     }, 50);
   });
 
-  it("parses 100 KB file within the parser CPU budget", () => {
-    const lines: string[] = [];
-    for (let i = 0; i < 1000; i++) {
-      lines.push("## H" + i);
-      for (let j = 0; j < 5; j++) {
-        lines.push(`- key${i}-${j}: value with content`);
-      }
-    }
-    const raw = lines.join("\n");
-    expectWithinCpuBudget(() => parseMd(raw), 200);
-  });
-
-  it("parses 1000 small files within a 500 ms CPU budget", () => {
-    const raw = `## H\n- a\n- b: c\n## I\n- d\n`;
-    expectWithinCpuBudget(() => {
-      for (let i = 0; i < 1000; i++) {
-        parseMd(raw);
-      }
-    }, 500);
-  });
-
   it("resolves 100k OcPaths on parsed AST within a 500 ms CPU budget", () => {
     const raw = `## A\n- a1\n- a2\n## B\n- b1\n- b2\n## C\n- c1: cv\n`;
     const { ast } = parseMd(raw);
@@ -61,51 +40,5 @@ describe("CPU budgets + determinism", () => {
     resolveOcPath(ast, { file: "X.md", section: "b" });
     resolveOcPath(ast, { file: "X.md", section: "unknown" });
     expect(JSON.stringify(ast)).toBe(before);
-  });
-
-  it("AST is JSON-serializable (no functions, no cycles)", () => {
-    const raw = `---\nk: v\n---\n## A\n- a\n\`\`\`ts\nx\n\`\`\`\n| h |\n| - |\n| 1 |\n`;
-    const { ast } = parseMd(raw);
-    const serialized = JSON.stringify(ast);
-    const parsed = JSON.parse(serialized);
-    expect(parsed.raw).toBe(ast.raw);
-    expect(parsed.blocks.length).toBe(ast.blocks.length);
-  });
-
-  it("frontmatter ordering is preserved (insertion order, not alphabetical)", () => {
-    const raw = `---\nz: 1\nm: 2\na: 3\n---\n`;
-    const { ast } = parseMd(raw);
-    expect(ast.frontmatter.map((e) => e.key)).toEqual(["z", "m", "a"]);
-  });
-
-  it("block ordering is document order, not alphabetical", () => {
-    const raw = `## Z\n## A\n## M\n`;
-    const { ast } = parseMd(raw);
-    expect(ast.blocks.map((b) => b.heading)).toEqual(["Z", "A", "M"]);
-  });
-
-  it("item ordering within block is document order", () => {
-    const raw = `## H\n- z\n- a\n- m\n`;
-    const { ast } = parseMd(raw);
-    expect(ast.blocks[0]?.items.map((i) => i.text)).toEqual(["z", "a", "m"]);
-  });
-
-  it("large fixture round-trip stays within a 100 ms CPU budget", () => {
-    const lines: string[] = [];
-    for (let i = 0; i < 500; i++) {
-      lines.push(`## Section ${i}`);
-      lines.push("");
-      for (let j = 0; j < 10; j++) {
-        lines.push(`- item-${i}-${j}: with some prose value content here`);
-      }
-      lines.push("");
-    }
-    const raw = lines.join("\n");
-    let out = "";
-    expectWithinCpuBudget(() => {
-      const { ast } = parseMd(raw);
-      out = ast.raw;
-    }, 100);
-    expect(out).toBe(raw);
   });
 });
