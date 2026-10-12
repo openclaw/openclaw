@@ -1192,11 +1192,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
       ),
     ).toHaveLength(1);
     expect(new Set(observerFailures().map((failure) => failure.runId)).size).toBe(4);
-    // Isolated completion rejects an error stop reason before observer logging;
-    // its bounded owner error, not the provider's raw body, is the recorded cause.
+    // Isolated completion rejects an error stop reason before observer logging and
+    // records the provider's formatted diagnostic as the cause.
     expect(
       observerFailures().every((failure) =>
-        String(failure.error).includes("Isolated completion failed with stop reason error"),
+        String(failure.error).startsWith("400 synthetic observer failure"),
       ),
     ).toBe(true);
     // The observer warning carries its run-owned consecutive-failure count;
