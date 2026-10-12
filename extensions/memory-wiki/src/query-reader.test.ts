@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
+import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import * as wikiLinks from "./markdown-links.js";
@@ -361,39 +362,44 @@ describe("memory wiki query reader", () => {
   // With one worker, a task handed to an idle, ready worker is sent to it before
   // run() returns (WorkerTaskPoolCore.run dispatches synchronously), and any task
   // submitted while that one is in flight waits in the pool's queue.
-  it("rejects a read queued behind a running scan and lets the scan finish", async () => {
+  it("rejects a read queued behind two running scans and lets the scans finish", async () => {
     const { rootDir } = await createScoringVault();
-    const warm = await readMemoryWikiPages({
-      rootDir,
-      visibility: null,
-      select: "lookup",
-      lookup: "page-3",
-    });
-    expect(warm.page?.relativePath).toBe("sources/page-3.md");
-    const scan = readMemoryWikiPages({
+    const run = vi.spyOn(WorkerTaskPool.prototype, "run");
+    const scanTask = {
       rootDir,
       visibility: null,
       select: "search",
       query: "lantern ledger",
       mode: "auto",
       maxResults: 5,
-    });
+    } as const;
+    const scans = [readMemoryWikiPages(scanTask), readMemoryWikiPages(scanTask)];
     const controller = new AbortController();
     const reason = new Error("caller cancelled the queued wiki read");
     const queued = readMemoryWikiPages(
       { rootDir, visibility: null, select: "lookup", lookup: "page-3" },
       { signal: controller.signal },
     );
+    // Admission is synchronous inside run() and the pool runs at most two tasks, so
+    // the read, submitted third, is still waiting when this snapshot is taken.
+    const pool = run.mock.contexts[0] as WorkerTaskPool<unknown, unknown>;
+    const admitted = pool.getSnapshot();
     controller.abort(reason);
 
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(admitted.pendingTasks).toBe(3);
+    expect(admitted.activeTasks).toBeLessThanOrEqual(2);
     await expect(queued).rejects.toBe(reason);
-    const finished = await scan;
-    expect(finished.results).toHaveLength(5);
-    expect(finished.results.every((result) => result.score > 0)).toBe(true);
+    for (const finished of await Promise.all(scans)) {
+      expect(finished.results).toHaveLength(5);
+      expect(finished.results.every((result) => result.score > 0)).toBe(true);
+    }
   });
 
   it("recovers on a fresh worker after a running read is cancelled", async () => {
     const { rootDir } = await createScoringVault();
+    // Start from a closed reader so the warm read below leaves exactly one idle worker.
+    await closeMemoryWikiQueryReader();
     // Node announces every Worker the process creates; a retired worker is replaced.
     let workersCreated = 0;
     const onWorker = () => {

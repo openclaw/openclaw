@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Worker } from "node:worker_threads";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./api.js";
@@ -20,6 +21,7 @@ import {
   loadMemoryWikiVaultIdentity,
   resolveMemoryWikiVaultSourceGeneration,
 } from "./src/log.js";
+import { renderWikiMarkdown } from "./src/markdown.js";
 import { withMemoryWikiVaultMutation } from "./src/mutation-coordinator.js";
 import * as queryReader from "./src/query-reader.js";
 import { waitForMemoryWikiImportedSourceSyncs } from "./src/source-sync.js";
@@ -254,18 +256,51 @@ describe("memory-wiki plugin", () => {
     });
   });
 
-  it("closes the query reader worker when the plugin service stops", async () => {
+  it("terminates the query reader worker when the plugin service stops", async () => {
     const rootDir = await createTempDir("memory-wiki-index-stop-reader-");
     const { api, registerService } = createPluginApi();
     api.pluginConfig = { vault: { path: rootDir } };
     plugin.register(api);
     const service = registerService.mock.calls[0]?.[0];
     await service?.start?.();
-    const closeReader = vi.spyOn(queryReader, "closeMemoryWikiQueryReader");
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
+        body: "# Alpha\n",
+      }),
+    );
+    // Start from a closed reader so the lookup below creates the pool's workers.
+    await queryReader.closeMemoryWikiQueryReader();
+    let workersCreated = 0;
+    let workersExited = 0;
+    const onWorker = (worker: Worker) => {
+      workersCreated += 1;
+      worker.once("exit", () => {
+        workersExited += 1;
+      });
+    };
+    process.on("worker", onWorker);
+    try {
+      // A basename lookup is a whole-vault scan, so it runs on the reader's worker.
+      const read = await queryReader.readMemoryWikiPages({
+        rootDir,
+        visibility: null,
+        select: "lookup",
+        lookup: "alpha",
+      });
+      expect(read.page?.relativePath).toBe("sources/alpha.md");
+      expect(workersCreated).toBeGreaterThan(0);
+      // The idle worker stays alive until it is retired or the pool closes.
+      expect(workersExited).toBe(0);
 
-    await service?.stop?.();
+      await service?.stop?.();
 
-    expect(closeReader).toHaveBeenCalledOnce();
+      expect(workersExited).toBe(workersCreated);
+    } finally {
+      process.off("worker", onWorker);
+    }
   });
 
   it("fences cache publication when the plugin service stops", async () => {
