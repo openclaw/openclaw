@@ -7,6 +7,8 @@ import {
 import { createConfigIO } from "../config/io.factory.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveSelectedCronJobsStorePath } from "../cron/store/paths.js";
+import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { listRetiredCronStateFiles } from "../infra/state-migrations.retired-cron-files.js";
 import { listRetiredDeliveryQueueFiles } from "../infra/state-migrations.retired-delivery-files.js";
 import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
@@ -15,7 +17,11 @@ import { resolveLegacyInstalledPluginIndexStorePath } from "../plugins/installed
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withOpenClawStateReadOnlyLocation } from "../state/openclaw-state-db-read-connection.js";
+import {
+  existingPathOrUndefined,
+  resolveOpenClawStateSqlitePath,
+} from "../state/openclaw-state-db.paths.js";
 import {
   assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
   listReferencedLegacyOAuthSidecarPaths,
@@ -52,17 +58,23 @@ export async function assertDoctorStateMigrationSupported(env: NodeJS.ProcessEnv
       ...listReferencedLegacyOAuthSidecarPaths(env, cfg),
       ...listReferencedLegacyOAuthSidecarPaths(createConfigRuntimeEnv(cfg, env), cfg),
     ]);
-    // Inspect the known catalog damage that Doctor repairs after admission.
-    const cronStore =
-      readNonBlankString(asOptionalRecord(cfg.cron)?.store) ??
-      withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-        ({ db }) => {
-          const row = readConfigMachineStateRowInDatabase(db, "cron.store");
-          return row ? readNonBlankString(JSON.parse(row.value_json)) : undefined;
-        },
-        { env },
-        openDoctorStateSchemaReadAdmission,
-      );
+    let cronStore = readNonBlankString(asOptionalRecord(cfg.cron)?.store);
+    if (!cronStore) {
+      const statePath = existingPathOrUndefined(resolveOpenClawStateSqlitePath(env));
+      if (statePath) {
+        // Inspect private bytes even when runtime reads are quarantined for Doctor repair.
+        assertStateDatabaseAccessAllowed(statePath);
+        cronStore = withOpenClawStateReadOnlyLocation(
+          ({ db }) => {
+            const row = readConfigMachineStateRowInDatabase(db, "cron.store");
+            return row ? readNonBlankString(JSON.parse(row.value_json)) : undefined;
+          },
+          statePath,
+          prepareSqliteReadOnlyLocationSync(statePath),
+          openDoctorStateSchemaReadAdmission,
+        );
+      }
+    }
     assertNoRetiredStateFiles(
       "Cron state",
       await listRetiredCronStateFiles(resolveSelectedCronJobsStorePath(cronStore, env)),
