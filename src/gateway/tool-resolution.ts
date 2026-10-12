@@ -339,6 +339,9 @@ export async function resolveGatewayScopedTools(
     sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     currentMessageId: params.currentMessageId,
+    // Host-minted provenance of the loopback current conversation; embedded/HTTP
+    // turns leave this undefined and contribute host-derived channels elsewhere.
+    currentConversationOrigin: params.currentConversationOrigin,
     currentInboundAudio: params.currentInboundAudio,
     sessionId: params.sessionId,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,

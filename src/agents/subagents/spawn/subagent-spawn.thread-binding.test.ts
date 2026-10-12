@@ -245,4 +245,90 @@ describe("spawnSubagentDirect thread binding", () => {
       }),
     );
   });
+
+  it("binds a CLI-runtime thread spawn from currentChannelId when agentTo is absent", async () => {
+    // CLI runtimes have no agentTo; fall back to the ambient current* fields.
+    const bind = vi.fn<NonNullable<BindingService["bind"]>>(async (request) => ({
+      targetSessionKey: request.targetSessionKey,
+      targetKind: request.targetKind,
+      status: "active",
+      conversation: request.conversation,
+    }));
+    bindingService = makeBindingService(bind);
+    const result = await spawnSubagentDirect(
+      { task: "CLI turn", thread: true, mode: "session", context: "isolated" },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "matrix",
+        agentAccountId: "bot-beta",
+        currentChannelId: "!room:example.org",
+        currentThreadTs: "t-123",
+        currentConversationOrigin: "run-bound-grant",
+      },
+    );
+    expect(result.status).toBe("accepted");
+    expect(bind).toHaveBeenCalledOnce();
+    expect(bind.mock.calls[0]?.[0].conversation).toMatchObject({
+      channel: "matrix",
+      accountId: "bot-beta",
+      conversationId: "t-123",
+      parentConversationId: "!room:example.org",
+    });
+  });
+
+  it("rejects a caller-token loopback thread spawn that would bind to a caller-selected room", async () => {
+    // generic-token callers must not steer thread-binding target; the channel
+    // gate or the origin resolver must refuse before reaching the binding service.
+    const bind = vi.fn<NonNullable<BindingService["bind"]>>(async (request) => ({
+      targetSessionKey: request.targetSessionKey,
+      targetKind: request.targetKind,
+      status: "active",
+      conversation: request.conversation,
+    }));
+    bindingService = makeBindingService(bind);
+    const result = await spawnSubagentDirect(
+      { task: "loopback turn", thread: true, mode: "session", context: "isolated" },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "matrix",
+        agentAccountId: "bot-beta",
+        currentChannelId: "!attacker-controlled-room",
+        currentThreadTs: "t-123",
+        currentConversationOrigin: "caller-token",
+      },
+    );
+    // Provenance fail-closed: caller-token ambient current* must not become a
+    // binding target. Expect the result to be rejected (error) rather than a bind.
+    expect(result.status).toBe("error");
+    expect(bind).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit agentTo authoritative over ambient current* fields", async () => {
+    const bind = vi.fn<NonNullable<BindingService["bind"]>>(async (request) => ({
+      targetSessionKey: request.targetSessionKey,
+      targetKind: request.targetKind,
+      status: "active",
+      conversation: request.conversation,
+    }));
+    bindingService = makeBindingService(bind);
+    const result = await spawnSubagentDirect(
+      { task: "channel turn", thread: true, mode: "session", context: "isolated" },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "matrix",
+        agentAccountId: "bot-beta",
+        agentTo: "room:!legitimate-room",
+        agentThreadId: "t-legit",
+        currentChannelId: "!ignored-room",
+        currentThreadTs: "t-ignored",
+        currentConversationOrigin: "caller-token",
+      },
+    );
+    expect(result.status).toBe("accepted");
+    expect(bind).toHaveBeenCalledOnce();
+    expect(bind.mock.calls[0]?.[0].conversation).toMatchObject({
+      conversationId: "t-legit",
+      parentConversationId: "!legitimate-room",
+    });
+  });
 });

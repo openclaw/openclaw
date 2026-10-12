@@ -77,6 +77,11 @@ export type AgentRunMessageContext = {
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
+  /**
+   * Host-minted provenance of `currentChannelId`/`currentThreadTs` for an MCP
+   * loopback turn. Absent on embedded/HTTP turns, whose channels are host-derived.
+   */
+  currentConversationOrigin?: import("../../gateway/mcp-grant-store.js").McpCurrentConversationOrigin;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;

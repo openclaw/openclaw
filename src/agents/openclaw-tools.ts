@@ -598,6 +598,12 @@ function* createOpenClawToolsSteps(
           completionOwnerKey: options?.runSessionKey,
           currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
           currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,
+          // A host-derived native channel id or an embedded/HTTP turn (no loopback
+          // provenance) is trusted; only caller-writable generic-token headers are not.
+          currentConversationOrigin: options?.nativeChannelId
+            ? "run-bound-grant"
+            : (options?.currentConversationOrigin ?? "run-bound-grant"),
+          currentThreadTs: options?.currentThreadTs,
           config: sessionConfig,
           requesterAgentIdOverride: sessionAgentId,
           requesterRunId: options?.runId,

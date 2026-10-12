@@ -23,6 +23,8 @@ export type SessionsSpawnToolOptions = {
   currentMessagingTarget?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
+  /** Host-minted provenance of the ambient current conversation for thread binding. */
+  currentConversationOrigin?: import("../../gateway/mcp-grant-store.js").McpCurrentConversationOrigin;
   currentMessageId?: string | number;
   sandboxed?: boolean;
   config?: OpenClawConfig;

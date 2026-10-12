@@ -63,6 +63,10 @@ export type SpawnSubagentContext = SpawnedToolContext & {
   agentThreadId?: string | number;
   currentMessagingTarget?: string;
   currentChannelId?: string;
+  /** Current thread timestamp/root for CLI runtimes without `agentThreadId`. */
+  currentThreadTs?: string | number;
+  /** Host-minted provenance of the ambient current conversation for binding. */
+  currentConversationOrigin?: import("../../../gateway/mcp-grant-store.js").McpCurrentConversationOrigin;
   currentMessageId?: string | number;
   requesterAgentIdOverride?: string;
   requesterRunId?: string;
