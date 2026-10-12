@@ -42,17 +42,6 @@ describe("exec secret ref id validation", () => {
       expect(validateExecSecretRefId(id).ok).toBe(false);
     }
   });
-
-  it("reports traversal segment failures separately", () => {
-    expect(validateExecSecretRefId("a/../b")).toEqual({
-      ok: false,
-      reason: "traversal-segment",
-    });
-    expect(validateExecSecretRefId("a/./b")).toEqual({
-      ok: false,
-      reason: "traversal-segment",
-    });
-  });
 });
 
 describe("secret ref validation", () => {

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createComponent } from "solid-js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
@@ -22,7 +23,10 @@ import {
   type CreateOptions,
 } from "./terminal-panel.test-support.ts";
 import { TerminalPanelController, type OpenClawTerminalPanel } from "./terminal-panel.ts";
-const tabStripStyles = readFileSync("ui/src/components/panel-tab-strip-solid.css", "utf8");
+const tabStripStyles = readFileSync(
+  path.resolve(import.meta.dirname, "../panel-tab-strip-solid.css"),
+  "utf8",
+);
 
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 

@@ -8,7 +8,6 @@ import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
-import type { WorkspaceIconElement } from "../../../components/workspace-icon.ts";
 import { resolveSessionWorkspace } from "../../../lib/sessions/workspace.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import {
@@ -756,7 +755,7 @@ describe("chat pane workspace chip icon", () => {
   });
   async function mountChip(workspaceIcon: ChatPaneHeaderProps["workspaceIcon"]) {
     const { container } = mountHeader({ workspaceIcon });
-    const element = container.querySelector<WorkspaceIconElement>("openclaw-workspace-icon");
+    const element = container.querySelector("openclaw-workspace-icon");
     await element?.updateComplete;
     return { container, element };
   }

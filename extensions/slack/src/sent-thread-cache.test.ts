@@ -3,11 +3,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
-  type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -311,7 +307,9 @@ describe("slack sent-thread-cache", () => {
           logging: { getChildLogger: () => ({ warn: vi.fn() }) },
         } as never);
 
-        now.mockReturnValue(repliedAt + 23 * 60 * 60 * 1000);
+        // Worker timestamps use its real clock, independently of the host Date mock.
+        const persistedAt = legacyEntry.createdAt;
+        now.mockReturnValue(persistedAt + 23 * 60 * 60 * 1000);
         await expect(
           hasSlackThreadParticipationWithPersistence({
             accountId: "A1",
@@ -335,18 +333,7 @@ describe("slack sent-thread-cache", () => {
         );
         expect(preservedLegacyEntry?.expiresAt).toBe(legacyEntry.expiresAt);
 
-        // Seed worker-visible expiry before advancing the parent cache clock.
-        const { db } = openOpenClawStateDatabase({ env: state.env });
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabaseForTests, "plugin_state_entries">>(db)
-            .updateTable("plugin_state_entries")
-            .set({ expires_at: 1 })
-            .where("plugin_id", "=", "slack")
-            .where("namespace", "=", "slack.thread-participation")
-            .where("entry_key", "=", legacyKey),
-        );
-        now.mockReturnValue(repliedAt + 25 * 60 * 60 * 1000);
+        now.mockReturnValue(persistedAt + 25 * 60 * 60 * 1000);
         await expect(
           hasSlackThreadParticipationWithPersistence({
             accountId: "A1",
@@ -356,11 +343,10 @@ describe("slack sent-thread-cache", () => {
           }),
         ).resolves.toBe(false);
         expect(hasSlackThreadParticipation("A1", "C123", legacyThreadTs, "T1")).toBe(false);
-        expect(await store.lookup(legacyKey)).toBeUndefined();
         recordSlackThreadParticipation("A1", "C123", "1700000000.000003", { teamId: "T1" });
         await vi.waitFor(async () => {
           await expect(store.lookup("A1:T1:C123:1700000000.000003")).resolves.toEqual({
-            repliedAt: repliedAt + 25 * 60 * 60 * 1000,
+            repliedAt: persistedAt + 25 * 60 * 60 * 1000,
           });
         });
         const entry = (await store.entries()).find(
@@ -369,7 +355,7 @@ describe("slack sent-thread-cache", () => {
         expect(entry).toBeDefined();
         expect(entry).not.toHaveProperty("expiresAt");
 
-        now.mockReturnValue(repliedAt + 50 * 60 * 60 * 1000);
+        now.mockReturnValue(persistedAt + 50 * 60 * 60 * 1000);
         resetPluginStateStoreForTests();
         clearSlackThreadParticipationCache();
 

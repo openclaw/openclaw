@@ -740,7 +740,7 @@ suite.define(() => {
     await page.addInitScript(
       ({ storageKey, entry }) => {
         const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
-        localStorage.setItem(storageKey, JSON.stringify({ ...settings, sidebarEntries: [entry] }));
+        localStorage.setItem(storageKey, JSON.stringify({ ...settings, railShortcuts: [entry] }));
       },
       {
         storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),

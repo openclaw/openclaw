@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { classifyAgentRunTerminalOutcome } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
