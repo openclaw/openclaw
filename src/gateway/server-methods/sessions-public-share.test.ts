@@ -12,6 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import * as sharingStore from "../../config/sessions/session-sharing-store.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import * as sharingLifecycle from "../../sessions/session-lifecycle-admission.js";
@@ -19,7 +20,6 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
-import * as profileReads from "../../state/user-profile-reads.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as publicSessionTokens from "../control-ui-public-session-token.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
@@ -246,12 +246,14 @@ describe("world-readable session publication management", () => {
             },
           );
         } else {
-          const list = profileReads.listProfiles;
-          vi.spyOn(profileReads, "listProfiles").mockImplementationOnce(async () => {
-            const profiles = await list();
-            await resetSession();
-            return profiles;
-          });
+          const read = sharingStore.readSessionMembersInWorker;
+          vi.spyOn(sharingStore, "readSessionMembersInWorker").mockImplementationOnce(
+            async (input) => {
+              const evidence = await read(input);
+              await resetSession();
+              return evidence;
+            },
+          );
         }
         await expect(
           method === "session.publicShare.set"
@@ -302,12 +304,13 @@ describe("world-readable session publication management", () => {
           await setPublic(false);
         }
         if (restoredGrant) {
-          const list = profileReads.listProfiles;
-          vi.spyOn(profileReads, "listProfiles").mockImplementationOnce(async () => {
-            const profiles = await list();
-            await upsertSessionEntryCore(scope, { publicShare: grant });
-            return profiles;
-          });
+          const read = sharingStore.readSessionMembersInWorker;
+          vi.spyOn(sharingStore, "readSessionMembersInWorker").mockImplementationOnce(
+            async (input) => {
+              await upsertSessionEntryCore(scope, { publicShare: grant });
+              return read(input);
+            },
+          );
         }
         const loadCodec = publicSessionTokens.loadPublicSessionShareTokenCodec;
         vi.spyOn(publicSessionTokens, "loadPublicSessionShareTokenCodec").mockImplementationOnce(

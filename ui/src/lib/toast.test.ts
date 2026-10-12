@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../components/modal-dialog.ts";
 import { moveToastToNavDrawer, restoreToastFromNavDrawer } from "../app/navigation-surface.ts";
+import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { showToast } from "./toast.ts";
 
 async function mountHost() {
@@ -12,8 +13,13 @@ async function mountHost() {
   return host;
 }
 
+let restoreDialog: () => void;
+beforeEach(() => {
+  restoreDialog = installDialogPolyfill();
+});
 afterEach(() => {
   document.body.replaceChildren();
+  restoreDialog();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -37,6 +43,26 @@ describe("shared toast", () => {
     expect(host.querySelector(".app-toast__message")?.textContent).toBe("Second");
   });
 
+  it("presents toasts in the outer modal after a nested modal closes", async () => {
+    const appHost = await mountHost();
+    const outer = document.createElement("openclaw-modal-dialog");
+    const inner = document.createElement("openclaw-modal-dialog");
+    outer.append(inner);
+    document.body.append(outer);
+    await outer.updateComplete;
+    await inner.updateComplete;
+    inner.hide();
+    await inner.updateComplete;
+
+    expect(inner.isConnected).toBe(true);
+    expect(inner.open).toBe(false);
+    showToast({ message: "Outer dialog notice" });
+    await appHost.updateComplete;
+
+    expect(appHost.parentElement).toBe(outer.getOverlayContainer());
+    expect(appHost.textContent).toContain("Outer dialog notice");
+  });
+
   it.each(["hover exit", "render update"])(
     "keeps shadow-root Undo focused through %s and resumes only after focus leaves",
     async (trigger) => {
@@ -58,7 +84,7 @@ describe("shared toast", () => {
         onDismiss,
       });
       await host.updateComplete;
-      expect(host.parentElement).toBe(modal);
+      expect(host.parentElement).toBe(modal.getOverlayContainer());
       await vi.advanceTimersByTimeAsync(40);
       const action = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
       const toast = host.querySelector<HTMLElement>(".app-toast")!;
@@ -326,7 +352,7 @@ describe("shared toast", () => {
     const modal = document.createElement("openclaw-modal-dialog");
     document.body.append(modal);
     await modal.updateComplete;
-    modal.append(host);
+    modal.getOverlayContainer()!.append(host);
     await host.updateComplete;
     expect(host.contains(document.activeElement)).toBe(false);
     await vi.advanceTimersByTimeAsync(59);

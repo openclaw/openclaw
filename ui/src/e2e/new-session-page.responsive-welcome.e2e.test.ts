@@ -234,6 +234,14 @@ suite.define(() => {
         { width: 390, height: 844 },
       ]) {
         await page.setViewportSize(viewport);
+        // CSS resizes before the shell commits its drawer layout.
+        await page
+          .locator(viewport.width === 390 ? ".shell--mobile-nav" : ".shell:not(.shell--mobile-nav)")
+          .waitFor();
+        await waitForLayoutSettled(
+          page,
+          ".new-session-page__composer .chat-reply-preview, .new-session-page__composer .chat-reply-preview button",
+        );
         await captureNewSessionComposerUiProof(
           suite,
           page,

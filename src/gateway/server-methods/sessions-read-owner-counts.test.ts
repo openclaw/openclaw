@@ -45,7 +45,7 @@ it("counts caller-visible conversations once through direct and delegated work b
       const { owner, participants, ...entry } = fields;
       replaceSessionEntrySync(scope, {
         sessionId: name,
-        updatedAt: 100,
+        updatedAt: Date.now(),
         visibility: "shared",
         createdActor: actor(ada),
         ...entry,

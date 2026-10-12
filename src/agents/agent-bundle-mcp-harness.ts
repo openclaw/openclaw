@@ -17,7 +17,7 @@ import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js"
 import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
 import type { CodexMcpServersConfig } from "./codex-mcp-config.types.js";
 import {
-  resolveConversationCapabilityProfile,
+  prepareConversationCapabilityProfile,
   type ConversationCapabilityProfileParams,
   type ResolvedConversationCapabilityProfile,
 } from "./conversation-capability-profile.js";
@@ -202,13 +202,13 @@ function notConnectedToolResult(serverName: string, toolName: string) {
   };
 }
 
-function resolveHarnessCapabilityProfile(
+async function resolveHarnessCapabilityProfile(
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
 ) {
   return (
     params.conversationCapabilityProfile ??
     (params.policyContext
-      ? resolveConversationCapabilityProfile({
+      ? prepareConversationCapabilityProfile({
           ...params.policyContext,
           runtimeToolAllowlist: params.toolsAllow,
         })
@@ -256,7 +256,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     retireSessionRuntimeAfterDispose?: boolean;
   },
 ): Promise<StaticHarnessMcpTools> {
-  const conversationCapabilityProfile = resolveHarnessCapabilityProfile(params);
+  const conversationCapabilityProfile = await resolveHarnessCapabilityProfile(params);
   const acquisition = await acquireSessionMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -360,7 +360,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
 ): Promise<RequesterScopedHarnessMcpTools | undefined> {
   const policyParams = {
     ...params,
-    conversationCapabilityProfile: resolveHarnessCapabilityProfile(params),
+    conversationCapabilityProfile: await resolveHarnessCapabilityProfile(params),
   };
   const scopedRuntimeHandle = await acquireRequesterScopedMcpRuntime({
     sessionId: params.sessionId,

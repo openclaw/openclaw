@@ -2,7 +2,7 @@ import path from "node:path";
 import * as timers from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
@@ -56,6 +56,9 @@ vi.mock("node:timers/promises", async (importOriginal) => ({
 const observer = useReconcileWorkerObserver();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => clearRuntimeConfigSnapshot());
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
 type TerminalType = Extract<

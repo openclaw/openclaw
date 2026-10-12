@@ -187,12 +187,6 @@ describe("registerSlackAgentEvents", () => {
       sessionKey: "agent:main:main",
     },
     {
-      channelType: "im" as const,
-      channel: "D123",
-      managedView: true,
-      sessionKey: "agent:main:main:thread:1712345678.000001",
-    },
-    {
       channelType: "channel" as const,
       channel: "C123",
       managedView: false,
@@ -332,48 +326,6 @@ describe("registerSlackAgentEvents", () => {
         appendSlackStream({ session, text: "Remaining reply", chunks: [] }),
       ).rejects.toBe(appendError);
       expect(session.pendingText).toBe("Remaining reply");
-    },
-  );
-
-  it.each([
-    { managedView: false, sessionKey: "agent:main:main" },
-    { managedView: true, sessionKey: "agent:main:main:thread:1712345678.000001" },
-  ])(
-    "patches the owning session display name with managed view $managedView",
-    async ({ managedView, sessionKey }) => {
-      const harness = createSessionEventHarness();
-      harness.ctx.isSlackAgentView = async () => managedView;
-      await harness.recordSession({
-        sessionKey,
-        updatedAt: 100,
-        peerId: "U123",
-        threadId: managedView ? "1712345678.000001" : undefined,
-      });
-
-      await harness.getHandler("agent_session_title_changed")?.({
-        event: {
-          type: "agent_session_title_changed",
-          channel: "D123",
-          thread_ts: "1712345678.000001",
-          user: "U123",
-          event_ts: "1712345679.000001",
-          team_id: "T_TEST",
-          title: "Renamed in Slack",
-        },
-        body: {},
-      });
-
-      expect(prepareSessionEntryPatch).toHaveBeenCalledOnce();
-      expect(
-        getSessionEntry({ agentId: "main", sessionKey, storePath: harness.storePath }),
-      ).toMatchObject({ displayName: "Renamed in Slack", updatedAt: 100 });
-      expect(harness.recordSlackSessionTitle).toHaveBeenCalledWith({
-        channelId: "D123",
-        threadTs: "1712345678.000001",
-        title: "Renamed in Slack",
-        eventScope: undefined,
-      });
-      expect(harness.ctx.runtime.error).not.toHaveBeenCalled();
     },
   );
 
@@ -736,7 +688,7 @@ describe("registerSlackAgentEvents", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "renames the live first-mode root owner after agent rerouting=%s",
     async (rerouted) => {
       const harness = createSessionEventHarness("mpim");

@@ -5,6 +5,7 @@ import type {
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
 import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
+import type { InternalSessionEntry } from "./types.js";
 
 export type AbortedSessionTranscriptPartial = {
   runId: string;
@@ -64,6 +65,7 @@ export type TranscriptReportCommit = {
   cliHistoryChanged?: boolean;
   abortedPartial?: AbortedSessionTranscriptPartialResult;
   sessionEntryChanged?: boolean;
+  entry?: InternalSessionEntry;
 };
 
 export type TranscriptReportWorkerOperations = {

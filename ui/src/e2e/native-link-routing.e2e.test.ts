@@ -288,10 +288,7 @@ describeControlUiE2e("native link routing", () => {
     await expect
       .poll(() =>
         page.locator("#native-link-routing-modal").evaluate((modal) => {
-          return (
-            modal.shadowRoot?.querySelector("wa-dialog")?.shadowRoot?.querySelector("dialog")
-              ?.open ?? false
-          );
+          return modal.querySelector("dialog")?.open ?? false;
         }),
       )
       .toBe(true);

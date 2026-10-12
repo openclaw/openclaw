@@ -598,7 +598,7 @@ serveOwnedWorkerTasks(
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {
           if (request.kind === "session-activity-summary-source") {
             const { readActivitySummaryBatch } =
-              await import("../../gateway/session-activity-summary-source.js");
+              await import("../../gateway/session-activity-summary-source.worker.js");
             return {
               kind: "session-activity-summary-source" as const,
               source: readActivitySummaryBatch(request),

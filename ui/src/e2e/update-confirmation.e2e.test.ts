@@ -54,9 +54,10 @@ async function openUpdateCard(page: Page, baseUrl: string) {
     'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
   );
   await updateIssue.locator("summary").click();
+  // Details queues its toggle; observe the refresh before checking completion.
+  await gateway.waitForRequest("update.status", { match: { refreshCheckout: true } });
   const updateButton = updateIssue.locator(".sidebar-update-card__action");
   await updateButton.waitFor({ timeout: 10_000 });
-  // Expansion checks freshness; a disabled button cannot receive keyboard focus.
   await expect.poll(() => updateButton.isEnabled()).toBe(true);
   return { gateway, updateButton };
 }

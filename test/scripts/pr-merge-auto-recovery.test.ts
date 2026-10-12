@@ -58,7 +58,8 @@ describePosix("native auto-merge recovery", () => {
       const attemptRecord = f.record();
       const captures = f.captures();
       if (!acknowledged) {
-        expect(f.recover()).toBe(true);
+        // The failed request drained, so the supervisor already released its lock.
+        expect(f.recover()).toBe(false);
       }
       if (absent) {
         f.save({ ...f.state(), pr: { ...f.state().pr, autoMergeRequest: null } });
@@ -127,7 +128,7 @@ describePosix("native auto-merge recovery", () => {
       pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
     });
     expect(f.run(true).status).toBe(1);
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
     const first = f.cancel(f.git(["rev-parse", outcomeRef]));
     expect(first.status, first.output).toBe(1);
     expect(f.record().cancellation.state).toBe("requested");

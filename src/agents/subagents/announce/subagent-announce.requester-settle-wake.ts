@@ -41,7 +41,7 @@ import {
   finalizeRequesterFinalAttachment,
   transferRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
-import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
+import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
 import { isPermanentAnnounceDeliveryError } from "./subagent-announce-delivery-retry.js";
 import {
   deliverSubagentAnnouncement,
@@ -265,6 +265,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   }
   const { isGatewayClosed, claim: acquireBatch } = claim;
   batchClaim = claim;
+  let requesterCurrent: Awaited<ReturnType<typeof captureRequesterSessionEntryCurrent>> | undefined;
 
   try {
     // Scheduling is per child, but every replay of this frozen wave is one input.
@@ -373,7 +374,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     const requesterYieldedAfterDelivery =
       selectedState.afterRequesterYield === true ||
       (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
-    const requesterDepth = getSubagentDepthFromSessionStore(requesterSessionKey, {
+    const requesterDepth = await getSubagentDepthFromSessionStoreInWorker(requesterSessionKey, {
       cfg,
       agentId: requesterAgentId,
     });
@@ -394,10 +395,11 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       return false;
     }
 
-    const readRequesterCurrent = captureRequesterSessionEntryCurrent(
+    requesterCurrent = await captureRequesterSessionEntryCurrent(
       requesterSessionKey,
       requesterAgentId,
     );
+    const { readCurrent: readRequesterCurrent } = requesterCurrent;
     const requester = await loadRequesterSessionEntry(requesterSessionKey, requesterAgentId);
     const requesterEntry = requester.entry;
     if (!hasUsableSessionEntry(requesterEntry)) {
@@ -729,6 +731,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     );
     return false;
   } finally {
+    requesterCurrent?.release();
     claim.release();
   }
 }

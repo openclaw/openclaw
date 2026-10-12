@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   executeExistingOpenClawStateRead,
@@ -21,7 +22,11 @@ import {
   publishUserProfileAliasChange,
   readUserProfileVersion,
 } from "./user-profile-events.js";
-import { isUserProfileCatalogReady, readUserProfileIdentity } from "./user-profile-list.js";
+import {
+  getUserProfileDisplay,
+  isUserProfileCatalogReady,
+  readUserProfileIdentity,
+} from "./user-profile-list.js";
 import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
   UserChannelIdentity,
@@ -29,6 +34,7 @@ import type {
   UserChannelIdentityResult,
   UserChannelIdentitySelector,
   UserChannelIdentityWorkerOperations,
+  UserProfileAuthority,
 } from "./user-profiles.types.js";
 
 type IdentityOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
@@ -298,7 +304,23 @@ async function prepareUserProfileAuthority(
     profileId,
     options,
     dependency,
-    async (context) => {
+    async (
+      context,
+    ): Promise<(UserProfileAuthority & { listItem?: UserProfileListItem }) | undefined> => {
+      const source = { path: context.admission.databasePath };
+      if (!includeProfile && isUserProfileCatalogReady(source)) {
+        const profile = readUserProfileIdentity(profileId, source);
+        return (
+          profile && {
+            ...profile,
+            aliases: [
+              profile.profileId,
+              ...[...profile.aliases].filter((id) => id !== profile.profileId).toSorted(),
+            ],
+            display: getUserProfileDisplay(profile.profileId, source),
+          }
+        );
+      }
       const reply = await executeExistingOpenClawStateRead(
         { path: context.admission.databasePath, env: context.environment },
         {

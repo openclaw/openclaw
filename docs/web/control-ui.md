@@ -47,6 +47,10 @@ Saved pin labels remain visible while their details refresh, even when those ses
 
 Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
 
+Transcript history loads in parallel with the browser cache. An unchanged history response keeps the cached message rows and widget sizes in place. The transcript restores its saved reading position, or opens at the end, before showing its initial measured rows.
+
+During connection recovery, Send shows its busy state and explains why sending is unavailable without inserting a temporary notice above the composer.
+
 Automatic read acknowledgements and identity refreshes pause while the Gateway reports a restart or suspension. Pending read acknowledgements are shared across repeated session updates. If an acknowledgement is rejected, later updates respect the server's retry delay and use randomized backoff instead of immediately sending another patch.
 
 Reconnect bootstrap reads also pause together: agent identity, session subscriptions, session groups, pending questions, and the session list. An announced restart or suspension holds these reads until readiness or a new connection resumes loading. If a restart rejection arrives without an announcement, one delayed probe at a time checks for recovery after at least a minute, in case the restart is canceled. Writes are never replayed by this mechanism.

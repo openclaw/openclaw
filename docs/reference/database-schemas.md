@@ -33,6 +33,9 @@ physical shared database's process-owned facts. Journal writers publish pending,
 completed, and removed status at commit through the existing worker fact transport;
 rollback preserves the previous status. Session admission reuses this fact and the
 deletion owner's queue closure instead of reading the journal on every turn.
+Synchronous runtime guards reuse the same committed fact rather than copying the
+shared database for each check. Guards inside a native transaction still read
+that transaction's current journal, including its uncommitted changes.
 Restart loads persisted tombstones again. Destructive cleanup retains its current
 journal-authority checks; schema, retention, and update behavior are unchanged.
 
@@ -76,6 +79,12 @@ operations also reuse their admitted file identity. A replacement after admissio
 does not redirect that operation to the replacement file; the next admission or
 open detects it through the database lifecycle owner. Commit authority checks and
 Doctor's explicit verification remain in place.
+
+Chat input actors reuse their native owner’s admitted physical identity and
+canonical location, without queuing another writer reservation just to acquire
+the actor. Cold owners still prepare their database identity first. Captured
+session reads constrain the same physical file; actual input writes retain FIFO
+admission and current authority checks.
 
 Managed writes publish committed facts before their public observers. Private
 receipts distinguish explicit absence from incomplete coverage and preserve known

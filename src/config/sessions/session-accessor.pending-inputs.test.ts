@@ -46,7 +46,10 @@ import {
 } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
-import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
+import {
+  waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
+} from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 const custodyFault = useSqliteWorkerFault([
@@ -115,6 +118,7 @@ describe("accepted input custody", () => {
       receipt.finish("interrupted");
     }
     await Promise.allSettled(retained.map(async (receipt) => receipt.settled?.()));
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     clearRuntimeConfigSnapshot();
   });
@@ -388,33 +392,40 @@ describe("accepted input custody", () => {
     const receipt = await stage("relocation-savepoints");
     await promote(receipt);
     const databaseOptions = toDatabaseOptions(resolveSqliteScope(scope()));
+    await waitForSessionTranscriptIndexReconcile(databaseOptions);
     const appendCopy = createRelocation(receipt);
 
-    expect(() =>
-      runOpenClawAgentWriteTransaction(() => {
-        receipt.run(() => appendCopy(receipt.inputId, "rolled-back-outer"));
-        throw new Error("outer rollback");
-      }, databaseOptions),
-    ).toThrow("outer rollback");
-
-    runOpenClawAgentWriteTransaction(() => {
-      receipt.run(() => {
-        expect(appendCopy(receipt.inputId, "first-savepoint-copy")).toMatchObject({
-          ok: true,
-          value: { appended: true, messageId: "first-savepoint-copy" },
-        });
+    await runExclusiveSqliteSessionWrite(
+      resolveSqliteScope(scope()),
+      async () => {
         expect(() =>
           runOpenClawAgentWriteTransaction(() => {
-            appendCopy("first-savepoint-copy", "rolled-back-savepoint");
-            throw new Error("savepoint rollback");
+            receipt.run(() => appendCopy(receipt.inputId, "rolled-back-outer"));
+            throw new Error("outer rollback");
           }, databaseOptions),
-        ).toThrow("savepoint rollback");
-        expect(appendCopy("first-savepoint-copy", "final-savepoint-copy")).toMatchObject({
-          ok: true,
-          value: { appended: true, messageId: "final-savepoint-copy" },
-        });
-      });
-    }, databaseOptions);
+        ).toThrow("outer rollback");
+
+        runOpenClawAgentWriteTransaction(() => {
+          receipt.run(() => {
+            expect(appendCopy(receipt.inputId, "first-savepoint-copy")).toMatchObject({
+              ok: true,
+              value: { appended: true, messageId: "first-savepoint-copy" },
+            });
+            expect(() =>
+              runOpenClawAgentWriteTransaction(() => {
+                appendCopy("first-savepoint-copy", "rolled-back-savepoint");
+                throw new Error("savepoint rollback");
+              }, databaseOptions),
+            ).toThrow("savepoint rollback");
+            expect(appendCopy("first-savepoint-copy", "final-savepoint-copy")).toMatchObject({
+              ok: true,
+              value: { appended: true, messageId: "final-savepoint-copy" },
+            });
+          });
+        }, databaseOptions);
+      },
+      "session.pending-input.stage",
+    );
 
     for (const eventId of ["rolled-back-outer", "rolled-back-savepoint"]) {
       expect(await loadTranscriptEvents(scope())).not.toContainEqual(
@@ -531,7 +542,7 @@ describe("accepted input custody", () => {
   });
 
   it("binds lazy recorder collection to approved sources and reports consumed source retry without execution", async () => {
-    const target = { ...scope(), sessionEntry: undefined };
+    const target = { ...scope(), sessionEntry: undefined, config: {} };
     const hook = vi.fn(({ message: input }: { message: PersistedUserTurnMessage }) => ({
       ...input,
       content: "Approved source",

@@ -52,13 +52,13 @@ export async function prepareSkillExperienceReviewCandidate(
   ) {
     return undefined;
   }
-  const { resolveConversationCapabilityProfile } =
+  const { prepareConversationCapabilityProfile } =
     await import("../../agents/conversation-capability-profile.js");
   const { isToolAllowedByPolicies } = await import("../../agents/tool-policy-match.js");
   const { mergeAlsoAllowPolicy } = await import("../../agents/tool-policy.js");
   const foreground = candidate.ctx.foregroundPromptContext;
   const sessionKey = candidate.source.sessionKey;
-  const capabilityProfile = resolveConversationCapabilityProfile({
+  const capabilityProfile = await prepareConversationCapabilityProfile({
     config,
     sessionKey,
     sandboxSessionKey: sessionKey,

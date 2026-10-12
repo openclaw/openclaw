@@ -597,6 +597,7 @@ describe("model chat and native model ownership", () => {
         model: fixture.generation.modelId,
       },
     });
+    await authority.fingerprintAsync();
     await fixture.withRuntime(profile, async (runtime, admission) => {
       expect(runtime.nativeSessionRuntime?.auth).toBe("host");
       expect(runtime.modelId).toBe("bound-native-model");

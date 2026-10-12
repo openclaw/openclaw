@@ -9,10 +9,8 @@ import {
   replyRunRegistry,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
-import {
-  prepareReplyToolAuthority,
-  resolveFollowupRunToolAuthorityFingerprint,
-} from "../../auto-reply/reply/reply-tool-authority.js";
+import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import { resolveFollowupRunToolAuthorityFingerprintAsync } from "../../auto-reply/reply/reply-tool-authority.test-support.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
@@ -669,14 +667,16 @@ describe("host-prepared embedded tool authority", () => {
       await published(
         async ({ handle, queue }) => {
           if (handleChange === "hash") {
-            handle.toolAuthorityFingerprint = resolveFollowupRunToolAuthorityFingerprint({
-              toolsAllow: [],
-              run: {
-                ...attempt,
-                model: attempt.modelId,
-                runtimePolicySessionKey: attempt.sandboxSessionKey,
+            handle.toolAuthorityFingerprint = await resolveFollowupRunToolAuthorityFingerprintAsync(
+              {
+                toolsAllow: [],
+                run: {
+                  ...attempt,
+                  model: attempt.modelId,
+                  runtimePolicySessionKey: attempt.sandboxSessionKey,
+                },
               },
-            });
+            );
           } else if (handleChange === "unbound") {
             withoutGatewayToolCallerIdentity(() =>
               setActiveEmbeddedRun(sessionId, { ...handle }, sessionKey),
@@ -703,7 +703,7 @@ describe("host-prepared embedded tool authority", () => {
         sandboxSessionKey: "agent:main:voice",
         config: { agents: { defaults: { sandbox: { mode: "non-main" as const } } } },
       };
-      const expected = resolveFollowupRunToolAuthorityFingerprint({
+      const expected = await resolveFollowupRunToolAuthorityFingerprintAsync({
         run: {
           ...attempt,
           config: direct.config,
@@ -718,7 +718,7 @@ describe("host-prepared embedded tool authority", () => {
         async (prepared) => {
           expect(prepared.toolAuthorityFingerprint).toBe(expected);
           expect(prepared.toolAuthorityFingerprint).not.toBe(
-            resolveFollowupRunToolAuthorityFingerprint({
+            await resolveFollowupRunToolAuthorityFingerprintAsync({
               run: {
                 ...attempt,
                 config: direct.config,
@@ -880,7 +880,7 @@ describe("host-prepared embedded tool authority", () => {
       const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
       const parent = createQueueTestRun({ prompt: "parent reply" });
       parent.run.traceAuthorized = true;
-      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(parent));
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(parent));
       try {
         await withPreparedEmbeddedRunToolAuthority(
           { admittedRunContext, replyOperation: operation },
@@ -917,7 +917,7 @@ describe("host-prepared embedded tool authority", () => {
         const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
         const snapshot = prepareReplyToolAuthority(original);
         let failProjection = false;
-        operation.bindToolAuthoritySnapshot({
+        await operation.bindToolAuthoritySnapshotAsync({
           ...snapshot,
           project: (overlay, selectedRoute) => {
             if (failProjection) {

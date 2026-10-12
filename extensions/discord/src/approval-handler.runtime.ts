@@ -1,6 +1,6 @@
 import { ButtonStyle } from "discord-api-types/v10";
 import {
-  createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   type ApprovalViewModel,
   type ChannelApprovalCapabilityHandlerContext,
   type PendingApprovalView,
@@ -245,7 +245,7 @@ function buildTerminalApprovalResult(
   return { kind: "update", payload: createApprovalContainer(params.view) } as const;
 }
 
-export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   DiscordPendingDelivery,
   PreparedDeliveryTarget,
   PendingApproval,

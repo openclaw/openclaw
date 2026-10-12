@@ -20,7 +20,7 @@ import {
 
 vi.mock("../session-utils.js", async () => ({
   ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
-  loadSessionEntry: () => ({ entry: { sessionId: "main-session" } }),
+  loadGatewaySessionEntryReadOnlyInWorker: async () => ({ entry: { sessionId: "main-session" } }),
 }));
 
 function abortAsOwner(params: Omit<Parameters<typeof invokeAbort>[0], "connId" | "deviceId">) {
@@ -701,6 +701,7 @@ describe("chat.abort original authority and registration", () => {
     const descendants = vi
       .spyOn(abortDescendants, "abortControlledSubagents")
       .mockImplementationOnce(async (params) => {
+        await params.prepareSelection?.prepare();
         await params.beforeKill?.(() => {});
         throw descendantFailure;
       });

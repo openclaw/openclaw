@@ -4,7 +4,6 @@ import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
-  loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
@@ -12,6 +11,7 @@ import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -88,7 +88,7 @@ export async function commitBackgroundResultToSession(params: {
     },
     run: async () => {
       params.assertCurrent?.();
-      const current = loadSessionEntryReadOnly({
+      const current = await readSessionEntryReadOnlyInWorker({
         agentId: params.agentId,
         sessionKey,
         storePath,

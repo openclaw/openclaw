@@ -117,6 +117,11 @@ export async function withAgentTurnCompletion<T>(
         return project().entry;
       };
       const completion: AgentTurnCompletion = {
+        assertCurrent() {
+          assertCurrent();
+          actor.assertCurrent();
+          return actor.snapshot(authority)?.entry;
+        },
         current: () => project().entry,
         refresh,
         patch(reducer) {
