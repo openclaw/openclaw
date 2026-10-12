@@ -131,7 +131,7 @@ it.each(["assistant", "toolResult"] as const)(
   },
 );
 
-it("rejects a stale generation and rebuilds prepared bytes for a rebased descendant", async () => {
+it("rejects a stale generation and stores prepared messages under the rebased descendant", async () => {
   await withOpenClawTestState({ label: "session-prepared-reparent" }, async (state) => {
     const scope = {
       agentId: "main",
@@ -152,19 +152,8 @@ it("rejects a stale generation and rebuilds prepared bytes for a rebased descend
       stopReason: "stop" as const,
       timestamp: 2,
     };
-    const prepared = prepareTranscriptMessageAppend(
-      { message },
-      {
-        scope,
-        envelope: {
-          type: "message",
-          id: "prepared-response",
-          parentId,
-          timestamp: new Date(2).toISOString(),
-        },
-      },
-    );
-    expect(prepared?.physicalPayload?.payload.event_zstd).toBeInstanceOf(Uint8Array);
+    const prepared = prepareTranscriptMessageAppend({ message });
+    expect(prepared?.persistedMessage).toEqual(message);
     const expectedMutationAt = readTranscriptMutationAtSync(scope);
     const descendant = manager.appendMessage({
       ...message,

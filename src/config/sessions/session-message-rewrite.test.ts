@@ -20,6 +20,10 @@ import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import {
+  rewriteAssistantTranscriptMessageForRun,
+  rewriteTranscriptMessageAtAnchor,
+} from "./session-accessor.transcript.js";
 import { rewritePreparedTranscriptMessageAtAnchor } from "./session-message-rewrite.js";
 import {
   SessionTranscriptWriterClaimReboundError,
@@ -84,7 +88,7 @@ it.each([
       try {
         if (operation === "anchor") {
           await expect(
-            rewritePreparedTranscriptMessageAtAnchor(f.anchor, (message) => {
+            rewriteTranscriptMessageAtAnchor(f.anchor, (message) => {
               if (!isRecord(message)) {
                 throw new Error("invalid fixture message");
               }
@@ -93,12 +97,14 @@ it.each([
           ).resolves.toMatchObject({ message: { __openclaw: { steerTargetRunId: "next-run" } } });
         } else {
           await expect(
-            enrichAssistantTranscriptMediaForRun({
+            rewriteAssistantTranscriptMessageForRun({
               scope: f.scope,
               runId: "first-run",
               expectedLifecycleRevision: null,
-              content: [{ type: "text", text: "display answer" }],
-              mediaUrls: [],
+              rewriteMessage: (message) => ({
+                ...message,
+                openclawDisplayContent: [{ type: "text", text: "display answer" }],
+              }),
             }),
           ).resolves.toEqual({ messageId: "answer" });
         }

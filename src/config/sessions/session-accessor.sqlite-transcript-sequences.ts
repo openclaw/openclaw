@@ -1,23 +1,14 @@
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
-import {
-  openOpenClawAgentDatabase,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   SessionTranscriptWriteScope,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
-import {
-  getSessionKysely,
-  resolveSqliteTranscriptScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
+import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
 import type { TranscriptAppendPostimage } from "./session-transcript-append-postimage.js";
 
 // Append results are public SDK contracts. Keep commit-only cursor metadata
@@ -84,16 +75,6 @@ export function rememberCommittedTranscriptMessageSequencesInTransaction(
     return;
   }
   const db = getSessionKysely(database.db);
-  const projection = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("session_transcript_index_state")
-      .select("needs_rebuild")
-      .where("session_id", "=", sessionId),
-  );
-  if (projection?.needs_rebuild !== 0) {
-    return;
-  }
   for (let offset = 0; offset < appendedMessages.length; offset += TRANSCRIPT_CURSOR_BATCH_SIZE) {
     const batch = appendedMessages.slice(offset, offset + TRANSCRIPT_CURSOR_BATCH_SIZE);
     const rows = readHotSessionTranscriptSnapshot(
@@ -110,7 +91,13 @@ export function rememberCommittedTranscriptMessageSequencesInTransaction(
                 .onRef("active.session_id", "=", "identity.session_id")
                 .onRef("active.event_seq", "=", "identity.seq"),
             )
+            .innerJoin(
+              "session_transcript_index_state as state",
+              "state.session_id",
+              "identity.session_id",
+            )
             .select(["identity.event_id", "active.message_position"])
+            .where("state.needs_rebuild", "=", 0)
             .where("identity.session_id", "=", sessionId)
             .where(
               "identity.event_id",
@@ -132,24 +119,33 @@ export function rememberCommittedTranscriptMessageSequencesInTransaction(
   }
 }
 
-/** Resolves final cursors while an ordinary turn still owns its writer transaction. */
-export function rememberCommittedTranscriptMessageSequences(
+/** Resolve a multi-message turn's final branch through the existing history reader. */
+export async function rememberCommittedTranscriptMessageSequences(
   scope: SessionTranscriptWriteScope,
   messages: readonly TranscriptMessageAppendResult<unknown>[],
-): void {
-  if (messages.length === 0 || !scope.agentId || !scope.sessionId || !scope.sessionKey) {
+): Promise<void> {
+  const appended = messages.filter((message) => message.appended);
+  if (appended.length === 0 || !scope.agentId || !scope.sessionId || !scope.sessionKey) {
     return;
   }
-  const resolved = resolveSqliteTranscriptScope({
-    agentId: scope.agentId,
-    ...(scope.env ? { env: scope.env } : {}),
-    sessionId: scope.sessionId,
-    sessionKey: scope.sessionKey,
-    ...(scope.storePath ? { storePath: scope.storePath } : {}),
-  });
-  rememberCommittedTranscriptMessageSequencesInTransaction(
-    openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
-    resolved.sessionId,
-    messages,
+  if (appended.length === 1) {
+    const message = appended[0];
+    if (message.anchor) {
+      committedTranscriptMessageSequences.set(message, message.anchor.activeMessagePosition + 1);
+    }
+    return;
+  }
+  const facts = await readSessionTranscriptAnchorsAsync(
+    { ...scope, sessionId: scope.sessionId, sessionKey: scope.sessionKey },
+    { entryIds: appended.map((message) => message.messageId) },
   );
+  const positions = new Map(
+    facts.anchors.map((anchor) => [anchor.entryId, anchor.activeMessagePosition + 1]),
+  );
+  for (const message of appended) {
+    const position = positions.get(message.messageId);
+    if (position !== undefined) {
+      committedTranscriptMessageSequences.set(message, position);
+    }
+  }
 }
