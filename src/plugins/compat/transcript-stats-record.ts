@@ -5,7 +5,7 @@ export const TRANSCRIPT_STATS_COMPAT_RECORD = {
   status: "deprecated",
   owner: "sdk",
   removalGate: "next-plugin-sdk-major",
-  introduced: "2026-09-08",
+  introduced: "2026-07-11",
   deprecated: "2026-10-11",
   warningStarts: "2026-10-11",
   replacement:
