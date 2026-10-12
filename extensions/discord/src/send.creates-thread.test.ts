@@ -103,13 +103,23 @@ describe("forum outbound delivery", () => {
 
   it("keeps chunked replies targeted at an explicitly selected thread", async () => {
     const { postMock, run } = forumPayloadHarness();
-    const result = await run({ text: "a".repeat(2001) }, { threadId: "701" });
+    const onDeliveryResult =
+      vi.fn<
+        NonNullable<
+          Parameters<NonNullable<typeof discordOutbound.sendPayload>>[0]["onDeliveryResult"]
+        >
+      >();
+    const result = await run({ text: "a".repeat(2001) }, { threadId: "701", onDeliveryResult });
     expect(postMock.mock.calls.map(([path]) => path)).toEqual([
       Routes.channelMessages("701"),
       Routes.channelMessages("701"),
     ]);
-    expect(result?.receipt?.threadId).toBeUndefined();
+    expect(result?.receipt?.threadId).toBe("701");
     expect(result?.receipt?.platformMessageIds).toEqual(["message-2"]);
+    expect(onDeliveryResult.mock.calls.map(([delivery]) => delivery.receipt?.threadId)).toEqual([
+      "701",
+      "701",
+    ]);
   });
 
   it("does not follow up when delivery bookkeeping rejects the starter", async () => {

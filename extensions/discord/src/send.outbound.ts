@@ -7,6 +7,7 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { isDiscordThreadChannelType } from "./channel-type.js";
 import { createChannelMessage, createThread } from "./internal/discord.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
@@ -119,7 +120,7 @@ export async function sendMessageDiscord(
     // Forum/Media channels reject POST /messages; auto-create a thread post instead.
     const channel = await resolveDiscordChannel(rest, channelId);
     const deliveredResults: DiscordSendResult[] = [];
-    let deliveryThreadId: string | undefined;
+    let deliveryThreadId = isDiscordThreadChannelType(channel?.type) ? channelId : undefined;
     const reportResult: DiscordSendProgress = async (progressResult, kind, replyToId) => {
       const deliveredResult = createDiscordSendResult({
         result: progressResult,
@@ -291,7 +292,10 @@ export async function sendMessageDiscord(
     });
     return {
       ...createDiscordSendResult({ result, fallbackChannelId: channelId, kind: "text" }),
-      receipt: createDiscordSendReceiptFromResults({ results: deliveredResults }),
+      receipt: createDiscordSendReceiptFromResults({
+        results: deliveredResults,
+        threadId: deliveryThreadId,
+      }),
     };
   });
 }
