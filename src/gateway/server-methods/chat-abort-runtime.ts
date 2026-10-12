@@ -724,7 +724,11 @@ export async function abortChatRunsForSessionKeyWithPartials(
   }
   return {
     ...result,
-    aborted: result.aborted || Boolean(descendants?.killed) || Boolean(descendants?.execAborted),
+    aborted:
+      result.aborted ||
+      Boolean(descendants?.killed) ||
+      Boolean(descendants?.continuationRetired) ||
+      Boolean(descendants?.execAborted),
     descendants,
     ...(warning ? { warning } : {}),
   };
