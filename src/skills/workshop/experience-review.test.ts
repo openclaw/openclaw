@@ -87,7 +87,7 @@ describe("runSkillExperienceReview", () => {
     );
   });
 
-  it("checks source authority and its accepted anchor together after a later append", async () => {
+  it("refreshes a later append without MAIN SQL and denies unprepared use after revocation", async () => {
     const candidate = await createExperienceReviewCandidate(
       "review-append",
       [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
@@ -122,6 +122,9 @@ describe("runSkillExperienceReview", () => {
           } finally {
             refreshedSql.restore();
           }
+          await upsertSessionEntryCore(candidate.source, { permissionMode: "read-only" });
+          // Provider dispatch checks the admitted assertion without preparing another scope.
+          expect(() => assertCurrent!()).toThrow("no longer active");
           return { meta: { durationMs: 1 } };
         } finally {
           params.preparedRunAdmission.close();

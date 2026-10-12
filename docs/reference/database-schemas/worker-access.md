@@ -1933,10 +1933,10 @@ the cold-storage owner, outside the writer FIFO and before message hooks run.
 
 ## Retained final-authority guards
 
-Preparation uses the existing worker owners. A synchronous guard immediately before
-an effect still reads current SQLite rows when released native or Plugin SDK writers
+Preparation uses the existing worker owners. Some synchronous guards immediately before
+an effect still read current SQLite rows when released native or Plugin SDK writers
 can revoke authority without a complete owner publication.
-Prepared facts and mutation witnesses cannot replace that final read. These guards
+For those owners, prepared facts and mutation witnesses cannot replace that final read. These guards
 reuse admitted schema facts without foreign-commit probes; single-statement guards
 do not add a transaction or another schema check.
 
