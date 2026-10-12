@@ -72,6 +72,45 @@ afterEach(async () => {
 });
 
 describe("config form renderer", () => {
+  it.each<{ uiHints: Parameters<typeof renderConfigFormBase>[0]["uiHints"]; description: string }>([
+    { uiHints: {}, description: "Security schema settings" },
+    {
+      uiHints: { security: { label: "Runtime security label", help: "Gateway security help" } },
+      description: "Gateway security help",
+    },
+  ])(
+    "localizes security and retains description precedence: $description",
+    async ({ uiHints, description }) => {
+      const analysis = analyzeConfigSchema(
+        object({
+          security: {
+            type: "object",
+            description: "Security schema settings",
+            properties: { enabled: { type: "boolean" } },
+          },
+        }),
+      );
+      for (const [locale, label] of [
+        ["zh-CN", "安全"],
+        ["en", "Security"],
+      ] as const) {
+        await i18n.setLocale(locale);
+        renderAnalyzedFormFixture(container, analysis, {
+          value: { security: { enabled: false } },
+          activeSection: "security",
+          uiHints,
+          onPatch,
+        });
+        expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
+          label,
+        );
+        expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
+          description,
+        );
+      }
+    },
+  );
+
   it.each([
     {
       key: "gateway.auth.token",
@@ -88,10 +127,29 @@ describe("config form renderer", () => {
       help: "Section help from the Gateway.",
       translatedHelp: "Bölüm açıklaması.",
       field: false,
+      fallback: "CloudWorkers",
+    },
+    {
+      key: "approvals",
+      label: "Approvals",
+      translated: "Onaylar",
+      help: "Approval settings from the Gateway.",
+      translatedHelp: "Ağ geçidi onay ayarları.",
+      field: false,
+      fallback: "Approvals",
+    },
+    {
+      key: "telemetry",
+      label: "Telemetry",
+      translated: "Telemetri",
+      help: "Telemetry settings from the Gateway.",
+      translatedHelp: "Ağ geçidi telemetri ayarları.",
+      field: false,
+      fallback: "Telemetry",
     },
   ])(
     "localizes $key hints and preserves missing-copy fallbacks",
-    async ({ key, label, translated, help, translatedHelp, field }) => {
+    async ({ key, label, translated, help, translatedHelp, field, fallback }) => {
       const hash = (kind: "label" | "help", text: string) =>
         configHintTranslationKey(key, kind, text).split(".").at(-1)!;
       i18n.registerTranslation("tr", {
@@ -145,7 +203,7 @@ describe("config form renderer", () => {
         expect(heading()).toBe(translated);
         expectHelp("Updated Gateway help without a translation.");
         renderAnalyzedFormFixture(container, analysis, { ...props, uiHints: {} });
-        expect(heading()).toBe("CloudWorkers");
+        expect(heading()).toBe(fallback);
         expectHelp("Schema description.");
       }
     },

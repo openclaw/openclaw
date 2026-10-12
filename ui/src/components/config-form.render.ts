@@ -320,15 +320,12 @@ export function renderConfigForm(props: ConfigFormProps) {
         })()
       : filteredEntries.map(([key, node]) => {
           const hint = localizedHintForPath([key], props.uiHints);
-          const meta = SECTION_META[key] ?? {
-            label: hint?.label ?? key.charAt(0).toUpperCase() + key.slice(1),
-            description: hint?.help ?? node.description ?? "",
-          };
+          const meta = SECTION_META[key];
 
           return renderSection({
             id: `config-section-${key}`,
-            label: meta.label,
-            description: meta.description,
+            label: meta?.label ?? hint?.label ?? key.charAt(0).toUpperCase() + key.slice(1),
+            description: meta?.description ?? hint?.help ?? node.description ?? "",
             node,
             nodeValue: value[key],
             path: [key],
