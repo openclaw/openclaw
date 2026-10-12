@@ -120,6 +120,27 @@ export function retainProjection(
   }
 }
 
+/** Local claim writes change only placement; the owner retains the other projection facts. */
+export function projectCachedLocalPlacementTurnClaim(
+  owner: PlacementAuthorityOwner | undefined,
+  placement: WorkerSessionPlacementRecord,
+): WorkerSessionPlacementReadResult["projection"] | undefined {
+  if (
+    !owner?.active ||
+    placement.state !== "local" ||
+    hasPendingPublication(owner, placement.sessionId)
+  ) {
+    return undefined;
+  }
+  const retained = owner.projections.get(placement.sessionId);
+  if (!retained) {
+    return undefined;
+  }
+  const projection = structuredClone(retained.projection);
+  projection.placements.set(placement.sessionId, structuredClone(placement));
+  return projection;
+}
+
 /** The authority owner retains exact reads until one of its writers publishes a change. */
 export async function readCachedPlacementProjection(
   captured: PlacementReadObservation,
