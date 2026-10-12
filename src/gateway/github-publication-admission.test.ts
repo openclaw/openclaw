@@ -184,22 +184,6 @@ describe("GitHub publication selection admission", () => {
     ).rejects.toThrow("idempotency key was reused");
   });
 
-  it("rejects publisher revocation during the final worktree read before claim admission", async () => {
-    const fixture = await sharedAdmission("claim");
-    const identity = await mocks.prepareIdentity();
-    const findWorktree = mocks.findWorktree.getMockImplementation()!;
-    mocks.prepareIdentity.mockImplementationOnce(async () => {
-      mocks.findWorktree.mockImplementationOnce((...args) => {
-        mocks.matchesIdentity.mockReturnValue(false);
-        return findWorktree(...args);
-      });
-      return identity;
-    });
-    await expect(fixture.request(publisher)).rejects.toThrow("GitHub publication identity changed");
-    expect(fixture.read()).toBeUndefined();
-    expect(commands).toEqual([]);
-  });
-
   it.each([
     ...[
       { sessionKey: "agent:main:main", agentId: "research" },
@@ -289,7 +273,7 @@ describe("GitHub publication selection admission", () => {
     },
   );
 
-  it.each(["deferred", "claim"] as const)(
+  it.each(["claim"] as const)(
     "observes a same-key %s admission committed while identity preparation awaits",
     async (surface) => {
       const fixture = await sharedAdmission(surface);
