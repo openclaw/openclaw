@@ -2147,7 +2147,6 @@ src/boards/board-report.ts
 src/boards/board-store.ts
 src/boards/board-website.ts
 src/boards/github-actions-capability.ts
-src/chat/sender-identity.ts
 src/chat/work-context.ts
 src/config/sessions/ambient-transcript-watermark-projection.ts
 src/config/sessions/conversation-authority.ts
@@ -2212,14 +2211,12 @@ src/gateway/worker-environments/worker-ledger-validation.ts
 src/infra/json-utf8-bytes.ts
 src/infra/retryable-network-errors.ts
 src/session-cards/progress-card-values.ts
-src/sessions/input-provenance.ts
 src/sessions/model-overrides.ts
 src/sessions/nested-tool-activity.ts
 src/sessions/provider-review.ts
 src/sessions/transcript-anchor-page.ts
 src/sessions/transcript-display-position.ts
 src/sessions/transcript-visible-record.ts
-src/sessions/user-turn-transcript.metadata.ts
 src/shared/assistant-display-content.ts
 src/shared/chat-content.ts
 src/shared/chat-envelope.ts
