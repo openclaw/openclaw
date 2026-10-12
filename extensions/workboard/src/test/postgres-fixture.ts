@@ -1,10 +1,10 @@
+import { openEngineWorkerStore } from "openclaw/plugin-sdk/database-engine-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import { startAdmittedTestWorker } from "../../../../test/helpers/admitted-worker.js";
 import { unwrapWorkboardSqliteResult } from "../sqlite-store-errors.js";
 import { createWorkboardDatabase } from "../sqlite-store-schema.js";
 import type {
   PostgresFixtureInput,
-  PostgresFixtureReply,
+  PostgresFixtureOperations,
   PostgresFixtureRequest,
   PostgresStatement,
 } from "./postgres-fixture-contract.js";
@@ -15,47 +15,15 @@ export function openPostgresFixture(input: PostgresFixtureInput) {
     sourceWorkerName: "postgres-fixture-worker.test-support",
     distWorkerPath: "extensions/workboard/src/test/postgres-fixture-worker.test-support.js",
   });
-  const worker = startAdmittedTestWorker(url, input.dbPath, input);
-  let nextId = 0;
-  let closed = false;
-  let workerFailure: Error | undefined;
-  const pending = new Map<number, ReturnType<typeof Promise.withResolvers<PostgresFixtureReply>>>();
-  worker.on("message", (reply: PostgresFixtureReply) => {
-    pending.get(reply.id)?.resolve(reply);
-    pending.delete(reply.id);
-  });
-  worker.on("error", (error) => {
-    workerFailure = error;
-    for (const entry of pending.values()) {
-      entry.reject(error);
-    }
-    pending.clear();
-  });
-  const exited = new Promise<void>((resolve, reject) => {
-    worker.on("exit", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        const error = new Error(`PostgreSQL fixture worker exited ${code}`);
-        workerFailure = error;
-        for (const entry of pending.values()) {
-          entry.reject(error);
-        }
-        pending.clear();
-        reject(error);
-      }
-    });
-  });
-  void exited.catch(() => {});
+  const opened = openEngineWorkerStore<PostgresFixtureOperations>(
+    { moduleUrl: url, databasePath: input.dbPath, input },
+    input.postgresInput,
+  );
+  void opened.catch(() => {});
+  let closing: Promise<void> | undefined;
   async function request(operation: PostgresFixtureRequest["operation"]) {
-    if (workerFailure) {
-      throw workerFailure;
-    }
-    const id = ++nextId;
-    const completion = Promise.withResolvers<PostgresFixtureReply>();
-    pending.set(id, completion);
-    worker.postMessage({ id, operation } satisfies PostgresFixtureRequest, []);
-    return await completion.promise;
+    const store = await opened;
+    return await store.execute({ type: "fixture", input: operation });
   }
   async function execute(operation: PostgresFixtureRequest["operation"]) {
     return unwrapWorkboardSqliteResult((await request(operation)).result);
@@ -86,13 +54,9 @@ export function openPostgresFixture(input: PostgresFixtureInput) {
       }
       return { schema: value.schema, isOpen: value.isOpen, isTransaction: value.isTransaction };
     },
-    async close() {
-      if (closed) {
-        return;
-      }
-      await execute({ kind: "close" });
-      await exited;
-      closed = true;
+    close() {
+      closing ??= opened.then((store) => store.close());
+      return closing;
     },
   };
 }

@@ -11,7 +11,6 @@ export type PostgresStatement = {
   catchError?: boolean;
 };
 export type PostgresFixtureRequest = {
-  id: number;
   operation:
     | {
         kind: "statements";
@@ -21,11 +20,16 @@ export type PostgresFixtureRequest = {
       }
     | { kind: "groupedRollback"; sibling: WorkboardCard; target: WorkboardCard; fault: string }
     | { kind: "state" }
-    | { kind: "assertClosed"; sql: string }
-    | { kind: "close" };
+    | { kind: "assertClosed"; sql: string };
 };
 export type PostgresFixtureReply = {
-  id: number;
   result: WorkboardSqliteResult<unknown>;
   outcomeUnknown?: boolean;
+};
+
+export type PostgresFixtureOperations = {
+  fixture: {
+    input: PostgresFixtureRequest["operation"];
+    output: PostgresFixtureReply;
+  };
 };

@@ -18,6 +18,8 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
+  "scripts/generate-postgres-schema.mts!",
   // Immutable activation and release deployment launch this packaged entry by path.
   "gateway-prewarm.mjs!",
   "apps/linux/scripts/test-runtime-boundary.mjs!",
@@ -754,6 +756,9 @@ const config = {
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
+    // PR2a admits physical facts now; PR2b routes state maintenance to these capabilities.
+    // The full-tree test-aware scan still audits their boundary-test consumers.
+    "src/infra/database-engine/physical-facts.ts": ["exports"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
     "src/boards/board-notices.ts": ["exports"],

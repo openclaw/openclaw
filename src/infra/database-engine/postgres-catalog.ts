@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 
 export type PostgresCatalogFact = { table: string; kind: string; value: unknown };
-export type PostgresCatalogSource = {
+type PostgresCatalogSource = {
   schema: string;
   tables: readonly {
     name: string;
