@@ -204,7 +204,7 @@ async function runMaintenanceDrift(
   }
 }
 
-it("moves lifecycle counts and snapshot writes off the host while preserving maintenance", async () => {
+it("keeps guarded lifecycle writes and committed follow-ups off the host while preserving maintenance", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = maintenanceFixture();
     replaceSessionEntrySync(
@@ -226,13 +226,28 @@ it("moves lifecycle counts and snapshot writes off the host while preserving mai
       }
     });
     const sql = observeHostDataSql();
+    let commitAllowed = false;
+    let committedFollowup = false;
     try {
       const result = await applySessionEntryLifecycleMutation({
         ...f.scope,
         activeSessionKey: f.scope.sessionKey,
         upserts: f.upserts,
         maintenanceOverride: f.maintenanceOverride,
+        beforeCommitInTransaction: () => {
+          commitAllowed = true;
+        },
+        afterCommitted: async (context) => {
+          context.assertCurrent();
+          expect(commitAllowed).toBe(true);
+          expect(publications.get(f.scope.sessionKey)?.entry).toMatchObject({
+            sessionId: f.initial.sessionId,
+            createdAt: f.initial.createdAt,
+          });
+          committedFollowup = true;
+        },
       });
+      expect(committedFollowup).toBe(true);
       expect(result).toMatchObject({
         beforeCount: 2,
         afterCount: 3,
@@ -510,5 +525,36 @@ it("publishes the acknowledged lifecycle once after losing its worker reply", as
     } finally {
       stop();
     }
+  });
+});
+
+it("reports its committed count while the next lifecycle sees later writes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const createdKey = "agent:main:lifecycle-counted";
+    const laterKey = "agent:main:lifecycle-later";
+    await expect(
+      applySessionEntryLifecycleMutation({
+        ...f.scope,
+        skipMaintenance: true,
+        upserts: [{ sessionKey: createdKey, entry: { sessionId: "counted", updatedAt: 2 } }],
+        onLifecycleCommitted() {
+          replaceSessionEntrySync(
+            { ...f.scope, sessionKey: laterKey },
+            { sessionId: "later", updatedAt: 3 },
+          );
+        },
+      }),
+    ).resolves.toMatchObject({ beforeCount: 1, afterCount: 2 });
+    expect(f.read(laterKey)?.sessionId).toBe("later");
+    await expect(
+      applySessionEntryLifecycleMutation({
+        ...f.scope,
+        skipMaintenance: true,
+        removals: [{ sessionKey: createdKey }],
+      }),
+    ).resolves.toMatchObject({ beforeCount: 3, afterCount: 2, removedEntries: 1 });
+    expect(f.read(createdKey)).toBeUndefined();
+    expect(f.read(laterKey)?.sessionId).toBe("later");
   });
 });

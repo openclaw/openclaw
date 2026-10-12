@@ -10,7 +10,7 @@ type ConversationRecallTestParams = {
     config: MemoryWikiPluginConfig;
   }) => Promise<{ config: ResolvedMemoryWikiConfig }>;
   getActiveMemorySearchManagerMock: Mock;
-  loadCombinedSessionStoreForGatewayMock: Mock;
+  loadCombinedSessionStoreForGatewayAsyncMock: Mock;
   searchMemoryWiki: typeof searchMemoryWiki;
 };
 
@@ -85,7 +85,7 @@ export function registerConversationRecallQueryTests(params: ConversationRecallT
       initialize: true,
       config: { search: { backend: "shared", corpus: "memory" } },
     });
-    params.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    params.loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({
       storePath: "(test)",
       store: RECALL_SESSION_STORE,
     });

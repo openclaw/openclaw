@@ -8,6 +8,7 @@ import {
 import { rethrowStartupConfigFailure } from "../../commands/doctor-startup-migration-refusal.js";
 import type {
   ConfigFileSnapshot,
+  ConfigSnapshotReadOptions,
   GatewayAuthMode,
   GatewayBindMode,
   GatewayTailscaleMode,
@@ -77,7 +78,7 @@ import {
 } from "../terminal-interactivity.js";
 import { createGatewayCrashLoopRecovery } from "./crash-loop-recovery.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
-import { getGatewayStartGuardErrors } from "./pre-bootstrap.js";
+import { getGatewayStartGuardErrors, takeAcceptedGatewayRunMigrations } from "./pre-bootstrap.js";
 import { runGatewayLoop } from "./run-loop.js";
 import { resolveGatewayPasswordOption, toOptionString } from "./run-option-values.js";
 import type { GatewayRunOpts } from "./run-options.js";
@@ -131,23 +132,17 @@ function parseEnumOption<T extends string>(
   return raw ? (allowed.find((value) => value === raw) ?? null) : null;
 }
 
-async function readGatewayStartupConfig(params: {
-  lowerPrecedenceEnv: Readonly<Record<string, string>>;
-  startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
-}): Promise<{
+async function readGatewayStartupConfig(
+  startupTrace: ReturnType<typeof createGatewayCliStartupTrace>,
+  readOptions: Pick<ConfigSnapshotReadOptions, "deferredPluginMigrations" | "lowerPrecedenceEnv">,
+): Promise<{
   cfg: OpenClawConfig;
   snapshot: ConfigFileSnapshot;
   startupConfigSnapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult;
 }> {
   const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
-  const snapshotRead = await params.startupTrace.measure("cli.config-snapshot", () =>
-    readConfigFileSnapshotWithPluginMetadata({
-      isolateEnv: true,
-      observe: false,
-      ...(Object.keys(params.lowerPrecedenceEnv).length > 0
-        ? { lowerPrecedenceEnv: params.lowerPrecedenceEnv }
-        : {}),
-    }),
+  const snapshotRead = await startupTrace.measure("cli.config-snapshot", () =>
+    readConfigFileSnapshotWithPluginMetadata({ isolateEnv: true, observe: false, ...readOptions }),
   );
   const { snapshot } = snapshotRead;
   if (!snapshot.valid && isConfigReadFailure(snapshot)) {
@@ -219,10 +214,9 @@ async function readGatewayStartupConfigWithShellEnv(params: {
     lowerPrecedenceEnv: Readonly<Record<string, string>>;
   }
 > {
-  const startupConfig = await readGatewayStartupConfig({
-    lowerPrecedenceEnv: {},
-    startupTrace: params.startupTrace,
-  });
+  // Both reads revalidate the accepted preflight generation instead of copying shared state.
+  const accepted = takeAcceptedGatewayRunMigrations();
+  const startupConfig = await readGatewayStartupConfig(params.startupTrace, accepted);
   const plan = await resolveGatewayRunShellEnvFallbackPlan(
     startupConfig.snapshot.valid ? startupConfig.cfg : {},
   );
@@ -232,7 +226,7 @@ async function readGatewayStartupConfigWithShellEnv(params: {
   // Startup uses one shell-env plan; edits during this read take effect on the next start.
   const lowerPrecedenceEnv = await loadGatewayRunShellEnvFallback(plan);
   return {
-    ...(await readGatewayStartupConfig({ lowerPrecedenceEnv, startupTrace: params.startupTrace })),
+    ...(await readGatewayStartupConfig(params.startupTrace, { ...accepted, lowerPrecedenceEnv })),
     lowerPrecedenceEnv,
   };
 }

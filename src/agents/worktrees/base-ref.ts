@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../../infra/errno.js";
@@ -8,6 +7,7 @@ import {
   normalizeGitPathForFilesystem,
   requireGitCommandOutput,
 } from "../../infra/git-exec.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -38,6 +38,7 @@ type RemoteDefaultAttempt = {
   pending: Promise<ResolvedWorktreeBase & { branch: string }>;
   ownerInvalidated: boolean;
   forwarded?: boolean;
+  refreshedAt?: number;
 };
 type RemoteDefaultPreparation = { borrowers: number; attempt?: RemoteDefaultAttempt };
 export type WorktreeBasePreparation = (options: {
@@ -49,6 +50,7 @@ export type WorktreeBasePreparation = (options: {
 const remoteDefaults = resolveGlobalMap<string, RemoteDefaultPreparation>(
   Symbol.for("openclaw.worktreeRemoteDefaults"),
 );
+const BASE_FRESHNESS_MS = 30_000;
 
 export class InvalidWorktreeBaseRefError extends Error {
   constructor(options?: ErrorOptions) {
@@ -169,14 +171,16 @@ export async function withWorktreeBasePreparation<T>(
       process.platform === "win32" ? directory.toLowerCase() : directory,
     ),
   );
-  const shared: RemoteDefaultPreparation = remoteDefaults.get(key) ?? { borrowers: 0 };
+  const cached = remoteDefaults.get(key);
+  const shared: RemoteDefaultPreparation =
+    cached &&
+    ((cached.borrowers > 0 && cached.attempt?.refreshedAt === undefined) ||
+      Date.now() - (cached.attempt?.refreshedAt ?? -Infinity) < BASE_FRESHNESS_MS)
+      ? cached
+      : { borrowers: 0 };
   shared.borrowers++;
   remoteDefaults.set(key, shared);
-  const forget = () => {
-    if (remoteDefaults.get(key) === shared) {
-      remoteDefaults.delete(key);
-    }
-  };
+  pruneMapToMaxSize(remoteDefaults, 32);
   let active = true;
   const resolutions: Promise<ResolvedWorktreeBase>[] = [];
   const resolve: WorktreeBasePreparation = async ({
@@ -197,6 +201,7 @@ export async function withWorktreeBasePreparation<T>(
     };
     const owned = (attempt: RemoteDefaultAttempt, pending: RemoteDefaultAttempt["pending"]) =>
       pending.catch((error: unknown) => {
+        attempt.refreshedAt = undefined;
         if (hasWorktreeUnknownOutcome(error)) {
           throw error;
         }
@@ -220,8 +225,8 @@ export async function withWorktreeBasePreparation<T>(
           pending: timeWorktreePreparationPhase("baseRefresh", () =>
             fetchRemoteDefault(repository.repoRoot, options),
           ).then(async (base) => {
-            // The creation cohort shares hydration before any checkout, including local main.
-            const preparationKey = randomUUID();
+            // Immutable commits share hydration across refreshes while the Git worker lives.
+            const preparationKey = base.commit;
             await timeWorktreePreparationPhase("baseHydration", () =>
               estimateWorktreeGitBytes(repository.repoRoot, base.commit, {
                 signal,
@@ -231,6 +236,9 @@ export async function withWorktreeBasePreparation<T>(
             );
             base.preparationKey = preparationKey;
             options.beforeRun();
+            if (base.fetchSucceeded) {
+              started.refreshedAt = Date.now();
+            }
             return base;
           }),
         };
@@ -286,8 +294,12 @@ export async function withWorktreeBasePreparation<T>(
   } finally {
     active = false;
     await Promise.allSettled(resolutions);
-    if (--shared.borrowers === 0) {
-      forget();
+    if (
+      --shared.borrowers === 0 &&
+      !shared.attempt?.refreshedAt &&
+      remoteDefaults.get(key) === shared
+    ) {
+      remoteDefaults.delete(key);
     }
   }
 }

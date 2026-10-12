@@ -26,7 +26,12 @@ import {
   captureBackendEvents,
   registerEmbeddedBackendStreamTests,
 } from "./embedded-backend.stream.test-support.js";
-import { localSessionEntry } from "./embedded-backend.test-helpers.js";
+import {
+  deferred,
+  flushMicrotasks,
+  localSessionEntry,
+  sendMainChat,
+} from "./embedded-backend.test-helpers.js";
 import {
   registerEmbeddedModelCatalogTests,
   withEmbeddedModelCatalogOwnerFixture,
@@ -296,6 +301,20 @@ vi.mock("../gateway/server-methods/chat-history-pages.js", () => ({
   readChatHistoryPage: (params: unknown) => readChatHistoryPageMock(params),
 }));
 
+// mock-isolation: use the synthetic session fixture without opening Gateway worker databases.
+vi.mock("../gateway/session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: ({
+    key,
+    cfg: _cfg,
+    ...opts
+  }: {
+    key: string;
+    cfg: unknown;
+    agentId?: string;
+    includeStoreChildEntries?: boolean;
+  }) => Promise.resolve(loadSessionEntryMock(key, opts)),
+}));
+
 vi.mock("../gateway/session-utils.js", () => ({
   getSessionDefaults: () => getSessionDefaultsMock(),
   listAgentsForGateway: () => [],
@@ -358,32 +377,10 @@ vi.mock("../gateway/server-methods/agent-timestamp.js", () => ({
   timestampOptsFromConfig: () => ({}),
 }));
 
-function deferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((error?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
-
-async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 function emitRegisteredAgentEvent(evt: unknown) {
   if (registeredListener) {
     notifyListeners([registeredListener], evt);
   }
-}
-
-function sendMainChat(backend: EmbeddedTuiBackendType, message: string, runId: string) {
-  return backend.sendChat({ sessionKey: "agent:main:main", message, runId });
 }
 
 const selectedGlobalSessionCases = [

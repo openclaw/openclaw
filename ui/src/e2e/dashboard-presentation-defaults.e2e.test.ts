@@ -4,6 +4,11 @@ import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { UiSettings } from "../app/settings.ts";
 import {
+  closeChatLayoutMenu,
+  openChatLayoutMenu as openLayoutMenu,
+  selectChatLayoutAction,
+} from "../test-helpers/chat-layout-menu.ts";
+import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
@@ -16,7 +21,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "shared dashboard presentation defaults" });
 const key = "agent:main:dashboard:9a1b2c3d-1234-4567-8901-234567890abc";
 const sessionId = "dashboard-presentation-session";
-const defaultAction = 'wa-dropdown-item[value="quick:layout:dashboard-default"]';
+const defaultAction = 'wa-dropdown-item[value="dashboard-default"]';
 const defaultStatus = '[data-menu-status="dashboard-default"]';
 
 function row(presentation: "split" | "expanded") {
@@ -92,31 +97,6 @@ async function openDashboard(
   return gateway;
 }
 
-async function waitForLayoutMenuClosed(page: Page) {
-  await page.waitForFunction(() => {
-    const dropdown = document.querySelector("openclaw-chat-header-session-menu wa-dropdown");
-    const popup = dropdown?.shadowRoot?.querySelector("wa-popup");
-    return (
-      (!dropdown || Reflect.get(dropdown, "open") !== true) &&
-      (!popup || !Reflect.get(popup, "active"))
-    );
-  });
-}
-
-async function openLayoutMenu(page: Page) {
-  // A save closes the popup asynchronously; finish that close before reopening it.
-  await waitForLayoutMenuClosed(page);
-  await page.locator(".chat-header-session-menu__trigger").click();
-  const menu = page.locator("openclaw-chat-header-session-menu");
-  const layout = menu.locator(".session-menu__text").filter({ hasText: /^Layout$/ });
-  if ((await menu.locator("wa-dropdown.chat-header-session-menu--compact").count()) > 0) {
-    await layout.click();
-  } else {
-    await layout.hover();
-  }
-  return menu;
-}
-
 async function openDefaultAction(page: Page) {
   const menu = await openLayoutMenu(page);
   const action = menu.locator(defaultAction);
@@ -156,7 +136,7 @@ suite.define(() => {
       });
       expect(await menu.locator(defaultStatus).count()).toBe(0);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-      await menu.locator(defaultAction).click();
+      await selectChatLayoutAction(page, "Use current view as default");
       const saved = await gateway.waitForRequest("sessions.patch");
       expect(saved.params).toMatchObject({
         key,
@@ -170,8 +150,7 @@ suite.define(() => {
       const savedMenu = await openLayoutMenu(page);
       await savedMenu.locator(defaultStatus).waitFor({ state: "visible" });
       await page.screenshot({ path: path.join(suite.artifactDir, "08-opening-default-saved.png") });
-      await page.locator(".chat-header-session-menu__trigger").click();
-      await waitForLayoutMenuClosed(page);
+      await closeChatLayoutMenu(page);
       // This fixture can read Sessions but does not advertise Home or session creation.
       await page.locator('[data-navigation-view="pages"]').click();
       await page
@@ -275,8 +254,7 @@ suite.define(() => {
       );
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       await page.screenshot({ path: path.join(suite.artifactDir, "00-current-default-menu.png") });
-      await page.locator(".chat-header-session-menu__trigger").click();
-      await waitForLayoutMenuClosed(page);
+      await closeChatLayoutMenu(page);
 
       await focusChatSidePanel(page);
       await chat.waitFor({ state: "hidden" });
@@ -286,7 +264,7 @@ suite.define(() => {
       await page.screenshot({
         path: path.join(suite.artifactDir, "01-different-default-menu.png"),
       });
-      await action.click();
+      await selectChatLayoutAction(page, "Use current view as default");
       const saved = await gateway.waitForRequest("sessions.patch", {
         match: { boardPresentation: "expanded" },
       });
@@ -304,8 +282,7 @@ suite.define(() => {
         "This is the default view",
       );
       await page.screenshot({ path: path.join(suite.artifactDir, "02-default-saved.png") });
-      await page.locator(".chat-header-session-menu__trigger").click();
-      await waitForLayoutMenuClosed(page);
+      await closeChatLayoutMenu(page);
 
       await suite.withPage(
         { viewport: { width: 1440, height: 1000 } },
@@ -326,9 +303,8 @@ suite.define(() => {
           await reader.screenshot({
             path: path.join(suite.artifactDir, "03-new-viewer-inherits.png"),
           });
-          await reader.locator(".chat-header-session-menu__trigger").click();
-          await waitForLayoutMenuClosed(reader);
-          await reader.getByRole("button", { name: "Restore split", exact: true }).click();
+          await closeChatLayoutMenu(reader);
+          await selectChatLayoutAction(reader, "Restore split");
           await readerChat.waitFor({ state: "visible" });
           expect(await presentationOverride(reader)).toBe("split");
           expect(await reader.locator(defaultAction).count()).toBe(0);
@@ -346,12 +322,9 @@ suite.define(() => {
         },
       );
 
-      await page.getByRole("button", { name: "Restore split", exact: true }).click();
+      await selectChatLayoutAction(page, "Restore split");
       await chat.waitFor({ state: "visible" });
-      await page
-        .locator(".chat-pane__header")
-        .getByRole("button", { name: "Focus", exact: true })
-        .click();
+      await selectChatLayoutAction(page, "Focus");
       await chat.waitFor({ state: "hidden" });
       expect(await presentationOverride(page)).toBeNull();
       // The server changes while this browser still has the old roster cached.
@@ -374,9 +347,9 @@ suite.define(() => {
       const gateway = await openDashboard(page, "split", { expandedLink: true });
       await page.locator(".sidebar-region__primary").waitFor({ state: "hidden" });
       expect(await presentationOverride(page)).toBeUndefined();
-      const action = await openDefaultAction(page);
+      await openDefaultAction(page);
       await page.screenshot({ path: path.join(suite.artifactDir, "05-compact-default-menu.png") });
-      await action.click();
+      await selectChatLayoutAction(page, "Use current view as default");
       await gateway.waitForRequest("sessions.patch", { match: { boardPresentation: "expanded" } });
       await page.getByText("Dashboard default saved for future opens.", { exact: true }).waitFor();
       await expect.poll(() => page.locator(defaultAction).count()).toBe(0);

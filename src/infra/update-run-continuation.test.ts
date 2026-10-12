@@ -4,18 +4,14 @@ import { getSelfAndAncestorPidsSync } from "./restart-stale-pids.js";
 import { inspectUpdateRepairDriverAdmission } from "./update-run-activity.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 
-const readProcessAncestry = vi.hoisted(() =>
-  vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessAncestry>(),
-);
+const { readProcessAncestry, readProcessIdentity } = vi.hoisted(() => ({
+  readProcessAncestry: vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessAncestry>(),
+  readProcessIdentity: vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessIdentity>(),
+}));
 vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
   readProcessAncestry,
-}));
-
-const spawnSync = vi.hoisted(() => vi.fn());
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync,
+  readProcessIdentity,
 }));
 
 const repairPid = process.pid + 7001;
@@ -57,10 +53,21 @@ function updateRun(updaterStart = originalStart): UpdateRunRecord {
   };
 }
 
+// Verified ancestry is retained for the process, so tests of an unverified
+// driver use an identity no earlier test has verified.
+const unverifiedPid = repairPid + 100;
+function unverifiedDriverRun(): UpdateRunRecord {
+  const run = updateRun();
+  run.origin = {
+    driver: { host: hostname(), pid: unverifiedPid, startIdentity: String(repairStart) },
+  };
+  return run;
+}
+
 describe("Windows update repair continuation", () => {
   beforeEach(() => {
     readProcessAncestry.mockReset().mockReturnValue(null);
-    spawnSync.mockReset();
+    readProcessIdentity.mockReset().mockReturnValue(null);
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.spyOn(process, "ppid", "get").mockReturnValue(repairPid);
     vi.spyOn(process, "kill").mockReturnValue(true);
@@ -81,13 +88,9 @@ describe("Windows update repair continuation", () => {
       complete: true,
       stoppedBy: updaterStart > repairStart ? "recycled-parent" : "root",
     });
-    spawnSync.mockImplementation((_command: string, args: string[]) => {
-      const pid = Number(/GetProcessById\((\d+)\)/.exec(args.at(-1) ?? "")?.[1]);
-      return {
-        status: 0,
-        stdout: new Date(pid === repairPid ? repairStart : updaterStart).toISOString(),
-      };
-    });
+    readProcessIdentity.mockImplementation((pid) =>
+      identity(pid, 0, pid === repairPid ? repairStart : updaterStart),
+    );
 
     expect(inspectUpdateRepairDriverAdmission([updateRun(updaterStart)], runId).kind).toBe(
       expected ? "continuation" : "conflict",
@@ -95,7 +98,6 @@ describe("Windows update repair continuation", () => {
   });
 
   it("keeps self and direct parent when transitive ancestry cannot be inspected", () => {
-    spawnSync.mockReturnValue({ status: 1, stdout: "" });
     expect(getSelfAndAncestorPidsSync()).toEqual(new Set([process.pid, repairPid]));
   });
 
@@ -106,7 +108,7 @@ describe("Windows update repair continuation", () => {
       complete: true,
       stoppedBy: "recycled-parent",
     });
-    spawnSync.mockReturnValue({ status: 0, stdout: new Date(replacementStart).toISOString() });
+    readProcessIdentity.mockImplementation((pid) => identity(pid, 0, replacementStart));
     const run = updateRun();
     run.origin = {
       driver: { host: hostname(), pid: repairPid, startIdentity: String(replacementStart) },
@@ -118,16 +120,65 @@ describe("Windows update repair continuation", () => {
   it("does not grant continuation from an incomplete chain containing the live driver", () => {
     readProcessAncestry.mockReturnValue({
       chain: [
-        identity(process.pid, repairPid, doctorStart),
-        identity(repairPid, updaterPid, repairStart),
+        identity(process.pid, unverifiedPid, doctorStart),
+        identity(unverifiedPid, updaterPid, repairStart),
       ],
       complete: false,
       stoppedBy: "unreadable-parent",
     });
-    spawnSync.mockReturnValue({ status: 0, stdout: new Date(repairStart).toISOString() });
-    const run = updateRun();
-    run.origin.previousDrivers = [];
-    expect(getSelfAndAncestorPidsSync().has(repairPid)).toBe(true);
-    expect(inspectUpdateRepairDriverAdmission([run], runId).kind).toBe("conflict");
+    readProcessIdentity.mockImplementation((pid) => identity(pid, 0, repairStart));
+    expect(getSelfAndAncestorPidsSync().has(unverifiedPid)).toBe(true);
+    expect(inspectUpdateRepairDriverAdmission([unverifiedDriverRun()], runId).kind).toBe(
+      "conflict",
+    );
+  });
+
+  it("keeps a verified continuation when a later ancestry read fails", () => {
+    const retainedPid = repairPid + 200;
+    const run = (startIdentity: number): UpdateRunRecord => ({
+      ...updateRun(),
+      origin: {
+        driver: { host: hostname(), pid: retainedPid, startIdentity: String(startIdentity) },
+      },
+    });
+    readProcessAncestry
+      .mockReturnValueOnce({
+        chain: [
+          identity(process.pid, retainedPid, doctorStart),
+          identity(retainedPid, 0, repairStart),
+        ],
+        complete: true,
+        stoppedBy: "root",
+      })
+      .mockImplementation(() => {
+        throw new Error("process snapshot timed out");
+      });
+    readProcessIdentity.mockImplementation((pid) => identity(pid, 0, repairStart));
+
+    expect(inspectUpdateRepairDriverAdmission([run(repairStart)], runId).kind).toBe("continuation");
+    expect(readProcessAncestry).toHaveBeenCalledTimes(1);
+    expect(inspectUpdateRepairDriverAdmission([run(repairStart)], runId).kind).toBe("continuation");
+
+    // Retained proof is bound to the verified identity, never to a reused PID.
+    const reusedStart = doctorStart + 1000;
+    readProcessIdentity.mockImplementation((pid) => identity(pid, 0, reusedStart));
+    expect(inspectUpdateRepairDriverAdmission([run(reusedStart)], runId)).toMatchObject({
+      kind: "conflict",
+      message: expect.stringContaining("could not read this process's ancestry"),
+    });
+  });
+
+  it("reports unreadable ancestry instead of a conflicting live update", () => {
+    readProcessAncestry.mockImplementation(() => {
+      throw new Error("process snapshot timed out");
+    });
+    readProcessIdentity.mockImplementation((pid) => identity(pid, 0, repairStart));
+
+    const admission = inspectUpdateRepairDriverAdmission([unverifiedDriverRun()], runId);
+    expect(admission).toMatchObject({
+      kind: "conflict",
+      message: expect.stringContaining("not evidence of another update"),
+    });
+    expect(admission).not.toMatchObject({ message: expect.stringContaining("liveness: alive") });
   });
 });

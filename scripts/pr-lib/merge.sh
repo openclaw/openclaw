@@ -108,37 +108,6 @@ verify_prior_ci_admin() {
   MERGE_PRIOR_CI_PROOF="$proof"
 }
 
-fetch_clawsweeper_review_comments() {
-  local pr="$1" repo_name="$2" repo_host="$3"
-  if ! CLAWSWEEPER_REVIEW_COMMENTS=$(pr_gh_plain issue-comments "$repo_name" "$repo_host" "$pr"); then
-    echo "ClawSweeper review gate failed: unable to read current issue comments." >&2
-    return 1
-  fi
-}
-
-validate_clawsweeper_review_comments() {
-  local pr="$1" head_sha="$2" evidence
-  if ! evidence=$(printf '%s\n' "$CLAWSWEEPER_REVIEW_COMMENTS" |
-    node "$script_parent_dir/pr-lib/clawsweeper-review-gate.mjs" "$pr" "$head_sha"); then
-    unset CLAWSWEEPER_REVIEW_COMMENTS
-    return 1
-  fi
-  unset CLAWSWEEPER_REVIEW_COMMENTS
-  CLAWSWEEPER_REVIEW_EVIDENCE="$evidence"
-  echo "ClawSweeper completed review: comment $(printf '%s\n' "$evidence" | jq -r .commentId), reviewed $(printf '%s\n' "$evidence" | jq -r .reviewedAt)"
-}
-
-require_clawsweeper_review() {
-  local pr="$1" head_sha="$2" repo_name="${3:-}" repo_host="${4:-}" repo_json
-  if [ -z "$repo_name" ] || [ -z "$repo_host" ]; then
-    repo_json=$(pr_gh_plain repo view --json nameWithOwner,url) || return 1
-    repo_name=$(printf '%s\n' "$repo_json" | jq -er '.nameWithOwner | select(type == "string" and length > 0)') || return 1
-    repo_host=$(printf '%s\n' "$repo_json" | jq -er '.url | capture("^https://(?<host>[^/]+)/").host') || return 1
-  fi
-  fetch_clawsweeper_review_comments "$pr" "$repo_name" "$repo_host" || return 1
-  validate_clawsweeper_review_comments "$pr" "$head_sha"
-}
-
 # Return 0 for relevant drift, 1 for unrelated drift, and 2 for failed evaluation.
 # The caller uses a conditional, so every fallible evidence operation is checked.
 mainline_drift_requires_sync() (
@@ -344,8 +313,6 @@ merge_verify() {
 
   fetch_pr_head "$pr" "$PREP_HEAD_SHA" "refs/heads/pr-$pr" "$json" || return 1
   json="$PR_HEAD_OBSERVATION"
-  require_clawsweeper_review "$pr" "$pr_head_sha" \
-    "${MERGE_REPO_NAME:-}" "${MERGE_REPO_HOST:-}" || return 1
   mark_pr_operation_side_effects_started || return 1
   if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
     verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
@@ -1012,22 +979,17 @@ merge_run() {
     recovery_actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1
     [ -n "$recovery_actor" ] || { merge_outcome_stop "cannot identify the operator recovery actor"; return 1; }
   fi
-  # Ordinary squash has one final authority observation after comment collection.
+  # Ordinary squash has one final authority observation before intent.
   # Special routes retain their separate admission and admin authority windows.
   if [ "$route" != immediate ] || [ "$merge_method" != squash ]; then
     merge_outcome_stable "$pr" || return 1
   fi
-  fetch_clawsweeper_review_comments "$pr" "$MERGE_REPO_NAME" "$MERGE_REPO_HOST" || return 1
   if [ -n "$async_failure" ] &&
     [ "$async_failure" != "$(merge_rest merge-result "$pr" "$(printf '%s\n' "$async_failure" | jq -r .uuid)" "$PREP_HEAD_SHA")" ]; then
     merge_outcome_stop "async failure is unavailable or changed; no recovery attempt was authorized"
     return 1
   fi
-  if ! merge_outcome_stable "$pr"; then
-    unset CLAWSWEEPER_REVIEW_COMMENTS
-    return 1
-  fi
-  validate_clawsweeper_review_comments "$pr" "$PREP_HEAD_SHA" || return 1
+  merge_outcome_stable "$pr" || return 1
   if [ -n "$merge_body_snapshot" ] &&
     [ "$merge_body_snapshot" != "$(snapshot_merge_body "$merge_body_file")" ]; then
     merge_outcome_stop "merge body changed during admission; no request was dispatched"
@@ -1151,12 +1113,11 @@ merge_run() {
   attempt=$(node -e 'process.stdout.write(require("node:crypto").randomUUID())') || return 1
   intent=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -c --argjson repo "$MERGE_REPO" \
     --arg method "$merge_method" --arg route "$route" --arg attempt "$attempt" \
-    --arg localHead "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}" --arg transport "$MERGE_TRANSPORT" \
-    --argjson review "$CLAWSWEEPER_REVIEW_EVIDENCE" '
+    --arg localHead "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}" --arg transport "$MERGE_TRANSPORT" '
     {version:1,repo:$repo,pr:.pr.number,prId:.pr.id,base:.pr.baseRefName,head:.pr.headRefOid,
      localHead:$localHead,
-     main:.main,method:$method,route:$route,attempt:$attempt,phase:"intent",accepted:false,landed:null,
-     clawsweeperReview:$review} + (if $transport == "rest" then {transport:"rest"} else {} end)
+     main:.main,method:$method,route:$route,attempt:$attempt,phase:"intent",accepted:false,landed:null}
+     + (if $transport == "rest" then {transport:"rest"} else {} end)
   ') || return 1
   if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson proof "$MERGE_PRIOR_CI_PROOF" '.priorCiAdmin=$proof') || return 1

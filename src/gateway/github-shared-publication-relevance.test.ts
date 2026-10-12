@@ -1,10 +1,10 @@
 import { expect, it, vi } from "vitest";
 import {
-  claimGitHubPublicationExecution,
-  createGitHubPublicationExecutionStore,
-} from "./github-publication-store.js";
+  claimGitHubPublicationExecutionFixture,
+  createGitHubPublicationExecutionStoreFixture,
+  insertRepositoryGitHubPublicationFixture,
+} from "./github-publication-store.test-support.js";
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
-import { insertRepositoryGitHubPublication } from "./github-repository-publication-store.js";
 import {
   insertSharedWorktreeReceipt,
   sharedRepositoryWorkspace,
@@ -17,8 +17,8 @@ installGitHubPublicationTestHarness();
 
 it("stops discovering a superseded failure without rewriting its receipt or exact-key recovery", async () => {
   const row = insertSharedWorktreeReceipt("obsolete-failure");
-  const claimed = claimGitHubPublicationExecution(row.request_id, "fixture-instance");
-  createGitHubPublicationExecutionStore("fixture-instance").complete(claimed, {
+  const claimed = claimGitHubPublicationExecutionFixture(row.request_id, "fixture-instance");
+  createGitHubPublicationExecutionStoreFixture("fixture-instance").complete(claimed, {
     requestId: row.request_id,
     status: "failed",
     code: "unavailable",
@@ -51,7 +51,7 @@ it("stops discovering a superseded failure without rewriting its receipt or exac
 
 it("retires covered repository-only failures with the same read-only contract", async () => {
   const workspace = await sharedRepositoryWorkspace();
-  const row = insertRepositoryGitHubPublication(
+  const row = insertRepositoryGitHubPublicationFixture(
     repositoryReceipt(workspace, {
       status: "failed",
       error_code: "unavailable",

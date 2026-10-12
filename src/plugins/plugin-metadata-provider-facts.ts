@@ -2,23 +2,19 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import type {
-  PluginManifestProviderEndpoint,
-  PluginManifestProviderRequestProvider,
-} from "./manifest.js";
+import type { PluginManifestProviderEndpoint } from "./manifest.js";
 import { listOfficialExternalProviderEndpointManifests } from "./official-external-provider-endpoints.js";
 import type {
   PluginProviderAuthAliasCandidate,
   PluginProviderAuthContribution,
 } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import { normalizeManifestProviderRequestProvider } from "./plugin-provider-request-policy.js";
+import { collectPluginProviderRequestOwners } from "./plugin-provider-request-policy.js";
 import { listSetupProviderIds } from "./setup-descriptors.js";
 
 const PROVIDER_ENDPOINT_CLASSES = new Set(
@@ -157,7 +153,12 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
   const providerEndpoints = plugins.flatMap((plugin) =>
     prepareProviderEndpoints(plugin.providerEndpoints),
   );
-  const providerRequests = new Map<string, PluginManifestProviderRequestProvider>();
+  const providerRequests = new Map(
+    [...collectPluginProviderRequestOwners(plugins)].map(([provider, { policy }]) => [
+      provider,
+      policy,
+    ]),
+  );
   const providerAuthContributions: PluginProviderAuthContribution[] = [];
   for (const plugin of plugins) {
     // Package declarations are stable; readers still decide eligibility against current config.
@@ -178,19 +179,6 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
         evidenceProviders,
         fallbackProviderRefs,
       });
-    }
-    const requests = isRecord(plugin.providerRequest?.providers)
-      ? plugin.providerRequest.providers
-      : {};
-    for (const [rawProvider, request] of Object.entries(requests)) {
-      if (!isRecord(request)) {
-        continue;
-      }
-      const provider = normalizeLowercaseStringOrEmpty(rawProvider);
-      if (!provider) {
-        continue;
-      }
-      providerRequests.set(provider, normalizeManifestProviderRequestProvider(request) ?? {});
     }
   }
   for (const manifest of listOfficialExternalProviderEndpointManifests()) {

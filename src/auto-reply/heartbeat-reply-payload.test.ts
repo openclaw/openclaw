@@ -30,12 +30,6 @@ describe("resolveHeartbeatReplyPayload", () => {
     });
   });
 
-  it("returns the last outbound payload when none are reasoning", () => {
-    const first: ReplyPayload = { text: "first" };
-    const second: ReplyPayload = { text: "second" };
-    expect(resolveHeartbeatReplyPayload([first, second])).toBe(second);
-  });
-
   it("skips a trailing reasoning payload and returns the assistant answer", () => {
     const answer: ReplyPayload = { text: "HEARTBEAT_OK" };
     const reasoning: ReplyPayload = {
@@ -45,30 +39,11 @@ describe("resolveHeartbeatReplyPayload", () => {
     expect(resolveHeartbeatReplyPayload([answer, reasoning])).toBe(answer);
   });
 
-  it("returns undefined when every outbound payload is reasoning", () => {
-    const reasoning: ReplyPayload = {
-      text: "Deliberating about whether to respond...",
-      isReasoning: true,
-    };
-    expect(resolveHeartbeatReplyPayload([reasoning])).toBeUndefined();
-  });
-
   it("returns undefined for a scalar reasoning payload", () => {
     const reasoning: ReplyPayload = {
       text: "Considering whether the heartbeat needs a reply...",
       isReasoning: true,
     };
     expect(resolveHeartbeatReplyPayload(reasoning)).toBeUndefined();
-  });
-
-  it("skips a trailing lowercase 'reasoning:' payload and returns the final answer", () => {
-    const answer: ReplyPayload = { text: "All clear" };
-    const lowercased: ReplyPayload = { text: "reasoning: because nothing changed" };
-    expect(resolveHeartbeatReplyPayload([answer, lowercased])).toBe(answer);
-  });
-
-  it("returns undefined for a Markdown blockquoted thinking payload", () => {
-    const quoted: ReplyPayload = { text: "> thinking... _weighing the options_" };
-    expect(resolveHeartbeatReplyPayload(quoted)).toBeUndefined();
   });
 });

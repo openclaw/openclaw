@@ -924,11 +924,6 @@ jobs:
           NPM_WORKFLOW_REF: ${{ inputs.release_candidate_branch != '' && format('refs/heads/{0}', inputs.release_candidate_branch) || github.ref }}
         run: node scripts/openclaw-npm-extended-stable-release.mjs validate-request
 
-      - name: Capture previous extended-stable selector
-        id: previous_extended_stable
-        if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
-        run: node scripts/openclaw-npm-extended-stable-release.mjs capture-selector
-
       - name: Wait for the release parent's npm authorization
         if: needs.validate_publish_request.outputs.parent_approval == 'receipt'
         env:
@@ -940,6 +935,9 @@ jobs:
 
       - name: Publish
         id: publish
+        # The shared release parent owns registry convergence, artifact verification,
+        # and publication reporting for every npm channel. Direct recovery uses
+        # the same postpublish verifier before closeout.
         env:
           BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
           GH_TOKEN: ${{ github.token }}
@@ -987,54 +985,3 @@ jobs:
             publish_if_missing "$package_name" "preflight-tarball/$tarball_name"
           done < <(jq -r '(.corePackageTarballs // [])[] | [.packageName, .tarballName] | @tsv' preflight-tarball/preflight-manifest.json)
           bash trusted-workflow/scripts/openclaw-npm-publish.sh --publish "${publish_target}"
-
-      - name: Verify extended-stable registry readback
-        id: extended_stable_readback
-        if: ${{ success() && inputs.npm_dist_tag == 'extended-stable' }}
-        env:
-          EXPECTED_VERSION: ${{ inputs.tag }}
-        run: node scripts/openclaw-npm-extended-stable-release.mjs verify-readback
-
-      - name: Summarize extended-stable npm publication
-        if: ${{ always() && inputs.npm_dist_tag == 'extended-stable' }}
-        env:
-          BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          EXTENDED_STABLE_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
-          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
-          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
-          TARBALL_NAME: ${{ steps.preflight_provenance.outputs.tarball_name }}
-          TARBALL_SHA256: ${{ steps.preflight_provenance.outputs.tarball_sha256 }}
-          SELECTOR_CAPTURE_OUTCOME: ${{ steps.previous_extended_stable.outcome }}
-          PREVIOUS_EXTENDED_STABLE: ${{ steps.previous_extended_stable.outputs.previous }}
-          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
-          EXACT_READBACK: ${{ steps.extended_stable_readback.outputs.exact_version }}
-          SELECTOR_READBACK: ${{ steps.extended_stable_readback.outputs.extended_stable_selector }}
-          READBACK_OUTCOME: ${{ steps.extended_stable_readback.outcome }}
-        run: |
-          set -euo pipefail
-          release_version="${RELEASE_TAG#v}"
-          release_sha="$(git rev-parse HEAD)"
-          {
-            echo "## npm extended-stable publication"
-            echo "- Package: openclaw@${release_version}"
-            echo "- Extended-stable guard bypass: ${BYPASS_EXTENDED_STABLE_GUARD}"
-            echo "- Extended-stable branch: ${EXTENDED_STABLE_BRANCH}"
-            echo "- Release tag: ${RELEASE_TAG}"
-            echo "- Release SHA: ${release_sha}"
-            echo "- npm preflight run: ${PREFLIGHT_RUN_ID}"
-            echo "- Full Release Validation run: ${FULL_RELEASE_VALIDATION_RUN_ID}"
-            echo "- Tarball: ${TARBALL_NAME:-unavailable}"
-            echo "- Tarball SHA-256: ${TARBALL_SHA256:-unavailable}"
-            echo "- Previous openclaw@extended-stable: ${PREVIOUS_EXTENDED_STABLE:-unavailable}"
-            echo "- npm publish outcome: ${PUBLISH_OUTCOME}"
-            echo "- Exact-version readback: ${EXACT_READBACK:-unavailable}"
-            echo "- Extended-stable selector readback: ${SELECTOR_READBACK:-unavailable}"
-            echo "- Registry readback outcome: ${READBACK_OUTCOME}"
-            if [[ "$SELECTOR_CAPTURE_OUTCOME" != "success" ]]; then
-              echo "- Selector capture failed; npm publish did not run and no repair is required because npm was unchanged."
-            else
-              repair_command="$(EXPECTED_VERSION="$RELEASE_TAG" node scripts/openclaw-npm-extended-stable-release.mjs repair-command)"
-              echo "- Repair command: \`${repair_command}\`"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"

@@ -9,7 +9,7 @@ import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
 import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
-import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
+import { autoDisableCronJob, maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import {
   finalizeCronFailureNotifications,
   resolveFailureIncident,
@@ -95,6 +95,8 @@ export function applyJobResult(
     // Startup recovery restores historical notification facts separately.
     replay?: boolean;
     replaySchedule?: { nextRunAtMs?: number };
+    /** Only runOnExit carries the completed watcher's terminal occurrence. */
+    onExitWatcherCompletion?: boolean;
     deferredNotifications: DeferredCronNotifications;
   },
 ): boolean {
@@ -225,6 +227,7 @@ export function applyJobResult(
     job.deleteAfterRun === true &&
     completionStatus === "succeeded";
   let autoDisableNotificationOwnsFailure = false;
+  let terminalOneShot = false;
   // Set when a quick transient re-run is scheduled for a provider outage; finalize holds
   // the failure alert/repair until that retry ladder resolves.
   let pendingTransientRetry = false;
@@ -239,16 +242,29 @@ export function applyJobResult(
     if (shouldDelete) {
       job.state.nextRunAtMs = undefined;
     }
-    finalizeCronFailureNotifications(state, {
+    const failureNotification = finalizeCronFailureNotifications(state, {
       job,
       alertConfig,
       result,
       completionStatus,
       autoDisableNotificationOwnsFailure,
+      terminalOneShot,
       pendingTransientRetry,
       replay: opts.replay,
       deferredNotifications: opts.deferredNotifications,
     });
+    if (terminalOneShot) {
+      autoDisableCronJob({
+        job,
+        reason: "consecutive-failures",
+        atMs: result.endedAt,
+        consecutiveErrors: job.state.consecutiveErrors ?? 0,
+        terminalOneShot: true,
+        // Cooldown and incident suppression remain the alert owner's decision.
+        notify: failureNotification === "unavailable" && !opts.replay,
+        deferredNotifications: opts.deferredNotifications,
+      });
+    }
     return shouldDelete;
   };
 
@@ -337,6 +353,7 @@ export function applyJobResult(
           // to preserve the error state for inspection.
           job.enabled = false;
           job.state.nextRunAtMs = undefined;
+          terminalOneShot = retryDecision.reason !== "aborted";
           state.deps.log.warn(
             {
               jobId: job.id,
@@ -350,6 +367,15 @@ export function applyJobResult(
           );
         }
       }
+    } else if (
+      job.schedule.kind === "on-exit" &&
+      opts.onExitWatcherCompletion &&
+      result.status === "error"
+    ) {
+      // Re-enabling would rerun the completed watched command, even for a transient error.
+      job.enabled = false;
+      job.state.nextRunAtMs = undefined;
+      terminalOneShot = result.errorClassification?.kind !== "aborted";
     } else if (opts.scheduleMode === "preserve") {
       // Forced recurring or disabled one-shot runs cannot change a scheduled
       // slot. Preserve its absence, or its timestamp and paced provenance.
@@ -663,7 +689,11 @@ export function applyOutcomeToAuthoritativeJob(
     deferredNotifications: DeferredCronNotifications;
     triggerStateRetired?: boolean;
     // A requested run retains startup bookkeeping even when it advances ordinary cadence.
-    request?: { preserveCadence: boolean; scheduleOwnershipAtMs: number };
+    request?: {
+      preserveCadence: boolean;
+      scheduleOwnershipAtMs: number;
+      onExitWatcherCompletion?: boolean;
+    };
   },
 ): boolean {
   const scheduleOwnership = resolveCronRunScheduleOwnership({
@@ -717,6 +747,7 @@ export function applyOutcomeToAuthoritativeJob(
       opts.request?.preserveCadence && scheduleOwnership === "current" ? "preserve" : "advance",
     scheduleOwnership,
     scheduleOwnershipAtMs: opts.request?.scheduleOwnershipAtMs,
+    onExitWatcherCompletion: opts.request?.onExitWatcherCompletion,
     deferredNotifications: opts.deferredNotifications,
   });
   applyTriggerRunResult(job, result, { scheduleOwnership, triggerOwnership });

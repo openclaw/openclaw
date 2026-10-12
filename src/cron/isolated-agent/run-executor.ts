@@ -392,10 +392,9 @@ function createCronPromptExecutor(
         // Native bindings can exist before turn/start fails; deletion must retain
         // the selected owner even when no result metadata is ever returned.
         await params.persistSessionEntry();
-        await params.persistRunContinuationSession?.();
-        await params.setRunContinuationCliExecutionProvider?.(
-          cliExecution ? executionProvider : undefined,
-        );
+        await params.persistRunContinuationSession?.(undefined, {
+          cliExecutionProvider: cliExecution ? executionProvider : undefined,
+        });
         const bootstrapPromptWarningSignature = bootstrapPromptWarningSignaturesSeen.at(-1);
         // CLI providers can resume provider-native sessions; embedded providers
         // use OpenClaw's transcript/session file plus prompt-cache affinity.

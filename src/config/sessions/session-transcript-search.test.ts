@@ -85,7 +85,7 @@ async function appendUserMessage(sessionId: string, sessionKey: string, text: st
 
 // Keep projection fixtures deterministic; the worker suite covers host scheduling.
 function searchSessionTranscripts(params: SessionTranscriptSearchParams) {
-  const { found, revision: _revision, ...result } = searchSessionTranscriptsReadOnlySync(params);
+  const { found, ...result } = searchSessionTranscriptsReadOnlySync(params);
   const indexing =
     found &&
     listSessionsNeedingTranscriptIndexReconcile(

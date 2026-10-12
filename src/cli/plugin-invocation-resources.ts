@@ -29,18 +29,16 @@ export class CliPluginInvocationResources {
 
   acquire(load: () => Promise<RegistryAcquisition>): Promise<PluginRegistry> {
     // Retained cleanup can need its first registry after ordinary admission has closed.
-    // Capture that permission before load: an earlier command load must still reject if late.
-    const cleanupAcquisition = this.phase === "cleanup" && isAsyncWorkScopeActiveHere(this.work);
-    if (this.phase !== "open" && !cleanupAcquisition) {
+    if (
+      this.phase !== "open" &&
+      !(this.phase === "cleanup" && isAsyncWorkScopeActiveHere(this.work))
+    ) {
       return Promise.reject(new Error("Plugin CLI invocation is closed"));
     }
     return this.work.track(async () => {
       const acquisition = await load();
-      // Release owns late acquisitions too, even when admission closed during the load.
+      // Admitted loads may finish during shutdown; the work scope joins them before disposal.
       this.resources.add(acquisition);
-      if (this.phase !== "open" && !(cleanupAcquisition && this.phase === "cleanup")) {
-        throw new Error("Plugin CLI invocation closed during registry acquisition");
-      }
       return acquisition.registry;
     });
   }

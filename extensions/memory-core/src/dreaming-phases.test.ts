@@ -22,7 +22,7 @@ import {
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { previewRemHarness } from "./rem-harness.js";
 import { appendSessionCorpusLines } from "./session-ingestion.js";
-import { makeMessage, withSessionAdmissionReadBudget } from "./session-ingestion.test-support.js";
+import { makeMessage, withoutHostSessionAdmissionReads } from "./session-ingestion.test-support.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -814,7 +814,7 @@ describe("memory-core dreaming phases", () => {
     const excludedHarness = createHarness(excludedConfig, workspaceDir);
     const corpusFile = corpusPath(workspaceDir);
 
-    await withSessionAdmissionReadBudget(() => runLight(excludedHarness.sweep), 1);
+    await withoutHostSessionAdmissionReads(() => runLight(excludedHarness.sweep));
     const excludedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(excludedState.files["main:sessions/main/gmail-session"]).toMatchObject({
       contentHash: "",
@@ -832,7 +832,7 @@ describe("memory-core dreaming phases", () => {
     const admittedHarness = createDailyHarness(workspaceDir, {
       includeMainAgent: true,
     });
-    await withSessionAdmissionReadBudget(() => runLight(admittedHarness.sweep, 6), 0);
+    await withoutHostSessionAdmissionReads(() => runLight(admittedHarness.sweep, 6));
     const admittedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(admittedState.files["main:sessions/main/gmail-session"]).not.toHaveProperty(
       "excludedReason",
