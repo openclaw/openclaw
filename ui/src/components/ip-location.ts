@@ -1,1 +1,1 @@
-export { IpLocation } from "./ip-location.tsx";
+import "./ip-location.tsx";

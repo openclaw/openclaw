@@ -2,10 +2,11 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
+import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
-import { renderChatPositionRail } from "./chat-position-rail.ts";
 import { getTranscriptState } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
@@ -42,13 +43,12 @@ describe("conversation position rail", () => {
           vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
           return html`<div class="chat-thread" tabindex="0">
             <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
-            ${renderChatPositionRail({
+            ${solidContent(ChatPositionRail, {
               positions: {
                 markers,
                 markerIdsByMessageId: new Map(markers.map(({ id }) => [id, id])),
               },
               transcript: session,
-              requestUpdate: () => {},
             })}
           </div>`;
         }),
@@ -137,7 +137,7 @@ describe("conversation position rail", () => {
           (session) => html`
             <div class="chat-thread" tabindex="0">
               <div class="chat-bubble" data-entry-id="short">A short question</div>
-              ${renderChatPositionRail({ positions, transcript: session, requestUpdate: update })}
+              ${solidContent(ChatPositionRail, { positions, transcript: session })}
             </div>
           `,
         ),
@@ -228,7 +228,7 @@ describe("conversation position rail", () => {
             vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
             return html`<div class="chat-thread" tabindex="0">
               <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
-              ${renderChatPositionRail({ positions, transcript: session, requestUpdate: () => {} })}
+              ${solidContent(ChatPositionRail, { positions, transcript: session })}
             </div>`;
           }),
           container,

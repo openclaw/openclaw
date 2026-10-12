@@ -263,7 +263,6 @@ const portableScripts = [
   "scripts/e2e/skill-install-docker.sh",
   "scripts/e2e/system-agent-first-run-docker.sh",
   "scripts/e2e/system-agent-rescue-docker.sh",
-  "scripts/e2e/systemd-sealed-service-definition.sh",
   "scripts/e2e/update-channel-switch-docker.sh",
   "scripts/e2e/update-corrupt-plugin-docker.sh",
   "scripts/e2e/update-first-hop-compat-docker.sh",

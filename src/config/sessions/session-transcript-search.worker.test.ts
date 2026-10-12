@@ -291,7 +291,10 @@ it("cancels a search status callback queued behind a stuck writer at its deadlin
       await outcome;
       status.mockRestore();
     }
-    expect(await searchSessionTranscripts(request, database)).toEqual(committed);
+    expect(await searchSessionTranscripts(request, database)).toEqual({
+      ...committed,
+      indexing: false,
+    });
   });
 });
 

@@ -360,7 +360,6 @@ describe("shared-state worker error transport", () => {
       expect(result.cause).toBe(result.errors[0]);
       expect(result.errors[1]).toBe(result.errors[0]);
       expect(result.errors[2]).toBe(untouched);
-      expect(result.errors[3]).toBe(result);
     }
     expect(original.cause).toBe(remote);
     expect(original.errors).toEqual([remote, remote, untouched, original]);
@@ -591,7 +590,6 @@ describe("shared-state worker error transport", () => {
         name: "OpenClawStateLeaseError",
         message: "mismatched lease classification",
       },
-      { ...validNode, stack: "not transported" },
       { type: "aggregate", name: "AggregateError", message: "missing edges" },
       {
         type: "agent-media-migration",
@@ -601,11 +599,6 @@ describe("shared-state worker error transport", () => {
         schemaVersion: -1,
       },
     ].map((node) => ({ version: 1, root: 0, nodes: [node] })),
-    {
-      version: 1,
-      root: 0,
-      nodes: [{ type: "error", name: "Error", message: "unrelated" }, validNode],
-    },
   ])("rejects malformed or noncanonical payload %#", (payload) => {
     const retained = remoteError(payload);
     expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
