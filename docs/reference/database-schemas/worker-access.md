@@ -39,6 +39,19 @@ Missing outcomes and already committed claims for the same run return without
 another write. New claims keep their atomic conditional update and live commit
 authority check; retries retain the original claim timestamp.
 
+Ordinary admitted session-entry and prepared transcript reads use the existing
+read workers and WAL snapshots without reserving the writer FIFO. Writer receipts
+invalidate retained entry facts, and reads retain their admitted physical database
+and lifecycle. An explicit transcript lock lends its writer connection and
+settlement queue for read-your-writes. Synchronous authority acceptance, mutation
+preparation, cold initialization, retirement comparisons, and accepted-write
+barriers retain their ordered reservations.
+
+Session actor mutations borrow the connection opened by their transaction owner;
+they do not request a second handle admission before that transaction. Current
+transaction authority and final commit admission remain unchanged. These changes
+require no schema, stored-format, retention, or update migration.
+
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
 committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,
