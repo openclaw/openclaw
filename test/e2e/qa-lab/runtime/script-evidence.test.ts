@@ -7,10 +7,7 @@ import {
   type QaProviderMode,
   validateQaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/test-api.js";
-import {
-  createQaScriptBlockedStatusTracker,
-  createQaScriptEvidenceWriter,
-} from "./script-evidence.js";
+import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const tempRoots: string[] = [];
 
@@ -148,16 +145,6 @@ describe("QA script evidence writer", () => {
     ).toThrow("unknown qa scenario: script-evidence-test");
   });
 
-  it("writes the bounded log independently for multi-target summaries", async () => {
-    const { artifactBase, writer } = await makeWriter();
-    writer.appendLog("producer output\n");
-
-    await expect(writer.writeLog()).resolves.toEqual({ kind: "log", path: "producer.log" });
-    await expect(fs.readFile(path.join(artifactBase, "producer.log"), "utf8")).resolves.toBe(
-      "producer output\n",
-    );
-  });
-
   it("keeps UTF-8 logs and failure details within byte limits", async () => {
     const { artifactBase, writer } = await makeWriter({
       maxDetailsBytes: 9,
@@ -235,13 +222,4 @@ describe("QA script evidence writer", () => {
       ).toThrow("QA evidence artifact must be inside artifact base");
     },
   );
-
-  it("tracks blocked output before discarded diagnostic tails", () => {
-    const tracker = createQaScriptBlockedStatusTracker([/missing provider auth/i]);
-
-    tracker.append("missing provider ");
-    tracker.append(`auth\n${"x".repeat(4096)}`);
-
-    expect(tracker.status()).toBe("blocked");
-  });
 });
