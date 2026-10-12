@@ -242,16 +242,17 @@ describePosix("scripts/pr Git maintenance ownership", () => {
       expect(existsSync(fixture.completed)).toBe(true);
       expect(stderr).not.toContain("drain deadline");
       expect(stderr).not.toContain("process group remained active");
-      if (exitCode === 0) {
-        expect(
-          spawnSync("git", ["show-ref", "--verify", "--quiet", lockRef], {
-            cwd: fixture.repo,
-            env: fixture.env,
-          }).status,
-        ).toBe(1);
-      } else {
-        expect(fixture.git(["rev-parse", lockRef])).toBe(ownerOid);
-        expect(stderr).toContain(`reason: child exited with code ${exitCode}`);
+      // A joined maintenance failure drains like a clean exit, so both release the lock.
+      expect(
+        spawnSync("git", ["show-ref", "--verify", "--quiet", lockRef], {
+          cwd: fixture.repo,
+          env: fixture.env,
+        }).status,
+      ).toBe(1);
+      if (exitCode !== 0) {
+        expect(stderr).toContain(
+          `Released the operation lock for PR #42 after exit code ${exitCode}`,
+        );
       }
       expect(fixture.git(["config", "--bool", "maintenance.autoDetach"])).toBe("true");
       expect(fixture.git(["config", "--bool", "gc.autoDetach"])).toBe("true");

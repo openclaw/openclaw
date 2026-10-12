@@ -37,7 +37,7 @@ function rejectedAttempt(response = refusal) {
   const record = f.record();
   const capture = `merge-output.${record.attempt}.log`;
   expect(readFileSync(join(f.worktree, ".local", capture), "utf8")).toBe(response);
-  expect(f.recover()).toBe(true);
+  expect(f.recover()).toBe(false);
   f.save({ ...f.state(), restMergeRefusal: "" });
   return { f, oid, record, capture };
 }
@@ -121,7 +121,7 @@ describePosix("explicit prior-CI provider rejection recovery", () => {
     expect(secondRecord).toMatchObject({ phase: "intent", accepted: false });
     expect(mergeRequests(f)).toHaveLength(2);
     expectRetainedCapture(f, secondOid, first.capture);
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
 
     const stale = f.adminPriorCi(f.path, true, first.oid);
     expect(stale.status, stale.output).toBe(1);

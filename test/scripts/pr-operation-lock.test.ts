@@ -1077,20 +1077,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
     },
 
     {
-      title: "does not re-enter validation after side effects have started",
-      fixture: "failed-after-forged-validation.sh",
-      commands: [
-        "acquire_pr_operation_lock 42",
-        "begin_pr_operation_validation_phase",
-        "mark_pr_operation_side_effects_started",
-        "notify_pr_operation_phase validation-started",
-        "exit 3",
-      ],
-      status: 3,
-      retained: true,
-    },
-
-    {
       title: "retains a validation-phase lock for untrapped signal exit statuses",
       fixture: "killed-validation.sh",
       commands: ["acquire_pr_operation_lock 42", "begin_pr_operation_validation_phase", "exit 137"],
@@ -1478,6 +1464,8 @@ describePosix("scripts/pr per-PR operation lock", () => {
           "acquire_pr_operation_lock 42",
           "begin_pr_operation_validation_phase",
           "mark_pr_operation_side_effects_started",
+          // A forged phase notification cannot reopen the validation release window.
+          "notify_pr_operation_phase validation-started",
           `node '${launcherScript}'`,
           "exit 1",
         ],
@@ -1500,6 +1488,28 @@ describePosix("scripts/pr per-PR operation lock", () => {
       await cleanupRecordedProcessGroup(nestedPidFile, nestedPgid);
     }
   }, 15_000);
+  it("releases a failed side-effects lock once its group and notification pipe drain", async ({
+    signal,
+  }) => {
+    const repoDir = createRepo();
+    const result = await runSupervisedOperation(
+      repoDir,
+      "failed-drained-operation.sh",
+      [
+        "acquire_pr_operation_lock 42",
+        "begin_pr_operation_validation_phase",
+        "mark_pr_operation_side_effects_started",
+        "exit 1",
+      ],
+      { signal },
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+    expect(result.stderr).toContain(
+      "Released the operation lock for PR #42 after exit code 1; its process group and every notification-pipe holder exited.",
+    );
+    expect(result.stderr).not.toContain("lock-recover");
+    expect(refExists(repoDir)).toBe(false);
+  });
   it("waits while a live supervisor finishes draining a dead operation group", async ({
     signal,
   }) => {
