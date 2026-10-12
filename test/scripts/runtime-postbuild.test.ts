@@ -1365,6 +1365,9 @@ describe("previous release update compatibility", () => {
       "utf8",
     );
     const exportedNames = [...alias.matchAll(/select\("(\w+)"\)/g)].map((match) => match[1]);
+    const sortedNames = exportedNames.toSorted((left, right) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    );
     if (variant === "changed delegation") {
       alias = alias.replace("return runtime[name]", "return undefined");
     } else if (variant === "changed binding") {
@@ -1382,13 +1385,13 @@ describe("previous release update compatibility", () => {
         ].join("\n"),
       });
     if (variant !== "exact") {
-      expect(record).toThrow(`Cannot trace io.runtime.js export ${exportedNames.toSorted()[0]}`);
+      expect(record).toThrow(`Cannot trace io.runtime.js export ${sortedNames[0]}`);
       return;
     }
     expect(record().inventory.releases[0]?.chunks).toMatchObject([
       {
         path: "io.runtime.js",
-        exports: exportedNames.toSorted().map((exported) => ({
+        exports: sortedNames.map((exported) => ({
           exported,
           origin: { module: "src/config/io.ts", symbol: exported },
         })),
