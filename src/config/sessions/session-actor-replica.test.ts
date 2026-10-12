@@ -392,7 +392,12 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
       session_started_at: null,
       has_optional_references: 0,
     });
-    const detached = replica.read()!;
+    const shared = replica.read()!;
+    expect(replica.read()).toBe(shared);
+    expect(() => {
+      shared.entry!.label = "caller edit";
+    }).toThrow(TypeError);
+    const detached = structuredClone(shared);
     detached.entry!.label = "caller edit";
     expect(replica.read()?.entry?.label).toBe("before");
 
