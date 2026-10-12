@@ -262,13 +262,22 @@ it.each([
     const observations: Array<{ taskName: string; startedAt: number }> = [];
     vi.spyOn(performance, "now").mockImplementation(() => now);
     spawnSync.mockImplementation((_command, args, options) => {
+      // The state probe passes its body as a literal argv item and the task name
+      // as base64 stdin data; `-EncodedCommand` only carries unrelated scripts.
+      const commandBody = args[args.indexOf("-Command") + 1] ?? "";
+      const probeCall = commandBody.includes("Schedule.Service");
       const encoded = args[args.indexOf("-EncodedCommand") + 1];
       const script = Buffer.from(encoded, "base64").toString("utf16le");
       const encodedName = /FromBase64String\('([^']*)'\)/.exec(script)?.[1];
-      if (encodedName === undefined || typeof options?.timeout !== "number") {
+      if ((!probeCall && encodedName === undefined) || typeof options?.timeout !== "number") {
         throw new Error("Unbounded or unrecognized native Scheduler request");
       }
-      const taskName = Buffer.from(encodedName, "base64").toString("utf8");
+      const stdin = typeof options?.input === "string" ? options.input.trim() : "";
+      const taskName = probeCall
+        ? stdin === ""
+          ? ""
+          : Buffer.from(stdin, "base64").toString("utf8")
+        : Buffer.from(encodedName ?? "", "base64").toString("utf8");
       observations.push({ taskName, startedAt: now });
       const duration =
         taskName === ""

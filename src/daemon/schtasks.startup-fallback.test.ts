@@ -119,10 +119,11 @@ vi.mock("node:child_process", async () => {
     spawnSync: (command: string, args?: readonly string[], options?: SpawnSyncOptions) => {
       const encoded = args?.indexOf("-EncodedCommand") ?? -1;
       if (
-        encoded >= 0 &&
-        Buffer.from(args?.[encoded + 1] ?? "", "base64")
-          .toString("utf16le")
-          .includes("Schedule.Service")
+        (encoded >= 0 &&
+          Buffer.from(args?.[encoded + 1] ?? "", "base64")
+            .toString("utf16le")
+            .includes("Schedule.Service")) ||
+        (args?.join(" ") ?? "").includes("Schedule.Service")
       ) {
         return taskProbe(command, args, options);
       }

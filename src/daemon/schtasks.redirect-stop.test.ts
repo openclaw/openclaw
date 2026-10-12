@@ -36,10 +36,11 @@ beforeEach(() => {
   spawnSync.mockImplementation((exe: string, args) => {
     const encoded = args?.indexOf("-EncodedCommand") ?? -1;
     const taskQuery =
-      encoded >= 0 &&
-      Buffer.from(args?.[encoded + 1] ?? "", "base64")
-        .toString("utf16le")
-        .includes("Schedule.Service");
+      (encoded >= 0 &&
+        Buffer.from(args?.[encoded + 1] ?? "", "base64")
+          .toString("utf16le")
+          .includes("Schedule.Service")) ||
+      (args?.join(" ") ?? "").includes("Schedule.Service");
     const stdout = taskQuery
       ? JSON.stringify({ state: 3, lastRunResult: 0, lastRunTime: "2026-09-27T00:00:00Z" })
       : "No tasks";
