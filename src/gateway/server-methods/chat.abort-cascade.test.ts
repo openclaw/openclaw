@@ -23,6 +23,7 @@ import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureExecRequestCustody,
@@ -175,6 +176,8 @@ describe("descendant cascade ownership", () => {
         await registerSubagentRun({
           runId,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: { sessionId: runId },
           requesterSessionKey: sessionKey,
           requesterAgentId: "main",
           requesterTurnRunId,
@@ -330,6 +333,8 @@ describe("descendant cascade ownership", () => {
     await registerSubagentRun({
       runId: "retained-stop-child",
       childSessionKey: childKey,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childKey }),
       requesterSessionKey: sessionKey,
       requesterAgentId: "main",
       requesterTurnRunId: "parent",
@@ -616,6 +621,8 @@ describe("descendant cascade ownership", () => {
       registerSubagentRun({
         runId: "cascade-queued",
         childSessionKey: childKey,
+        childAgentId: "main",
+        sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childKey }),
         requesterSessionKey:
           kind === "late descendant" ? "agent:main:subagent:orchestrator" : sessionKey,
         requesterAgentId: "main",
@@ -630,6 +637,11 @@ describe("descendant cascade ownership", () => {
       await registerSubagentRun({
         runId: "orchestrator",
         childSessionKey: "agent:main:subagent:orchestrator",
+        childAgentId: "main",
+        sessionEntry: loadSessionEntry({
+          agentId: "main",
+          sessionKey: "agent:main:subagent:orchestrator",
+        }),
         requesterSessionKey: sessionKey,
         requesterAgentId: "main",
         requesterTurnRunId: "run-mine",
@@ -657,6 +669,12 @@ describe("descendant cascade ownership", () => {
         ? await beginSessionWorkAdmission({
             scope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
             identities: ["agent:main:subagent:orchestrator"],
+            run: {
+              runId: "orchestrator",
+              sessionKey: "agent:main:subagent:orchestrator",
+              sessionId: "orchestrator",
+              agentId: "main",
+            },
             assertAllowed: () => {},
             onInterrupt: () => entered.resolve(),
           })

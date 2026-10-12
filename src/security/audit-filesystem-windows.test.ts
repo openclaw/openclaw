@@ -21,17 +21,9 @@ function windowsAclQueryResult(
   args: string[],
   stateGrant?: { sid: string; mask: number },
 ): { stdout: string; stderr: string } {
-  expect(command.toLowerCase()).toMatch(/powershell\.exe$/u);
-  const encodedCommand = expectDefined(
-    args[args.indexOf("-EncodedCommand") + 1],
-    "encoded PowerShell command",
-  );
-  const script = Buffer.from(encodedCommand, "base64").toString("utf16le");
-  const encodedPath = expectDefined(
-    /FromBase64String\('([^']+)'\)/u.exec(script)?.[1],
-    "encoded permission target",
-  );
-  const target = Buffer.from(encodedPath, "base64").toString("utf8");
+  expect(path.basename(command)).toBe("windows-security-helper.exe");
+  expect(args[0]).toBe("owner");
+  const target = expectDefined(args[1], "permission target");
   const currentUserSid = "S-1-5-21-1-2-3-1001";
   const grants = [
     { sid: "S-1-5-18", mask: 0x001f_01ff },
@@ -59,7 +51,7 @@ describe("security audit filesystem Windows findings", () => {
   let nativeModeEnv: ReturnType<typeof captureEnv>;
   beforeEach(() => {
     nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
-    // The injected PowerShell fixture exercises the supported command fallback.
+    // The injected Windows helper fixture exercises the supported command fallback.
     setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
   });
   afterEach(() => nativeModeEnv.restore());

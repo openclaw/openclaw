@@ -61,7 +61,10 @@ export class ProcessInspectionError extends Error {
 }
 
 function remainingInspectionTime(deadline: number): number {
-  const remainingMs = deadline - Date.now();
+  // Use the monotonic clock so NTP adjustments or sleep resumes cannot stretch
+  // or shrink the budget while the inspection timers (also monotonic) are in flight.
+  // Math.floor keeps the value integral for AbortSignal.timeout / setTimeout.
+  const remainingMs = Math.floor(deadline - performance.now());
   if (remainingMs <= 0) {
     throw new ProcessInspectionError("deadline");
   }
@@ -93,7 +96,7 @@ function isMissingProcess(error: unknown): boolean {
 }
 
 export async function readCodexAppServerProcessSnapshot(
-  deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
+  deadline = performance.now() + MAX_PROCESS_CONTAINMENT_MS,
   pids?: readonly number[],
 ): Promise<PosixProcess[]> {
   // Registration proves only known owners. Containment still needs the full tree.
@@ -219,7 +222,7 @@ async function readProcessOutput(
       },
       (error, stdout) => {
         settle(
-          Date.now() >= deadline
+          performance.now() >= deadline
             ? new ProcessInspectionError("deadline")
             : error
               ? procfs && error.code === PROCFS_COMMAND_PERMISSION_EXIT

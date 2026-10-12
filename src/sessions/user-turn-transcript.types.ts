@@ -197,6 +197,10 @@ export type CreateUserTurnTranscriptRecorderParams = {
 
 type UserTurnPersistenceOptions = {
   target?: UserTurnTranscriptTargetResolver;
+  /** Pin admitted storage without replacing the recorder's target resolver or metadata. */
+  storageTarget?: Readonly<
+    Pick<UserTurnTranscriptTarget, "agentId" | "sessionKey" | "sessionId"> & { storePath: string }
+  >;
   updateMode?: UserTurnTranscriptUpdateMode;
   cwd?: string;
 };

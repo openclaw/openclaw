@@ -66,6 +66,7 @@ export async function resumeSessionsSendTask(params: {
       caller: params.caller,
       childSessionKey: params.sessionKey,
       childSessionId: entry.sessionId,
+      childLifecycleRevision: entry.lifecycleRevision,
     });
     const accepted = await params.callGateway<{
       runId: string;

@@ -30,7 +30,7 @@ afterEach(async () => {
 });
 
 describe("device setup completion pruning", () => {
-  it("keeps idle setup cleanup read-only and reuses its first expiry observation", async () => {
+  it("keeps idle setup cleanup read-only and reports its expiry fact", async () => {
     const baseDir = await createTempDir();
     const env = { ...process.env, OPENCLAW_STATE_DIR: baseDir };
     const database = openOpenClawStateDatabase({ env });
@@ -64,8 +64,7 @@ describe("device setup completion pruning", () => {
         ),
       );
     try {
-      expect(prune(1_000)).toBe(0);
-      expect(prune(1_001)).toBe(0);
+      expect(prune(1_000)).toMatchObject({ removed: 0, nextExpiryAtMs: null });
       expect(statements.counts).toEqual({ expiry: 1, prune: 0 });
       expect(execute.mock.calls.some(([sql]) => /^(?:BEGIN|SAVEPOINT)\b/iu.test(sql))).toBe(false);
     } finally {
@@ -76,7 +75,7 @@ describe("device setup completion pruning", () => {
     }
   });
 
-  it("prunes newly retained setup outcomes at their deadline after an idle pass", async () => {
+  it("refreshes the host expiry cache after a worker write and prunes at its deadline", async () => {
     const baseDir = await createTempDir();
     vi.useFakeTimers();
     try {
@@ -101,6 +100,13 @@ describe("device setup completion pruning", () => {
         token: issued.token,
         deviceId: "device-123",
         completedAtMs: recordedAtMs,
+      });
+      await expect(
+        readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId }),
+      ).resolves.toMatchObject({
+        setupId: issued.setupId,
+        deviceId: "device-123",
+        retainUntilMs: recordedAtMs + 20 * 60 * 1000,
       });
 
       await expect(

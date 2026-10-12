@@ -23,7 +23,6 @@ export {
   type DirectorySyncOutcome,
   type DirectoryReceipt,
   type ExactDirectoryReceipt,
-  type DurableDirectoryReceipt,
   type PinnedDirectory,
 } from "@openclaw/fs-safe/durability";
 

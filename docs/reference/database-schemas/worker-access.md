@@ -264,6 +264,11 @@ from SQLite's native connection descriptor.
 Synchronous admission exchanges carry the requested physical database's facts and
 custody, including a retained file whose original pathname now points elsewhere.
 
+A refused opener can preserve another owner's reader validation only when its
+refusal certifies that no agent handle opened and admission cleanup succeeded.
+Admission failures during native open or schema refresh cannot carry that
+certificate; retirement keeps conservative validation and lease cleanup.
+
 Quarantine guards retain their indexed durable row lookup by target pathname.
 A separate inspection process can admit a file before the Gateway's verifier
 confirms corruption and records quarantine. The inspecting process must observe
@@ -287,6 +292,19 @@ proves that no other descriptor for that file remains in the process.
 
 Migration and repair owners retain their checks and publish replacement facts
 after their DDL commits. Ordinary runtime consumers do not revalidate that result.
+
+<a id="private-worker-schema-extensions" />
+
+Bundled worker backends can use `stageOpenClawAgentDatabaseSchemaExtension` from
+`openclaw/plugin-sdk/sqlite-worker-runtime` before known derived-table DDL inside
+a managed transaction. Use it only when the operation preserves agent ownership
+metadata and canonical agent tables, indexes, and triggers. The committed receipt
+preserves those existing contracts; unclassified DDL and migrations still require
+their normal schema admission. Private databases without agent admission are
+unaffected.
+This is a private-local runtime helper; its declarations are intentionally excluded
+from the typed public Plugin SDK package.
+
 Memory's vector worker stages an agent schema-extension receipt before replacing
 its derived virtual tables. After commit, it publishes the settled catalog,
 including SQLite extension shadow tables, while retaining the unchanged agent
@@ -954,6 +972,15 @@ values. Writer transactions still reread authoritative rows, and live permission
 run, generation, and source assertions remain at effect boundaries. This changes
 no schema, stored bytes, durability, retention, permissions, or update behavior.
 
+Entry snapshot enrichment preserves the resident row projection, including Board
+presence and the activity-summary watermark. The entry, participant display, and
+watermark remain covered by the same committed write token. Native deletions,
+count-only participant updates, cold archive changes, and unscoped fixture writes
+invalidate those facts through the existing write receipts.
+Starting another actor command retains the preceding committed snapshot until a
+write changes its token. A reader that evicts stale facts does not cancel the
+pending command's receipt; its complete postimage can still install after commit.
+
 Typed session writers publish through the existing entry and transcript owners.
 Entry replacement and patch receipts carry the committed lifecycle, permission,
 sharing, membership, owner, and category facts. Partial owner, member, category,
@@ -974,6 +1001,14 @@ worker callers install from the native commit receipt before completion. A neste
 savepoint cannot publish facts that its outer transaction may still roll back.
 Received worker facts have their own installation frame even when a native caller
 is waiting for, or already owns, a different transaction on its host handle.
+
+Row projections consume these committed facts without comparing a global
+transcript notification counter. The physical writer queue orders receipt
+installation, and each affected row's publisher refreshes or invalidates its
+facts. Presentation notifications schedule refreshes using the installed facts;
+message IDs, sequence numbers, and lifecycle hints do not certify database
+freshness. A delayed notification may schedule an unnecessary refresh, but does
+not replace the current row's watermark with notification data.
 
 The projection is not a complete list of valid anchors. Exact anchor membership,
 CLI-writer ownership, and accepted-input custody retain their existing validators.

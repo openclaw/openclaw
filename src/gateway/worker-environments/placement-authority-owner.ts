@@ -32,6 +32,7 @@ export function closePlacementAuthorityOwner(owner: PlacementAuthorityOwner): vo
   owner.placementReaders.clear();
   owner.projections.clear();
   owner.preservation = undefined;
+  owner.recoveryCandidatesEmpty = undefined;
 }
 
 export const placementAuthorityOwners = resolveGlobalSingleton(

@@ -26,6 +26,7 @@ import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/s
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
 import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -63,11 +64,14 @@ async function createYieldedChild(withSibling = false) {
       agentId: "main",
       sessionKey,
       defaultSessionId: `${sessionKey}-session`,
+      lifecycleRevision: "initial-transfer",
     });
   }
   for (const child of children) {
     await registerSubagentRun({
       ...child,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: child.childSessionKey }),
       requesterSessionKey,
       requesterAgentId: "main",
       requesterTurnRunId,
@@ -135,6 +139,8 @@ it.each(["unchanged", "replaced", "empty"] as const)(
       await registerSubagentRun({
         runId,
         childSessionKey: "agent:main:subagent:cold-initial-child",
+        childAgentId: "main",
+        sessionEntry: { sessionId: "cold-initial-child-session" },
         requesterSessionKey,
         requesterAgentId: "main",
         requesterTurnRunId,
@@ -417,6 +423,8 @@ it("rejects an overlapping claim without releasing the first authority preparati
   await registerSubagentRun({
     runId,
     childSessionKey: "agent:main:subagent:joined-authority-child",
+    childAgentId: "main",
+    sessionEntry: { sessionId: "joined-authority-child-session" },
     requesterSessionKey,
     requesterAgentId: "main",
     requesterTurnRunId,

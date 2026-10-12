@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { captureSessionWorkRunInterruptions } from "../sessions/session-lifecycle-admission.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { loadSessionEntry } from "./session-utils.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -118,6 +120,21 @@ describe("Gateway close during agent admission", () => {
       );
       await admissionHeld.promise;
       expect(kernel.gatewayRequestContext.chatAbortControllers.size).toBe(0);
+      const session = loadSessionEntry("main");
+      expect(
+        captureSessionWorkRunInterruptions({
+          scope: session.storePath,
+          identities: [session.canonicalKey, session.entry?.sessionId],
+          accept: (run) => run.runId === "late-admission",
+        }).map(({ run }) => run),
+      ).toEqual([
+        {
+          runId: "late-admission",
+          sessionKey: session.canonicalKey,
+          sessionId: session.entry?.sessionId,
+          agentId: "main",
+        },
+      ]);
       const drain = kernel.connectionWork.drain.bind(kernel.connectionWork);
       vi.spyOn(kernel.connectionWork, "drain").mockImplementationOnce(() => {
         const operation = drain();

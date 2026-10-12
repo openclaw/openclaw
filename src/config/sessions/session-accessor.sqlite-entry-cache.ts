@@ -455,7 +455,7 @@ export function publishSessionEntryCacheParticipantUpdate(
 ): void {
   const { writeGeneration, projectionChanged } = params;
   if (!projectionChanged) {
-    // Count-only contributions do not change list facts, including when the cache is cold.
+    // Count-only contributions retain list facts but invalidate exact participant records.
     if (writeGeneration) {
       publishTrackedCacheUpdate(database, () => {
         const cached = sessionEntryCaches.get(database.db);
@@ -464,6 +464,13 @@ export function publishSessionEntryCacheParticipantUpdate(
         }
       });
     }
+    emitPreparedSessionSharingChange(
+      database,
+      sessionKey,
+      database.agentId,
+      { kind: "participants" },
+      { kind: "marker", sharingChange: "unchanged" },
+    );
     return;
   }
   let facts: SessionRowFacts = { kind: "participants" };

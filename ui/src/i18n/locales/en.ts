@@ -3502,6 +3502,8 @@ export const en: TranslationMap & {
       draftConflict: "This question was edited in another tab. Copy your answer before reloading.",
     },
     questions: {
+      showSecret: "Show secret",
+      hideSecret: "Hide secret",
       resourcePreview: "Preview resource",
       addResources: "Add resources",
       resourceUploadTooLarge: "Selected resources exceed the upload limits.",

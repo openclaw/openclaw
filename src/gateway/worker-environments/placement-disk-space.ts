@@ -105,7 +105,7 @@ function parseDiskSpaceProbe(stdout: string, observedAtMs: number): SessionPlace
 }
 
 export function createWorkerPlacementDiskSpaceMonitor(params: {
-  placements: Pick<WorkerSessionPlacementStore, "get" | "readChangeSnapshot" | "readProjection">;
+  placements: Pick<WorkerSessionPlacementStore, "prepareMaintenancePlacements">;
   environments: Pick<WorkerEnvironmentService, "startTunnel">;
   runnerAvailability: Pick<WorkerPlacementRunnerAvailabilityReader, "read" | "version">;
   warn: (message: string) => void;
@@ -159,13 +159,9 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
       result.stdout,
       Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(now()))),
     );
-    const current = params.placements.get(placement.sessionId);
     const candidate = { ...placement, snapshot, runnerVersion } satisfies DiskSpaceObservation;
-    // Tunnel work can outlive an owner. Accept the sample only for the exact active generation.
-    if (!hasExactBinding(candidate, current)) {
-      return;
-    }
-    const previous = read(current);
+    // Late samples remain tagged with their original binding; read() hides them after a move.
+    const previous = read(placement);
     observations.set(placement.sessionId, candidate);
     if (
       !previous ||
@@ -185,22 +181,20 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
   };
 
   const sweep = async (): Promise<void> => {
-    const identities = await params.placements.readChangeSnapshot();
-    const projection = await params.placements.readProjection(
-      identities.map(({ sessionId }) => sessionId),
-      { current: true },
+    const inventory = await params.placements.prepareMaintenancePlacements();
+    const active = inventory.placements.filter(
+      (placement): placement is ActivePlacement => placement.state === "active",
     );
-    const active = identities
-      .map(({ sessionId }) => projection.placements.get(sessionId))
-      .filter((placement): placement is ActivePlacement => placement?.state === "active");
+    inventory.release();
+    const activeBySession = new Map(active.map((placement) => [placement.sessionId, placement]));
     for (const [sessionId, observation] of observations) {
-      if (!hasExactBinding(observation, params.placements.get(sessionId))) {
+      if (!hasExactBinding(observation, activeBySession.get(sessionId))) {
         observations.delete(sessionId);
         observationVersion += 1;
       }
     }
     for (const [sessionId, binding] of staleBindings) {
-      if (!hasExactBinding(binding, params.placements.get(sessionId))) {
+      if (!hasExactBinding(binding, activeBySession.get(sessionId))) {
         staleBindings.delete(sessionId);
       }
     }

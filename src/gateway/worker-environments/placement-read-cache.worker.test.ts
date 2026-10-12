@@ -7,6 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
@@ -26,6 +27,104 @@ const roots = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("worker placement read cache", () => {
+  it("reuses empty recovery candidates and sees committed work across stores", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-recovery-cache-"));
+    const database = openOpenClawStateDatabase();
+    const reader = createWorkerSessionPlacementStore({ database });
+    const writer = createWorkerSessionPlacementStore({ database });
+    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const recoveryReadCount = () =>
+      reads.mock.calls.filter(
+        ([, command]) => command.type === "workers.placementRecoveryCandidates",
+      ).length;
+
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    expect(await writer.readRecoveryCandidates()).toEqual([]);
+    expect(recoveryReadCount()).toBe(1);
+
+    const remote = await writer.startDispatch({
+      sessionId: "recovery-remote",
+      agentId: "main",
+      sessionKey: "agent:main:recovery-remote",
+    });
+    const expected = [{ sessionId: remote.sessionId, environmentId: null, state: "requested" }];
+    expect(await reader.readRecoveryCandidates()).toEqual(expected);
+    expect(await reader.readRecoveryCandidates()).toEqual(expected);
+    expect(recoveryReadCount()).toBe(3);
+
+    await writer.retireSessionPlacementAsync({
+      sessionId: remote.sessionId,
+      expectedState: "requested",
+      expectedGeneration: remote.generation,
+    });
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    expect(await writer.readRecoveryCandidates()).toEqual([]);
+    expect(recoveryReadCount()).toBe(4);
+  });
+
+  it("reuses the disk sweep inventory and observes committed placement transitions", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-disk-cache-"));
+    const database = openOpenClawStateDatabase();
+    const reader = createWorkerSessionPlacementStore({ database });
+    const writer = createWorkerSessionPlacementStore({ database });
+    const runWorkspaceCommand = vi.fn(async () => ({
+      stdout: JSON.stringify({ availableBytes: "6000000000", totalBytes: "10000000000" }),
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
+    }));
+    const unexpected = async () => {
+      throw new Error("unexpected workspace mutation during a disk probe");
+    };
+    let nowMs = 1_000;
+    const warn = vi.fn();
+    const monitor = createWorkerPlacementDiskSpaceMonitor({
+      placements: reader,
+      environments: {
+        startTunnel: async ({ environmentId, ownerEpoch }) => ({
+          environmentId,
+          ownerEpoch,
+          runWorkspaceCommand,
+          quiesceWorkspace: unexpected,
+          syncWorkspace: unexpected,
+          reconcileWorkspace: unexpected,
+          stop: async () => {},
+        }),
+      },
+      runnerAvailability: { read: () => undefined, version: () => 0 },
+      warn,
+      now: () => nowMs,
+    });
+    await monitor.sweep();
+    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    await monitor.sweep();
+    expect(reads).not.toHaveBeenCalled();
+    expect(runWorkspaceCommand).not.toHaveBeenCalled();
+
+    const active = await advancePlacementFixtureToActive(writer, database, {
+      sessionId: "disk-cache",
+      sessionKey: "agent:main:disk-cache",
+      agentId: "main",
+    });
+    await monitor.sweep();
+    expect(runWorkspaceCommand).toHaveBeenCalledOnce();
+    expect(monitor.read(active)?.status).toBe("ok");
+
+    const draining = await writer.transition({
+      sessionId: active.sessionId,
+      from: "active",
+      to: "draining",
+      expectedGeneration: active.generation,
+    });
+    nowMs += 15 * 60_000;
+    await monitor.sweep();
+    expect(monitor.read(draining)).toBeUndefined();
+    expect(runWorkspaceCommand).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("claims and releases an existing worker placement with a NULL execution mode", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-null-mode-"));
     const database = openOpenClawStateDatabase();

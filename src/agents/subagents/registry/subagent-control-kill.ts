@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { captureSubagentCommands } from "./subagent-control-commands.js";
 import { mutateSubagentRunForKill } from "./subagent-control-kill-runtime.js";
 import {
@@ -39,6 +40,7 @@ import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-me
 import { listRunsForControllerFromRuns } from "./subagent-registry-queries.js";
 import { listSubagentRunsForRequester } from "./subagent-registry-read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 async function killSubagentRun(
   params: Parameters<typeof mutateSubagentRunForKill>[0],
@@ -608,11 +610,17 @@ export async function killSubagentRunAdmin(
   if (!targetSessionKey) {
     return publish({ found: false as const, killed: false as const });
   }
-  const entry = getLatestOwnedSubagentRun(targetSessionKey, params.agentId, params.cfg);
+  const expectedRunId = params.expectedRunId?.trim();
+  const selected = expectedRunId ? subagentRuns.get(expectedRunId) : undefined;
+  const entry =
+    selected &&
+    selected.childSessionKey === targetSessionKey &&
+    resolveSubagentChildAuthority(selected).status !== "verified"
+      ? selected
+      : getLatestOwnedSubagentRun(targetSessionKey, params.agentId, params.cfg);
   if (!entry) {
     return publish({ found: false as const, killed: false as const });
   }
-  const expectedRunId = params.expectedRunId?.trim();
   const expectedTaskRunId = params.expectedTaskRunId?.trim();
   if (
     (expectedRunId && entry.runId !== expectedRunId) ||
@@ -624,6 +632,18 @@ export async function killSubagentRunAdmin(
     return publish({ found: false as const, killed: false as const });
   }
 
+  const authority = resolveSubagentChildAuthority(entry);
+  if (authority.status === "mismatch") {
+    return publish({
+      found: true,
+      killed: false,
+      cascadeKilled: 0,
+      runId: entry.runId,
+      sessionKey: entry.childSessionKey,
+      error: authority.error,
+    });
+  }
+
   let rootStopSuperseded = false;
   return withSubagentKillScope<SubagentAdminKillResult>(
     {
@@ -631,6 +651,17 @@ export async function killSubagentRunAdmin(
       runs: [entry],
       assertCurrent: control?.assertCurrent,
       prepareRead: control?.prepareRead,
+      ownsRoot:
+        params.expectedGeneration === undefined
+          ? undefined
+          : (candidate) => {
+              const current = getLatestOwnedSubagentRun(
+                candidate.childSessionKey,
+                authority.childAgentId,
+                params.cfg,
+              );
+              return !current || isSameSubagentRunOwner(current, candidate);
+            },
     },
     async (scope, [tree]) => {
       if (!tree) {

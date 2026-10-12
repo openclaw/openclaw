@@ -298,7 +298,7 @@ function collectExpiredCronRunIds(records: readonly CronRunRecord[], now: number
   return expired;
 }
 
-export function pruneCronRunHistoryInDatabase(
+function pruneCronRunHistoryInDatabase(
   db: DatabaseSync,
   now: number,
   schema: CronRunReceiptWriteSchema,
@@ -326,13 +326,12 @@ export function pruneCronRunHistoryInDatabase(
   return ids.length;
 }
 
-/** Caller holds the transaction and retains live job/receipt decisions through commit. */
-export function reconcileCronRunHistoryInDatabase(
-  db: DatabaseSync,
+/** Plan synchronous maintenance on the serialized writer before opening a write transaction. */
+export function planCronRunHistoryMaintenance(
   records: readonly CronRunRecord[],
   now: number,
   protectedJobIds: ReadonlySet<string>,
-): Set<string> {
+) {
   const key = (row: CronRunRecord) =>
     JSON.stringify([cronRunRecordStoreKey(row), row.jobId, row.runId]);
   const firstByRun = new Map<string, CronRunRecord>();
@@ -341,7 +340,7 @@ export function reconcileCronRunHistoryInDatabase(
       firstByRun.set(key(row), row);
     }
   }
-  const reconciled = new Set<string>();
+  const reconciliations: CronRunRecord[] = [];
   for (const row of records) {
     const active = row.status === "queued" || row.status === "running";
     const recoverableLost =
@@ -383,6 +382,25 @@ export function reconcileCronRunHistoryInDatabase(
         error: row.error ?? "backing session missing",
       });
     }
+    reconciliations.push(next);
+  }
+  const reconciledIds = new Set(reconciliations.map((row) => row.id));
+  // Newly lost rows retain their first lost observation until the next sweep.
+  const pruneCandidates = records.filter((row) => !reconciledIds.has(row.id));
+  return {
+    reconciliations,
+    pruneCandidates,
+    prune: collectExpiredCronRunIds(pruneCandidates, now).size > 0,
+  };
+}
+
+export function applyCronRunHistoryMaintenanceInDatabase(
+  db: DatabaseSync,
+  plan: ReturnType<typeof planCronRunHistoryMaintenance>,
+  now: number,
+  schema: CronRunReceiptWriteSchema,
+): { reconciled: number; pruned: number } {
+  for (const next of plan.reconciliations) {
     executeSqliteQuerySync(
       db,
       query(db)
@@ -399,9 +417,11 @@ export function reconcileCronRunHistoryInDatabase(
           detail_json: next.detail === undefined ? null : JSON.stringify(next.detail),
         })
         .where("runtime", "=", "cron")
-        .where("task_id", "=", row.id),
+        .where("task_id", "=", next.id),
     );
-    reconciled.add(row.id);
   }
-  return reconciled;
+  return {
+    reconciled: plan.reconciliations.length,
+    pruned: plan.prune ? pruneCronRunHistoryInDatabase(db, now, schema, plan.pruneCandidates) : 0,
+  };
 }

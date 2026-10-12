@@ -18,7 +18,6 @@ import * as runtimeMutations from "./service/runtime-mutation.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { cronStoreKey } from "./store/key.js";
-import * as receipts from "./store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
 
 const transports = vi.hoisted(() => ({
@@ -140,7 +139,6 @@ it.each([
         nowMs: secondReplacementClock.clock.now,
       });
     let tick: Promise<void> | undefined;
-    let restoreOwnerProbe: (() => void) | undefined;
     try {
       await first.start();
       const job = await first.add({
@@ -164,16 +162,8 @@ it.each([
       expect(receipt).toBeDefined();
       expect((await first.readJob(job.id))?.state.runningReceiptId).toBe(receipt?.receiptId);
 
-      // Simulate process death at the liveness probe. Admission, receipt identity,
-      // recovery CAS, catch-up, and finalization use their real persisted state.
-      const probe = receipts.isCronRunReceiptOwnerStale;
-      const ownerProbe = vi
-        .spyOn(receipts, "isCronRunReceiptOwnerStale")
-        .mockImplementation(
-          (candidate, nowMs) =>
-            candidate.receiptId === receipt?.receiptId || probe(candidate, nowMs),
-        );
-      restoreOwnerProbe = () => ownerProbe.mockRestore();
+      // Retire the old launcher while its payload remains unresolved; startup
+      // recovery consumes the real persisted request without replaying its effect.
       first.stop();
       advanceCronActiveJobGeneration();
       await replacement.start();
@@ -230,11 +220,7 @@ it.each([
       replacement.stop();
       secondReplacement.stop();
       acknowledgment.resolve();
-      try {
-        await tick;
-      } finally {
-        restoreOwnerProbe?.();
-      }
+      await tick;
     }
   },
 );

@@ -3,7 +3,7 @@ import path from "node:path";
 import type { DatabaseSync, StatementSync as NativeStatement } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -22,7 +22,12 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
@@ -196,27 +201,44 @@ it.each(["cold", "warm-cap", "removal"] as const)(
   },
 );
 
-it.each([
-  "registry",
-  "recovery-cycle",
-  "recovery-run",
-  "provider",
-  "work-key",
-  "work-id",
-  "lifecycle-key",
-  "lifecycle-id",
-  "ancestor",
-] as const)("preserves %s protection through automatic worker planning", async (protection) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+describe("automatic worker planning protections", () => {
+  let state: OpenClawTestState;
+
+  beforeAll(async () => {
+    state = await createOpenClawTestState({ scenario: "minimal" });
+  });
+
+  afterEach(async () => {
+    await drainSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+  });
+
+  afterAll(async () => {
+    await state.cleanup();
+  });
+
+  it.each([
+    "registry",
+    "recovery-cycle",
+    "recovery-run",
+    "provider",
+    "work-key",
+    "work-id",
+    "lifecycle-key",
+    "lifecycle-id",
+    "ancestor",
+  ] as const)("preserves %s protection through automatic worker planning", async (protection) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
-    const active = { sessionKey: "agent:main:maintenance-protection-active", storePath };
+    const active = {
+      sessionKey: `agent:main:maintenance-protection-active-${protection}`,
+      storePath,
+    };
     const protectedKey = protection.startsWith("recovery")
-      ? "agent:main:hook:maintenance-protected"
-      : "agent:main:subagent:maintenance-protected";
-    const protectedId = "maintenance-protected-id";
-    const aliasKey = "agent:main:subagent:maintenance-protected-alias";
-    const sibling = "agent:main:subagent:maintenance-unprotected";
-    replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
+      ? `agent:main:hook:maintenance-protected-${protection}`
+      : `agent:main:subagent:maintenance-protected-${protection}`;
+    const protectedId = `maintenance-protected-id-${protection}`;
+    const aliasKey = `agent:main:subagent:maintenance-protected-alias-${protection}`;
+    const sibling = `agent:main:subagent:maintenance-unprotected-${protection}`;
+    replaceSessionEntrySync(active, { sessionId: `active-${protection}`, updatedAt: Date.now() });
     replaceSessionEntrySync(
       { sessionKey: protectedKey, storePath },
       {
@@ -247,7 +269,7 @@ it.each([
     replaceSessionEntrySync(
       { sessionKey: sibling, storePath },
       {
-        sessionId: "unprotected",
+        sessionId: `unprotected-${protection}`,
         updatedAt: 1,
         ...(protection === "recovery-cycle"
           ? {

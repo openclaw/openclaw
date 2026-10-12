@@ -329,7 +329,11 @@ export class SqliteWorkerBroker {
         options.retainCleanup,
         this.lifecycle.closeActor.bind(this.lifecycle, owned, maintenanceScope),
       );
-      options.onNativeStopped?.(owned.nativeStopped, () => owned.closeReceipt);
+      options.onNativeStopped?.(
+        owned.nativeStopped,
+        () => owned.closeReceipt,
+        () => owned.openDispatch.openRefused === true,
+      );
       await actor.opened;
       options.assertCurrent?.();
       if (actor.retirementRequested) {
