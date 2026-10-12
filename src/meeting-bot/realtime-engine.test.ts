@@ -603,6 +603,29 @@ describe("meeting realtime engine output ownership", () => {
     }
   });
 
+  it("bounds queued tiny-frame ownership", async () => {
+    const fixture = await createEngineFixture();
+    try {
+      fixture.sendOutputAudio(Buffer.from([0]), "response-1");
+      await fixture.waitForWriteStart(1);
+      expect(fixture.writeOutput).toHaveBeenCalledTimes(1);
+      for (let index = 1; index < 257; index += 1) {
+        fixture.sendOutputAudio(Buffer.from([index]), "response-1");
+      }
+
+      await vi.waitFor(() => {
+        expect(fixture.handleBargeIn).toHaveBeenCalledWith({
+          audioPlaybackActive: true,
+          force: true,
+        });
+      });
+      expect(fixture.clearOutput).toHaveBeenCalledOnce();
+      fixture.releaseWrite(0);
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
+
   it("does not report a deferred cancellation race after response completion", async () => {
     const fixture = await createEngineFixture();
     try {
