@@ -78,6 +78,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   isRawModelRun: boolean;
   modelToolsEnabled: boolean;
   skillsPrompt: string;
+  installedSkills?: readonly { name: string; description: string }[];
   codeModeActive?: boolean;
   webSearchUnconfigured?: () => boolean;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
@@ -309,6 +310,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       ownerNumbers: attempt.ownerNumbers,
       reasoningTagHint,
       skillsPrompt: effectiveSkillsPrompt,
+      installedSkills: params.remoteWorkspace ? undefined : params.installedSkills,
+      compactSkills: !params.remoteWorkspace,
       codeModeActive: params.codeModeActive,
       webSearchUnconfigured: params.webSearchUnconfigured?.(),
       docsPath: openClawReferences.docsPath ?? undefined,

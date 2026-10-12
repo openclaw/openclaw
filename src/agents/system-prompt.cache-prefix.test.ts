@@ -121,17 +121,100 @@ describe("installed skill prompt guidance", () => {
       codeModeActive: true,
       toolNames: ["exec"],
       capabilityToolNames: admitted ? ["skills_search", "skills_read"] : ["read"],
-      skillsPrompt: formatSkillsForPromptCore([demo]),
+      skillsPrompt: formatSkillsForPromptCore([
+        { ...demo, description: "Review invoices.\nCalculate tax." },
+      ]),
     });
     if (admitted) {
       expect(prompt).toContain('`skills.read("<name>")`');
       expect(prompt).toContain("skills.search(query)");
       expect(prompt).not.toContain("read exact <location> with `read`");
+      expect(prompt).toContain("- demo: Review invoices. Calculate tax.");
     } else {
       expect(prompt).not.toContain("skills.read(");
       expect(prompt).not.toContain("skills.search(");
     }
   });
+
+  it.each([false, true])(
+    "keeps a stable compact catalog without locations (Code Mode %s)",
+    (codeModeActive) => {
+      const render = (installedSkills: { name: string; description: string }[]) =>
+        buildAgentSystemPrompt({
+          workspaceDir: "/tmp/openclaw",
+          codeModeActive,
+          toolNames: codeModeActive ? ["exec"] : ["skills_search", "skills_read"],
+          capabilityToolNames: ["skills_search", "skills_read"],
+          skillsPrompt: formatSkillsForPromptCore([demo]),
+          installedSkills,
+        });
+      const skills = [
+        { name: "zebra", description: "Find striped animals. ".repeat(10) },
+        { name: "alpha", description: "Review invoices.\nCalculate tax." },
+      ];
+      const prompt = render(skills);
+      expect(prompt).toContain("- alpha: Review invoices. Calculate tax.\n- zebra: ");
+      expect(prompt).toContain(`- zebra: ${skills[0].description.trim().slice(0, 60)}`);
+      expect(prompt).not.toContain("<location>");
+      expect(prompt).not.toContain(demo.filePath);
+      expect(prompt).not.toContain("Before work involving files");
+      expect(render([...skills].reverse())).toBe(prompt);
+      expect(render(skills)).toBe(prompt);
+    },
+  );
+
+  it("drops triggers before names, then falls back to the installed count", () => {
+    const render = (installedSkills: { name: string; description: string }[]) =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["skills_search", "skills_read"],
+        installedSkills,
+      });
+    const skills = Array.from({ length: 80 }, (_, index) => ({
+      name: `skill-${String(index).padStart(3, "0")}`,
+      description: "x".repeat(60),
+    }));
+    const namesOnly = render(skills);
+    expect(namesOnly).toContain("- skill-000\n");
+    expect(namesOnly).toContain("- skill-079");
+    expect(namesOnly).not.toContain("x".repeat(60));
+    const countOnly = render(
+      Array.from({ length: 800 }, (_, index) => ({
+        name: `skill-${index}`,
+        description: "workflow",
+      })),
+    );
+    expect(countOnly).toContain("800 skills installed; use `skills_search`.");
+    expect(countOnly).not.toContain("- skill-");
+  });
+
+  it.each([
+    { toolNames: ["read"] },
+    { toolNames: ["read", "skills_search"] },
+    { toolNames: ["read", "skills_read"] },
+    { toolNames: ["skills_search", "skills_read"], promptSurface: "cli_backend" as const },
+    { toolNames: ["skills_search", "skills_read"], compactSkills: false },
+  ])(
+    "preserves fallback directory bytes for $toolNames $promptSurface $compactSkills",
+    (options) => {
+      const skillsPrompt = prepareSkillsForPrompt({
+        skills: [demo],
+        maxSkillsInPrompt: 1,
+      }).prompt.trim();
+      let rendered = "";
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        skillsPrompt,
+        onRenderedSkillsPrompt: (value) => {
+          rendered = value;
+        },
+        ...options,
+      });
+      expect(rendered).toBe(skillsPrompt);
+      expect(prompt).toContain(skillsPrompt);
+      expect(prompt).toContain(`<location>${demo.filePath}</location>`);
+    },
+  );
 
   describe("without listed entries", () => {
     it.each(unlistedPrompts)("guides discovery with $label", ({ skillsPrompt }) => {
@@ -156,7 +239,6 @@ describe("installed skill prompt guidance", () => {
       expect(denied).not.toContain("Scan <available_skills>");
       expect(denied).not.toContain("read exact <location>");
       if (skillsPrompt) {
-        expect(prompt).toContain(skillsPrompt);
         expect(denied).toContain(skillsPrompt);
       } else {
         expect(denied).not.toContain("## Skills");

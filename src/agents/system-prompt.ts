@@ -299,6 +299,8 @@ export function buildAgentSystemPrompt(params: {
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
+  installedSkills?: readonly { name: string; description: string }[];
+  compactSkills?: boolean;
   /** Records the catalog selected by the renderer without changing prompt bytes. */
   onRenderedSkillsPrompt?: (skillsPrompt: string) => void;
   codeModeActive?: boolean;
@@ -509,16 +511,29 @@ export function buildAgentSystemPrompt(params: {
     : visibleTools.has("read") ||
       availableTools.has("skills_read") ||
       promptSurface === "cli_backend";
+  const compactSkills =
+    params.compactSkills !== false &&
+    promptSurface !== "cli_backend" &&
+    availableTools.has("skills_search") &&
+    availableTools.has("skills_read");
   const skillsSection = canAccessSkills
     ? buildSkillsSection({
         skillsPrompt,
+        installedSkills: params.installedSkills,
         readToolName,
         codeModeActive: params.codeModeActive,
         installedSkillSearch: availableTools.has("skills_search"),
         installedSkillRead: availableTools.has("skills_read"),
+        compactSkills,
       })
     : [];
-  params.onRenderedSkillsPrompt?.(canAccessSkills ? (skillsPrompt ?? "") : "");
+  params.onRenderedSkillsPrompt?.(
+    canAccessSkills
+      ? compactSkills
+        ? skillsSection.slice(1).join("\n").trim()
+        : (skillsPrompt ?? "")
+      : "",
+  );
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
     : [];
@@ -625,7 +640,7 @@ export function buildAgentSystemPrompt(params: {
       bootstrapSystemPromptSections,
       docsPath: params.docsPath,
       sourcePath: params.sourcePath,
-      skillsPrompt,
+      skillsSection,
       codeModeActive: params.codeModeActive,
       webSearchUnconfigured: params.webSearchUnconfigured,
       modelAliasLines: params.modelAliasLines,

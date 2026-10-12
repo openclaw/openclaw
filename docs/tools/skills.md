@@ -872,16 +872,19 @@ the total number of operating-system file watches.
 
 ## Search installed skills
 
-The prompt contains a bounded skill directory. Skills omitted by the prompt
-budget remain discoverable through `skills_search` when that tool is enabled.
-Small catalogs continue to appear in full.
+When both `skills_search` and `skills_read` are effective tools, the embedded
+runtime shows a compact catalog: each skill's name and a short trigger derived
+from its description, without filesystem locations. The same applies to Code
+Mode's `skills.search` and `skills.read`.
 
-When search is available, the agent is instructed to check for a relevant skill
-before work involving files, specialized tools, or a reusable workflow.
-An omitted directory is identified explicitly; the agent searches by task goal
-instead of trying to scan a list that is not present. Known names and clear
-directory matches can go directly to a complete skill read. Simple conversation
-and self-contained answers do not require discovery.
+The agent uses a skill when the task matches its trigger or the user names it.
+It searches when a task likely needs a reusable workflow that is not listed,
+then reads the matching skill's complete instructions. Ordinary file edits do
+not by themselves require a skill search.
+
+When either tool is unavailable, CLI backends, native harnesses with their own
+policy, and remote workers retain the existing directory with locations and
+its prompt-budget behavior.
 
 - `skills_search({ query, limit? })` searches eligible installed names,
   descriptions, and bounded instruction text. The default limit is 5; the maximum
@@ -944,8 +947,15 @@ eligible catalog.
 
 ## Token impact
 
-When skills are eligible, OpenClaw injects a compact XML block into the system
-prompt. The cost follows a fixed formula and scales linearly per skill:
+With effective search and read tools, the compact catalog is sorted by name and
+stable across turns for the same installed skills. Each trigger is at most 60
+characters. The catalog has a fixed 4,000-character cap: if it exceeds the cap,
+OpenClaw drops all triggers before dropping names. If names alone exceed the
+cap, it shows the installed count and directs the agent to `skills_search`.
+Full instructions remain on demand through `skills_read`.
+
+Other runtimes retain the existing XML directory and its default 18,000-character
+budget. Its cost follows a fixed formula and scales linearly per skill:
 
 - **Base overhead** (only when 1+ skills are eligible): a fixed block of intro
   prose plus the `<available_skills>` wrapper.
@@ -955,7 +965,7 @@ prompt. The cost follows a fixed formula and scales linearly per skill:
   occurrence.
 - At ~4 chars/token, 97 chars ≈ 24 tokens per skill before field lengths.
 
-If the rendered block would exceed the configured prompt budget
+If that XML directory would exceed the configured prompt budget
 (`skills.limits.maxSkillsPromptChars`), OpenClaw first preserves as many skill
 identities (name and location) as the description-free compact format
 can fit. It then uses any remaining budget for shortened descriptions. If no
@@ -965,11 +975,11 @@ truncation is required.
 
 Keep descriptions short and descriptive to minimize prompt overhead.
 
-For small context windows, the OpenClaw embedded runtime further shortens the
-descriptions in the already-admitted catalog. It retains every admitted name,
-location, and loading note, even when these exceed the description budget.
-Full skill instructions and saved snapshots are unchanged; Code Mode can still
-read every admitted skill. Native harnesses retain their own prompt policy.
+For small context windows on the fallback path, the OpenClaw embedded runtime
+further shortens descriptions in the already-admitted directory. It retains
+every admitted name, location, and loading note, even when these exceed the
+description budget. Full skill instructions and saved snapshots are unchanged.
+Native harnesses retain their own prompt policy.
 
 ## Related
 

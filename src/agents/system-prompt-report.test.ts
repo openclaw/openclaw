@@ -113,6 +113,27 @@ function reportSkills(systemPrompt: string, skillsPrompt = catalog) {
 }
 
 describe("rendered skills diagnostics", () => {
+  it("accounts for the compact catalog actually submitted to the model", () => {
+    let rendered = "";
+    const systemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      toolNames: ["skills_search", "skills_read"],
+      skillsPrompt: catalog,
+      installedSkills: [{ name: "weather", description: "Weather reports" }],
+      onRenderedSkillsPrompt: (value) => {
+        rendered = value;
+      },
+    });
+    const report = reportSkills(systemPrompt, rendered);
+    expect(rendered).toContain("- weather: Weather reports");
+    expect(rendered).not.toContain("<location>");
+    expect(report.promptChars).toBe(rendered.length);
+    expect(report.hash).toBe(createHash("sha256").update(rendered).digest("hex"));
+    expect(report.entries).toEqual([
+      { name: "weather", blockChars: "- weather: Weather reports".length },
+    ]);
+  });
+
   it.each([
     { name: "visible skills_read", params: { toolNames: ["skills_read"] }, included: true },
     {
