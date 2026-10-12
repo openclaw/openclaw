@@ -4,7 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import * as cronStore from "../../../src/cron/store.js";
 import { cronStoreKey } from "../../../src/cron/store/key.js";
-import type { CronRuntimeMutationType } from "../../../src/cron/store/runtime-worker.types.js";
+import type { CronStateWorkerOperations } from "../../../src/cron/store/worker-contract.js";
 import type { SqliteWorkerRequest } from "../../../src/infra/sqlite-worker-contract.js";
 import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.js";
 
@@ -22,7 +22,9 @@ export function observeCronStoreCommits(storePath: string, observer: () => void)
   return () => publication.mockRestore();
 }
 
-export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron.repairRun") {
+export function loseFirstCronMutationReply(
+  type: keyof CronStateWorkerOperations = "cron.repairRun",
+) {
   let target: { worker: Worker; requestId: number } | undefined;
   let stopped: Promise<number> | undefined;
   let dropped = false;
@@ -65,7 +67,10 @@ export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron
       reply.value instanceof Uint8Array
     ) {
       const result: unknown = deserialize(reply.value);
-      if (isRecord(result) && "outcome" in result) {
+      if (
+        isRecord(result) &&
+        ("outcome" in result || "accepted" in result || "launches" in result || "skipped" in result)
+      ) {
         // Lose the successful reply after the real worker committed; never fabricate a rollback.
         dropped = true;
         stopped = target.worker.terminate();

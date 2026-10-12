@@ -44,6 +44,7 @@ import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinki
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { prepareTtsPreferences } from "../tts/tts-preferences.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
@@ -584,6 +585,7 @@ export async function buildStatusReplyParts(
   });
   return buildStatusMessageParts({
     config: cfg,
+    preparedTtsPreferences: params.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     agent: {
       ...agentDefaults,
       model: {

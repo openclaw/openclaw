@@ -128,6 +128,7 @@ export {
   getTtsProviderAsync,
   resolveTtsConfig,
   resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
 } from "../tts/tts.js";
 export type { ResolvedTtsConfig } from "../tts/tts.js";
 

@@ -37,8 +37,8 @@ import {
   buildMessageToolDescription,
   buildMessageToolSchema,
   resolveMessageToolActionSchemaActions,
+  resolveEffectiveCurrentChannelContextForRequest,
   resolveMessageToolDiscoveryAsync,
-  resolveEffectiveCurrentChannelContext,
   type MessageToolDiscoveryParams,
 } from "./message-tool-discovery.js";
 
@@ -99,10 +99,10 @@ describe("session-derived message destinations", () => {
       delivery: { channel: "googlechat", to: canonicalSpace, accountId: "work" },
       expected: canonicalSpace,
     },
-  ])("recovers only the matching route: $name", ({ delivery, direct, expected }) => {
+  ])("recovers only the matching route: $name", async ({ delivery, direct, expected }) => {
     readDeliveryMock.mockReturnValue(delivery);
     expect(
-      resolveEffectiveCurrentChannelContext(
+      await resolveEffectiveCurrentChannelContextForRequest(
         direct
           ? {
               ...options,
@@ -127,7 +127,7 @@ describe("session-derived message destinations", () => {
     { name: "unselected bootstrap", selected: false, hasAliases: false, expected: foldedSpace },
   ])(
     "uses $name when deciding whether to recover a destination",
-    ({ selected, hasAliases, expected }) => {
+    async ({ selected, hasAliases, expected }) => {
       getBootstrapChannelPluginMock.mockReturnValue({
         actions: { messageActionTargetAliases: { read: { aliases: ["messageId"] } } },
       });
@@ -149,12 +149,14 @@ describe("session-derived message destinations", () => {
         getChannel: (id: string) => channels.find((entry) => entry.id === id),
       };
       expect(
-        resolveEffectiveCurrentChannelContext(options, {
-          ...request,
-          action: "read",
-          params: { messageId: "message-1" },
-          preparedMessageToolCatalog: selected ? catalog : undefined,
-        }).currentMessagingTarget,
+        (
+          await resolveEffectiveCurrentChannelContextForRequest(options, {
+            ...request,
+            action: "read",
+            params: { messageId: "message-1" },
+            preparedMessageToolCatalog: selected ? catalog : undefined,
+          })
+        ).currentMessagingTarget,
       ).toBe(expected);
       if (selected) {
         expect(getBootstrapChannelPluginMock).not.toHaveBeenCalled();
@@ -176,11 +178,11 @@ describe("session-derived message destinations", () => {
     { name: "reusable discovery", discovery: true },
     { name: "lowercase-canonical channel", lowercase: true },
     { name: "normal inbound destination", inbound: true },
-  ])("avoids delivery reads for $name", ({ params, discovery, lowercase, inbound }) => {
+  ])("avoids delivery reads for $name", async ({ params, discovery, lowercase, inbound }) => {
     if (lowercase) {
       getChannelPluginMock.mockReturnValue({ messaging: { targetIdComparison: "lowercase" } });
     }
-    const result = resolveEffectiveCurrentChannelContext(
+    const result = await resolveEffectiveCurrentChannelContextForRequest(
       inbound
         ? { ...options, currentChannelProvider: "googlechat", currentChannelId: canonicalSpace }
         : options,

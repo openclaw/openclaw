@@ -9,12 +9,13 @@ const loadSessionEntryMock = vi.hoisted(() =>
   vi.fn((_sessionKey: string) => ({ entry: undefined as Record<string, unknown> | undefined })),
 );
 
-vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
+vi.mock("../../config/sessions/session-accessor.entry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-accessor.entry.js")>();
   return {
     ...actual,
-    resolveSessionEntryAccessTarget: (params: { sessionKey: string }) =>
-      loadSessionEntryMock(params.sessionKey),
+    readResolvedSessionEntryInWorker: async (params: { sessionKey: string }) =>
+      loadSessionEntryMock(params.sessionKey).entry,
   };
 });
 

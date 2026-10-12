@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
@@ -533,10 +532,7 @@ export function createTelegramCallbackRouter({
           const isDefaultSelection =
             selection.provider === resolvedDefault.provider &&
             selection.model === resolvedDefault.model;
-          const persistedSessionEntry =
-            sessionState.sessionEntry ??
-            telegramDeps.getSessionEntry?.({ storePath, sessionKey: sessionState.sessionKey }) ??
-            getSessionEntry({ storePath, sessionKey: sessionState.sessionKey });
+          const persistedSessionEntry = sessionState.sessionEntry;
           const sessionEntryMissing = persistedSessionEntry === undefined;
           const sessionEntry = persistedSessionEntry ?? {
             sessionId: randomUUID(),
