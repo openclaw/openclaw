@@ -14007,6 +14007,153 @@ struct ChatViewModelTests {
     }
 }
 
+extension ChatViewModelTests {
+    @Test(arguments: ["/new", "/reset", "/compact"])
+    func `failed local command keeps its draft`(command: String) async throws {
+        let failure = NSError(
+            domain: "AuditCommand",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Fixture denied command"])
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            createSessionHook: { _, _ in throw failure },
+            resetSessionHook: { _ in throw failure },
+            compactSessionHook: { _ in throw failure })
+        try await loadAndWaitBootstrap(vm: vm)
+        await MainActor.run {
+            vm.input = command
+            vm.send()
+        }
+        await waitForObservedState { !vm.isSubmittingDraft && vm.errorText != nil }
+        #expect(await MainActor.run { vm.input } == command)
+        #expect(await MainActor.run { vm.sessionKey } == "main")
+    }
+
+    @Test(arguments: [false, true])
+    func `compact completion does not mutate replacement session`(fails: Bool) async throws {
+        let gate = AsyncGate()
+        let requests = AsyncStringRecorder()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(), historyPayload(sessionKey: "other")],
+            requestHistoryHook: { key in await requests.append(key) },
+            compactSessionHook: { _ in
+                await gate.wait()
+                if fails { throw NSError(domain: "AuditCompact", code: 1) }
+            })
+        try await loadAndWaitBootstrap(vm: vm)
+        await MainActor.run { vm.requestSessionCompact() }
+        await transport.waitForState { $0.compactSessionKeys == ["main"] }
+        await MainActor.run { vm.switchSession(to: "other") }
+        await waitForObservedState { vm.sessionId == "sess-main" && !vm.isLoading }
+        await MainActor.run { vm.errorText = "Replacement session notice" }
+        let before = await requests.current()
+        await gate.open()
+        await waitForObservedState { !vm.isCompacting }
+        #expect(await MainActor.run { vm.errorText } == "Replacement session notice")
+        #expect(await requests.current() == before)
+        #expect(await MainActor.run { vm.sessionKey } == "other")
+    }
+
+    @Test(arguments: ["/new", "/reset", "/compact"])
+    func `successful local command preserves newer draft`(command: String) async throws {
+        let gate = AsyncGate()
+        let started = AsyncCounter()
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(), historyPayload()],
+            createSessionHook: { _, _ in
+                _ = await started.increment()
+                await gate.wait()
+            },
+            resetSessionHook: { _ in
+                _ = await started.increment()
+                await gate.wait()
+            },
+            compactSessionHook: { _ in
+                _ = await started.increment()
+                await gate.wait()
+            })
+        try await loadAndWaitBootstrap(vm: vm)
+        await MainActor.run {
+            vm.input = command
+            vm.send()
+        }
+        await started.wait { $0 == 1 }
+        await MainActor.run { vm.input = "Newer draft" }
+        await gate.open()
+        await waitForObservedState { !vm.isSubmittingDraft }
+        if command == "/new" {
+            await MainActor.run { vm.switchSession(to: "main") }
+        }
+        #expect(await MainActor.run { vm.input } == "Newer draft")
+    }
+}
+
+extension ChatViewModelTests {
+    @Test(arguments: ["/new", "/reset", "/compact"])
+    func `successful local command consumes accepted draft`(command: String) async throws {
+        let (_, vm) = await makeViewModel(historyResponses: [historyPayload(), historyPayload()])
+        try await loadAndWaitBootstrap(vm: vm)
+        await MainActor.run { vm.input = command
+            vm.send()
+        }
+        await waitForObservedState { !vm.isSubmittingDraft }
+        #expect(await MainActor.run { vm.input } == "")
+        if command == "/new" {
+            await MainActor.run { vm.switchSession(to: "main") }
+            #expect(await MainActor.run { vm.input } == "")
+        }
+    }
+
+    @Test(arguments: ["/new", "/reset", "/compact"])
+    func `command finishing after a chat switch consumes the draft it was typed in`(command: String) async throws {
+        let gate = AsyncGate()
+        let started = AsyncCounter()
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(), historyPayload(sessionKey: "other"), historyPayload()],
+            createSessionHook: { _, _ in
+                _ = await started.increment()
+                await gate.wait()
+            },
+            resetSessionHook: { _ in
+                _ = await started.increment()
+                await gate.wait()
+            },
+            compactSessionHook: { _ in
+                _ = await started.increment()
+                await gate.wait()
+            })
+        try await loadAndWaitBootstrap(vm: vm)
+        await MainActor.run {
+            vm.input = command
+            vm.send()
+        }
+        await started.wait { $0 == 1 }
+        await MainActor.run { vm.switchSession(to: "other") }
+        #expect(await MainActor.run { vm.sessionKey } == "other")
+        await gate.open()
+        await waitForObservedState { !vm.isSubmittingDraft }
+        await MainActor.run { vm.switchSession(to: "main") }
+        #expect(await MainActor.run { vm.input } == "")
+    }
+
+    @Test func `failed reset fallback keeps new command draft`() async throws {
+        let unsupported = NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.create not supported by this transport"])
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            createSessionHook: { _, _ in throw unsupported },
+            resetSessionHook: { _ in throw NSError(domain: "AuditReset", code: 1) })
+        try await loadAndWaitBootstrap(vm: vm)
+        await MainActor.run { vm.input = "/new"
+            vm.send()
+        }
+        await waitForObservedState { !vm.isSubmittingDraft && vm.errorText != nil }
+        #expect(await MainActor.run { vm.input } == "/new")
+    }
+}
+
 @Suite(.serialized)
 struct ChatViewModelSessionManagementTests {
     @Test @MainActor func `session list organizer orders pinned first with key tiebreak`() {

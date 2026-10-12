@@ -2,6 +2,7 @@ import Foundation
 import GRDB
 import Observation
 import OpenClawProtocol
+import SwabbleKit
 import Testing
 import UIKit
 import UserNotifications
@@ -639,9 +640,9 @@ private func makeWatchModel(
 }
 
 @MainActor
-private func makeTalkModel() -> (TalkModeManager, NodeAppModel) {
+private func makeTalkModel(restoringSavedGatewayRoute: Bool = false) -> (TalkModeManager, NodeAppModel) {
     let talkMode = TalkModeManager(allowSimulatorCapture: true)
-    return (talkMode, NodeAppModel(talkMode: talkMode))
+    return (talkMode, NodeAppModel(talkMode: talkMode, restoringSavedGatewayRoute: restoringSavedGatewayRoute))
 }
 
 @MainActor
@@ -9248,5 +9249,319 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Model/NodeAppModel.swift")
+    }
+}
+
+@Suite(.serialized) struct TalkVisibleSessionTests {
+    @Test(arguments: [false, true]) @MainActor
+    func `cold launch uses restored chat before connect`(talkEnabled: Bool) {
+        let registry = GatewaySettingsStore.loadGatewayRegistry()
+        let defaults = UserDefaults.standard
+        let previousTalk = defaults.object(forKey: "talk.enabled")
+        let stableID = "talk-launch-\(UUID().uuidString)"
+        let key = "agent:main:dashboard:ios-dev-env"
+        defer {
+            defaults.set(previousTalk, forKey: "talk.enabled")
+            _ = GatewaySettingsStore.saveGatewayRegistry(registry)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+        }
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Talk test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: key)
+        defaults.set(talkEnabled, forKey: "talk.enabled")
+        let (talk, model) = makeTalkModel(restoringSavedGatewayRoute: true)
+        defer { model.setTalkEnabled(false)
+            model.voiceWake.stop()
+        }
+        #expect(model.chatSessionKey == key)
+        #expect(talk.isUsingMainSessionKey(key))
+        model.prepareForGatewayConnect(stableID: stableID, preservingFocusedChatSession: true)
+        #expect(talk.isUsingMainSessionKey(key))
+        model.chatSessionRoutingRestoreTask?.cancel()
+    }
+
+    @Test @MainActor func `retired chat cannot refocus talk onto cron`() throws {
+        let (talk, model) = makeTalkModel()
+        model.enterScreenshotFixtureMode()
+        model.chatPresentation.sync(appModel: model)
+        let retired = try #require(model.chatPresentation.viewModel)
+        model.prepareForGatewayConnect(stableID: "replacement-talk-owner")
+        model.chatSessionRoutingRestoreTask?.cancel()
+        model.focusChatSession("agent:main:dashboard:visible")
+        model.chatPresentation.sync(appModel: model)
+        let visible = try #require(model.chatPresentation.viewModel)
+        defer { retired.detachTransport()
+            visible.detachTransport()
+            model.voiceWake.stop()
+        }
+        #expect(visible !== retired)
+        retired.switchSession(to: "agent:main:cron:expired-automation")
+        #expect(model.chatSessionKey == visible.sessionKey)
+        #expect(talk.isUsingMainSessionKey(visible.sessionKey))
+    }
+
+    @Test(arguments: ["main", "agent:main:cron:expired-automation"]) @MainActor
+    func `watch start uses phone chat not stale snapshot`(staleKey: String) async {
+        let messaging = MockWatchMessagingService()
+        let talk = TalkModeManager(allowSimulatorCapture: true)
+        let model = NodeAppModel(watchMessagingService: messaging, talkMode: talk)
+        model.setTalkEnabled(false)
+        model.focusChatSession("agent:main:dashboard:visible")
+        defer { model.setTalkEnabled(false)
+            model.voiceWake.stop()
+        }
+        messaging.emitAppCommand(makeWatchAppCommand(
+            "stale-watch-talk", .startTalk, session: staleKey, sentAt: 123))
+        #expect(await waitForMainActorWork { talk.isEnabled })
+        #expect(talk.isUsingMainSessionKey(model.chatSessionKey))
+        #expect(model.chatSessionKey == "agent:main:dashboard:visible")
+    }
+
+    @Test @MainActor func `enabling talk repairs old manager key`() {
+        let (talk, model) = makeTalkModel()
+        model.focusChatSession("agent:main:dashboard:visible")
+        talk.updateMainSessionKey("main")
+        defer { model.setTalkEnabled(false)
+            model.voiceWake.stop()
+        }
+        model.setTalkEnabled(true)
+        #expect(talk.isUsingMainSessionKey(model.chatSessionKey))
+    }
+
+    @Test @MainActor func `foreground resumes visible session`() {
+        let (talk, model) = makeTalkModel()
+        model.focusChatSession("agent:main:dashboard:visible")
+        model.setScenePhase(.background)
+        talk.updateMainSessionKey("main")
+        defer { model.setTalkEnabled(false)
+            model.voiceWake.stop()
+        }
+        model.setScenePhase(.active)
+        #expect(talk.isUsingMainSessionKey(model.chatSessionKey))
+    }
+
+    @Test @MainActor func `enabled talk and ptt follow chat switch`() async {
+        let (talk, model) = makeTalkModel()
+        model.focusChatSession("agent:main:dashboard:first")
+        talk.updateGatewayConnected(true)
+        talk.isEnabled = true
+        talk._test_setRealtimeRelayStartInFlight(true)
+        model.focusChatSession("agent:main:dashboard:second")
+        #expect(talk.isUsingMainSessionKey(model.chatSessionKey))
+        #expect(!talk._test_realtimeRelayStartIsInFlight())
+        talk.isEnabled = false
+        let response = await model.handleInvoke(talkRequest(id: "visible-ptt", command: .pttStart))
+        #expect(response.ok)
+        #expect(talk.isUsingMainSessionKey(model.chatSessionKey))
+        _ = await model.handleInvoke(talkRequest(id: "visible-ptt-cancel", command: .pttCancel))
+        model.voiceWake.stop()
+    }
+
+    @Test @MainActor func `wake word sends to visible chat and rejects old chat`() async throws {
+        actor Frames {
+            var keys: [String] = []
+            func append(_ key: String) {
+                self.keys.append(key)
+            }
+        }
+        let frames = Frames()
+        let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
+            let data: Data = switch message {
+            case let .data(value): value
+            case let .string(value): Data(value.utf8)
+            @unknown default: Data()
+            }
+            let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            guard frame["method"] as? String == "node.event" else { return }
+            let params = try #require(frame["params"] as? [String: Any])
+            if params["event"] as? String == "voice.transcript" {
+                let payload = try #require(params["payloadJSON"] as? String)
+                let body = try #require(JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
+                try await frames.append(#require(body["sessionKey"] as? String))
+            }
+            let reply: [String: Any] = [
+                "type": "res",
+                "id": frame["id"] as? String ?? "event",
+                "ok": true,
+                "payload": [:],
+            ]
+            try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: reply)))
+        }, receiveHook: { socket, index in
+            if index == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+            return .data(GatewayWebSocketTestSupport.connectOkData(id: socket.snapshotConnectRequestID() ?? "connect"))
+        })
+        let (_, model) = makeTalkModel()
+        model.setTalkEnabled(false)
+        let gatewayID = "wake-visible-\(UUID().uuidString)"
+        let url = try #require(URL(string: "ws://wake-fixture.invalid"))
+        let (config, _) = try makeGatewayPair(
+            firstURL: url, firstStableID: gatewayID, firstToken: "synthetic-first",
+            secondURL: url, secondStableID: gatewayID, secondToken: "synthetic-second")
+        model.activeGatewayConnectConfig = config
+        model.connectedGatewayID = gatewayID
+        model.gatewayConnected = true
+        model.focusChatSession("agent:main:dashboard:visible")
+        defer { model.voiceWake.stop()
+            model.disconnectGateway()
+        }
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.deviceAuthGatewayID = gatewayID
+        options.allowStoredDeviceAuth = false
+        try await model._test_nodeGateway().connect(
+            url: #require(URL(string: "ws://wake-fixture.invalid")), credentials: .init(), connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+            onConnected: {}, onDisconnected: { _ in }, onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+        let wake = model.voiceWake
+        wake.triggerWords = ["openclaw"]
+        wake.isEnabled = true
+        let transcript = "openclaw hello"
+        try wake._test_handleRecognitionCallback(transcript: transcript, segments: [
+            WakeWordSegment(
+                text: "openclaw",
+                start: 0,
+                duration: 0.2,
+                range: #require(transcript.range(of: "openclaw"))),
+            WakeWordSegment(
+                text: "hello",
+                start: 0.8,
+                duration: 0.2,
+                range: #require(transcript.range(of: "hello"))),
+        ], errorText: nil)
+        for _ in 0..<1000 {
+            if await !(frames.keys).isEmpty { break }
+            await Task.yield()
+        }
+        #expect(await frames.keys == [model.chatSessionKey])
+        await #expect(throws: CancellationError.self) {
+            try await model.sendVoiceTranscript(text: "stale", sessionKey: "main")
+        }
+        #expect(await frames.keys == [model.chatSessionKey])
+        await model._test_nodeGateway().disconnect()
+    }
+}
+
+@Suite(.serialized) struct ChatLaunchRestoreTests {
+    @Test @MainActor func `first model frame already targets the last chat`() {
+        let registry = GatewaySettingsStore.loadGatewayRegistry()
+        let stableID = "scroll-launch-\(UUID().uuidString)"
+        let sessionKey = "agent:main:dashboard:last-used"
+        defer {
+            _ = GatewaySettingsStore.saveGatewayRegistry(registry)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        }
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Launch test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: sessionKey)
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "main")
+        let model = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        #expect(model.chatSessionKey == sessionKey)
+        #expect(model.connectedGatewayID == stableID)
+        #expect(model.selectedAgentId == "main")
+        model.prepareForGatewayConnect(stableID: stableID)
+        #expect(model.chatSessionKey == sessionKey)
+        model.chatSessionRoutingRestoreTask?.cancel()
+    }
+
+    @Test @MainActor func `agent switch forgets the previous agent's saved chat`() {
+        let registry = GatewaySettingsStore.loadGatewayRegistry()
+        let stableID = "agent-switch-\(UUID().uuidString)"
+        let agentAChat = "agent:alpha:dashboard:last-used"
+        defer {
+            _ = GatewaySettingsStore.saveGatewayRegistry(registry)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        }
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Agent switch test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "alpha")
+        let model = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        model.focusChatSession(agentAChat)
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == agentAChat)
+        model.setSelectedAgentId("beta")
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == nil)
+        let relaunched = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { relaunched.voiceWake.stop() }
+        #expect(relaunched.selectedAgentId == "beta")
+        #expect(relaunched.chatSessionKey != agentAChat)
+    }
+
+    @Test @MainActor func `roster removal of the selected agent forgets its saved chat`() {
+        let registry = GatewaySettingsStore.loadGatewayRegistry()
+        let stableID = "agent-roster-\(UUID().uuidString)"
+        let alphaChat = "agent:alpha:dashboard:last-used"
+        defer {
+            _ = GatewaySettingsStore.saveGatewayRegistry(registry)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        }
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Agent roster test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "alpha")
+        let model = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        model.focusChatSession(alphaChat)
+        #expect(model.chatSessionKey == alphaChat)
+        model.retireSelectedAgentIfRemoved(from: [AgentSummary(
+            id: "beta", name: "Beta", identity: nil, workspace: nil, workspacegit: nil,
+            model: nil, agentruntime: nil)])
+        #expect(model.selectedAgentId == nil)
+        #expect(model.chatSessionKey != alphaChat)
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == nil)
+        let relaunched = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { relaunched.voiceWake.stop() }
+        #expect(relaunched.selectedAgentId == nil)
+        #expect(relaunched.chatSessionKey != alphaChat)
+    }
+
+    @Test @MainActor func `same gateway connect does not undo a preconnect chat selection`() {
+        let registry = GatewaySettingsStore.loadGatewayRegistry()
+        let stableID = "scroll-connect-\(UUID().uuidString)"
+        defer {
+            _ = GatewaySettingsStore.saveGatewayRegistry(registry)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+        }
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Connect test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        let model = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        model.focusChatSession("agent:main:dashboard:chosen-before-connect")
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) ==
+            "agent:main:dashboard:chosen-before-connect")
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
+            stableID: stableID, sessionKey: "agent:main:dashboard:stale-saved")
+        model.prepareForGatewayConnect(stableID: stableID, preservingFocusedChatSession: true)
+        #expect(model.chatSessionKey == "agent:main:dashboard:chosen-before-connect")
+        model.chatSessionRoutingRestoreTask?.cancel()
+    }
+
+    @Test @MainActor func `a newly installed connect config cannot preserve another gateway chat`() throws {
+        let oldID = "old-scroll-gateway-\(UUID().uuidString)"
+        let newID = "new-scroll-gateway-\(UUID().uuidString)"
+        let newChat = "agent:main:dashboard:new-gateway-chat"
+        defer {
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: oldID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: newID, sessionKey: nil)
+        }
+        let model = NodeAppModel()
+        defer { model.voiceWake.stop() }
+        model.connectedGatewayID = oldID
+        model.focusChatSession("agent:main:dashboard:old-gateway-chat")
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: newID, sessionKey: newChat)
+        let url = try #require(URL(string: "wss://scroll.example.test"))
+        let (config, _) = try makeGatewayPair(
+            firstURL: url, firstStableID: newID, firstToken: "synthetic-first",
+            secondURL: url, secondStableID: newID, secondToken: "synthetic-second")
+        model.activeGatewayConnectConfig = config
+        model.prepareForGatewayConnect(stableID: newID)
+        #expect(model.chatSessionKey == newChat)
+        model.chatSessionRoutingRestoreTask?.cancel()
     }
 }

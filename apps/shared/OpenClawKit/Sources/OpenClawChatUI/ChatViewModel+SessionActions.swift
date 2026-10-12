@@ -127,6 +127,14 @@ extension OpenClawChatViewModel {
         return "agent:\(agentID):\(baseKey)"
     }
 
+    /// A new-session request can succeed without changing the visible chat, when the reader moved on
+    /// while it was in flight.
+    enum NewSessionOutcome {
+        case switched
+        case createdElsewhere
+        case failed
+    }
+
     /// Returns true only when a session switch happened (create or reset
     /// fallback); callers keep UI like the new-session popover open on failure.
     @discardableResult
@@ -136,7 +144,20 @@ extension OpenClawChatViewModel {
         worktreeBaseRef: String? = nil,
         routeLease: OpenClawChatNewSessionRouteLease? = nil) async -> Bool
     {
-        guard !self.isCreatingSession, self.canCreateSessionForImmediateSwitch() else { return false }
+        await self.startNewSessionOutcome(
+            agentID: agentID,
+            worktree: worktree,
+            worktreeBaseRef: worktreeBaseRef,
+            routeLease: routeLease) == .switched
+    }
+
+    func startNewSessionOutcome(
+        agentID: String? = nil,
+        worktree: Bool,
+        worktreeBaseRef: String? = nil,
+        routeLease: OpenClawChatNewSessionRouteLease? = nil) async -> NewSessionOutcome
+    {
+        guard !self.isCreatingSession, self.canCreateSessionForImmediateSwitch() else { return .failed }
         self.isCreatingSession = true
         defer { self.isCreatingSession = false }
         let initiatingSession = self.currentSessionSnapshot()
@@ -170,7 +191,7 @@ extension OpenClawChatViewModel {
             let createdKey = created.key.trimmingCharacters(in: .whitespacesAndNewlines)
             next = createdKey.isEmpty ? requested : createdKey
         } catch {
-            guard self.isCurrentSession(initiatingSession) else { return false }
+            guard self.isCurrentSession(initiatingSession) else { return .failed }
             if Self.isUnsupportedCreateSessionError(error) {
                 // Reset only mimics a plain new chat; agent/worktree selections were
                 // not honored, so advanced requests surface the error instead of
@@ -178,23 +199,23 @@ extension OpenClawChatViewModel {
                 guard requestedAgentID == nil, !worktree else {
                     chatUILogger.error("sessions.create unsupported; advanced options not honored")
                     self.errorText = error.localizedDescription
-                    return false
+                    return .failed
                 }
-                guard self.canCreateSessionForImmediateSwitch() else { return false }
+                guard self.canCreateSessionForImmediateSwitch() else { return .failed }
                 chatUILogger.info("sessions.create unsupported; falling back to sessions.reset")
-                await self.performReset()
-                return self.isCurrentSession(initiatingSession)
+                guard await self.performReset() else { return .failed }
+                return self.isCurrentSession(initiatingSession) ? .switched : .createdElsewhere
             }
             chatUILogger.error("sessions.create failed \(error.localizedDescription, privacy: .public)")
             self.errorText = error.localizedDescription
-            return false
+            return .failed
         }
         guard self.isCurrentSession(initiatingSession), self.canCreateSessionForImmediateSwitch() else {
             if !self.sessions.contains(where: { $0.key == next }) { self.refreshSessions() }
-            return false
+            return .createdElsewhere
         }
         self.adoptCreatedSession(next)
-        return true
+        return .switched
     }
 
     static func isUnsupportedCreateSessionError(_ error: Error) -> Bool {

@@ -637,7 +637,7 @@ struct OpenClawApp: App {
         (UserDefaults(suiteName: OpenClawAppGroup.identifier) ?? .standard)
             .removeObject(forKey: "share.defaultInstruction")
         OpenClawType.installUIKitAppearance()
-        let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+        let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false, restoringSavedGatewayRoute: true)
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--openclaw-reset-onboarding") {
             // Reruns must exercise onboarding instead of saved pairing state.

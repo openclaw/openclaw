@@ -968,7 +968,9 @@ extension RootTabs {
     private func applyInitialChatSessionIfNeeded() {
         guard !self.didApplyInitialChatSession else { return }
         self.didApplyInitialChatSession = true
-        self.appModel.focusChatSession(Self.initialChatSessionKey)
+        // Without the launch argument, keep the restored last chat instead of forcing Home.
+        guard let initialChatSessionKey = Self.initialChatSessionKey else { return }
+        self.appModel.focusChatSession(initialChatSessionKey)
     }
 
     private func maybeShowQuickSetup() {

@@ -1461,6 +1461,36 @@ private func pendingHandoffDiagnostic(
         }
     }
 
+    @Test @MainActor func `onboarding reset forgets saved chat focus for every paired gateway`() async throws {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let temporaryState = try TemporaryOpenClawState()
+        defer { temporaryState.restore() }
+        let gatewayIDs = (0..<2).map { "manual|reset-\($0)-\(UUID().uuidString).example.com|443" }
+        defer {
+            for stableID in gatewayIDs {
+                GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            }
+        }
+        for stableID in gatewayIDs {
+            #expect(saveActiveManualGateway(
+                host: "reset.example.com", port: 443, useTLS: true, stableID: stableID))
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
+                stableID: stableID, sessionKey: "agent:main:reset-proof")
+            #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) != nil)
+        }
+        let defaults = try #require(UserDefaults(suiteName: "onboarding-reset-\(UUID().uuidString)"))
+        let appModel = NodeAppModel()
+        await GatewayOnboardingReset.reset(appModel: appModel, instanceId: "", defaults: defaults)
+
+        #expect(GatewaySettingsStore.loadGatewayRegistry().entries.isEmpty)
+        for stableID in gatewayIDs {
+            #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == nil)
+            appModel.prepareForGatewayConnect(stableID: stableID)
+            #expect(appModel.chatSessionKey == appModel.mainSessionKey)
+        }
+    }
+
     @Test @MainActor func `bootstrap pairing clears only the target gateway`() async throws {
         let temporaryState = try TemporaryOpenClawState()
         defer { temporaryState.restore() }
@@ -2693,6 +2723,38 @@ private func pendingHandoffDiagnostic(
             #expect(GenericPasswordKeychainStore.loadString(service: service, account: preferredAccount) == nil)
             #expect(GenericPasswordKeychainStore.loadString(service: service, account: lastAccount) == keptID)
         }
+    }
+
+    @Test @MainActor func `forget gateway erases only its saved chat focus`() async {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let forgottenID = "focus-forgotten-\(UUID().uuidString)"
+        let keptID = "focus-kept-\(UUID().uuidString)"
+        let keptChat = "agent:main:dashboard:kept"
+        defer {
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: forgottenID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: keptID, sessionKey: nil)
+        }
+        for stableID in [forgottenID, keptID] {
+            #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+                stableID: stableID, kind: .manual, name: "Focus test", host: "localhost", port: 443,
+                useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: false))
+        }
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
+            stableID: forgottenID, sessionKey: "agent:main:dashboard:forgotten")
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: keptID, sessionKey: keptChat)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        await controller.forgetGateway(stableID: forgottenID)
+
+        // Re-adding the same stable ID starts without the forgotten conversation.
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: forgottenID, kind: .manual, name: "Focus test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: false))
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: forgottenID) == nil)
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: keptID) == keptChat)
     }
 
     @Test @MainActor func `forget gateway cancels its pending trust handoff`() async {
