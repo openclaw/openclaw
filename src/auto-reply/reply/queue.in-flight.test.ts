@@ -72,6 +72,10 @@ describe("followup queue in-flight ownership", () => {
     const entered = createDeferred();
     const release = createDeferred();
     const groupCompletions = [vi.fn(), vi.fn()];
+    const groupFeedback = [vi.fn(), vi.fn()];
+    groupFeedback[0]!.mockImplementation(() => {
+      throw new Error("source feedback unavailable");
+    });
     const pendingComplete = vi.fn();
     const rejectedComplete = vi.fn();
     let aggregate: FollowupRun | undefined;
@@ -84,7 +88,11 @@ describe("followup queue in-flight ownership", () => {
             originatingTo: "channel:A",
             originatingChatType: "channel",
           }),
-          turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled },
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
+            onRunIncluded: groupFeedback[index],
+            onSettled,
+          },
         }),
       ).toBe(true);
     }
@@ -116,6 +124,12 @@ describe("followup queue in-flight ownership", () => {
       expect(pendingComplete).toHaveBeenCalledOnce();
       expect(groupCompletions.map((complete) => complete.mock.calls.length)).toEqual([0, 0]);
       await aggregate?.turnAdoptionLifecycle?.onAdopted?.();
+      const included = { runId: "collected-owner", completion: Promise.resolve() };
+      expect(() => aggregate?.turnAdoptionLifecycle?.onRunIncluded?.(included)).not.toThrow();
+      expect(groupFeedback.map((feedback) => feedback.mock.calls)).toEqual([
+        [[included]],
+        [[included]],
+      ]);
       expect(queue?.items.map((item) => item.prompt)).toEqual(["survivor"]);
       expect(queue?.inFlight.size).toBe(2);
       expect(getFollowupQueueDepth(q.key)).toBe(1);

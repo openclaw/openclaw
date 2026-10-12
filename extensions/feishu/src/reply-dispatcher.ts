@@ -1,5 +1,4 @@
 import { formatReasoningMessage, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   isChannelPartialDeliveryError,
   type ChannelInboundTurnPlan,
@@ -39,6 +38,7 @@ import {
   renderFeishuReplyPayload,
   withinCardTableLimit,
 } from "./presentation-card.js";
+import type { FeishuProcessingMessage } from "./processing-indicator.js";
 import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
@@ -49,6 +49,7 @@ import {
   type FeishuReplyDeliverySource,
 } from "./reply-delivery-result.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
+import { createFeishuReplyTyping } from "./reply-typing.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
   chunkFeishuCardMarkdown,
@@ -64,7 +65,6 @@ import {
 } from "./streaming-card.js";
 import { queueFeishuStreamingUpdate } from "./streaming-update.js";
 import { resolveReceiveIdType } from "./targets.js";
-import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
 function mergeStreamingFinalText(
   previousText: string,
@@ -80,10 +80,6 @@ function mergeStreamingFinalText(
   return `${previousText}\n\n${nextText}`;
 }
 
-/** Maximum age (ms) for a message to receive a typing indicator reaction.
- * Messages older than this are likely replays after context compaction (#30418). */
-const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
-const MS_EPOCH_MIN = 1_000_000_000_000;
 const STREAMING_START_FAILURE_BACKOFF_MS = 60_000;
 const NO_VISIBLE_REPLY_FALLBACK_TEXT =
   "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
@@ -98,15 +94,6 @@ function isStreamingStartBackedOff(accountId: string, now = Date.now()): boolean
     return false;
   }
   return true;
-}
-
-function normalizeEpochMs(timestamp: number | undefined): number | undefined {
-  if (!Number.isFinite(timestamp) || timestamp === undefined || timestamp <= 0) {
-    return undefined;
-  }
-  // Defensive normalization: some payloads use seconds, others milliseconds.
-  // Values below 1e12 are treated as epoch-seconds.
-  return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
 }
 
 function resolveCardHeader(
@@ -165,6 +152,7 @@ type CreateFeishuReplyDispatcherParams = {
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
   sessionKey?: string;
+  processingStatus?: FeishuProcessingMessage;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -203,7 +191,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     accountId,
   };
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
-  let typingState: TypingIndicatorState | null = null;
   // Reply text and card attribution share the same selected-model context.
   const { typingCallbacks, responsePrefix, responsePrefixContextProvider, onModelSelected } =
     createChannelMessageReplyPipeline({
@@ -211,63 +198,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       agentId,
       channel: "feishu",
       accountId,
-      typing: {
-        start: async () => {
-          if (!(account.config.typingIndicator ?? true)) {
-            return;
-          }
-          if (!typingTargetMessageId) {
-            return;
-          }
-          // Skip typing indicator for old messages — likely replays after context
-          // compaction that would flood users with stale notifications (#30418).
-          const messageCreateTimeMs = normalizeEpochMs(params.messageCreateTimeMs);
-          if (
-            messageCreateTimeMs !== undefined &&
-            Date.now() - messageCreateTimeMs > TYPING_INDICATOR_MAX_AGE_MS
-          ) {
-            return;
-          }
-          // Feishu reactions persist until explicitly removed, so skip keepalive
-          // re-adds when a reaction already exists. Re-adding the same emoji
-          // triggers a new push notification for every call (#28660).
-          if (typingState?.reactionId) {
-            return;
-          }
-          typingState = await addTypingIndicator({
-            cfg,
-            messageId: typingTargetMessageId,
-            accountId,
-            runtime: params.runtime,
-          });
-        },
-        stop: async () => {
-          if (!typingState) {
-            return;
-          }
-          await removeTypingIndicator({
-            cfg,
-            state: typingState,
-            accountId,
-            runtime: params.runtime,
-          });
-          typingState = null;
-        },
-        onStartError: (err) =>
-          logTypingFailure({
-            log: (message) => params.runtime.log?.(message),
-            channel: "feishu",
-            action: "start",
-            error: err,
-          }),
-        onStopError: (err) =>
-          logTypingFailure({
-            log: (message) => params.runtime.log?.(message),
-            channel: "feishu",
-            action: "stop",
-            error: err,
-          }),
-      },
+      typing: createFeishuReplyTyping({
+        cfg,
+        accountId,
+        messageId: typingTargetMessageId,
+        messageCreateTimeMs: params.messageCreateTimeMs,
+        runtime: params.runtime,
+        enabled: account.config.typingIndicator !== false,
+        ownsProcessingFeedback: Boolean(params.processingStatus),
+      }),
     });
 
   const textChunkLimit = core.channel.text.resolveTextChunkLimit(cfg, "feishu", accountId, {

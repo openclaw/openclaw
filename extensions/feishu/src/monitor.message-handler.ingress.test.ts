@@ -187,6 +187,8 @@ describe("Feishu durable ingress debounce lifecycle", () => {
   it("releases a claim acquired after ingress abandonment instead of enqueueing it", async () => {
     const transport = createLifecycle();
     const logicalClaim = createClaim("delayed-admission");
+    const released = createDeferred<void>();
+    vi.mocked(logicalClaim.release).mockImplementation(() => released.resolve());
     const pending =
       createDeferred<Awaited<ReturnType<typeof dedup.claimUnprocessedFeishuMessage>>>();
     const harness = createHarness({
@@ -194,13 +196,19 @@ describe("Feishu durable ingress debounce lifecycle", () => {
       claims: [],
       adoptTurn: true,
     });
-    harness.claim.mockReturnValueOnce(pending.promise);
+    const claiming = createDeferred<void>();
+    harness.claim.mockImplementationOnce(() => {
+      claiming.resolve();
+      return pending.promise;
+    });
     const handling = harness.handler(createTextEvent("evt-delayed", "om-delayed", "hello"));
+    await claiming.promise;
     transport.controller.abort();
     await transport.lifecycle.onAbandoned();
     pending.resolve({ kind: "claimed", handle: logicalClaim });
 
     await expect(handling).resolves.toMatchObject({ kind: "failed-retryable" });
+    await released.promise;
     expect(logicalClaim.release).toHaveBeenCalledOnce();
     expect(logicalClaim.commit).not.toHaveBeenCalled();
     expect(harness.entries).toEqual([]);

@@ -12,6 +12,14 @@ OpenClaw connects to Feishu/Lark (the all-in-one collaboration platform) through
 
 Webhook mode shares the Gateway HTTP port (normally `18789`) at `/feishu/events`. Updates preserve an existing installation's previous endpoint with an explicit `legacyWebhook` pin; new installations open no separate port. See the [webhook migration guidance](/channels/feishu/configuration-reference#gateway-webhook-route) before moving an existing callback.
 
+### Automatic processing reactions
+
+With `typingIndicator` enabled (the default), accepted human messages show source-message feedback: `OneSecond` on the latest queued message in each DM or Topic, and `Typing` on the latest source confirmed as included in an active run. Rejected or unsupported steering stays queued for the followup run. These reactions are chosen by the plugin, not by model output.
+
+Feedback starts after core accepts input custody or queues the turn. It stays bound to that exact run through reply delivery and persistence, then clears on completion, failure, cancellation, or intentional silence. Cleanup uses only the reaction ID returned to this application. Stored receipts allow restart cleanup; an unknown create outcome cannot safely be retried or deleted.
+
+Reaction failures do not block message processing. Automatic requests pause for 60 seconds after provider backoff and resume lazily on later input; known failed cleanup receipts remain available for restart recovery. The existing typing path still handles synthetic events without source-message feedback.
+
 ## What each page covers
 
 - [Feishu setup](/channels/feishu/setup) — run the setup wizard and understand durable inbound events.

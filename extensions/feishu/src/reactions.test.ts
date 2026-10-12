@@ -2,7 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
-const listMock = vi.hoisted(() => vi.fn());
+const { listMock, createMock, deleteMock } = vi.hoisted(() => ({
+  listMock: vi.fn(),
+  createMock: vi.fn(),
+  deleteMock: vi.fn(),
+}));
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuRuntimeAccount: () => ({
@@ -19,12 +23,15 @@ vi.mock("./client.js", () => ({
     im: {
       messageReaction: {
         list: listMock,
+        create: createMock,
+        delete: deleteMock,
       },
     },
   }),
 }));
 
-import { listReactionsFeishu } from "./reactions.js";
+import { addReactionFeishu, listReactionsFeishu, removeReactionFeishu } from "./reactions.js";
+import { FeishuBackoffError } from "./typing-backoff.js";
 
 describe("listReactionsFeishu", () => {
   beforeEach(() => {
@@ -166,5 +173,26 @@ describe("listReactionsFeishu", () => {
     await expect(
       listReactionsFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_message" }),
     ).rejects.toThrow("Feishu list reactions failed: continuation unavailable");
+  });
+});
+
+describe("reaction API backoff", () => {
+  it.each(["create", "delete"])("preserves quota errors from %s responses", async (operation) => {
+    const response = { code: 99991403, msg: "quota exceeded" };
+    if (operation === "create") {
+      createMock.mockResolvedValueOnce(response);
+      await expect(
+        addReactionFeishu({ cfg: {} as ClawdbotConfig, messageId: "source", emojiType: "Typing" }),
+      ).rejects.toEqual(new FeishuBackoffError(99991403));
+    } else {
+      deleteMock.mockResolvedValueOnce(response);
+      await expect(
+        removeReactionFeishu({
+          cfg: {} as ClawdbotConfig,
+          messageId: "source",
+          reactionId: "owned",
+        }),
+      ).rejects.toEqual(new FeishuBackoffError(99991403));
+    }
   });
 });

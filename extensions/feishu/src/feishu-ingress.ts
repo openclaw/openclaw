@@ -22,7 +22,11 @@ const FEISHU_DURABLE_EVENT_TYPES = new Set([
   "im.message.receive_v1",
 ]);
 
-export type FeishuIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission"> & {
+export type FeishuIngressLifecycle = Omit<
+  ChannelIngressMonitorLifecycle,
+  "admission" | "onDeferred"
+> & {
+  onDeferred: () => boolean | void;
   registerAbandonHandler?: (handler: () => void | Promise<void>) => () => void;
 };
 
@@ -152,7 +156,15 @@ function inspectFeishuIngressEnvelope(
         "Feishu message ingress envelope is missing event.message.chat_id.",
       );
     }
-    return { eventId, eventType, laneKey: `chat:${chatId}` };
+    const threadId = normalizeNullableString(message?.thread_id);
+    const rootId = normalizeNullableString(message?.root_id);
+    const topicId =
+      message?.chat_type === "topic_group" ? (threadId ?? rootId) : (rootId ?? threadId);
+    return {
+      eventId,
+      eventType,
+      laneKey: topicId ? `chat:${chatId}:topic:${topicId}` : `chat:${chatId}`,
+    };
   }
   const noticeMeta = isRecord(event.notice_meta) ? event.notice_meta : null;
   const fileType = normalizeNullableString(noticeMeta?.file_type);
@@ -256,6 +268,7 @@ export function buildFeishuFlushIngressLifecycle(
         options?.trackTask?.(adoption);
         await adoption;
       },
+      onRunIncluded: transportLifecycle.onRunIncluded,
       onDeferred: () => {
         handedOff = true;
         transportLifecycle.onDeferred();
@@ -376,6 +389,9 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
     pollIntervalMs: options.pollIntervalMs ?? FEISHU_INGRESS_POLL_INTERVAL_MS,
     retention: "standard",
     drain: {
+      // Debounce/preparation retains its own FIFO. Keep the durable claim alive
+      // for replay while letting subsequent receipts reach that admission queue.
+      deferredLaneOccupancy: "release",
       adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
       resolveNonRetryableFailure: resolveFeishuIngressNonRetryableFailure,
       onLog: (message) => options.runtime.error?.(`feishu ingress: ${message}`),

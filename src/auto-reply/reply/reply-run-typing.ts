@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { logVerbose } from "../../globals.js";
+import type { TurnAdoptionLifecycle } from "../get-reply-options.types.js";
 import { runAfterReplyOperationClear, type ReplyOperation } from "./reply-run-registry.js";
 import type { TypingController } from "./typing.js";
 
@@ -28,4 +31,33 @@ export async function refreshReplyOperationTyping(
     return;
   }
   await typing.startTypingLoop();
+}
+
+const inputRunIds = new WeakMap<ReplyOperation, string>();
+const includedSources = new WeakMap<ReplyOperation, WeakSet<TurnAdoptionLifecycle>>();
+
+/** Publish feedback for confirmed input without giving a channel run mutation authority. */
+export function notifyReplyRunInputIncluded(
+  operation: ReplyOperation,
+  lifecycle: TurnAdoptionLifecycle | undefined,
+): void {
+  if (!lifecycle?.onRunIncluded || operation.result || !operation.ownerSettlement) {
+    return;
+  }
+  const sources = includedSources.get(operation) ?? new WeakSet<TurnAdoptionLifecycle>();
+  if (sources.has(lifecycle)) {
+    return;
+  }
+  sources.add(lifecycle);
+  includedSources.set(operation, sources);
+  let runId = inputRunIds.get(operation);
+  if (!runId) {
+    runId = randomUUID();
+    inputRunIds.set(operation, runId);
+  }
+  try {
+    lifecycle.onRunIncluded({ runId, completion: operation.ownerSettlement });
+  } catch (error) {
+    logVerbose(`channel input feedback failed: ${String(error)}`);
+  }
 }

@@ -45,6 +45,7 @@ type InboundDebounceFlush = {
 type InboundDebounceAdmissionLifecycleInput = {
   abortSignal?: AbortSignal;
   onAdopted?: () => void | Promise<void>;
+  onRunIncluded?: (run: { runId: string; completion: Promise<void> }) => void;
   onDeferred?: () => boolean | void;
   onDeferredHeartbeat?: () => void;
   deferredHeartbeatIntervalMs?: number;
@@ -57,6 +58,7 @@ type InboundDebounceAdmissionLifecycleInput = {
 type InboundDebounceAdmissionLifecycle = {
   abortSignal: AbortSignal;
   onAdopted: () => Promise<void>;
+  onRunIncluded?: (run: { runId: string; completion: Promise<void> }) => void;
   onDeferred: () => boolean | void;
   onDeferredHeartbeat?: () => void;
   deferredHeartbeatIntervalMs?: number;
@@ -86,6 +88,7 @@ function createInboundDebounceFlush(params: {
       await source?.onAdopted?.();
       markAdmitted();
     },
+    onRunIncluded: source?.onRunIncluded,
     onDeferred: () => {
       const accepted = source?.onDeferred?.();
       if (accepted !== false) {

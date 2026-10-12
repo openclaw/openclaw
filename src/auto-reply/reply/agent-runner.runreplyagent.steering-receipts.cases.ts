@@ -8,6 +8,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import type { TemplateContext } from "../templating.js";
+import { registerProcessingFeedbackCases } from "./agent-runner.runreplyagent.processing-feedback.cases.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   enqueueFollowupRun,
@@ -24,7 +25,7 @@ import {
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
-type SteeringReceiptFixture = {
+export type SteeringReceiptFixture = {
   createMinimalRun: (params: {
     opts?: InternalGetReplyOptions;
     isActive?: boolean;
@@ -55,6 +56,7 @@ export function registerSteeringReceiptCases({
   makeSessionFixture,
   state,
 }: SteeringReceiptFixture): void {
+  registerProcessingFeedbackCases({ createMinimalRun, state });
   it("queues instead of steering when privilege facts differ on the active route", async ({
     signal,
   }) => {

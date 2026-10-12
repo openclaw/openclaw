@@ -7,10 +7,7 @@ import {
   type ChannelInboundEventRunnerParams,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
-import {
-  bindIngressLifecycleToReplyOptions,
-  resolveAgentOutboundIdentity,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import {
   ensureConfiguredBindingRouteReady,
@@ -21,7 +18,7 @@ import {
   resolvePromptHistoryLimit,
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
-import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   resolveDefaultGroupPolicy,
@@ -54,15 +51,16 @@ import {
 } from "./bot-content.js";
 import { resolveGroupName } from "./bot-group-name.js";
 import { resolveFeishuBotName } from "./bot-name.js";
+import {
+  bindFeishuProcessingReplyLifecycle,
+  withFeishuProcessingFeedback,
+  type FeishuMessageParams,
+} from "./bot-processing-feedback.js";
 import { resolveFeishuSenderName, type FeishuPermissionError } from "./bot-sender-name.js";
 import { prepareFeishuThreadRoot } from "./bot-thread-mentions.js";
 import { createFeishuClient } from "./client.js";
 import { resolveConfiguredFeishuGroupSessionScope } from "./conversation-id.js";
-import {
-  claimUnprocessedFeishuMessage,
-  finalizeFeishuMessageProcessing,
-  type FeishuMessageProcessingClaim,
-} from "./dedup.js";
+import { claimUnprocessedFeishuMessage, finalizeFeishuMessageProcessing } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import type { FeishuMessageEvent } from "./event-types.js";
@@ -254,20 +252,11 @@ async function filterFetchedGroupContextMessages<
   return results.filter((message): message is T => message !== undefined);
 }
 
-export async function handleFeishuMessage(params: {
-  cfg: ClawdbotConfig;
-  event: FeishuMessageEvent;
-  preparedContent?: string;
-  botOpenId?: string;
-  runtime?: RuntimeEnv;
-  channelRuntime?: ReturnType<typeof getFeishuRuntime>["channel"];
-  chatHistories?: Map<string, HistoryEntry[]>;
-  accountId?: string;
-  processingClaim?: FeishuMessageProcessingClaim;
-  messageDedupeKey?: string;
-  turnAdoptionLifecycle?: FeishuIngressLifecycle;
-  trackTask?: (task: Promise<void>) => void;
-}): Promise<void> {
+export function handleFeishuMessage(params: FeishuMessageParams): Promise<void> {
+  return withFeishuProcessingFeedback(params, handleFeishuMessageTurn);
+}
+
+async function handleFeishuMessageTurn(params: FeishuMessageParams): Promise<void> {
   const {
     event,
     preparedContent,
@@ -279,6 +268,7 @@ export async function handleFeishuMessage(params: {
     processingClaim,
     messageDedupeKey: messageDedupeKeyOverride,
     turnAdoptionLifecycle,
+    processingStatus,
   } = params;
 
   // Resolve each turn from live config; DMs reauthorize after awaited work below.
@@ -1470,7 +1460,16 @@ export async function handleFeishuMessage(params: {
         mentionTargets: ctx.mentionTargets,
         requiredMentionTargets,
         messageCreateTimeMs,
+        processingStatus,
       });
+
+    const processingFeedback = {
+      processingStatus,
+      onRunIncluded: turnAdoptionLifecycle?.onRunIncluded,
+      onSettled: params.onQueuedSettled,
+    };
+    const bindReplyLifecycle = (lifecycle: FeishuIngressLifecycle | undefined, feedback: boolean) =>
+      bindFeishuProcessingReplyLifecycle(lifecycle, feedback ? processingFeedback : undefined);
 
     const runAgentTurn = (
       ctxPayload: Awaited<ReturnType<typeof buildCtxPayloadForAgent>>,
@@ -1639,6 +1638,7 @@ export async function handleFeishuMessage(params: {
             `feishu[${account.accountId}]: broadcast ${dispatcher ? "active" : "observer"} dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
 
+          lane.lifecycle?.abortSignal.throwIfAborted();
           const turnResult = await runAgentTurn(agentCtx, () => ({
             cfg,
             channel: "feishu",
@@ -1650,14 +1650,14 @@ export async function handleFeishuMessage(params: {
               ? {
                   admission: { kind: "observeOnly" as const, reason: "broadcast-observer" },
                   delivery: { deliver: async () => ({ visibleReplySent: false }) },
-                  replyOptions: bindIngressLifecycleToReplyOptions(lane.lifecycle),
+                  replyOptions: bindReplyLifecycle(lane.lifecycle, false),
                 }
               : {
                   dispatcherOptions: dispatcher.dispatcherOptions,
                   delivery: dispatcher.delivery,
                   replyOptions: {
                     ...dispatcher.replyOptions,
-                    ...bindIngressLifecycleToReplyOptions(lane.lifecycle),
+                    ...bindReplyLifecycle(lane.lifecycle, true),
                   },
                 }),
           }));
@@ -1749,6 +1749,7 @@ export async function handleFeishuMessage(params: {
           sessionKey: route.sessionKey,
         });
 
+      turnAdoptionLifecycle?.abortSignal.throwIfAborted();
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
       const turnResult = await runAgentTurn(ctxPayload, () => ({
         cfg: effectiveCfg,
@@ -1777,9 +1778,7 @@ export async function handleFeishuMessage(params: {
         delivery,
         replyOptions: {
           ...replyOptions,
-          ...(turnAdoptionLifecycle
-            ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle)
-            : {}),
+          ...bindReplyLifecycle(turnAdoptionLifecycle, true),
         },
       }));
       if (!turnResult.dispatched) {

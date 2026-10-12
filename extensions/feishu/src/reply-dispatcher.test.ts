@@ -7,197 +7,32 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { afterAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-
-type StreamingSessionStub = {
-  active: boolean;
-  credentials: unknown;
-  start: ReturnType<typeof vi.fn>;
-  update: ReturnType<typeof vi.fn>;
-  closeWithResult: Mock<FeishuStreamingSession["closeWithResult"]>;
-  discard: Mock<FeishuStreamingSession["discard"]>;
-  isActive: ReturnType<typeof vi.fn>;
-};
-const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
-const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
-const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
-const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
-const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
-const sendCardFeishuMock = vi.hoisted(() => vi.fn());
-const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
-const createFeishuClientMock = vi.hoisted(() => vi.fn());
-const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
-const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
-const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
-const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
-const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
-  () =>
-    (params: {
-      mediaUrl?: string;
-      audioAsVoice?: boolean;
-      ttsSupplement?: { visibleTextAlreadyDelivered?: boolean };
-    }) =>
-      params.ttsSupplement
-        ? params.ttsSupplement.visibleTextAlreadyDelivered === true
-        : params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
-);
-const resolvePinnedHostnameWithPolicyMock = vi.hoisted(() =>
-  vi.fn(async (hostname: string) => {
-    if (hostname === "files.example.test") {
-      throw new Error("Blocked: resolves to private/internal/special-use IP address");
-    }
-    return { hostname, addresses: ["93.184.216.34"], lookup: vi.fn() };
-  }),
-);
-vi.mock("./accounts.js", () => ({
-  resolveFeishuAccount: resolveFeishuAccountMock,
-  resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
-}));
-vi.mock("./runtime.js", () => ({ getFeishuRuntime: getFeishuRuntimeMock }));
-vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, getGlobalHookRunner: getGlobalHookRunnerMock };
-});
-vi.mock("./send.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./send.js")>()),
-  sendMessageFeishu: sendMessageFeishuMock,
-  sendStructuredCardFeishu: sendStructuredCardFeishuMock,
-  sendCardFeishu: sendCardFeishuMock,
-}));
-vi.mock("./media.js", () => ({
-  sendMediaFeishu: sendMediaFeishuMock,
-  shouldSuppressFeishuTextForVoiceMedia: shouldSuppressFeishuTextForVoiceMediaMock,
-}));
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock };
-});
-vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
-vi.mock("./targets.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./targets.js")>()),
-  resolveReceiveIdType: resolveReceiveIdTypeMock,
-}));
-vi.mock("./typing.js", () => ({
-  addTypingIndicator: addTypingIndicatorMock,
-  removeTypingIndicator: removeTypingIndicatorMock,
-}));
-vi.mock("./streaming-card.js", async () => {
-  const { mergeStreamingText } = await import("./card-test-helpers.js");
-  class FeishuStreamingFinalizationError extends Error {
-    result: { visibleReplySent: boolean; content?: string; messageId?: string };
-    constructor(
-      cause: unknown,
-      result: { visibleReplySent: boolean; content?: string; messageId?: string },
-    ) {
-      super(cause instanceof Error ? cause.message : String(cause), { cause });
-      this.result = result;
-    }
-  }
-  return {
-    mergeStreamingText,
-    FeishuStreamingFinalizationError,
-    FeishuStreamingSession: class {
-      active = false;
-      credentials: unknown;
-      start = vi.fn(async () => {
-        this.active = true;
-      });
-      update = vi.fn(async () => {});
-      closeWithResult = vi.fn<FeishuStreamingSession["closeWithResult"]>(async (text, _options) => {
-        this.active = false;
-        return {
-          visibleReplySent: Boolean(text?.trim()),
-          ...(text?.trim() ? { content: text } : {}),
-          messageId: "om_stream",
-        };
-      });
-      discard = vi.fn<FeishuStreamingSession["discard"]>(async () => {
-        this.active = false;
-        return { visibleReplySent: false };
-      });
-      isActive = vi.fn(() => this.active);
-      constructor(_client: unknown, credentials: unknown) {
-        this.credentials = credentials;
-        streamingInstances.push(this);
-      }
-    },
-  };
-});
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildFeishuPostMessageContent } from "./markdown.js";
-import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
-import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
+import {
+  resolveFeishuAccountMock,
+  getFeishuRuntimeMock,
+  getGlobalHookRunnerMock,
+  sendMessageFeishuMock,
+  sendStructuredCardFeishuMock,
+  sendCardFeishuMock,
+  sendMediaFeishuMock,
+  createFeishuClientMock,
+  streamingInstances,
+  createReplyAccount,
+  useNonStreamingAutoAccount,
+  createDispatcherHarness,
+  toTypingDispatcherOptions,
+  resetFeishuReplyDispatcherHarness,
+  type StreamingSessionStub,
+  type TypingDispatcherOptions,
+} from "./reply-dispatcher.test-support.js";
 import { FeishuStreamingFinalizationError, type FeishuStreamingSession } from "./streaming-card.js";
-import type { FeishuConfig } from "./types.js";
 type StreamingCloseResult = Awaited<ReturnType<FeishuStreamingSession["closeWithResult"]>>;
 const imageUrl = "https://example.com/image.png";
 
-afterAll(() => {
-  vi.doUnmock("./accounts.js");
-  vi.doUnmock("./runtime.js");
-  vi.doUnmock("./send.js");
-  vi.doUnmock("./media.js");
-  vi.doUnmock("./client.js");
-  vi.doUnmock("./targets.js");
-  vi.doUnmock("./typing.js");
-  vi.doUnmock("./streaming-card.js");
-  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
-  vi.doUnmock("openclaw/plugin-sdk/plugin-runtime");
-  vi.resetModules();
-});
 describe("createFeishuReplyDispatcher streaming behavior", () => {
-  type ReplyDispatcherArgs = Parameters<typeof createFeishuReplyDispatcher>[0];
-
-  type ReplyDispatcherPlan = ReturnType<typeof createFeishuReplyDispatcher>;
-
-  type TypingDispatcherOptions = ReplyDispatcherPlan["dispatcherOptions"] &
-    ReplyDispatcherPlan["delivery"];
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    streamingStartBackoffUntilByAccount.clear();
-    streamingInstances.length = 0;
-    sendMediaFeishuMock.mockReset().mockResolvedValue(undefined);
-    sendStructuredCardFeishuMock.mockReset().mockResolvedValue(undefined);
-    sendCardFeishuMock.mockReset().mockResolvedValue({ messageId: "om_card" });
-    getGlobalHookRunnerMock.mockReturnValue(null);
-    resolveFeishuAccountMock.mockReturnValue(
-      createReplyAccount("auto", "partial", "feishu", { httpTimeoutMs: 45_000 }),
-    );
-    resolveReceiveIdTypeMock.mockReturnValue("chat_id");
-    createFeishuClientMock.mockReturnValue({});
-    getFeishuRuntimeMock.mockReturnValue({
-      channel: {
-        text: {
-          resolveTextChunkLimit: vi.fn(() => 4000),
-          resolveChunkMode: vi.fn(() => "line"),
-          resolveMarkdownTableMode: vi.fn(() => "preserve"),
-          convertMarkdownTables: vi.fn((text) => text),
-          chunkTextWithMode: vi.fn((text) => [text]),
-          chunkMarkdownTextWithMode: vi.fn((text) => [text]),
-        },
-        reply: { resolveHumanDelayConfig: vi.fn(() => undefined) },
-      },
-    });
-  });
-
-  function createReplyAccount(
-    renderMode: "auto" | "card",
-    streamingMode: "off" | "partial",
-    domain: "feishu" | "lark",
-    overrides: Partial<FeishuConfig> = {},
-  ) {
-    return {
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain,
-      config: { renderMode, streaming: { mode: streamingMode }, ...overrides },
-    };
-  }
-
-  function useNonStreamingAutoAccount() {
-    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "off", "feishu"));
-  }
+  beforeEach(resetFeishuReplyDispatcherHarness);
 
   it("honors the account response prefix over channel and global defaults", async () => {
     useNonStreamingAutoAccount();
@@ -331,26 +166,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     return { code: "CHANNEL_PARTIAL_DELIVERY", deliveryResult: accepted(content, messageIds) };
   }
 
-  function createRuntimeLogger() {
-    return { log: vi.fn(), error: vi.fn() } as never;
-  }
-
-  function createDispatcherHarness(overrides: Partial<ReplyDispatcherArgs> = {}) {
-    const result = createFeishuReplyDispatcher({
-      cfg: {} as never,
-      agentId: "agent",
-      runtime: createRuntimeLogger(),
-      chatId: "oc_chat",
-      sendTarget: "oc_chat",
-      ...overrides,
-    });
-    return { result, options: toTypingDispatcherOptions(result) };
-  }
-
-  function toTypingDispatcherOptions(result: ReplyDispatcherPlan): TypingDispatcherOptions {
-    return { ...result.dispatcherOptions, ...result.delivery };
-  }
-
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
     expect(isRecord(value), `${label} must be an object`).toBe(true);
     return value as Record<string, unknown>;
@@ -382,62 +197,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       typeof call[0] === "string" ? call[0] : "",
     );
   }
-
-  it.each(["disabled", "stale seconds"])("suppresses typing for %s messages", async (reason) => {
-    if (reason === "disabled") {
-      resolveFeishuAccountMock.mockReturnValue(
-        createReplyAccount("auto", "partial", "feishu", { typingIndicator: false }),
-      );
-    }
-    const { options } = createDispatcherHarness({
-      replyToMessageId: "om_parent",
-      messageCreateTimeMs:
-        reason === "stale seconds" ? Math.floor((Date.now() - 3 * 60_000) / 1000) : undefined,
-    });
-    await options.onReplyStart?.();
-    expect(addTypingIndicatorMock).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "topic root",
-      replyToMessageId: "om_topic_root",
-      rootId: "om_topic_root",
-      fallback: false,
-    },
-    {
-      name: "quoted reply",
-      replyToMessageId: "om_quote_reply",
-      rootId: "om_original_msg",
-      fallback: true,
-    },
-  ])(
-    "routes $name replies and inbound typing independently",
-    async ({ replyToMessageId, rootId, fallback }) => {
-      useNonStreamingAutoAccount();
-      const { options } = createDispatcherHarness({
-        replyToMessageId,
-        rootId,
-        typingTargetMessageId: "om_topic_child",
-        threadReply: true,
-        replyInThread: true,
-        messageCreateTimeMs: Date.now() - 30_000,
-      });
-      await options.onReplyStart?.();
-      await options.deliver(
-        { text: "plain text", mediaUrl: "https://example.com/reply.png" },
-        { kind: "final" },
-      );
-      expectSend(addTypingIndicatorMock, { messageId: "om_topic_child" });
-      for (const sender of [sendMessageFeishuMock, sendMediaFeishuMock]) {
-        expectSend(sender, {
-          replyToMessageId,
-          replyInThread: true,
-          allowTopLevelReplyFallback: fallback,
-        });
-      }
-    },
-  );
 
   it("splits raw final text at the serialized post byte envelope", async () => {
     useNonStreamingAutoAccount();

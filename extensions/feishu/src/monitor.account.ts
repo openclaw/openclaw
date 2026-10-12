@@ -7,6 +7,7 @@ import {
   readStringValue as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
+import { resolveFeishuAccount as inspectFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import {
   handleFeishuMessage,
@@ -28,6 +29,7 @@ import { botOpenIds } from "./monitor.state.js";
 import { FeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
+import { createFeishuProcessingIndicator } from "./processing-indicator.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
@@ -167,6 +169,7 @@ type RegisterEventHandlersContext = {
   fireAndForget?: boolean;
   isAccountActive: () => boolean;
   trackTask: (task: Promise<void>) => void;
+  processingIndicator?: ReturnType<typeof createFeishuProcessingIndicator>;
   vcAutoJoin: boolean;
   /** Owning account signal; retrying handlers must propagate it. */
   abortSignal?: AbortSignal;
@@ -479,6 +482,25 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       ? params.channelRuntime
       : getFeishuRuntime().channel;
 
+    const pluginRuntime = getFeishuRuntime();
+    const processingIndicator = createFeishuProcessingIndicator({
+      cfg,
+      accountId,
+      appId: account.appId ?? "",
+      state: pluginRuntime.state,
+      assertCurrent: () => {
+        const current = inspectFeishuAccount({
+          cfg: pluginRuntime.config.current() as ClawdbotConfig,
+          accountId,
+        });
+        if (!current.enabled || !current.configured || current.appId !== account.appId) {
+          throw new Error("Feishu processing account identity changed");
+        }
+      },
+      trackTask,
+      onError: (error) =>
+        log(`feishu[${accountId}]: processing indicator failed: ${String(error)}`),
+    });
     registerEventHandlers(eventDispatcher, {
       cfg,
       accountId,
@@ -488,6 +510,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       fireAndForget: params.fireAndForget ?? true,
       isAccountActive: () => !accountAbortSignal.aborted,
       trackTask,
+      ...(account.config.typingIndicator !== false ? { processingIndicator } : {}),
       vcAutoJoin: account.config.vcAutoJoin === true,
       abortSignal: accountAbortSignal,
       ...(durableIngress ? { resolveIngressLifecycle: durableIngress.resolveLifecycle } : {}),
@@ -519,6 +542,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       });
     } finally {
       accountStopped.abort(new Error("Feishu account stopped"));
+      processingIndicator.stop();
       try {
         await durableIngress?.stop();
       } finally {

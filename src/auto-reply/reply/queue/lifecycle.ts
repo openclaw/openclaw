@@ -196,3 +196,31 @@ export function completeFollowupRuns(
     }
   }
 }
+
+export function createAggregateLifecycle(
+  items: readonly FollowupRun[],
+  onAdopted: NonNullable<FollowupRun["turnAdoptionLifecycle"]>["onAdopted"],
+  onSettled: () => void,
+): NonNullable<FollowupRun["turnAdoptionLifecycle"]> {
+  return {
+    // Synthetic aggregates own cancellation; sources keep their own admission.
+    admission: "cancel-only",
+    ...(items.some(
+      (item) =>
+        item.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable === "queued-local-operator",
+    )
+      ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
+      : {}),
+    onAdopted,
+    onRunIncluded: (run) => {
+      for (const item of items) {
+        try {
+          item.turnAdoptionLifecycle?.onRunIncluded?.(run);
+        } catch {
+          // Feedback cannot reject or replay an already adopted source.
+        }
+      }
+    },
+    onSettled,
+  };
+}

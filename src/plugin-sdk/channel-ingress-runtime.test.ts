@@ -46,6 +46,7 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     const createLifecycle = () => ({
       abortSignal: new AbortController().signal,
       onAdopted: vi.fn(async () => {}),
+      onRunIncluded: vi.fn<NonNullable<FanInLifecycle["onRunIncluded"]>>(),
       onDeferred: vi.fn(),
       deferredHeartbeatIntervalMs: 3_000,
       onAdoptionFinalizing: vi.fn(),
@@ -65,6 +66,12 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     combined.lifecycle?.onAdoptionFinalizing();
     await combined.lifecycle?.onAdopted();
     await combined.settle();
+    first.onRunIncluded.mockImplementationOnce(() => {
+      throw new Error("reaction unavailable");
+    });
+    const run = { runId: "owner", completion: Promise.resolve() };
+    expect(() => combined.lifecycle?.onRunIncluded?.(run)).not.toThrow();
+    expect(second.onRunIncluded).toHaveBeenCalledWith(run);
 
     expect(first.onAdoptionFinalizing).toHaveBeenCalledOnce();
     expect(second.onAdoptionFinalizing).toHaveBeenCalledOnce();

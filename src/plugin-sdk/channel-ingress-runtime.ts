@@ -294,6 +294,15 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
         await adoptAll();
       },
+      onRunIncluded: (run) => {
+        for (const lifecycle of lifecycles) {
+          try {
+            lifecycle.onRunIncluded?.(run);
+          } catch {
+            // Feedback is best effort and cannot change accepted input custody.
+          }
+        }
+      },
       onDeferred: () => {
         handedOff = true;
         for (const lifecycle of lifecycles) {

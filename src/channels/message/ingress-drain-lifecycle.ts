@@ -14,6 +14,8 @@ export type ChannelIngressDispatchLifecycle = {
    * Drain completes (tombstones) the claim here -- never at settle.
    */
   onAdopted: () => void | Promise<void>;
+  /** Feedback only: confirmed run inclusion and its complete delivery/persistence lifetime. */
+  onRunIncluded?: (run: { runId: string; completion: Promise<void> }) => void;
   /**
    * Turn ownership deferred to reply-lane admission (queued followup).
    * Claim remains held until adopted or abandoned.
@@ -51,6 +53,7 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
     turnAdoptionLifecycle: {
       admission: "exclusive",
       onAdopted: lifecycle.onAdopted,
+      onRunIncluded: lifecycle.onRunIncluded,
       onDeferred: lifecycle.onDeferred,
       onDeferredHeartbeat: lifecycle.onDeferredHeartbeat,
       deferredHeartbeatIntervalMs: lifecycle.deferredHeartbeatIntervalMs,

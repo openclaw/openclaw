@@ -28,6 +28,53 @@ function createTextEvent(params: {
 
 describe("getFeishuSequentialKey", () => {
   it.each([
+    { chatType: "topic_group", rootId: "om-reply", threadId: "omt-topic", topic: "omt-topic" },
+    { chatType: "group", rootId: "om-root", threadId: "omt-thread", topic: "om-root" },
+  ] as const)("aligns $chatType preparation with routed topic identity", (params) => {
+    const event = createTextEvent({ text: "correction" });
+    event.message.chat_type = params.chatType;
+    event.message.root_id = params.rootId;
+    event.message.thread_id = params.threadId;
+    expect(
+      getFeishuSequentialKey({
+        cfg: { channels: { feishu: { groupSessionScope: "group_topic" } } },
+        accountId: "default",
+        event,
+      }),
+    ).toBe(`feishu:default:oc_dm_chat:topic:${params.topic}`);
+    // A group-scoped session deliberately shares the topic lane.
+    expect(
+      getFeishuSequentialKey({
+        cfg: { channels: { feishu: { groupSessionScope: "group" } } },
+        accountId: "default",
+        event,
+      }),
+    ).toBe("feishu:default:oc_dm_chat");
+  });
+
+  it("uses group overrides and keeps topic control traffic separate", () => {
+    const event = createTextEvent({ text: "/stop" });
+    event.message.chat_type = "topic_group";
+    event.message.thread_id = "omt-a";
+    expect(
+      getFeishuSequentialKey({
+        cfg: {
+          channels: {
+            feishu: {
+              groupSessionScope: "group",
+              groups: {
+                oc_dm_chat: { groupSessionScope: "group_topic" },
+              },
+            },
+          },
+        },
+        accountId: "default",
+        event,
+      }),
+    ).toBe("feishu:default:oc_dm_chat:topic:omt-a:control");
+  });
+
+  it.each([
     [createTextEvent({ text: "hello" }), "feishu:default:oc_dm_chat"],
     [createTextEvent({ text: "/status" }), "feishu:default:oc_dm_chat"],
     [createTextEvent({ text: "/stop" }), "feishu:default:oc_dm_chat:control"],

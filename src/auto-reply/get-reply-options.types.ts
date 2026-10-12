@@ -117,6 +117,8 @@ export type TurnAdoptionLifecycle = {
   /** Transcript branch leaf from which this turn was admitted. */
   originatingLeafEntryId?: string | null;
   onAdopted: () => void | Promise<void>;
+  /** Non-blocking feedback after confirmed input inclusion; completion belongs to that exact run. */
+  onRunIncluded?: (run: { runId: string; completion: Promise<void> }) => void;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;
   /** Pre-adoption liveness while waiting for reply-lane admission or preflight compaction. */

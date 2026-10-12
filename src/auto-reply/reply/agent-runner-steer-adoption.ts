@@ -34,7 +34,7 @@ import {
   replyRunRegistry,
 } from "./reply-run-registry.js";
 import { waitForReplyOperationBackend } from "./reply-run-registry.state.js";
-import { refreshReplyOperationTyping } from "./reply-run-typing.js";
+import { notifyReplyRunInputIncluded, refreshReplyOperationTyping } from "./reply-run-typing.js";
 import {
   resolveFollowupRunToolAuthorityFingerprint,
   resolveFollowupRunToolAuthorityFingerprintAsync,
@@ -321,6 +321,13 @@ export async function runActiveReplySteer(
     }
     // Accepted or indeterminate input cannot be abandoned for replay, even
     // when the source's later adoption callback rejects.
+    if (
+      finalization.status === "accepted" &&
+      !finalization.aborted &&
+      !finalization.adoptionError
+    ) {
+      notifyReplyRunInputIncluded(activeReplyOperation, followupRun.turnAdoptionLifecycle);
+    }
     parked.consume("consumed");
     if (finalization.status === "indeterminate") {
       return markReplyPayloadForSourceSuppressionDelivery({

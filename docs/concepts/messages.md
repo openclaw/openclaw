@@ -128,6 +128,8 @@ The queue uses a built-in 500ms debounce for steer, followup, and collect batchi
 
 Details: [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
 
+Feishu preserves receipt and preparation order within the configured conversation scope. Its ingress lane releases when core adopts the turn or retains it for steering or followup, so later messages can reach an active run before its final reply. Native Topic identity is resolved before reserving that lane; an unavailable identity remains retryable instead of dispatching into a guessed Topic. The inbound debounce delay and backend steering support still apply.
+
 ## Channel run ownership
 
 Channel plugins may preserve ordering, debounce input, and apply transport backpressure before a message enters the session queue. They should not impose a separate timeout around the agent turn itself. Once a message is routed to a session, the session, tool, and runtime lifecycle govern long-running work so all channels report and recover from slow turns consistently.

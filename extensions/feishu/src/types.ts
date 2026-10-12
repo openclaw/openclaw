@@ -17,10 +17,14 @@ type LegacyFeishuWebhookConfig = {
   webhookPort?: number;
 };
 
-export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema> &
-  LegacyFeishuWebhookConfig;
-export type FeishuConfig = Omit<z.infer<typeof FeishuConfigSchema>, "accounts"> &
+// Account merging preserves omitted defaults; groupPolicy keeps the schema's canonical values.
+export type FeishuAccountConfig = Omit<z.input<typeof FeishuAccountConfigSchema>, "groupPolicy"> &
   LegacyFeishuWebhookConfig & {
+    groupPolicy?: z.output<typeof FeishuAccountConfigSchema>["groupPolicy"];
+  };
+export type FeishuConfig = Omit<z.input<typeof FeishuConfigSchema>, "accounts" | "groupPolicy"> &
+  LegacyFeishuWebhookConfig & {
+    groupPolicy?: z.output<typeof FeishuConfigSchema>["groupPolicy"];
     accounts?: Record<string, FeishuAccountConfig | undefined>;
   };
 

@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
 import { createConfiguredFeishuClient } from "./configured-client.js";
+import { FeishuBackoffError, getBackoffCodeFromResponse } from "./typing-backoff.js";
 
 type FeishuReaction = {
   reactionId: string;
@@ -32,6 +33,10 @@ export async function addReactionFeishu(params: {
     },
   });
 
+  const backoffCode = getBackoffCodeFromResponse(response);
+  if (backoffCode !== undefined) {
+    throw new FeishuBackoffError(backoffCode);
+  }
   assertFeishuApiSuccess(response, "Feishu add reaction failed");
 
   const reactionId = response.data?.reaction_id;
@@ -58,6 +63,10 @@ export async function removeReactionFeishu(params: {
     },
   });
 
+  const backoffCode = getBackoffCodeFromResponse(response);
+  if (backoffCode !== undefined) {
+    throw new FeishuBackoffError(backoffCode);
+  }
   assertFeishuApiSuccess(response, "Feishu remove reaction failed");
 }
 

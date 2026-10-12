@@ -75,7 +75,10 @@ describe("broadcast dispatch", () => {
 
   function dispatchBroadcast(
     messageId: string,
-    options: { turnAdoptionLifecycle?: FeishuIngressLifecycle } = {},
+    options: Pick<
+      Parameters<typeof handleFeishuMessage>[0],
+      "turnAdoptionLifecycle" | "processingStatus"
+    > = {},
   ) {
     return handleFeishuMessage({
       cfg: createBroadcastConfig(),
@@ -86,6 +89,49 @@ describe("broadcast dispatch", () => {
     });
   }
 
+  it("retains the active broadcast processing run when an observer later reports its own inclusion", async () => {
+    mockBroadcastClaims("broadcast-processing-exact-owner");
+    const activeReported = createDeferred<void>();
+    const ownerCompletion = createDeferred<void>();
+    const observerCompletion = createDeferred<void>();
+    const includedRun = { runId: "active-broadcast-run", completion: ownerCompletion.promise };
+    const processingStatus = {
+      queued: vi.fn(),
+      included: vi.fn(),
+      abandoned: vi.fn(),
+      settled: vi.fn(),
+    };
+    const transport = createIngressLifecycle();
+    transport.lifecycle.onRunIncluded = vi.fn();
+    mockDispatchReply.mockImplementation(async ({ ctx, replyOptions }) => {
+      if (String(ctx.SessionKey).startsWith("agent:main:")) {
+        await replyOptions.turnAdoptionLifecycle.onAdopted();
+        replyOptions.turnAdoptionLifecycle.onRunIncluded(includedRun);
+        activeReported.resolve();
+        return { queuedFinal: true, counts: { final: 1 } };
+      }
+      await activeReported.promise;
+      replyOptions.turnAdoptionLifecycle?.onRunIncluded?.({
+        runId: "observer-run",
+        completion: observerCompletion.promise,
+      });
+      return { queuedFinal: false, counts: { final: 0 } };
+    });
+    await dispatchBroadcast("msg-broadcast-processing-owner", {
+      turnAdoptionLifecycle: transport.lifecycle,
+      processingStatus,
+    });
+    expect(processingStatus.included).toHaveBeenCalledOnce();
+    expect(processingStatus.included).toHaveBeenCalledWith(includedRun);
+    expect(transport.lifecycle.onRunIncluded).toHaveBeenCalledOnce();
+    expect(processingStatus.settled).not.toHaveBeenCalled();
+    observerCompletion.resolve();
+    await observerCompletion.promise;
+    expect(processingStatus.settled).not.toHaveBeenCalled();
+    ownerCompletion.resolve();
+    await ownerCompletion.promise;
+    expect(processingStatus.included).toHaveBeenCalledOnce();
+  });
   it("sends no-visible-reply fallback for active broadcast failed final delivery", async () => {
     mockDispatchReply.mockImplementation(async ({ ctx }) =>
       String(ctx.SessionKey).startsWith("agent:main:")
