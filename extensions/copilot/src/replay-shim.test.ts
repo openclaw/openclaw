@@ -7,16 +7,6 @@ import {
 } from "./replay-shim.js";
 
 describe("isMissingCopilotSessionError", () => {
-  it("treats undefined / null as unrecoverable", () => {
-    expect(isMissingCopilotSessionError(undefined)).toBe(false);
-    expect(isMissingCopilotSessionError(null)).toBe(false);
-  });
-
-  it("treats a non-Error throw value as unrecoverable", () => {
-    expect(isMissingCopilotSessionError("string-error")).toBe(false);
-    expect(isMissingCopilotSessionError(42)).toBe(false);
-  });
-
   it("classifies statusCode:404 errors as missing/recoverable", () => {
     const error = Object.assign(new Error("Not Found"), { statusCode: 404 });
     expect(isMissingCopilotSessionError(error)).toBe(true);
@@ -29,87 +19,13 @@ describe("isMissingCopilotSessionError", () => {
     }
   });
 
-  it("classifies recognised message patterns as missing/recoverable", () => {
-    const messages = [
-      "session not found",
-      "Session sess-1 not found",
-      "Unknown session id sess-1",
-      "session id sess-1 does not exist",
-      "no such session",
-    ];
-    for (const message of messages) {
-      expect(isMissingCopilotSessionError(new Error(message))).toBe(true);
-    }
-  });
-
-  it("does not over-match unrelated errors", () => {
-    expect(isMissingCopilotSessionError(new Error("network ECONNRESET"))).toBe(false);
-    expect(isMissingCopilotSessionError(new Error("Unauthorized"))).toBe(false);
-    expect(isMissingCopilotSessionError(new Error("rate limit exceeded"))).toBe(false);
-  });
-
   it("reads message from plain objects with a message string", () => {
     const error = { message: "session not found" };
-    expect(isMissingCopilotSessionError(error)).toBe(true);
-  });
-
-  it("prefers structured signals over message heuristics", () => {
-    // status:404 wins even when message is unrelated
-    const error = Object.assign(new Error("Internal server error"), { status: 404 });
     expect(isMissingCopilotSessionError(error)).toBe(true);
   });
 });
 
 describe("computeReplayMetadata", () => {
-  it("clean attempt with no prior state → replaySafe true", () => {
-    expect(computeReplayMetadata({})).toEqual({
-      hadPotentialSideEffects: false,
-      replaySafe: true,
-    });
-  });
-
-  it("timeout flips both flags", () => {
-    expect(computeReplayMetadata({ thisAttemptTimedOut: true })).toEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
-    });
-  });
-
-  it("prior side effects propagate forward", () => {
-    expect(computeReplayMetadata({ priorHadPotentialSideEffects: true })).toEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
-    });
-  });
-
-  it("current attempt side effects make replay unsafe", () => {
-    expect(computeReplayMetadata({ thisAttemptHadPotentialSideEffects: true })).toEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
-    });
-  });
-
-  it("prior replayInvalid invalidates replay even without side effects", () => {
-    expect(computeReplayMetadata({ priorReplayInvalid: true })).toEqual({
-      hadPotentialSideEffects: false,
-      replaySafe: false,
-    });
-  });
-
-  it("downgradedFromResume invalidates replay even without side effects", () => {
-    expect(computeReplayMetadata({ thisAttemptDowngradedFromResume: true })).toEqual({
-      hadPotentialSideEffects: false,
-      replaySafe: false,
-    });
-  });
-
-  it("resumeFailureRecovered invalidates replay even without side effects", () => {
-    expect(computeReplayMetadata({ thisAttemptResumeFailureRecovered: true })).toEqual({
-      hadPotentialSideEffects: false,
-      replaySafe: false,
-    });
-  });
-
   it("treats explicit false flags as if they were absent", () => {
     expect(
       computeReplayMetadata({

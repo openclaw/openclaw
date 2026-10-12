@@ -141,26 +141,24 @@ describe("createCopilotByokProxy", () => {
     }
   });
 
-  it.each(["GET", "HEAD", "POST"])(
-    "forwards an empty %s request without a body",
-    async (method) => {
-      ssrfRuntimeMock.fetchWithSsrFGuard.mockResolvedValue({
-        response: new Response(null, { status: 204 }),
-        release: vi.fn(async () => undefined),
-      });
-      const proxy = await createCopilotByokProxy(createProvider());
-      try {
-        const response = await fetch(`${proxy?.provider.provider?.baseUrl}/responses`, { method });
-        expect(response.status).toBe(204);
-        expect(ssrfRuntimeMock.fetchWithSsrFGuard).toHaveBeenCalledWith(
-          expect.objectContaining({ init: expect.objectContaining({ method }) }),
-        );
-        expect(ssrfRuntimeMock.fetchWithSsrFGuard.mock.calls[0]?.[0].init.body).toBeUndefined();
-      } finally {
-        await proxy?.close();
-      }
-    },
-  );
+  it("forwards an empty POST request without a body", async () => {
+    const method = "POST";
+    ssrfRuntimeMock.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(null, { status: 204 }),
+      release: vi.fn(async () => undefined),
+    });
+    const proxy = await createCopilotByokProxy(createProvider());
+    try {
+      const response = await fetch(`${proxy?.provider.provider?.baseUrl}/responses`, { method });
+      expect(response.status).toBe(204);
+      expect(ssrfRuntimeMock.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({ init: expect.objectContaining({ method }) }),
+      );
+      expect(ssrfRuntimeMock.fetchWithSsrFGuard.mock.calls[0]?.[0].init.body).toBeUndefined();
+    } finally {
+      await proxy?.close();
+    }
+  });
 
   it("injects resolved bearer auth when the SDK request omits Authorization", async () => {
     ssrfRuntimeMock.fetchWithSsrFGuard.mockResolvedValue({

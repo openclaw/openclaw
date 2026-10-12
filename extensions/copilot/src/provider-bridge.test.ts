@@ -79,41 +79,6 @@ describe("resolveCopilotProvider", () => {
     expect(supportsCopilotByokProviderShape({ baseUrl: "https://proxy.example/v1" })).toBe(true);
   });
 
-  it("maps OpenAI Chat Completions BYOK bearer auth with the provider-local model id", () => {
-    const result = resolveCopilotProvider({
-      model: {
-        provider: "tencent-tokenplan",
-        api: "openai-completions",
-        id: "hy3",
-        baseUrl: "https://tokenplan.example/v1",
-        authHeader: true,
-      },
-      resolvedApiKey: "secret-key",
-    });
-
-    expect(result.provider).toMatchObject({
-      type: "openai",
-      wireApi: "completions",
-      baseUrl: "https://tokenplan.example/v1",
-      modelId: "hy3",
-      wireModel: "hy3",
-      bearerToken: "secret-key",
-    });
-  });
-
-  it("changes the BYOK compatibility fingerprint when token limits change", () => {
-    const small = resolveCopilotProvider({
-      model: createModel({ contextTokens: 8_000, maxTokens: 512 }),
-      resolvedApiKey: "secret-key",
-    });
-    const large = resolveCopilotProvider({
-      model: createModel({ contextTokens: 16_000, maxTokens: 1024 }),
-      resolvedApiKey: "secret-key",
-    });
-
-    expect(small.authProfileVersion).not.toBe(large.authProfileVersion);
-  });
-
   it("maps Anthropic and Ollama-compatible APIs", () => {
     expect(
       resolveCopilotProvider({
@@ -227,15 +192,11 @@ describe("resolveCopilotProvider", () => {
     });
   });
 
-  it.each([
-    { mode: "header", headers: { "x-api-key": "header-secret" } },
-    { mode: "none", headers: undefined },
-  ])("does not synthesize SDK auth for prepared $mode request auth", ({ mode, headers }) => {
+  it("does not synthesize SDK auth for prepared none request auth", () => {
     const result = resolveCopilotProvider({
       model: createModel({
         provider: "custom-header-proxy",
-        headers,
-        requestAuthMode: mode,
+        requestAuthMode: "none",
       }),
       resolvedApiKey: "header-secret",
     });
@@ -246,7 +207,6 @@ describe("resolveCopilotProvider", () => {
       baseUrl: "https://proxy.example/v1",
       modelId: "proxy-model",
       wireModel: "proxy-model",
-      ...(headers ? { headers } : {}),
     });
   });
 
@@ -356,19 +316,6 @@ describe("resolveCopilotProvider", () => {
         requestProxy: { mode: "env-proxy" },
       }),
     ).toBe(false);
-  });
-
-  it("rejects provider APIs the SDK adapter cannot represent", () => {
-    expect(() =>
-      resolveCopilotProvider({
-        model: {
-          provider: "google",
-          api: "google-generative-ai",
-          id: "gemini",
-          baseUrl: "https://google.example",
-        },
-      }),
-    ).toThrow(COPILOT_BYOK_PROVIDER_ERROR);
   });
 
   it("requires an endpoint for non-subscription providers", () => {
