@@ -29,6 +29,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { registerGenerationRecoveryTests } from "./update-command-generation.test-support.js";
 import { registerRestartOutcomeTests } from "./update-command-restart-outcome.test-support.js";
 import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
+import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import {
   createServiceActivationFixture,
@@ -349,6 +350,7 @@ describe("preserved update activation with real version guards", () => {
   it.each(preservedActivationCases)(
     "handles $phase $denial denial for $mode activation ($outcome; json=$json)",
     async ({ mode, denial, outcome, json, phase }) => {
+      const definitionRecovery: UpdateServiceDefinitionRecovery = {};
       let nowMs = 0;
       vi.spyOn(performance, "now").mockImplementation(() => nowMs);
       vi.spyOn(runtimeUtils, "sleep").mockImplementation(async (ms) => {
@@ -394,16 +396,18 @@ describe("preserved update activation with real version guards", () => {
           return commandResult({
             code: 1,
             stdout:
-              outcome === "json denial"
+              outcome === "json denial" || outcome === "clean refusal"
                 ? JSON.stringify({
                     ok: false,
                     error: `SERVICE_DEFINITION_${denial.toUpperCase()}: late owner denial`,
                   })
                 : "",
             stderr:
-              outcome === "json denial"
-                ? "runtime warning"
-                : `SERVICE_DEFINITION_${denial.toUpperCase()}: late owner denial`,
+              outcome === "clean refusal"
+                ? ""
+                : outcome === "json denial"
+                  ? "runtime warning"
+                  : `SERVICE_DEFINITION_${denial.toUpperCase()}: late owner denial`,
           });
         }
         if (mocks.running) {
@@ -462,6 +466,7 @@ describe("preserved update activation with real version guards", () => {
         }),
         opts: { json, run },
         refreshServiceEnv: late,
+        ...(outcome === "clean refusal" ? { definitionRecovery } : {}),
         serviceUpdateVerdict: before.serviceUpdateVerdict,
         serviceManagerUid: before.serviceManagerUid,
         serviceEnv: before.serviceEnv,
@@ -472,6 +477,11 @@ describe("preserved update activation with real version guards", () => {
       const allowed = !["uninspectable", "foreign"].includes(outcome);
       const buildMismatch = ["stale build", "missing build"].includes(outcome);
       expect(activated).toBe(!allowed ? "failed" : buildMismatch ? "restart-health-failed" : "ok");
+      if (outcome === "clean refusal") {
+        expect(definitionRecovery).toEqual({ preserved: true, unverified: false });
+        expect(mocks.running).toBe(true);
+        expect(mocks.events).toContain("native restart");
+      }
       const restarts = mocks.child.mock.calls.filter(([args]) => args.includes("restart"));
       expect(restarts).toHaveLength(allowed ? (retried ? 2 : 1) : 0);
       for (const [args, options] of restarts) {

@@ -8,8 +8,10 @@ import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import type * as CommandExec from "../../process/exec.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import type * as UpdateCommandExecutor from "./update-command-executor.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { recordServiceTimedStep } from "./update-command-result.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
+import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 
 const mocks = vi.hoisted(() => ({
   command: vi.fn(),
@@ -117,6 +119,46 @@ it("keeps failed reconciliation children on the existing failure path", async ()
   ).rejects.toThrow("install refused");
   expect(onTimedStep).not.toHaveBeenCalled();
 });
+
+it.each(["", "UPDATE_NATIVE_AUTHORITY: exit 1"])(
+  "classifies a completed pre-write refusal with stderr %j",
+  async (stderr) => {
+    const error =
+      "SERVICE_DEFINITION_UNKNOWN: Service definition inspection or backup failed; the definition was preserved: inspection failed";
+    mocks.command.mockImplementation(async (argv: string[]) =>
+      createCommandResult(
+        argv.includes("check")
+          ? {
+              code: 0,
+              cleanup: "normal",
+              stdout: JSON.stringify({
+                updateExecutor: GATEWAY_UPDATE_EXECUTOR_CONTRACT,
+                targetRootBinding: true,
+                definitionBackup: true,
+              }),
+            }
+          : { code: 1, stdout: JSON.stringify({ action: "install", ok: false, error }), stderr },
+      ),
+    );
+    const definitionRecovery: UpdateServiceDefinitionRecovery = {};
+    const failure = await runUpdatedInstallGatewayCommand(
+      {
+        result: { root: "/fixture/root", mode: "npm" },
+        opts: { run: { runId: "run-1", env: {}, executorFence: { assertCurrent() {} } } },
+        invocationEnv: {},
+        definitionRecovery,
+      },
+      "install",
+    ).catch((cause: unknown) => cause);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure instanceof UpdateCommandRecoveryPendingError).toBe(stderr !== "");
+    expect(failure).toHaveProperty(
+      "message",
+      `updated install refresh failed (/fixture/root/dist/entry.js): ${stderr || error}`,
+    );
+    expect(definitionRecovery).toEqual({ preserved: true, unverified: false });
+  },
+);
 
 it("records a timed service step in the result and as a measured run row", () => {
   const result: UpdateRunResult = { status: "ok", mode: "git", steps: [], durationMs: 0 };
