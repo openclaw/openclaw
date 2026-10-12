@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -24,6 +25,7 @@ import { createMeetingNodeHost, type MeetingNodeHostOptions } from "./node-host.
 const TEST_UUID = "00000000-0000-4000-8000-000000000001";
 // Mirrors the node-host's private retention limits.
 const MAX_QUEUED_INPUT_CHUNKS = 200;
+const MAX_QUEUED_INPUT_BYTES = 1024 * 1024;
 const AUDIO_START_PARAMS = {
   action: "start",
   audioInputCommand: ["capture"],
@@ -305,6 +307,42 @@ describe("meeting node host audio output", () => {
     );
     const pulled = await invokeBridge(bridge, "pullAudio");
     expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(Buffer.from([1]));
+    await invokeBridge(bridge, "stop");
+  });
+
+  it("keeps only the newest bounded input bytes", async () => {
+    const bridge = await startAudioBridge();
+    const chunkBytes = 64 * 1024;
+
+    for (let value = 0; value <= MAX_QUEUED_INPUT_BYTES / chunkBytes; value += 1) {
+      bridge.inputStdout.emit("data", Buffer.alloc(chunkBytes, value));
+    }
+
+    const status = await invokeBridge(bridge, "status");
+    expect((status.bridge as Record<string, unknown>).queuedInputChunks).toBe(
+      MAX_QUEUED_INPUT_BYTES / chunkBytes,
+    );
+    const pulled = await invokeBridge(bridge, "pullAudio");
+    assert.deepStrictEqual(
+      Buffer.from(pulled.base64 as string, "base64"),
+      Buffer.alloc(chunkBytes, 1),
+    );
+    await invokeBridge(bridge, "stop");
+  });
+
+  it("copies only the newest bytes from an oversized input chunk", async () => {
+    const bridge = await startAudioBridge();
+    const source = Buffer.allocUnsafe(MAX_QUEUED_INPUT_BYTES + 4);
+    for (let index = 0; index < source.length; index += 1) {
+      source[index] = index % 251;
+    }
+    const expected = Buffer.from(source.subarray(source.length - MAX_QUEUED_INPUT_BYTES));
+
+    bridge.inputStdout.emit("data", source);
+    source.fill(0);
+
+    const pulled = await invokeBridge(bridge, "pullAudio");
+    assert.deepStrictEqual(Buffer.from(pulled.base64 as string, "base64"), expected);
     await invokeBridge(bridge, "stop");
   });
 

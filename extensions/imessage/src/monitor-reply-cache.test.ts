@@ -154,6 +154,24 @@ describe("requireFromMe (edit / unsend authorization)", () => {
     ).rejects.toThrow("not one this agent sent");
   });
 
+  it("allows a short id resolution when the cached entry was sent by the gateway", async () => {
+    const entry = await rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "outbound-guid",
+      chatGuid: "iMessage;+;chatA",
+      timestamp: Date.now(),
+      isFromMe: true,
+    });
+
+    expect(
+      await resolveIMessageMessageId(entry.shortId, {
+        requireKnownShortId: true,
+        chatContext: { chatGuid: "iMessage;+;chatA" },
+        requireFromMe: true,
+      }),
+    ).toBe("outbound-guid");
+  });
+
   it("rejects an uncached full guid under requireFromMe (agent cannot edit/unsend unknown messages)", async () => {
     await expect(
       resolveIMessageMessageId("never-seen-guid", {
@@ -336,6 +354,27 @@ describe("SQLite reply-cache hydration", () => {
         }),
       ).toBe(entry.messageId);
     }
+  });
+
+  it("does not reuse short ids after cached rows expire", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-08T00:00:00Z"));
+    const first = await rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "old-guid",
+      timestamp: Date.now(),
+    });
+    expect(first.shortId).toBe("1");
+
+    vi.setSystemTime(new Date("2026-05-08T07:00:00Z"));
+    await loadReplyCache({ preservePersistentState: true });
+    const second = await rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "new-guid",
+      timestamp: Date.now(),
+    });
+
+    expect(second.shortId).toBe("2");
   });
 });
 

@@ -90,6 +90,19 @@ describe("meeting output loopback verifier", () => {
     },
   );
 
+  it("matches loopback delayed by a sub-frame sample offset", () => {
+    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
+    const output = pcmEnergyFrames(outputEnvelope.slice(0, 30));
+    const fiveMsPreRoll = Buffer.alloc(120 * 2);
+    const capture = Buffer.concat([fiveMsPreRoll, output]);
+
+    verifier.beginOutput();
+    verifier.recordOutput(output);
+    verifier.recordInput(capture);
+
+    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(capture.byteLength);
+  });
+
   it("rejects a correlated waveform below the signal threshold", () => {
     const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
     const output = pcmEnergyFrames(outputEnvelope.slice(0, 20));
