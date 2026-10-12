@@ -289,6 +289,24 @@ describe("buildCliSpeechProvider", () => {
     ).toMatchObject({ command: "real-command", voiceId: "af_bella" });
   });
 
+  it("keeps a pre-existing full Talk record working when TTS has no CLI block", () => {
+    // Before Talk merging existed, a Talk record had to carry the executable itself.
+    const talkProviderConfig = {
+      command: "/usr/local/bin/talk-tts",
+      args: ["--out", "{{OutputPath}}"],
+      outputFormat: "wav",
+    };
+
+    expect(
+      buildCliSpeechProvider().resolveTalkConfig?.({
+        cfg: TEST_CFG,
+        baseTtsConfig: {},
+        talkProviderConfig,
+        timeoutMs: 1000,
+      }),
+    ).toEqual(talkProviderConfig);
+  });
+
   it("lets a Talk selection beat a speaker alias inherited from the TTS default", async () => {
     const script = createCliFixture();
     const resolved = buildCliSpeechProvider().resolveTalkConfig?.({
