@@ -88,6 +88,12 @@ export const LAB_FEATURES = (
     },
     {
       ...BOOLEAN_GATE,
+      id: "progressReview",
+      docsUrl: "https://docs.openclaw.ai/concepts/experimental-features#progress-review",
+      configPath: ["plugins", "entries", "progress-review", "enabled"],
+    },
+    {
+      ...BOOLEAN_GATE,
       id: "chatBubbles",
       docsUrl: "https://docs.openclaw.ai/web/control-ui/chat",
       configPath: ["gateway", "controlUi", "experimental", "chatBubbles"],

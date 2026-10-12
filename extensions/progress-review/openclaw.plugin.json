@@ -1,0 +1,37 @@
+{
+  "id": "progress-review",
+  "categories": ["agent-orchestration"],
+  "name": "Progress Review",
+  "description": "Experimental: periodically reviews a conversation's recent agent work and gives the agent one short correction on its next turn.",
+  "activation": { "onStartup": true },
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "everyTurns": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1000,
+        "default": 10
+      },
+      "everyMinutes": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1440,
+        "default": 20
+      }
+    },
+    "additionalProperties": false
+  },
+  "uiHints": {
+    "everyTurns": {
+      "label": "Review every N turns",
+      "help": "Review after this many completed agent turns in a conversation. 0 turns this trigger off."
+    },
+    "everyMinutes": {
+      "label": "Review every N minutes",
+      "help": "Review after this many minutes of accumulated agent run time in a conversation. 0 turns this trigger off."
+    }
+  },
+  "version": "2026.9.9"
+}

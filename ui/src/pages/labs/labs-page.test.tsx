@@ -160,6 +160,9 @@ describe("LabsPage", () => {
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(page.textContent).toContain("Host Desktop");
     expect(page.textContent).toContain("Cloud Worker Desktop");
+    expect(page.textContent).toContain("Progress review");
+    expect(labToggle(page, "Progress review").checked).toBe(false);
+    expect(page.querySelector('input[aria-label="Review every N turns"]')).toBeNull();
     expect(codeModeToggle(page).checked).toBe(true);
 
     const docs = LAB_FEATURES.map((feature) => labDocsLink(page, feature.title()));
@@ -335,6 +338,101 @@ describe("LabsPage", () => {
       raw: testCase.expectedPatch,
       note: testCase.note,
     });
+  });
+
+  it.each([true, false])(
+    "sets Progress review to %s without changing its settings",
+    async (enabled) => {
+      const settings = { everyTurns: 7, everyMinutes: 15 };
+      const sourceConfig = {
+        plugins: { entries: { "progress-review": { enabled: !enabled, config: settings } } },
+      };
+      const { page, runtimeConfig } = await mountPage(sourceConfig);
+      const toggle = labToggle(page, "Progress review");
+      toggle.checked = enabled;
+      toggle.dispatchEvent(new Event("change", { bubbles: true }));
+
+      await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+      const patch = runtimeConfig.patch.mock.calls[0]?.[0].raw;
+      expect(patch).toEqual({
+        plugins: { entries: { "progress-review": { enabled: enabled ? true : null } } },
+      });
+      expect(applyMergePatch(sourceConfig, patch)).toEqual({
+        plugins: {
+          entries: {
+            "progress-review": { ...(enabled ? { enabled: true } : {}), config: settings },
+          },
+        },
+      });
+    },
+  );
+
+  it.each([
+    { label: "Review every N turns", key: "everyTurns", value: 0, defaultValue: "10" },
+    { label: "Review every N minutes", key: "everyMinutes", value: 1440, defaultValue: "20" },
+  ])("saves only $key and retains the other plugin settings", async (testCase) => {
+    const sibling = testCase.key === "everyTurns" ? { everyMinutes: 35 } : { everyTurns: 8 };
+    const sourceConfig = {
+      plugins: { entries: { "progress-review": { enabled: true, config: sibling } } },
+    };
+    const { page, runtimeConfig } = await mountPage(sourceConfig);
+    const input = page.querySelector<HTMLInputElement>(`input[aria-label="${testCase.label}"]`)!;
+    expect(input.value).toBe(testCase.defaultValue);
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
+    input.value = String(testCase.value);
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    const patch = runtimeConfig.patch.mock.calls[0]?.[0].raw;
+    expect(patch).toEqual({
+      plugins: { entries: { "progress-review": { config: { [testCase.key]: testCase.value } } } },
+    });
+    expect(applyMergePatch(sourceConfig, patch)).toEqual({
+      plugins: {
+        entries: {
+          "progress-review": {
+            enabled: true,
+            config: { ...sibling, [testCase.key]: testCase.value },
+          },
+        },
+      },
+    });
+  });
+
+  it.each([
+    { label: "Review every N turns", value: "-1" },
+    { label: "Review every N turns", value: "1.5" },
+    { label: "Review every N turns", value: "1001" },
+    { label: "Review every N minutes", value: "1441" },
+  ])("rejects $value for $label without saving", async ({ label, value }) => {
+    const { page, runtimeConfig } = await mountPage({
+      plugins: { entries: { "progress-review": { enabled: true } } },
+    });
+    const input = page.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+    input.value = value;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await waitForSolid(() =>
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain(label),
+    );
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
+  });
+
+  it("shows Progress review setting save failures", async () => {
+    const { page, runtimeConfig } = await mountPage({
+      plugins: { entries: { "progress-review": { enabled: true } } },
+    });
+    runtimeConfig.state.lastError = "Could not save review interval";
+    runtimeConfig.patch.mockResolvedValueOnce(false);
+    const input = page.querySelector<HTMLInputElement>('input[aria-label="Review every N turns"]')!;
+    input.value = "12";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await waitForSolid(() =>
+      expect(page.querySelector('[role="alert"]')?.textContent).toBe(
+        "Could not save review interval",
+      ),
+    );
   });
 
   it("shows default provenance", async () => {

@@ -27,6 +27,15 @@ const enLabs = {
       description:
         "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
     },
+    progressReview: {
+      title: "Progress review",
+      description:
+        "Every few turns or minutes of agent work, a reviewer model reads the conversation's recent work and, if it spots avoidable work (drifting from the request, repeated or stalled tool calls), gives the agent one short correction on its next turn. Uses the agent's model and adds model calls.",
+      everyTurns: "Review every N turns",
+      everyMinutes: "Review every N minutes",
+      triggerHelp: "Set to 0 to turn this trigger off. Review runs when either trigger is reached.",
+      invalidValue: "{label} must be a whole number from 0 to {max}.",
+    },
     chatBubbles: {
       title: "Speech bubbles",
       description:

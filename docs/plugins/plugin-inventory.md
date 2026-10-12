@@ -50,7 +50,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-66 plugins
+67 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
@@ -153,6 +153,8 @@ Each entry lists the package, distribution route, and description.
 - **[openrouter](/plugins/reference/openrouter)** (`@openclaw/openrouter-provider`) - included in OpenClaw. Adds OpenRouter model provider support to OpenClaw.
 
 - **[policy](/plugins/reference/policy)** (`@openclaw/policy`) - included in OpenClaw. Adds policy-backed doctor checks for workspace conformance.
+
+- **[progress-review](/plugins/reference/progress-review)** (`@openclaw/progress-review`) - included in OpenClaw. Experimental: periodically reviews a conversation's recent agent work and gives the agent one short correction on its next turn.
 
 - **[reef](/plugins/reference/reef)** (`@openclaw/reef`) - included in OpenClaw. Guarded end-to-end encrypted claw channel.
 

@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/progress-review",
+  "version": "2026.9.9",
+  "private": true,
+  "description": "OpenClaw experimental periodic progress review",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

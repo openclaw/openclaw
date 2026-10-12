@@ -34,7 +34,7 @@ function LabsPageContent() {
   const config = projectRuntimeConfig(untrack(() => context.runtimeConfig));
   const lifecycle = createGatewayConnectionLifecycle(untrack(() => context.gateway.snapshot));
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  let pending: { featureId: string; value: boolean | string } | null = null;
+  let pending: { featureId: string; value: boolean | string | number } | null = null;
   let saveError: string | null = null;
   const publish = () => setRevision((value) => value + 1);
   const currentPending = () => {
@@ -107,7 +107,7 @@ function LabsPageContent() {
   }
   async function updateSetting(
     featureId: string,
-    value: boolean | string,
+    value: boolean | string | number,
     raw: Record<string, unknown>,
   ) {
     const scope = lifecycle.capture();
@@ -182,6 +182,31 @@ function LabsPageContent() {
           ? value.executor
           : null;
     return executor === "quickjs" ? "quickjs" : "node";
+  }
+  function progressReviewValue(key: "everyTurns" | "everyMinutes", defaultValue: number) {
+    const current = currentPending();
+    if (current?.featureId === key && typeof current.value === "number") {
+      return current.value;
+    }
+    const plugins = editableConfig()?.plugins;
+    const entries = isRecord(plugins) ? plugins.entries : undefined;
+    const plugin = isRecord(entries) ? entries["progress-review"] : undefined;
+    const settings = isRecord(plugin) ? plugin.config : undefined;
+    return isRecord(settings) && typeof settings[key] === "number" ? settings[key] : defaultValue;
+  }
+  function setProgressReviewInterval(key: "everyTurns" | "everyMinutes", raw: string, max: number) {
+    const value = Number(raw);
+    if (raw.trim() === "" || !Number.isInteger(value) || value < 0 || value > max) {
+      saveError = t("labsPage.progressReview.invalidValue", {
+        label: t(`labsPage.progressReview.${key}`),
+        max: String(max),
+      });
+      publish();
+      return;
+    }
+    void updateSetting(key, value, {
+      plugins: { entries: { "progress-review": { config: { [key]: value } } } },
+    });
   }
   function FeatureRow(props: { feature: LabFeature }) {
     const featureState = () => resolveLabFeatureState(editableConfig(), props.feature);
@@ -274,6 +299,38 @@ function LabsPageContent() {
               </select>
             }
           />
+        ) : null}
+        {props.feature.id === "progressReview" && checked() ? (
+          <For
+            each={
+              [
+                { key: "everyTurns", defaultValue: 10, max: 1000 },
+                { key: "everyMinutes", defaultValue: 20, max: 1440 },
+              ] as const
+            }
+          >
+            {(setting) => (
+              <SettingsRow
+                title={t(`labsPage.progressReview.${setting.key}`)}
+                description={t("labsPage.progressReview.triggerHelp")}
+                control={
+                  <input
+                    class="settings-input"
+                    type="number"
+                    min="0"
+                    max={setting.max}
+                    step="1"
+                    aria-label={t(`labsPage.progressReview.${setting.key}`)}
+                    value={progressReviewValue(setting.key, setting.defaultValue)}
+                    disabled={!canToggle()}
+                    onChange={(event) =>
+                      setProgressReviewInterval(setting.key, event.currentTarget.value, setting.max)
+                    }
+                  />
+                }
+              />
+            )}
+          </For>
         ) : null}
       </>
     );
