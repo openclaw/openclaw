@@ -28,10 +28,7 @@ import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js
 import { readDevicePairingNodeSnapshot } from "./device-pairing-store-readonly.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import { revokeDeviceToken, verifyDeviceToken } from "./device-pairing-tokens.js";
-import {
-  executeDevicePairingMutation,
-  withCurrentDevicePairingSnapshot,
-} from "./device-pairing-worker.js";
+import { withCurrentDevicePairingSnapshot } from "./device-pairing-worker.js";
 import {
   getPairedDevice,
   getPendingDevicePairing,
@@ -140,54 +137,6 @@ test("keeps node authority available while retained setup cleanup is pending", a
     writer.mockRestore();
   }
 });
-
-test.each([0, 1])(
-  "settles setup cleanup after late revocation according to removed rows (%s)",
-  async (removed) => {
-    database.db.prepare("DELETE FROM device_pair_setup_completions").run();
-    if (removed > 0) {
-      database.db
-        .prepare(
-          "INSERT INTO device_pair_setup_completions (setup_id, device_id, access, completed_at_ms, delivery_state, retain_until_ms) VALUES ('expired', 'node', 'node', 1, 'confirmed', 1000)",
-        )
-        .run();
-    }
-    let current = true;
-    const revoked = new Error("setup cleanup owner revoked after native result");
-    const delivery = probe.command(
-      stateWorker,
-      async (command, executeOptions, scope) => {
-        const result = await scope.execute(command, executeOptions);
-        current = false;
-        return result;
-      },
-      { once: true },
-    );
-    try {
-      const pruning = executeDevicePairingMutation(
-        { type: "bootstrap.prune", input: { nowMs: 1_000 } },
-        {
-          baseDir,
-          assertCurrent: () => {
-            if (!current) {
-              throw revoked;
-            }
-          },
-        },
-      );
-      if (removed === 0) {
-        await expect(pruning).rejects.toBe(revoked);
-      } else {
-        await expect(pruning).resolves.toBe(removed);
-      }
-      expect(
-        database.db.prepare("SELECT setup_id FROM device_pair_setup_completions").all(),
-      ).toEqual([]);
-    } finally {
-      delivery.mockRestore();
-    }
-  },
-);
 
 test.each([
   "session-host consent",

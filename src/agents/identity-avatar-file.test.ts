@@ -203,15 +203,20 @@ describe("local agent avatar files", () => {
     const unchangedMtime = new Date("2024-01-01T00:00:00Z");
     fs.utimesSync(avatarPath, unchangedMtime, unchangedMtime);
     const originalStat = fs.statSync(avatarPath);
+    const originalIdentity = fs.statSync(avatarPath, { bigint: true });
     const originalFstatSync = fs.fstatSync;
-    // Control the ctime tick without depending on the filesystem's timestamp resolution.
-    let ctimeMs = originalStat.ctimeMs;
+    // fs-safe derives numeric metadata from the pinned descriptor's bigint observation.
+    let ctimeMs = unchangedMtime.getTime();
     vi.spyOn(fs, "fstatSync").mockImplementation((fd, options) => {
-      const stat = originalFstatSync(fd, options);
-      if (stat.dev === originalStat.dev && stat.ino === originalStat.ino) {
-        stat.ctimeMs = ctimeMs;
+      if (options?.bigint) {
+        const stat = originalFstatSync(fd, { bigint: true });
+        if (stat.dev === originalIdentity.dev && stat.ino === originalIdentity.ino) {
+          stat.ctimeNs = BigInt(ctimeMs) * 1_000_000n;
+          stat.ctimeMs = BigInt(ctimeMs);
+        }
+        return stat;
       }
-      return stat;
+      return originalFstatSync(fd, options);
     });
     const params = { cfg, agentId: "main", source: "avatar.png", readBody: true };
     const [first, duplicate] = await Promise.all([

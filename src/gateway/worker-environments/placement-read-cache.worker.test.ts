@@ -27,6 +27,41 @@ const roots = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("worker placement read cache", () => {
+  it("reuses empty recovery candidates and sees committed work across stores", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-recovery-cache-"));
+    const database = openOpenClawStateDatabase();
+    const reader = createWorkerSessionPlacementStore({ database });
+    const writer = createWorkerSessionPlacementStore({ database });
+    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const recoveryReadCount = () =>
+      reads.mock.calls.filter(
+        ([, command]) => command.type === "workers.placementRecoveryCandidates",
+      ).length;
+
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    expect(await writer.readRecoveryCandidates()).toEqual([]);
+    expect(recoveryReadCount()).toBe(1);
+
+    const remote = await writer.startDispatch({
+      sessionId: "recovery-remote",
+      agentId: "main",
+      sessionKey: "agent:main:recovery-remote",
+    });
+    const expected = [{ sessionId: remote.sessionId, environmentId: null, state: "requested" }];
+    expect(await reader.readRecoveryCandidates()).toEqual(expected);
+    expect(await reader.readRecoveryCandidates()).toEqual(expected);
+    expect(recoveryReadCount()).toBe(3);
+
+    await writer.retireSessionPlacementAsync({
+      sessionId: remote.sessionId,
+      expectedState: "requested",
+      expectedGeneration: remote.generation,
+    });
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    expect(await writer.readRecoveryCandidates()).toEqual([]);
+    expect(recoveryReadCount()).toBe(4);
+  });
+
   it("reuses the disk sweep inventory and observes committed placement transitions", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-disk-cache-"));
     const database = openOpenClawStateDatabase();

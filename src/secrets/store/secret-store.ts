@@ -1,8 +1,10 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { isRedactedSecretValue } from "../../config/redact-sentinel.js";
+import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { registerOpenClawStateDatabaseLifecycleListener } from "../../state/openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import {
@@ -12,7 +14,10 @@ import {
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { sealSecretSentinel } from "../sentinel.js";
-import { captureSecretStoreExpiryCutoffs } from "./secret-store-expiry.kernel.js";
+import {
+  captureSecretStoreExpiryCutoffs,
+  type SecretStoreExpiryResult,
+} from "./secret-store-expiry.kernel.js";
 import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import {
   assertSecretStoreEnvName,
@@ -247,10 +252,29 @@ export async function readSecretStoreValue(params: {
   }
 }
 
+let expiryObservation: { path: string; result: SecretStoreExpiryResult } | undefined;
+registerOpenClawStateDatabaseLifecycleListener((event) => {
+  if (event.kind !== "opened") {
+    expiryObservation = undefined;
+  }
+});
+
 export async function purgeExpiredSecretStoreEntries(
   params: { database?: Pick<OpenClawStateDatabaseOptions, "path" | "env"> } = {},
 ): Promise<number> {
   const input = captureSecretStoreExpiryCutoffs();
   const context = captureOpenClawStateWorkerContext(params.database);
-  return await executeOpenClawStateWorker(context, { type: "secrets.purge", input });
+  const path = context.admission.databasePath;
+  const retained = expiryObservation?.path === path ? expiryObservation.result : undefined;
+  const writeToken = readSqliteDatabaseWriteTokenForPath(path);
+  if (
+    writeToken &&
+    retained?.writeToken === writeToken &&
+    (retained.nextExpiryAtMs === null || Date.now() < retained.nextExpiryAtMs)
+  ) {
+    return 0;
+  }
+  const result = await executeOpenClawStateWorker(context, { type: "secrets.purge", input });
+  expiryObservation = { path, result };
+  return result.removed;
 }

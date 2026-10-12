@@ -1,13 +1,14 @@
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
 import {
-  pruneCronRunHistoryInDatabase,
+  applyCronRunHistoryMaintenanceInDatabase,
+  planCronRunHistoryMaintenance,
   readCronRunRecordsInDatabase,
-  reconcileCronRunHistoryInDatabase,
 } from "./run-history.kernel.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import {
@@ -27,50 +28,51 @@ import type {
 
 export function maintainCronRunHistoryInWorker(
   database: OpenClawStateDatabase,
-  input: CronRuntimeWorkerOperations["cron.maintainHistory"]["input"],
+  input: { snapshot: CronRuntimeMutationContracts["cron.maintainHistory"]["snapshot"] },
 ): CronRuntimeWorkerOperations["cron.maintainHistory"]["output"] {
+  const records = readCronRunRecordsInDatabase(database.db);
+  const jobIds = [
+    ...new Set(
+      records.flatMap((row) =>
+        (row.status === "queued" ||
+          row.status === "running" ||
+          (row.status === "lost" &&
+            row.error?.trim().toLowerCase().includes("backing session missing"))) &&
+        row.jobId?.trim()
+          ? [row.jobId.trim()]
+          : [],
+      ),
+    ),
+  ];
+  const receipts =
+    jobIds.length > 0 && tableExists(database.db, "cron_run_receipts")
+      ? readActiveCronRunReceiptsInDatabase(database.db, undefined, jobIds)
+      : [];
+  const { nowMs, protectedJobIds, locallyOwnedReceiptIds } = input.snapshot;
+  const protectedJobs = new Set([
+    ...protectedJobIds,
+    ...receipts
+      // Host-only liveness is captured before dispatch; new ownership may race this snapshot.
+      .filter((receipt) =>
+        receipt.ownerPid === process.pid
+          ? locallyOwnedReceiptIds.includes(receipt.receiptId)
+          : !isCronRunReceiptOwnerStale(receipt, nowMs),
+      )
+      .map((receipt) => receipt.jobId),
+  ]);
+  const plan = planCronRunHistoryMaintenance(records, nowMs, protectedJobs);
+  if (plan.reconciliations.length === 0 && !plan.prune) {
+    return { outcome: { reconciled: 0, pruned: 0 } };
+  }
   return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const schema = prepareCronRunReceiptWriteSchema(db);
-      const records = readCronRunRecordsInDatabase(db);
-      const jobIds = [
-        ...new Set(
-          records.flatMap((row) =>
-            (row.status === "queued" ||
-              row.status === "running" ||
-              (row.status === "lost" &&
-                row.error?.trim().toLowerCase().includes("backing session missing"))) &&
-            row.jobId?.trim()
-              ? [row.jobId.trim()]
-              : [],
-          ),
-        ),
-      ];
-      const receipts = schema.cronRunReceipts
-        ? readActiveCronRunReceiptsInDatabase(db, undefined, jobIds)
-        : [];
-      const { nowMs, protectedJobIds, locallyOwnedReceiptIds } = input.snapshot;
-      const protectedJobs = new Set([
-        ...protectedJobIds,
-        ...receipts
-          // Host-only liveness is captured before dispatch; new ownership may race this snapshot.
-          .filter((receipt) =>
-            receipt.ownerPid === process.pid
-              ? locallyOwnedReceiptIds.includes(receipt.receiptId)
-              : !isCronRunReceiptOwnerStale(receipt, nowMs),
-          )
-          .map((receipt) => receipt.jobId),
-      ]);
-      const reconciled = reconcileCronRunHistoryInDatabase(db, records, nowMs, protectedJobs);
-      // Newly lost rows retain their first lost observation until the next sweep, as before.
-      const pruned = pruneCronRunHistoryInDatabase(
+    ({ db }) => ({
+      outcome: applyCronRunHistoryMaintenanceInDatabase(
         db,
+        plan,
         nowMs,
-        schema,
-        records.filter((row) => !reconciled.has(row.id)),
-      );
-      return { outcome: { reconciled: reconciled.size, pruned } };
-    },
+        prepareCronRunReceiptWriteSchema(db),
+      ),
+    }),
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.history-maintenance" },
   );

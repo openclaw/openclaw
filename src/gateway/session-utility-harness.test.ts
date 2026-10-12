@@ -133,7 +133,7 @@ describe("utility completion with an unavailable implicit harness", () => {
       expect(transport).toHaveBeenCalledWith(
         expect.objectContaining({
           context: expect.objectContaining({ tools: [] }),
-          options: expect.objectContaining({ maxTokens: 8_492, temperature: 0.2 }),
+          options: expect.objectContaining({ maxTokens: 300, temperature: 0.2, reasoning: "off" }),
         }),
       );
       expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
@@ -199,7 +199,7 @@ describe("utility completion with an unavailable implicit harness", () => {
       expect(transport).toHaveBeenCalledWith(
         expect.objectContaining({
           context: expect.objectContaining({ tools: [] }),
-          options: expect.objectContaining({ maxTokens: 8_432, temperature: 0.2 }),
+          options: expect.objectContaining({ maxTokens: 240, temperature: 0.2, reasoning: "off" }),
         }),
       );
       expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();

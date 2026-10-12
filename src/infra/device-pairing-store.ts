@@ -48,17 +48,12 @@ import type {
   PairedDevicePendingNodeSurface,
 } from "./device-pairing.types.js";
 import {
-  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { clearApnsRegistrationFromDatabase } from "./push-apns-store-transaction.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
-import {
-  getSqliteReadOperationRevision,
-  type SqliteReadOperationRevision,
-} from "./sqlite-schema-facts.js";
 import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 export type { DevicePairingStoreState } from "./device-pairing.types.js";
@@ -675,39 +670,21 @@ export function confirmDevicePairSetupCompletionDeliveryInTransaction(params: {
   }, resolveDevicePairingStateDbOptions());
 }
 
-const setupCompletionExpiry = createSqliteQueryCache<{
-  observed?: { revision: SqliteReadOperationRevision; retainUntilMs: number | undefined };
-}>(() => ({}));
-
-/** Admission observes new commits; an unchanged completion can still expire with time. */
-export function hasExpiredDevicePairSetupCompletionsInDatabase(
+/** The host retains this deadline until a shared-state writer receipt changes. */
+export function readDevicePairSetupCompletionExpiryInDatabase(
   db: DatabaseSync,
-  nowMs: number,
-): boolean {
+): number | undefined {
   if (!tableExists(db, "device_pair_setup_completions")) {
-    return false;
+    return undefined;
   }
-  const state = setupCompletionExpiry(db);
-  const revision = getSqliteReadOperationRevision(db);
-  let retainUntilMs: number | undefined;
-  if (revision && state.observed?.revision === revision) {
-    retainUntilMs = state.observed.retainUntilMs;
-  } else {
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
-        .selectFrom("device_pair_setup_completions")
-        .select("retain_until_ms")
-        .orderBy("retain_until_ms", "asc")
-        .limit(1),
-    );
-    retainUntilMs = row?.retain_until_ms;
-    state.observed =
-      revision && getSqliteReadOperationRevision(db) === revision
-        ? { revision, retainUntilMs }
-        : undefined;
-  }
-  return retainUntilMs !== undefined && retainUntilMs <= nowMs;
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
+      .selectFrom("device_pair_setup_completions")
+      .select("retain_until_ms")
+      .orderBy("retain_until_ms", "asc")
+      .limit(1),
+  )?.retain_until_ms;
 }
 
 /** The maintenance command owns the write transaction and its live admission. */
