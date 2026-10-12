@@ -3,14 +3,20 @@ import { Worker } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { insertRepositoryGitHubPublicationAsync } from "../gateway/github-publication-request-async.js";
+import { digestGitHubPublicationRequest } from "../gateway/github-publication-receipt.js";
+import {
+  insertGitHubPublicationRequestAsync,
+  insertRepositoryGitHubPublicationAsync,
+} from "../gateway/github-publication-request-async.js";
 import {
   bindGitHubPublicationSource,
   prepareGitHubPublicationSource,
 } from "../gateway/github-publication-source.js";
 import {
   claimRepositoryGitHubPublicationAsync,
+  readGitHubPublicationRequestAsync,
   runGitHubPublicationMaintenanceAsync,
 } from "../gateway/github-publication-store-async.js";
 import { listRepositoryGitHubPublicationsInDatabase } from "../gateway/github-repository-publication-read.worker.js";
@@ -306,6 +312,78 @@ async function sourceFixture(
   });
   return { row, source };
 }
+
+it("creates the lazy shared publication schema on its first worker insert", async () => {
+  const request = {
+    sessionKey: "agent:main:first-shared-publication",
+    agentId: "main",
+    idempotencyKey: "first-shared-publication",
+  };
+  const worktree = {
+    id: "first-shared-publication-worktree",
+    repoRoot: "/publication-repository",
+    repoFingerprint: "publication-repository-fingerprint",
+    branch: "openclaw/first-publication",
+  };
+  await insertRegistryWorktree(process.env, {
+    ...worktree,
+    name: "first-publication",
+    path: "/publication-repository/worktree",
+    ownerKind: "session",
+    ownerId: request.sessionKey,
+    createdAt: 1000,
+    lastActiveAt: 1000,
+  });
+  const sessionId = "first-shared-publication-session";
+  const entry = await upsertSessionEntryCore(request, {
+    sessionId,
+    updatedAt: 1000,
+    worktree: { id: worktree.id, repoRoot: worktree.repoRoot, branch: worktree.branch },
+  });
+  const lifecycleRevision = entry?.lifecycleRevision ?? null;
+  const db = openOpenClawStateDatabase().db;
+  db.exec("DROP TABLE IF EXISTS github_publication_requests");
+  expect(
+    db.prepare("SELECT name FROM sqlite_schema WHERE name = 'github_publication_requests'").get(),
+  ).toBeUndefined();
+  const source = await prepareGitHubPublicationSource({
+    sourcePath: resolveOpenClawAgentSqlitePath({ agentId: request.agentId }),
+    selector: {
+      agentId: request.agentId,
+      sessionKey: request.sessionKey,
+      sessionId,
+      lifecycleRevision,
+      worktreeId: worktree.id,
+    },
+    signal: new AbortController().signal,
+    assertCurrent: context.admission.assertCurrent,
+  });
+  const inserted = await insertGitHubPublicationRequestAsync(
+    {
+      request,
+      requestId: "first-shared-publication-request",
+      requestDigest: digestGitHubPublicationRequest({ ...request, sessionId }),
+      sessionId,
+      lifecycleRevision,
+      requester: { version: 1, actor: { kind: "system" }, scopes: ["operator.admin"], grant: null },
+      now: 1000,
+      worktree,
+      identity: {
+        source: "system-configured",
+        profileId: "fixture-profile",
+        account: { accountId: 42, login: "fixture-bot", avatarUrl: null },
+      },
+    },
+    source,
+  );
+  expect(inserted).toMatchObject({
+    request_id: "first-shared-publication-request",
+    status: "requested",
+  });
+  await expect(
+    readGitHubPublicationRequestAsync({ requestId: inserted.request_id }),
+  ).resolves.toEqual(inserted);
+});
 
 it("inserts a repository request through its retained session source", async () => {
   const { facts } = observeAuthority();

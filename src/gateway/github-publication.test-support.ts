@@ -192,7 +192,7 @@ async function bindPublicationFixtureRequest<
   T extends {
     requester?: GitHubPublicationRequesterV2;
     assertCurrent?: () => void;
-    sessionKey: string;
+    sessionKey?: string;
     agentId: string;
   },
 >(input: T) {
@@ -201,7 +201,7 @@ async function bindPublicationFixtureRequest<
     input.requester ??
     (
       await createSystemGitHubPublicationRequesterFixture(
-        { sessionKey: input.sessionKey, agentId: input.agentId },
+        { sessionKey: input.sessionKey ?? SESSION_KEY, agentId: input.agentId },
         assertCurrent,
       )
     ).requester;

@@ -23,6 +23,7 @@ import {
   createGitHubPublicationCoordinatorMethods,
   type GitHubPublicationClaimRequest,
   type GitHubPublicationClaimRequestV2,
+  type GitHubPublicationSessionRequest,
 } from "./github-publication-coordinator-methods.js";
 import { GitHubPublicationAuthorityLostError } from "./github-publication-execution-identity.js";
 import {
@@ -481,7 +482,7 @@ export function createGitHubPublicationCoordinator(params: {
     },
     /** @deprecated Use requestForSessionV2; removed in the next Plugin SDK major. */
     async requestForSession(
-      _input: import("./github-publication-coordinator-methods.js").GitHubPublicationSessionRequest,
+      _input: GitHubPublicationSessionRequest,
     ): Promise<SessionGitHubPublicationResult> {
       warnPluginSdkDeprecation({
         family: "github-publication",

@@ -26,7 +26,6 @@ import {
   repositoryGitHubPublicationDigest,
 } from "./github-repository-publication.kernel.js";
 
-export { repositoryGitHubPublicationDigest } from "./github-repository-publication.kernel.js";
 const checkpointColumns = [
   "checkpoint_ref",
   "checkpoint_digest",
