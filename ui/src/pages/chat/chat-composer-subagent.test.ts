@@ -6,6 +6,7 @@ import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
 import { disposeQuestionPromptState } from "../../app/question-prompt.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { ChatPane } from "./chat-pane-render.ts";
@@ -559,6 +560,9 @@ describe("subagent composer", () => {
       try {
         pane.render();
         render(renderChat(pane.chatProps!), container);
+        pane.chatProps!.transcript.hostConnected();
+        pane.chatProps!.transcript.hostUpdated();
+        flush();
         expect(container.textContent).toContain("The workspace review is complete.");
         expect(container.querySelector("textarea")).toBeNull();
         expect(container.querySelector(".chat-reply-btn")).toBeNull();

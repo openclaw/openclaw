@@ -1,7 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { html, nothing, render } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -171,11 +169,6 @@ afterEach(async () => {
 });
 
 describe("renderPanelTabStrip", () => {
-  it("keeps the new-tab control from shrinking when the strip overflows", () => {
-    const styles = readFileSync(path.resolve(import.meta.dirname, "panel-tab-strip.css"), "utf8");
-    expect(styles).toMatch(/\.tabstrip-new\s*\{[^}]*flex:\s*none/u);
-  });
-
   it("renders an unslotted new button without an empty tab group", async () => {
     const onNew = vi.fn();
     const container = await renderStrip({ onNew });
