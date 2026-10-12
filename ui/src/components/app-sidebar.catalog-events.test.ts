@@ -41,7 +41,10 @@ async function mountTab(
 }
 
 describe("AppSidebar catalog event refresh", () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => {
+    // Keep jsdom's native animation intervals paired with native cleanup.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();

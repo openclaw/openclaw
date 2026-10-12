@@ -1543,8 +1543,15 @@ data, retention, durability, permission, or update migration.
 Gateway deleted-agent checks batch ACP metadata candidates through the shared-state
 reader only for free ACP keys whose agent is absent. When initial admission needs
 the content-version marker, the reader fetches it and the first metadata cohort in
-one statement. Later reads reuse admitted version facts; the existing read revision
-still owns ACP row freshness and reuse.
+one statement. Later reads reuse admitted version facts. The ACP writer publishes
+the exact changed metadata keys through the existing database admission exchange,
+including native incognito writes and offline migration/Doctor imports. Managed
+transactions combine their changed keys and publish only after commit; rollback
+retains the previous receipt. ACP cohorts invalidate on ACP receipts and schema
+changes, so unrelated shared-state writes do not discard them. Readers discard
+the whole bounded cohort on an ACP receipt because they can skip intervening
+receipts. Transactions, pinned snapshots, and authorizer-controlled reads keep
+their direct-read contracts.
 Reset rebinding uses the ACP
 writer after the session entry commits, retaining that entry writer's physical
 custody and accepted cleanup authority until the metadata settles. If the session
@@ -1560,6 +1567,12 @@ ACP writes publish the row returned by their upsert,
 and clearing the exact metadata keys publishes absence without a readback. Native
 Doctor writes and the released synchronous SDK reader retain their contracts.
 Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
+
+The native ACP mutation adapter serves incognito session paths and exclusive native
+maintenance/deletion scopes; ordinary durable runtime mutations use the worker.
+Its legacy provenance read is also used by this adapter, so it is not classified
+as Doctor-only. Remove the incognito adapter with its actor cutover; the released
+synchronous SDK reader needs deprecation and later removal.
 
 Reset reuses its prepared entry snapshot across transcript-only cold restoration;
 the committing worker still compares the complete current target before changing
@@ -6298,6 +6311,15 @@ replays. Plugin-state keyed lookup and lookupMany reuse the same bounded receipt
 postimages and tombstones as observe when every key is resident. Cold batches
 still read through the worker; expiry and committed native or worker writes
 invalidate or replace cached values. Returned JSON remains caller-owned.
+
+Namespace lists share that cache owner with a 64-namespace, 8 MiB bound. A
+committed write invalidates its namespace, unknown settlement invalidates the
+database's lists, and each read filters expired entries without another worker
+request. Returned lists and values are detached from the retained snapshot.
+
+Agent dispatch reads ACP metadata only after finding a completed subagent run
+eligible for reactivation. Ordinary turns without such a run skip that worker
+request; actual reactivation retains the ACP exclusion and live dispatch checks.
 
 Voice-wake reads and writes, configuration-write metadata, and Claw MCP/package
 adoption use the existing shared-state workers. Voice-wake writes return the

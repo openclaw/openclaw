@@ -50,7 +50,7 @@ for implementation and benchmarking details.
 
 Workspace manifest downloads use gzip when the node supports it and remain compatible with uncompressed transfers. Both the compressed response and its decoded manifest stay within the 64 MiB safety limit; the node verifies the decoded manifest before changing the workspace.
 
-For a Gateway-source worktree, synchronization is not continuous: OpenClaw sends a fresh eligible inventory at dispatch, not before every turn on an existing worker. Files created only on the Gateway after dispatch remain local and outside the accepted manifest. To send those new inputs, finish the current turn, stop the cloud worker, and dispatch again.
+For a Gateway-source worktree, synchronization is not continuous: OpenClaw sends a fresh eligible inventory at dispatch, not before every turn on an existing worker. Files created only on the Gateway after dispatch remain local until explicitly staged with `git add`. Staged paths join the accepted manifest at the next completed worker reconciliation. Unstaged new inputs require a fresh dispatch.
 
 ### Deliver skills to the worker
 
@@ -111,6 +111,8 @@ For each OpenClaw `worker-turn`, the Gateway binds its effective shared GitHub i
 Codex `remote-exec` sessions and the Control UI **Publish PR** action use the Gateway publication broker; remote-exec agents request publication with `github_publish`. Repository-only publication uses an accepted Git-normalized checkpoint without creating a Gateway checkout. Shared or explicitly selected personal publication can use that checkpoint after Stop; personal credentials remain on the Gateway. See [Publish with your account](/concepts/user-model#publish-with-your-account).
 
 ### Resolve conflicts and queued follow-ups
+
+Stage new Gateway files with `git add` to include them in the next worker reconciliation. Unstaged local-only files remain outside the worker workspace, including files selected by worker changes to ignore rules.
 
 For Gateway-source worktrees, apply uses the latest accepted manifest as the merge base, initialized at dispatch and advanced after each accepted reconciliation. Cloud-only changes are applied, local-only changes stay in place, and paths changed on both sides use a three-way keep-local policy. When reconciliation finishes with conflicts, a separate transcript notice follows the final reply with the bounded path summary and staged result ref. This notice is not a new agent turn. The placement exposes the same conflict for the Control UI, and non-conflicting cloud changes remain applied. The notice includes `git show <ref>:<path>` to inspect a present cloud file and a top-level literal-pathspec `git checkout <ref> -- <path>` command to take it from any workspace directory. Run the commands in Bash or zsh (Git Bash on Windows). If inspect says the path does not exist, the cloud result deleted it; verify and remove the retained local path manually. If checkout reports a file/directory obstruction, move or remove the blocking local path and retry. If the staged ref itself is gone, treat the notice as stale and do not change the local path. Conflicted staged refs remain available after the normal turn fence is released; a later clean result clears the notice and retires the old ref, while explicit fence removal is the final cleanup boundary.
 
