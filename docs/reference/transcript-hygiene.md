@@ -239,6 +239,10 @@ inter-session user turns that only have provenance metadata.
   completed assistant message, so live continuation and transcript storage use
   the same signature bytes. Encrypted reasoning bytes, executable tool arguments,
   and previously approved history remain unchanged.
+- Local sessions apply the same canonicalization to fresh reasoning signatures
+  carrying non-empty `encrypted_content` before their first tool continuation, keeping
+  those signature bytes consistent after reload. Plaintext-only signatures keep
+  their existing in-turn content; transcript storage still canonicalizes them.
 - Native ChatGPT Codex Responses follows Codex wire parity by replaying
   prior Responses reasoning/message/function payloads without prior item
   IDs while preserving session `prompt_cache_key`.
