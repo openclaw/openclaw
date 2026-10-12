@@ -192,6 +192,7 @@ function createPluginHandler(
   const baseCtx = {
     cfg: params.cfg,
     to: params.to,
+    sessionKey: params.sessionKey,
     accountId: params.accountId,
     replyToId: params.replyToId,
     replyToIdSource: undefined,
@@ -224,18 +225,22 @@ function createPluginHandler(
     route: PlatformSendRoute,
     send: () => Promise<T>,
   ): Promise<T> => {
+    await params.onPlatformSendStart?.(route);
+    let preparationFailure: { error: unknown } | undefined;
     try {
-      await params.onPlatformSendStart?.(route);
       await params.onDirectAdapterHandoff?.();
     } catch (error) {
-      assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
-      throw error;
+      preparationFailure = { error };
     }
     // Keep the final authority check and adapter invocation in one synchronous
     // call stack. An awaited callback leaves a microtask gap where custody can
     // change after validation but before recipient-visible transport code runs.
     const initiate = () => {
       assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+      // Retirement is terminal even when preparation failed before reaching this handoff.
+      if (preparationFailure) {
+        throw preparationFailure.error;
+      }
       return send();
     };
     return params.withDirectAdapterHandoff
@@ -265,12 +270,7 @@ function createPluginHandler(
     let result: ChannelMessageSendResult;
     let afterCommit: OutboundDeliveryCommitHook | undefined;
     try {
-      try {
-        attemptToken = await messageLifecycle.beforeSendAttempt?.(ctx);
-      } catch (error) {
-        assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
-        throw error;
-      }
+      attemptToken = await messageLifecycle.beforeSendAttempt?.(ctx);
       result = await dispatchToAdapter(ctx, () => send(ctx));
       if (result.outcome !== "not_sent") {
         const successCtx = {

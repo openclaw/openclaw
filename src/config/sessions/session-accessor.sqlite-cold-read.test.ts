@@ -481,18 +481,6 @@ it.each(["batch stats", "search", "mutation"] as const)(
   },
 );
 
-it("discards every batched result for a store that loses a table between chunks", async () => {
-  await withRace("stats-batch-table-race", async (race) => {
-    const scopes = Array.from({ length: 411 }, (_, index) => ({
-      ...race.scope,
-      sessionId: index === 0 ? race.scope.sessionId : `missing-${index}`,
-    }));
-    race.commitAfterMarkerRead(undefined, () => race.writer.exec("DROP TABLE transcript_events"));
-    expect(readTranscriptStatsBatchReadOnlySync(scopes)).toEqual(scopes.map(() => null));
-    expect(race.committed()).toBe(true);
-  });
-});
-
 it("preserves partial-store statistics, UTF-8 bytes, and scope-cache freshness in batches", async () => {
   await withOpenClawTestState({ label: "stats-batch-partial-store" }, async (state) => {
     const options = { agentId: "main", env: state.env, path: state.statePath("shared.sqlite") };

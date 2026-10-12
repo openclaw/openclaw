@@ -217,17 +217,8 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     });
   }
 
-  async getCorpusPathsForTest(): Promise<string[]> {
-    const entries = await this.listSessionCorpusEntries();
-    return entries.map((entry) => this.sessionPathForCorpusEntry(entry));
-  }
-
   getDirtyArchiveFiles(): string[] {
     return Array.from(this.sessionsDirtyFiles);
-  }
-
-  getPendingSessionTargets(): MemorySyncParams["sessions"] {
-    return Array.from(this.sessionPendingTargets.values());
   }
 
   getPendingArchiveFiles(): string[] {
@@ -264,11 +255,6 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
 
   isSessionsDirty(): boolean {
     return this.sessionsDirty;
-  }
-
-  markFullSessionRetry(): void {
-    this.sessionsDirty = true;
-    this.sessionsFullRetryDirty = true;
   }
 
   startTranscriptListener(): void {
@@ -359,11 +345,7 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     return work;
   }
 
-  embeddingCachePrunes = 0;
-
-  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {
-    this.embeddingCachePrunes += 1;
-  }
+  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
 
   protected resetProviderInitializationForRetry(): void {}
 

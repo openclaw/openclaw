@@ -11,7 +11,6 @@ import {
 import { t } from "../../lib/reactive/i18n.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import type { SkillLibraryController } from "./library-controller.ts";
-import { libraryEventControl } from "./library-events.ts";
 import { libraryFileText } from "./library-files.ts";
 import { SkillLibraryToolbar } from "./library-toolbar.tsx";
 
@@ -64,8 +63,8 @@ export function SkillLibrary(props: {
             name="library-search"
             value={props.library.query}
             placeholder={t("skillLibrary.search")}
-            onInput={(event: Event) => {
-              props.library.query = libraryEventControl(event, HTMLInputElement).value;
+            onInput={(event) => {
+              props.library.query = event.currentTarget.value;
               props.library.changed();
             }}
           />
@@ -178,7 +177,7 @@ function LibraryDialog(props: {
             void props.library.importFiles(props.library.importSelection);
           }
         }}
-        onKeyDown={(event: KeyboardEvent) => {
+        onKeyDown={(event) => {
           if (
             props.editor &&
             (event.ctrlKey || event.metaKey) &&
@@ -186,7 +185,7 @@ function LibraryDialog(props: {
             !props.editor.disabled
           ) {
             event.preventDefault();
-            libraryEventControl(event, HTMLFormElement).requestSubmit();
+            event.currentTarget.requestSubmit();
           }
         }}
       >
@@ -296,8 +295,8 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
           maxlength={63}
           disabled={disabled()}
           value={draft().slug}
-          onInput={(event: Event) => {
-            draft().slug = libraryEventControl(event, HTMLInputElement).value;
+          onInput={(event) => {
+            draft().slug = event.currentTarget.value;
             draft().dirty = true;
             props.library.changed();
           }}
@@ -310,8 +309,8 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
             class="settings-select"
             aria-label={t("skillLibrary.file")}
             value={draft().selectedFile}
-            onChange={(event: Event) => {
-              draft().selectedFile = libraryEventControl(event, HTMLSelectElement).value;
+            onChange={(event) => {
+              draft().selectedFile = event.currentTarget.value;
               props.library.changed();
             }}
           >
@@ -355,8 +354,8 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
             name="library-file-executable"
             disabled={disabled()}
             checked={support()!.executable === true}
-            onChange={(event: Event) => {
-              const executable = libraryEventControl(event, HTMLInputElement).checked;
+            onChange={(event) => {
+              const executable = event.currentTarget.checked;
               const path = support()!.path;
               draft().files = draft().files.map((file) =>
                 file.path === path ? Object.assign({}, file, { executable }) : file,
@@ -385,9 +384,7 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
             }}
             readonly={disabled()}
             value={text()!}
-            onInput={(event: Event) =>
-              changeText(libraryEventControl(event, HTMLTextAreaElement).value)
-            }
+            onInput={(event) => changeText(event.currentTarget.value)}
           />
         </label>
       </Show>
@@ -399,8 +396,8 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
               class="settings-input"
               name="library-file-path"
               value={props.library.newFilePath}
-              onInput={(event: Event) => {
-                props.library.newFilePath = libraryEventControl(event, HTMLInputElement).value;
+              onInput={(event) => {
+                props.library.newFilePath = event.currentTarget.value;
                 props.library.changed();
               }}
             />
@@ -458,8 +455,8 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
               aria-label={t("skillLibrary.revision")}
               value={draft().rollbackRevision}
               disabled={mutationLocked()}
-              onChange={(event: Event) => {
-                draft().rollbackRevision = libraryEventControl(event, HTMLSelectElement).value;
+              onChange={(event) => {
+                draft().rollbackRevision = event.currentTarget.value;
                 props.library.changed();
               }}
             >
@@ -539,8 +536,8 @@ function LibraryImport(props: { library: SkillLibraryController }) {
           pattern="[a-z0-9][a-z0-9\-]{0,62}"
           value={props.library.importSlug}
           disabled={props.library.busy}
-          onInput={(event: Event) => {
-            props.library.importSlug = libraryEventControl(event, HTMLInputElement).value;
+          onInput={(event) => {
+            props.library.importSlug = event.currentTarget.value;
             props.library.changed();
           }}
         />
@@ -560,14 +557,11 @@ function LibraryImport(props: { library: SkillLibraryController }) {
                     class="btn"
                     aria-describedby="library-import-files-help library-import-selection"
                     disabled={props.library.busy}
-                    onClick={(event: Event) => {
+                    onClick={(event) => {
                       if (!props.library.uploadsEnabled) {
                         return;
                       }
-                      const input = libraryEventControl(
-                        event,
-                        HTMLButtonElement,
-                      ).nextElementSibling;
+                      const input = event.currentTarget.nextElementSibling;
                       if (input instanceof HTMLInputElement) {
                         input.click();
                       }
@@ -586,8 +580,8 @@ function LibraryImport(props: { library: SkillLibraryController }) {
                     multiple
                     name={directory() ? "library-import-directory" : "library-import-files"}
                     disabled={props.library.busy}
-                    onChange={(event: Event) => {
-                      const input = libraryEventControl(event, HTMLInputElement);
+                    onChange={(event) => {
+                      const input = event.currentTarget;
                       props.library.importSelection = props.library.uploadsEnabled
                         ? Array.from(input.files ?? [])
                         : [];

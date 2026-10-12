@@ -249,6 +249,7 @@ describe("manual run tool authority after the initiating invocation closes", () 
       continueTool.resolve();
       source.release();
       execution.stop();
+      await execution.waitForIdle();
     }
   });
 });

@@ -11,13 +11,7 @@ import type {
 } from "../components/session-menu.ts";
 import type { SessionOwnerOption } from "../components/session-owner-chip.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
-type SessionMenuElement = HTMLElement & {
-  anchor: { x: number; y: number };
-  compact: boolean;
-  lastActive: string;
-  session: SessionMenuData;
-  updateComplete: Promise<boolean>;
-};
+type SessionMenuElement = HTMLElementTagNameMap["openclaw-session-menu"];
 export type SessionMenuItem = HTMLElement & { disabled: boolean; updateComplete: Promise<unknown> };
 
 export const containers: HTMLElement[] = [];

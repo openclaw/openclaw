@@ -39,6 +39,12 @@ export async function readSessionHistoryRequest(
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
   };
+  if (request.kind === "history-event-page") {
+    return {
+      kind: "history-event-page",
+      result: options.readers.readHistoryEventPage(request.params.options),
+    };
+  }
   if (request.kind === "active-accounting") {
     return {
       kind: "active-accounting",
@@ -49,6 +55,12 @@ export async function readSessionHistoryRequest(
     return {
       kind: "bounded-tail",
       result: options.readers.readBoundedMessageTail(request.params.options),
+    };
+  }
+  if (request.kind === "recent-text") {
+    return {
+      kind: "recent-text",
+      result: options.readers.readRecentConversationText(request.params.options),
     };
   }
   if (request.kind === "summary") {

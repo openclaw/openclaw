@@ -863,6 +863,7 @@ describe("plugin run context lifecycle", () => {
     const resultPromise = runPluginHostCleanup({
       reason: "disable",
       pluginId: "hung-cleanup-plugin",
+      sessionStoreTargets: [],
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(cleanup).toHaveBeenCalledTimes(1);
@@ -910,6 +911,7 @@ describe("plugin run context lifecycle", () => {
       registry: registry.registry,
       pluginId: "hanging-cleanup-fixture",
       reason: "delete",
+      sessionStoreTargets: [],
     });
     try {
       for (let index = 0; index < 3; index += 1) {

@@ -106,7 +106,7 @@ it("streams a trusted owner webchat video over 16 MiB into managed storage and s
       }),
     ).rejects.toThrow(/Managed video attachment.*could not be prepared/u);
 
-    const scope = captureWebchatReplyMediaScope({
+    const scope = await captureWebchatReplyMediaScope({
       cfg,
       sessionKey: SESSION_KEY,
       agentId: "main",

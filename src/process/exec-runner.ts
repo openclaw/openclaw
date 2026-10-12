@@ -14,7 +14,6 @@ import {
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { sleep } from "../utils/sleep.js";
 import {
   EXIT_STDIO_GRACE_MS,
   hasChildProcessExited,
@@ -57,9 +56,6 @@ import {
 import { createCommandTerminationController } from "./exec-termination.js";
 import { setProcessTimeout } from "./process-deadline.js";
 import { BrokerChild } from "./spawn-broker/child.js";
-
-const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
-const WINDOWS_CLOSE_STATE_POLL_MS = 10;
 
 type CommandTerminationReason = SpawnResult["termination"] | "output-limit";
 
@@ -624,25 +620,6 @@ async function runCommandWithOutputEncoding(
     !result.isCanceled &&
     !result.isMaxBuffer &&
     !result.isTerminated;
-  if (isCauseLessWindowsShimResult) {
-    // A patched Windows runtime can populate exitCode shortly after close.
-    // Settle that state before the shim fallback can infer a clean exit.
-    for (
-      let elapsedMs = 0;
-      elapsedMs < WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS;
-      elapsedMs += WINDOWS_CLOSE_STATE_POLL_MS
-    ) {
-      if (
-        childExitState?.code != null ||
-        childExitState?.signal != null ||
-        nodeChild.exitCode != null ||
-        nodeChild.signalCode != null
-      ) {
-        break;
-      }
-      await sleep(WINDOWS_CLOSE_STATE_POLL_MS);
-    }
-  }
   if (
     result.failed &&
     !termination &&

@@ -155,7 +155,7 @@ it("publishes committed metadata, presence, and revision facts with source mutat
   await withPublishedIndex(async (database) => {
     const initialRevision = database.facts.revision;
     await database.writeMetadata(metadata);
-    expect(database.facts).toEqual({
+    expect(database.facts).toMatchObject({
       meta: metadata,
       serialized: JSON.stringify(metadata),
       revision: initialRevision,
@@ -209,12 +209,15 @@ it("refreshes facts once after another in-process writer commits", async () => {
     try {
       for (let turn = 0; turn < 3; turn++) {
         await database.refreshFacts();
-        expect(database.facts).toEqual({
+        expect(database.facts).toMatchObject({
           meta: metadata,
           serialized: JSON.stringify(metadata),
           revision: initialRevision + 1,
           hasIndexedChunks: false,
           hasSemanticChunks: false,
+          invalidatedSources: [],
+          hasVectorTable: false,
+          vectorState: { state: "empty" },
         });
       }
       expect(sql.queries).toEqual([]);
@@ -223,5 +226,43 @@ it("refreshes facts once after another in-process writer commits", async () => {
       messages.mockRestore();
       sql.restore();
     }
+  });
+});
+
+it("refreshes invalidated source and vector facts after an in-process write", async () => {
+  await withPublishedIndex(async (database) => {
+    await database.replaceSource(
+      sourceReplacement("test-model"),
+      () => {},
+      async () => true,
+    );
+    await withOpenClawAgentDatabaseWrite(database.writeOptions!, ({ db }) => {
+      db.prepare("UPDATE memory_index_sources SET hash = '' WHERE source = ?").run("memory");
+      db.prepare(
+        "INSERT INTO memory_index_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      ).run("memory_vector_rebuild_v1", "1");
+    });
+    const sql = observeHostDataSql();
+    try {
+      await database.refreshFacts();
+      expect(database.facts.invalidatedSources).toEqual(["memory"]);
+      expect(database.facts.vectorState).toEqual({ state: "incomplete" });
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    await withOpenClawAgentDatabaseWrite(database.writeOptions!, ({ db }) => {
+      db.prepare("UPDATE memory_index_sources SET hash = ? WHERE source = ?").run(
+        "restored",
+        "memory",
+      );
+      db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = ?").run(
+        "clean",
+        "memory_vector_rebuild_v1",
+      );
+    });
+    await database.refreshFacts();
+    expect(database.facts.invalidatedSources).toEqual([]);
+    expect(database.facts.vectorState).toEqual({ state: "empty" });
   });
 });

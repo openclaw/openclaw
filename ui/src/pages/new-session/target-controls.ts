@@ -82,7 +82,7 @@ export function renderRequiredSessionPlacement(gateway: DraftGatewayState) {
         ? html`<button
             type="button"
             class="btn btn--sm"
-            @click=${() => void gateway.refreshCloudProfiles()}
+            @click=${() => void gateway.retryRequiredPlacement()}
           >
             ${t("common.retry")}
           </button>`
@@ -114,7 +114,7 @@ export function renderNewSessionPlaceControls({
   onFocusComposer: () => void;
   requestUpdate: () => void;
 }) {
-  if (!catalog.isTarget(data) && (!gateway.placementPolicyReady || place.requiredPlacement)) {
+  if (place.requiredPlacement) {
     return renderRequiredSessionPlacement(gateway);
   }
   const browser = place.browser;

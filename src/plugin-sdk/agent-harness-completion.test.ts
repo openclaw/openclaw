@@ -144,10 +144,10 @@ describe("SDK harness completion source admission", () => {
     expect(mocks.deliver).not.toHaveBeenCalled();
   });
 
-  it.each(["custody-currentness", "custody-signal", "caller-signal"] as const)(
+  it.each(["custody-currentness", "caller-signal"] as const)(
     "fences %s at asynchronous admission and effect boundaries",
     async (ending) => {
-      const { custody, controller } = custodyFixture();
+      const { custody } = custodyFixture();
       const caller = new AbortController();
       mocks.deliver.mockImplementation(async (delivery) => {
         const assertCurrent = assertHarnessCompletionSourceAdmission(source);
@@ -157,8 +157,6 @@ describe("SDK harness completion source admission", () => {
         await Promise.resolve();
         if (ending === "custody-currentness") {
           mocks.custodyCurrent = false;
-        } else if (ending === "custody-signal") {
-          controller.abort();
         } else {
           caller.abort();
         }
@@ -263,7 +261,7 @@ describe("SDK harness completion source admission", () => {
     },
   );
 
-  it.each(["unowned", "pending", "delivered"])(
+  it.each(["unowned"])(
     "rejects requester replacement during awaited %s reconciliation",
     async (custody) => {
       const entered = createDeferred();

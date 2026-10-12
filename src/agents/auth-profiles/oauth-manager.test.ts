@@ -553,10 +553,10 @@ describe("createOAuthManager", () => {
         saveCredential(profileId, managedCredential, agentDir);
         let refreshRejected = false;
         const recoveryError = new Error(`OAuth main recovery ${recovery} failed`);
-        const readMain = authProfileStoreRuntime.ensureAuthProfileStoreWithoutExternalProfiles;
+        const readMain = authProfileStoreRuntime.ensureAuthProfileStoreWithoutExternalProfilesAsync;
         const recoveryRead = vi
-          .spyOn(authProfileStoreRuntime, "ensureAuthProfileStoreWithoutExternalProfiles")
-          .mockImplementation((selectedDir, options) => {
+          .spyOn(authProfileStoreRuntime, "ensureAuthProfileStoreWithoutExternalProfilesAsync")
+          .mockImplementation(async (selectedDir, options) => {
             if (refreshRejected && selectedDir === undefined) {
               if (recovery === "main validation") {
                 return {

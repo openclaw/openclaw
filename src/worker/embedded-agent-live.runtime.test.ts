@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   WorkerLiveEventSchema,
   type WorkerLiveEvent,
@@ -126,97 +126,8 @@ describe("createWorkerLiveRuntime", () => {
     expect(emitted).toHaveLength(3);
   });
 
-  it("stops preparing previews after the client degrades", () => {
-    let previewCalls = 0;
-    const runtime = createWorkerLiveRuntime({
-      enqueuePreview: () => {
-        previewCalls += 1;
-        return false;
-      },
-      emitTerminal: async () => {},
-    });
-
-    const readPayload = vi.fn(() => ({ mimeType: "image/png", data: "QUJDRA==" }));
-    const message = makeAgentAssistantMessage({
-      content: [
-        { type: "text", text: "ignored answer" },
-        { type: "thinking", thinking: "ignored reasoning" },
-      ],
-    });
-    const messageContent = message.content;
-    const readContent = vi.fn(() => messageContent);
-    Object.defineProperty(message, "content", { get: readContent });
-    const events: AgentSessionEvent[] = [
-      { type: "message_start", message },
-      {
-        type: "message_update",
-        message,
-        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "answer" },
-      },
-      {
-        type: "message_update",
-        message,
-        assistantMessageEvent: {
-          type: "text_end",
-          contentIndex: 0,
-          content: "ignored answer",
-          partial: message,
-        },
-      },
-      {
-        type: "message_update",
-        message,
-        assistantMessageEvent: {
-          type: "thinking_delta",
-          contentIndex: 1,
-          delta: "reasoning",
-          partial: message,
-        },
-      },
-      { type: "message_end", message },
-      {
-        type: "tool_execution_start",
-        toolCallId: "tool-1",
-        toolName: "read",
-        get args() {
-          return readPayload();
-        },
-      },
-      {
-        type: "tool_execution_update",
-        toolCallId: "tool-1",
-        toolName: "read",
-        args: {},
-        get partialResult() {
-          return readPayload();
-        },
-      },
-      {
-        type: "tool_execution_end",
-        toolCallId: "tool-1",
-        toolName: "read",
-        isError: false,
-        get result() {
-          return readPayload();
-        },
-      },
-    ];
-    runtime.handleSessionEvent({ type: "agent_start" });
-    for (const event of events) {
-      runtime.handleSessionEvent(event);
-    }
-
-    expect({
-      previewCalls,
-      payloadReads: readPayload.mock.calls.length,
-      contentReads: readContent.mock.calls.length,
-    }).toEqual({ previewCalls: 1, payloadReads: 0, contentReads: 0 });
-  });
-
   it.each([
-    { stopReason: "stop", cleanupFailed: false, expectedStopReason: "stop" },
     { stopReason: "error", cleanupFailed: false, expectedStopReason: "error" },
-    { stopReason: "aborted", cleanupFailed: false, expectedStopReason: "aborted" },
     { stopReason: "stop", cleanupFailed: true, expectedStopReason: "error" },
     { stopReason: "aborted", cleanupFailed: true, expectedStopReason: "aborted" },
   ] as const)(

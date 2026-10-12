@@ -81,7 +81,7 @@ export const sessionMaintenanceHandlers: GatewayRequestHandlers = {
       const { mode, appliedSummaries, failure } = await runSessionsCleanup({
         cfg: context.getRuntimeConfig(),
         assertCurrent,
-        beforeCommitInTransaction: sessionMutationCommitGuard,
+        commitGuard: sessionMutationCommitGuard,
         opts: {
           agent: params.agent,
           allAgents: params.allAgents,

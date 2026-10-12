@@ -13,6 +13,11 @@ import {
 import { resolveEventSessionKey } from "../../../routing/session-key.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-contract.js";
 import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+  resolveSubagentChildAuthority,
+} from "../registry/subagent-child-owner-match.js";
+import {
   consumeSubagentPauseNotice,
   completeRequesterSettleWakeState,
   transitionRequesterSettleWakeState,
@@ -65,7 +70,7 @@ const noMutation = (applied: boolean | null): SubagentCompletionMutationResult =
   queueIds: [],
 });
 
-/** Decode on the worker while retaining the exact physical row's CAS version. */
+/** Decode on the worker while retaining the committed row's CAS version. */
 export function decodeSubagentCompletionRecord(
   row: SubagentRunSqliteRow,
   cleanupHandled?: boolean,
@@ -87,6 +92,7 @@ export function retiredCancellationEndedAt(
 ): number | undefined {
   const endedAt = subagent.execution.endedAt;
   if (
+    resolveSubagentChildAuthority(subagent).status === "mismatch" ||
     subagent.execution.status !== "terminal" ||
     subagent.execution.outcome?.status !== "error" ||
     subagent.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
@@ -118,8 +124,11 @@ function ownsRetiredCancellation(
   expected: SubagentRunRecord,
 ): boolean {
   const newerSibling = (candidate: SubagentRunRecord) =>
-    candidate.childSessionKey === subagent.childSessionKey &&
-    compareSubagentRunGeneration(candidate, subagent) > 0;
+    matchesSubagentChildSessionOwner(
+      candidate,
+      subagent.childSessionKey,
+      resolveSubagentChildAgentId(subagent),
+    ) && compareSubagentRunGeneration(candidate, subagent) > 0;
   return (
     compareSubagentRunGeneration(subagent, expected) === 0 &&
     !loadSubagentRunsForChildSessionFromSqlite(subagent.childSessionKey, database).some(
@@ -239,7 +248,16 @@ function commitCompletionMutations(
   database: OpenClawStateDatabase,
   mutations: readonly CompletionMutation[],
 ): SubagentCompletionMutationResult {
-  for (const { subagent, queued, retire } of mutations) {
+  const rows = mutations
+    .filter((mutation) => !mutation.retire)
+    .map(({ subagent }) => ({
+      row: bindSubagentRunRecord(subagent),
+      cleanupHandled: subagent.cleanupHandled,
+    }));
+  const retiredRunIds = mutations
+    .filter((mutation) => mutation.retire)
+    .map(({ subagent }) => subagent.runId);
+  for (const { queued } of mutations) {
     if (queued) {
       upsertBoundDeliveryQueueEntryInDatabase(
         bindDeliveryQueueEntry({
@@ -250,27 +268,19 @@ function commitCompletionMutations(
         database,
       );
     }
-    if (retire) {
-      writeSubagentRunValuesInDatabase(database, [], [subagent.runId]);
-    } else {
-      writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(subagent)], []);
-    }
   }
+  writeSubagentRunValuesInDatabase(
+    database,
+    rows.map(({ row }) => row),
+    retiredRunIds,
+  );
   const queueIds = mutations.flatMap(({ queued }) => (queued ? [queued.id] : []));
   return {
     applied: true,
-    records: mutations
-      .filter((mutation) => !mutation.retire)
-      .map(({ subagent }) => {
-        const row = readSubagentRunRow(database, subagent.runId);
-        if (!row) {
-          throw new Error("Subagent completion mutation lost its native row");
-        }
-        return decodeSubagentCompletionRecord(row, subagent.cleanupHandled);
-      }),
-    retiredRunIds: mutations
-      .filter((mutation) => mutation.retire)
-      .map(({ subagent }) => subagent.runId),
+    records: rows.map(({ row, cleanupHandled }) =>
+      decodeSubagentCompletionRecord(row, cleanupHandled),
+    ),
+    retiredRunIds,
     queueIds,
     ...(queueIds.length > 0
       ? { queueReceipts: queueIds.map((id) => readSubagentCompletionQueueReceipt(database, id)) }
@@ -278,7 +288,7 @@ function commitCompletionMutations(
   };
 }
 
-function readRequesterBatch(
+function prepareRequesterBatch(
   database: OpenClawStateDatabase,
   params: Extract<SubagentCompletionMutation, { kind: "requesterWake" | "requesterBatch" }>,
 ): Array<{ expected: SubagentRunRecord; subagent: SubagentRunRecord }> {
@@ -290,9 +300,9 @@ function readRequesterBatch(
   return entries.map(({ subagent: expected }) => {
     const changedOwner = () =>
       new Error("subagent completion owner changed before settlement: " + expected.runId);
-    const subagent = readSubagentRun(database, expected.runId);
+    // The registry FIFO supplies the current committed postimage; keep its input immutable.
+    const subagent = structuredClone(expected);
     if (
-      !subagent ||
       !subagent.requesterSettleWake ||
       subagent.requesterSessionKey !== first?.requesterSessionKey ||
       subagent.requesterAgentId !== first?.requesterAgentId ||
@@ -321,8 +331,6 @@ function readRequesterBatch(
         checkedOmittedIds.add(id);
       }
     }
-    // Decoding restores restart defaults, not the active process's cleanup ownership.
-    subagent.cleanupHandled = expected.cleanupHandled;
     return { expected, subagent };
   });
 }
@@ -334,7 +342,7 @@ function mutateRequesterBatch(
   if (params.committed) {
     return reconcileRequesterWake(database, params);
   }
-  const mutations = readRequesterBatch(database, params).map(
+  const mutations = prepareRequesterBatch(database, params).map(
     ({ expected, subagent }): CompletionMutation => {
       if (params.kind === "requesterWake") {
         if (params.operation.kind === "complete") {
@@ -448,7 +456,12 @@ function reconcileRequesterWake(
     const row = readSubagentRunRow(database, expected.runId);
     if (
       loadSubagentRunsForChildSessionFromSqlite(originalCanonical.childSessionKey, database).some(
-        (candidate) => compareSubagentRunGeneration(candidate, originalCanonical) > 0,
+        (candidate) =>
+          matchesSubagentChildSessionOwner(
+            candidate,
+            originalCanonical.childSessionKey,
+            resolveSubagentChildAgentId(originalCanonical),
+          ) && compareSubagentRunGeneration(candidate, originalCanonical) > 0,
       )
     ) {
       throw new Error("Requester wake reconciliation was superseded");

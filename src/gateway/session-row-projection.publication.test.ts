@@ -31,6 +31,7 @@ import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as projectionWork from "./session-projection-work.js";
+import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -158,6 +159,14 @@ it.each(["native", "worker"] as const)(
           sessionChanges.emit({ ...scope, storePath: warm!.storeTarget.storePath });
           expect(projection.sharingTarget(query)).toBeNull();
           expect(projection.capture(query)?.publishedSource).toBeUndefined();
+          expect(() => projection.selectEntries(query)).toThrow(SessionRowFactsPending);
+          const refreshed = await listProjectedSessions({
+            projection,
+            opts: { includePeople: true },
+          });
+          expect(refreshed.sessions.find((row) => row.key === scope.sessionKey)?.label).toBe(
+            "Updated label",
+          );
           expect(sql.queries).toEqual([]);
         } finally {
           sql.restore();
@@ -374,7 +383,7 @@ it("publishes maintenance removals before row listeners recreate the key", async
       expect(readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey)?.sessionId).toBe(
         "removed",
       );
-      await runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics });
+      await runSqliteSessionReclamation({ plan, diagnostics });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
       expect(callbackErrors).toEqual([]);
       expect(identities).toEqual(["delete:removed", "create:replacement"]);

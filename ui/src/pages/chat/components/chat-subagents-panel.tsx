@@ -15,7 +15,7 @@ import {
   useSessionPanel,
   type SessionPanelProps,
 } from "./chat-session-panel.tsx";
-import "../../../components/elapsed-time.ts";
+import "../../../components/elapsed-time.tsx";
 import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
 
@@ -185,10 +185,12 @@ export const ChatSubagentsPanel = defineSolidBridge<Props, Methods>(
                           {row().callCount !== undefined && (
                             <span class="chat-subagents__calls">
                               {t(
-                                row().callCount === 1
-                                  ? "chat.subagentsPanel.callsOne"
-                                  : "chat.subagentsPanel.callsMany",
-                                { count: String(row().callCount) },
+                                !row().callCount?.exact
+                                  ? "chat.subagentsPanel.callsAtLeast"
+                                  : row().callCount?.count === 1
+                                    ? "chat.subagentsPanel.callsOne"
+                                    : "chat.subagentsPanel.callsMany",
+                                { count: String(row().callCount?.count) },
                               )}
                             </span>
                           )}

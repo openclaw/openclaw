@@ -16,6 +16,7 @@ import {
   hasRestartRecoveryTerminalRun,
   isRetryableUnadoptedChatClaim,
 } from "../../config/sessions/restart-recovery-state.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -165,6 +166,39 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let supersedingResult: DedupeEntry | undefined;
   let preparedGoalEntry: Awaited<ReturnType<typeof prepareChatSendSessionEntry>> | undefined;
   const placementService = context.workerSessionPlacementService;
+  const isPendingReservationCurrent = () => {
+    if (context.chatRunState.hasAbortMarker(clientRunId)) {
+      return false;
+    }
+    const currentReservation = pendingReservation.read();
+    if (
+      currentReservation &&
+      normalizeOptionalString(currentReservation.payload.attemptId) !== pendingAttemptId
+    ) {
+      reservationSuperseded = true;
+      return false;
+    }
+    if (!currentReservation) {
+      const terminalResult = readChatSendDedupeResponse(context.dedupe, clientRunId);
+      if (terminalResult || context.chatAbortControllers.has(clientRunId)) {
+        reservationSuperseded = true;
+        supersedingResult = terminalResult;
+        return false;
+      }
+    }
+    if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+      abortPendingChatSend("restart");
+      return false;
+    }
+    if (
+      !currentReservation ||
+      !isFutureDateTimestampMs(currentReservation.payload.expiresAtMs, { nowMs: Date.now() })
+    ) {
+      abortPendingChatSend("timeout");
+      return false;
+    }
+    return true;
+  };
   const commitChatWorkAdmission = async (
     acpMeta: SessionEntry["acp"] | null,
     preparedPlacement?: PreparedRestartSafeChatPlacement,
@@ -198,34 +232,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       if (retainedRequestConflict) {
         throw new Error(retainedRequestConflict.message);
       }
-      if (context.chatRunState.hasAbortMarker(clientRunId)) {
-        return;
-      }
-      const currentReservation = pendingReservation.read();
-      if (
-        currentReservation &&
-        normalizeOptionalString(currentReservation.payload.attemptId) !== pendingAttemptId
-      ) {
-        reservationSuperseded = true;
-        return;
-      }
-      if (!currentReservation) {
-        const terminalResult = readChatSendDedupeResponse(context.dedupe, clientRunId);
-        if (terminalResult || context.chatAbortControllers.has(clientRunId)) {
-          reservationSuperseded = true;
-          supersedingResult = terminalResult;
-          return;
-        }
-      }
-      if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
-        abortPendingChatSend("restart");
-        return;
-      }
-      if (
-        !currentReservation ||
-        !isFutureDateTimestampMs(currentReservation.payload.expiresAtMs, { nowMs: Date.now() })
-      ) {
-        abortPendingChatSend("timeout");
+      if (!isPendingReservationCurrent()) {
         return;
       }
       const latestEntry = latestSession.entry;
@@ -365,6 +372,12 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         ...(progressRefresh ? { controlUiVisible: false, projectSessionActive: false } : {}),
         lifecycleGeneration,
       });
+    }).catch((error: unknown) => {
+      if (isSessionTranscriptProjectionUnavailableError(error)) {
+        // Cancellation still owns the outcome when worker preparation cannot finish.
+        isPendingReservationCurrent();
+      }
+      throw error;
     });
     if (refreshPlacement) {
       return commitChatWorkAdmission(acpMeta);
@@ -374,6 +387,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let retainedRequestConflict: ReturnType<typeof resolveChatSendRequestConflict>;
   try {
     gatewayWorkAdmission = await beginSessionWorkAdmission({
+      agentId,
       scope: storePath,
       isSettling: () => admittedRunAbort?.entry?.terminalOutcomeObserved === true,
       identities: [sessionKey, backingSessionId],

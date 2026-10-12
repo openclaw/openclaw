@@ -8,7 +8,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
-import { classifyHiddenGitHubStoreName } from "./secret-store-hidden-github.js";
+import { classifyHiddenGitHubStoreName } from "./secret-store-github-names.js";
 import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 import { SECRET_STORE_VALUE_MAX_BYTES } from "./secret-store-validation-error.js";
 import { assertSecretStoreEnvName } from "./secret-store-validation.js";

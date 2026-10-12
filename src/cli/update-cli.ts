@@ -324,6 +324,24 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       await updateAdmitCommand(opts.context);
     });
 
+  for (const action of ["migrate", "restore", "finish"] as const) {
+    setCommandJsonMode(update.command(action, { hidden: true }), "output", () => true)
+      .description(`Internal externally supervised update ${action}`)
+      .requiredOption("--backup-root <path>", "Absolute recovery artifact prefix")
+      .action(
+        createUpdateLeafAction(async (opts) => {
+          const { updateMigrateCommand, updateRestoreCommand, updateFinishCommand } =
+            await import("./update-cli/update-command-migrate.js");
+          const execute = {
+            migrate: updateMigrateCommand,
+            restore: updateRestoreCommand,
+            finish: updateFinishCommand,
+          }[action];
+          await execute(requiredUpdateLeafString(opts, "backupRoot"));
+        }),
+      );
+  }
+
   update
     .command("cleanup")
     .description("Retire verified update recovery originals after acknowledging rollback loss")

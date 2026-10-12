@@ -274,9 +274,10 @@ vi.mock("./send.js", async () => ({
   reactMessageTelegram: reactMessageTelegramHoisted,
 }));
 
+// mock-isolation: Keep session database startup outside the command fixture.
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel: generateTopicLabelHoisted,
-  getSessionEntry: getSessionEntryHoisted,
+  getSessionEntryAsync: async (...args: unknown[]) => getSessionEntryHoisted(...args),
   getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsHoisted,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode: resolveChunkModeHoisted,
@@ -301,7 +302,7 @@ export let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").d
 export const telegramDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
-  getSessionEntry: getSessionEntry as TelegramBotDeps["getSessionEntry"],
+  getSessionEntryAsync: async (params) => getSessionEntry(params),
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:

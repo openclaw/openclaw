@@ -152,18 +152,9 @@ export async function withPluginArtifactCleanupLease<T>(
   const context = captureOpenClawStateWorkerContext({
     env: resolveLifecycleLeaseEnv(options.env),
   });
-  let refusal: { error: unknown } | undefined;
   const assertCurrent = () => {
-    if (refusal) {
-      throw refusal.error;
-    }
-    try {
-      options.signal?.throwIfAborted();
-      options.assertCurrent?.();
-    } catch (error) {
-      refusal = { error };
-      throw error;
-    }
+    options.signal?.throwIfAborted();
+    options.assertCurrent?.();
   };
   assertCurrent();
   return await withPluginLifecycleLeaseDemand(
@@ -186,18 +177,12 @@ export async function withPluginArtifactCleanupLease<T>(
           markAcquired();
           const assertOwned = async () => {
             assertCurrent();
-            try {
-              await lease.assertOwned();
-              assertCurrent();
-            } catch (error) {
-              refusal ??= { error };
-              throw refusal.error;
-            }
+            await lease.assertOwned();
+            assertCurrent();
           };
           await assertOwned();
-          const result = await run(assertOwned);
-          await assertOwned();
-          return result;
+          // Deletion owners check each effect; completed cleanup needs no new admission.
+          return await run(assertOwned);
         },
       ),
   );

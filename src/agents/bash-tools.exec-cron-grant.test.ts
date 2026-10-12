@@ -14,10 +14,9 @@ import {
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
 import {
+  claimCronRunReceiptForTest,
   finishCronRunReceiptAsync,
-  releaseLocalCronRunReceiptOwnership,
-} from "../cron/store/run-receipt-store.js";
-import { claimCronRunReceiptForTest } from "../cron/store/run-receipt-store.test-support.js";
+} from "../cron/store/run-receipt-store.test-support.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { buildCronExecOperationBinding } from "../gateway/operator-approval-standing-grants.js";
 import {
@@ -299,7 +298,6 @@ describe("cron standing grants", () => {
     const job = seedCronJobRow();
     const revision = resolveCronJobConfigRevision(job);
     const receipt = claimCronRunReceiptForTest(CRON_STORE_KEY, job, Date.now());
-    releases.push(() => releaseLocalCronRunReceiptOwnership(receipt));
     const marker = markServiceCronJobActive(
       createCronServiceState({
         scheduler: createTestGatewayScheduler(),
@@ -445,7 +443,6 @@ describe("cron standing grants", () => {
         });
         if (invalidation === "replacement receipt") {
           const successor = claimCronRunReceiptForTest(CRON_STORE_KEY, job, Date.now());
-          releases.push(() => releaseLocalCronRunReceiptOwnership(successor));
           expect(successor.receiptId).not.toBe(receipt.receiptId);
         }
       }

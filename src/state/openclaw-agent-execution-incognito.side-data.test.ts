@@ -19,11 +19,11 @@ import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { settleIncognitoTrajectoryRuntimeRetention } from "../trajectory/runtime-retention.js";
 import { createSqliteTrajectoryRuntimeSink } from "../trajectory/runtime-store-writer.js";
+import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import {
   appendSqliteTrajectoryRuntimeEvents,
-  loadSqliteTrajectoryRuntimeEventRowsSync,
-} from "../trajectory/runtime-store.sqlite.js";
-import { createTrajectoryEvent } from "../trajectory/runtime-store.test-support.js";
+  createTrajectoryEvent,
+} from "../trajectory/runtime-store.test-support.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
@@ -338,7 +338,11 @@ it("preserves native incognito trajectory age and global-budget retention", asyn
       });
       await retained.sessions.sideData(authority, {
         type: "session.trajectory.append",
-        input: { sessionKey: sessionKey(name), sessionId: name, events: [event] },
+        input: {
+          sessionKey: sessionKey(name),
+          sessionId: name,
+          events: [{ runId: event.runId, ts: event.ts, line: JSON.stringify(event) }],
+        },
       });
       appendSqliteTrajectoryRuntimeEvents({ ...native, sessionId: name }, [event]);
     }
@@ -373,7 +377,11 @@ it("preserves native incognito trajectory age and global-budget retention", asyn
       } else {
         await retained.sessions.sideData(authority, {
           type: "session.trajectory.append",
-          input: { sessionKey: sessionKey("current"), sessionId: "current", events: [event] },
+          input: {
+            sessionKey: sessionKey("current"),
+            sessionId: "current",
+            events: [{ runId: event.runId, ts: event.ts, line: JSON.stringify(event) }],
+          },
         });
         await settleIncognitoTrajectoryRuntimeRetention({
           actor: retained,

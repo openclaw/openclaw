@@ -51,7 +51,7 @@ import { readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { readGatewayProcessVitals } from "../server/process-vitals.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
@@ -318,9 +318,14 @@ export const systemHandlers: GatewayRequestHandlers = {
       read?.snapshot.assertCurrent();
       const targetSession = binding
         ? read?.entry
-        : loadGatewaySessionEntryReadOnly(requestedSessionKey, {
-            agentId: requestedAgentId,
-          }).entry;
+        : (
+            await loadGatewaySessionEntryReadOnlyInWorker({
+              cfg,
+              key: requestedSessionKey,
+              agentId: requestedAgentId,
+              assertActive: authority.assertCurrent,
+            })
+          ).entry;
       if (!targetSession || targetSession.archivedAt !== undefined) {
         respond(
           false,

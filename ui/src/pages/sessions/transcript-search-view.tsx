@@ -75,11 +75,7 @@ export function TranscriptSearch(props: TranscriptSearchProps) {
             placeholder={t("sessionsView.transcriptSearchPlaceholder")}
             value={query()}
             disabled={!props.transcriptSearchAvailable}
-            onInput={(event: Event) => {
-              if (event.currentTarget instanceof HTMLInputElement) {
-                props.onTranscriptSearchChange(event.currentTarget.value);
-              }
-            }}
+            onInput={(event) => props.onTranscriptSearchChange(event.currentTarget.value)}
           />
         </div>
         <button

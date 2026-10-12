@@ -14,10 +14,9 @@ import { clearCronJobActive, markCronJobActive } from "../cron/active-jobs.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import { upsertCronJobRow } from "../cron/store/row-codec.js";
 import {
+  claimCronRunReceiptInDatabaseForTest,
   prepareCronRunReceiptClaim,
-  releaseLocalCronRunReceiptOwnership,
-} from "../cron/store/run-receipt-store.js";
-import { claimCronRunReceiptInDatabaseForTest } from "../cron/store/run-receipt-store.test-support.js";
+} from "../cron/store/run-receipt-store.test-support.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import * as deletionJournal from "../state/agent-deletion-journal.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -263,7 +262,7 @@ describe("Claw serving monitor cleanup", () => {
   });
 
   it.each([false, true])(
-    "retains files for a foreign receipt after its job row disappears (unverifiable=%s)",
+    "retains files until startup recovers a removed job's receipt (unverifiable=%s)",
     async (unverifiable) => {
       const current = await fixture(false);
       const monitor = (await current.cron.list({ includeDisabled: true })).find(
@@ -304,7 +303,6 @@ describe("Claw serving monitor cleanup", () => {
             .prepare("UPDATE cron_run_receipts SET started_at_ms = ? WHERE receipt_id = ?")
             .run(Date.now() - 24 * 60 * 60_000, handle.receiptId);
         }
-        releaseLocalCronRunReceiptOwnership(handle);
         database.db.prepare("DELETE FROM cron_jobs WHERE job_id = ?").run(monitor.id);
         expect(getSuspensionVisibleCronTaskRunCount({ agentId: "worker" })).toBe(0);
         const plan = await current.plan();
@@ -321,6 +319,12 @@ describe("Claw serving monitor cleanup", () => {
             .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
             .get(handle.receiptId),
         ).toEqual({ status: "running" });
+        await current.cron.start();
+        expect(
+          database.db
+            .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+            .get(handle.receiptId),
+        ).toEqual({ status: "interrupted" });
         expect(await current.apply(await current.plan())).toMatchObject({ status: "complete" });
       } finally {
         if (holder.pid && holder.exitCode === null && holder.signalCode === null) {
@@ -328,7 +332,6 @@ describe("Claw serving monitor cleanup", () => {
           holder.kill("SIGTERM");
           await exit;
         }
-        releaseLocalCronRunReceiptOwnership(handle);
       }
     },
   );

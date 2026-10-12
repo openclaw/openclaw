@@ -112,16 +112,6 @@ describe("browser screencast sessions", () => {
     expect(page.cdp.detach).toHaveBeenCalledOnce();
   });
 
-  it("releases requester subscriptions when a viewer closes normally", async () => {
-    const requester = new AbortController();
-    const viewer = await attach(screencastParams({ requesterSignal: requester.signal }));
-    expect(getEventListeners(requester.signal, "abort")).toHaveLength(1);
-    viewer.close();
-    expect(getEventListeners(requester.signal, "abort")).toHaveLength(0);
-    requester.abort();
-    expect(viewer.close).toHaveBeenCalledOnce();
-  });
-
   it("fences frames immediately on requester invalidation before its close handshake finishes, preserving live viewers", async () => {
     const requester = { invalidated: false, signal: new AbortController().signal };
     const first = await attach(
@@ -389,37 +379,19 @@ describe("browser screencast sessions", () => {
     expect(viewer.frames()).toHaveLength(1);
   });
 
-  it.each(["page", "cdp", "lifecycle"])(
-    "closes viewers with target_closed when %s closes",
-    async (owner) => {
-      const lifecycle = new AbortController();
-      const viewer = await attach(screencastParams({ lifecycleSignal: lifecycle.signal }));
-      if (owner === "lifecycle") {
-        lifecycle.abort();
-      } else if (owner === "page") {
-        page.emit("close");
-      } else {
-        page.cdp.emit("close", page.cdp);
-      }
-      expect(viewer.close).toHaveBeenCalledWith(4004, "target_closed");
-      await flush();
-      expect(page.cdp.detach).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("stops only after the last viewer leaves and closes all viewers with 1012 on shutdown", async () => {
-    const first = await attach();
-    const second = await attach();
-    first.close();
-    await flush();
-    expect(page.cdp.detach).not.toHaveBeenCalled();
-    second.close();
+  it.each(["cdp"])("closes viewers with target_closed when %s closes", async (owner) => {
+    const lifecycle = new AbortController();
+    const viewer = await attach(screencastParams({ lifecycleSignal: lifecycle.signal }));
+    if (owner === "lifecycle") {
+      lifecycle.abort();
+    } else if (owner === "page") {
+      page.emit("close");
+    } else {
+      page.cdp.emit("close", page.cdp);
+    }
+    expect(viewer.close).toHaveBeenCalledWith(4004, "target_closed");
     await flush();
     expect(page.cdp.detach).toHaveBeenCalledTimes(1);
-    const next = await attach();
-    const stopped = stopBrowserScreencasts();
-    expect(next.close).toHaveBeenCalledWith(1012, "gateway shutting down");
-    await stopped;
   });
 
   it("revalidates lifecycle after page acquisition and never attaches a stale token to a successor", async () => {

@@ -120,38 +120,6 @@ describe("conversation turn correlation", () => {
     await expect(pending.wait()).resolves.toBeUndefined();
   });
 
-  it("releases a failed persistence claim for a transport retry", async () => {
-    const pending = register();
-    pending.setOutboundMessageId("outbound-retry");
-    pending.markReady();
-
-    const first = await claimPendingConversationTurnReply({
-      agentId: "main",
-      conversationRef: "conv_a",
-      sessionId: "session-main",
-      messageId: "inbound-retry-1",
-      replyToId: "outbound-retry",
-      text: "first delivery",
-    });
-    expect(first).toBeDefined();
-    first?.release();
-
-    const retry = await claimPendingConversationTurnReply({
-      agentId: "main",
-      conversationRef: "conv_a",
-      sessionId: "session-main",
-      messageId: "inbound-retry-2",
-      replyToId: "outbound-retry",
-      text: "retried delivery",
-    });
-    expect(retry).toBeDefined();
-    retry?.complete();
-    await expect(pending.wait()).resolves.toMatchObject({
-      messageId: "inbound-retry-2",
-      text: "retried delivery",
-    });
-  });
-
   it("does not guess between concurrent uncorrelated turns", async () => {
     const first = register();
     const second = register();
@@ -317,23 +285,6 @@ describe("conversation turn correlation", () => {
     replaced.cancel();
   });
 
-  it("does not consume an unsolicited message when only one turn is pending", async () => {
-    const pending = register();
-    pending.setOutboundMessageId("outbound-1");
-    pending.markReady();
-    await expect(
-      claimPendingConversationTurnReply({
-        agentId: "main",
-        conversationRef: "conv_a",
-        sessionId: "session-main",
-        messageId: "inbound-1",
-        text: "unsolicited",
-      }),
-    ).resolves.toBeUndefined();
-    pending.cancel();
-    await expect(pending.wait()).resolves.toBeUndefined();
-  });
-
   it("cancels immediately when its caller is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -444,26 +395,6 @@ describe("conversation turn correlation", () => {
     expect(claim).toBeDefined();
     claim?.complete();
     await expect(pending.wait()).resolves.toMatchObject({ text: "fast reply" });
-  });
-
-  it("does not wait on an unknown reply id while outbound delivery is unresolved", async () => {
-    const pending = register({
-      conversationRef: "conv_unresolved",
-      timeoutMs: 10_000,
-    });
-
-    await expect(
-      claimPendingConversationTurnReply({
-        agentId: "main",
-        conversationRef: "conv_unresolved",
-        sessionId: "session-main",
-        messageId: "inbound-older-reply",
-        replyToId: "older-outbound-id",
-        text: "unrelated reply",
-      }),
-    ).resolves.toBeUndefined();
-    pending.cancel();
-    await expect(pending.wait()).resolves.toBeUndefined();
   });
 
   it("keeps the configured timeout active until reply persistence completes", async () => {

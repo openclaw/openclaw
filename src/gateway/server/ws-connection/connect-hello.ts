@@ -15,7 +15,7 @@ import {
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
-import { commitPresence } from "../../../infra/system-presence.js";
+import { commitPresence, listSystemPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
@@ -37,10 +37,10 @@ import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import { operatorSessionCap } from "../../operator-role-policy.js";
+import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
 import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
 import {
   MAX_BUFFERED_BYTES,
-  MAX_PAYLOAD_BYTES,
   TICK_INTERVAL_MS,
   WEBSOCKET_OPEN_READY_STATE,
 } from "../../server-constants.js";
@@ -120,10 +120,14 @@ export async function sendGatewayHello(
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
   const sessionRowProjection = getSessionRowProjection(buildRequestContext());
-  while (sessionRowProjection?.needsMembershipPreparation()) {
-    await sessionRowProjection.prepareMembership();
-    if (context.handler.isClosed() || context.handler.getClient()?.invalidated) {
-      throw new Error("Gateway connection closed before hello");
+  if (
+    listSystemPresence({ includeConnectionId: connId }).some((row) => row.watchedSessions?.length)
+  ) {
+    while (sessionRowProjection?.needsMembershipPreparation()) {
+      await sessionRowProjection.prepareMembership();
+      if (context.handler.isClosed() || context.handler.getClient()?.invalidated) {
+        throw new Error("Gateway connection closed before hello");
+      }
     }
   }
   const snapshot = buildGatewaySnapshot({
@@ -184,6 +188,8 @@ export async function sendGatewayHello(
           : []),
         GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
         GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING,
+        GATEWAY_SERVER_CAPS.MODELS_AUTH_SET_API_KEY_OWNER,
+        GATEWAY_SERVER_CAPS.MODELS_AUTH_LOGIN_OWNER,
         GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_LIST_OWNER,
         GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_APPROVE_OWNER,
         GATEWAY_SERVER_CAPS.EXEC_APPROVALS_GET_OWNER,

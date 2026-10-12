@@ -295,7 +295,7 @@ export function runWithPreparedRunSourceScope<T>(
     }
     assertion = captured;
   }
-  return runWithSessionSourceScope(assertion, run);
+  return runWithSessionSourceScope(assertion, run, { checkAfter: false });
 }
 
 function bindAdmittedRunDelegatedAuthority(
@@ -623,34 +623,38 @@ export function prepareAgentRunAdmission(params: {
       // Later fallback paths reuse this exact admission instead of recapturing identity.
       const fixedRuntimeKind = (admittedRuntimeKind ??= runtimeKind);
       admittedRuntimeInstanceId ??= runtimeInstanceId?.trim() || undefined;
-      admitted ??= (async () => {
-        assertSourceCurrent?.();
-        const facts = executionIdentitySpawnAdmission({
-          operation: "attach",
-          value: { ...params.facts, runtime: { kind: fixedRuntimeKind } },
-          extra: executionIdentitySpawnAdmission({ operation: "read", value: params.facts }),
-        });
-        const context = admitPreparedAgentRun({
-          cfg: params.cfg,
-          admissionSource: params.admissionSource,
-          facts,
-          operationalRunInstance,
-          runtimeInstanceId: admittedRuntimeInstanceId,
-          ...(params.recovery ? { recovery: params.recovery } : {}),
-        });
-        bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent, operatorAuthority);
-        admittedContext = context;
-        try {
-          await params.onAdmitted?.(context);
-          if (closed || !getAdmittedRunDelegatedAuthority(context)) {
-            throw new Error("prepared execution authority closed during admission");
+      admitted ??= runWithSessionSourceScope(
+        assertSourceCurrent,
+        async () => {
+          assertSourceCurrent?.();
+          const facts = executionIdentitySpawnAdmission({
+            operation: "attach",
+            value: { ...params.facts, runtime: { kind: fixedRuntimeKind } },
+            extra: executionIdentitySpawnAdmission({ operation: "read", value: params.facts }),
+          });
+          const context = admitPreparedAgentRun({
+            cfg: params.cfg,
+            admissionSource: params.admissionSource,
+            facts,
+            operationalRunInstance,
+            runtimeInstanceId: admittedRuntimeInstanceId,
+            ...(params.recovery ? { recovery: params.recovery } : {}),
+          });
+          bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent, operatorAuthority);
+          admittedContext = context;
+          try {
+            await params.onAdmitted?.(context);
+            if (closed || !getAdmittedRunDelegatedAuthority(context)) {
+              throw new Error("prepared execution authority closed during admission");
+            }
+            return context;
+          } catch (error) {
+            closeAdmittedRunDelegatedAuthority(context);
+            throw error;
           }
-          return context;
-        } catch (error) {
-          closeAdmittedRunDelegatedAuthority(context);
-          throw error;
-        }
-      })();
+        },
+        { checkAfter: false },
+      );
       return admitted;
     },
   });

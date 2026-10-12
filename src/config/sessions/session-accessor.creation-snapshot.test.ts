@@ -22,6 +22,7 @@ import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
 
 const tempDirs: string[] = [];
@@ -35,6 +36,22 @@ afterEach(async () => {
 });
 
 describe("session creation snapshot", () => {
+  it("preserves a competing creation committed while the initial entry is prepared", async () => {
+    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-conflict-") };
+    const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
+    const competing = { sessionId: "competing", updatedAt: 1, label: "retained" };
+    openOpenClawAgentDatabase(scope);
+
+    await expect(
+      createSessionEntryWithTranscript(scope, ({ existingEntry }) => {
+        expect(existingEntry).toBeUndefined();
+        replaceSessionEntrySync(scope, competing);
+        return { ok: true, entry: { sessionId: "prepared", updatedAt: 2 } };
+      }),
+    ).rejects.toThrow("SQLite session entry changed before replacement");
+    expect(loadSessionEntry(scope)).toMatchObject(competing);
+  });
+
   it("preserves adopted history without selecting a new projection", async () => {
     const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-history-") };
     const scope = { agentId: "main", env, sessionKey: "agent:main:target", sessionId: "target" };
@@ -211,6 +228,10 @@ describe("session creation snapshot", () => {
       expect(context.existingEntry).toEqual(expected);
       expect(context.targetEntry).toEqual(expected);
       expect(context.labelInUse).toBe(true);
+      // Offline repair revokes the physical proof before another reader admits these rows.
+      runSqliteImmediateTransactionSync(db, () =>
+        markCanonicalSessionValidationPending(database, [scope.sessionKey]),
+      );
       await expect(
         createSessionEntryWithTranscript(scope, () => ({ ok: false, error: "unreachable" })),
       ).rejects.toThrow("openclaw doctor --fix");

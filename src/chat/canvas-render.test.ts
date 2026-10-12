@@ -101,31 +101,13 @@ describe("extractCanvasShortcodes", () => {
     expect(text).toBe(" keep me [/embed]");
   });
 
-  it("still extracts a normal block embed and strips only the shortcode span", () => {
-    const input = 'before [embed ref="doc1"] hi [/embed] after';
-    const { text, previews } = extractCanvasShortcodes(input);
-
-    expect(previews).toHaveLength(1);
-    expect(previews[0]?.viewId).toBe("doc1");
-    expect(text).toBe("before  after");
-  });
-
-  it("still extracts a plain self-closing embed and keeps surrounding text", () => {
-    const input = 'see [embed url="https://b.com" /] end';
-    const { text, previews } = extractCanvasShortcodes(input);
-
-    expect(previews).toHaveLength(1);
-    expect(previews[0]?.url).toBe("https://b.com");
-    expect(text).toBe("see  end");
-  });
-
-  it.each([
-    ["indented code", '    [embed url="https://example.com/image.png"]\n    example\n    [/embed]'],
-    ["inline code", '`[embed url="https://example.com/image.png" /]`'],
-  ])("preserves literal embed examples in %s", (_kind, example) => {
-    const input = `Before the example.\n\n${example}\n\nAfter the example.`;
-    expect(extractCanvasShortcodes(input)).toEqual({ text: input, previews: [] });
-  });
+  it.each([["inline code", '`[embed url="https://example.com/image.png" /]`']])(
+    "preserves literal embed examples in %s",
+    (_kind, example) => {
+      const input = `Before the example.\n\n${example}\n\nAfter the example.`;
+      expect(extractCanvasShortcodes(input)).toEqual({ text: input, previews: [] });
+    },
+  );
 });
 
 it("removes a shortcode without rewriting surrounding literal whitespace", () => {

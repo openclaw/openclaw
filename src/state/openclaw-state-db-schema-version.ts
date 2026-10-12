@@ -50,9 +50,7 @@ export function readStateSchemaContentVersion(
   const contentVersion = parseContentVersion(
     tableExists(db, "config_machine_state") ? readRow(db)?.value_json : undefined,
   );
-  if (getAdmittedSqliteSchemaFacts(db) === schema) {
-    rememberStateSchemaVersionAdmission(db, { userVersion: version, contentVersion });
-  }
+  rememberStateSchemaVersionAdmission(db, { userVersion: version, contentVersion });
   return Math.max(published ?? version, contentVersion);
 }
 

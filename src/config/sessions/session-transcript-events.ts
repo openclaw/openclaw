@@ -20,6 +20,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import {
   captureIncognitoSessionHistoryBinding,
@@ -47,10 +48,24 @@ import {
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 /** Load durable raw events through the existing full-transcript hydration owner. */
-export async function loadTranscriptEvents(
+export async function loadSessionTranscriptEvents(
   scope: SessionTranscriptReadScope,
   suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<TranscriptEvent[]> {
+  const memory = captureSessionActorTranscriptRead(scope);
+  if (memory) {
+    if (memory.missing) {
+      memory.assertCurrent();
+      return [];
+    }
+    const result = await memory.read("session.history.hydrate", {
+      maxEventBytes: scope.maxEventBytes,
+    });
+    if (result.kind !== "full") {
+      throw new Error("Transcript events received a bounded hydration result");
+    }
+    return result.snapshot.events;
+  }
   const source = suppliedIncognito ? undefined : captureIncognitoSessionSource(scope);
   if (source && "kind" in source) {
     source.assertCurrent();

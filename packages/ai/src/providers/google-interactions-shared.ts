@@ -167,8 +167,7 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
     const decoder = new TextDecoder();
     let buffer = "";
 
-    type StreamingToolCall = ToolCall & { partialJson?: string };
-    let currentBlock: TextContent | ThinkingContent | StreamingToolCall | null = null;
+    let currentBlock: TextContent | ThinkingContent | ToolCall | null = null;
     let currentBlockIndex = -1;
     let latestThoughtSignature: string | undefined;
     let latestUsage: Record<string, unknown> | undefined;
@@ -259,7 +258,7 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
       endCurrentBlock();
       currentBlockIndex = output.content.length;
       const name = readStringField(source, "name") ?? "tool";
-      const toolCall: StreamingToolCall = {
+      const toolCall: ToolCall = {
         type: "toolCall",
         id: readStringField(source, "id") ?? nextToolCallId(name),
         name,
@@ -477,8 +476,9 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
   } catch (error) {
     const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
     for (const block of output.content) {
-      // SAFETY: Streaming tool blocks extend the terminal content type with this buffer.
-      delete (block as { partialJson?: string }).partialJson;
+      if (block.type === "toolCall") {
+        delete block.partialJson;
+      }
     }
     failTransportStream({ stream, output, signal: options?.signal, error: failure });
   } finally {

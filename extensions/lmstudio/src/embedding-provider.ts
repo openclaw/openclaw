@@ -33,9 +33,7 @@ import { hasLmstudioAuthorizationHeader } from "./provider-auth.js";
 import {
   buildLmstudioAuthHeaders,
   resolveLmstudioConfiguredApiKeyForProvider,
-  resolveLmstudioProviderHeaders,
   resolveLmstudioRuntimeApiKey,
-  sanitizeLmstudioStringHeaders,
 } from "./runtime.js";
 
 const log = createSubsystemLogger("memory/embeddings");
@@ -170,19 +168,24 @@ export async function createLmstudioEmbeddingProvider(
     !remoteBaseUrl ||
     embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl: providerOwnedBaseUrl });
   const model = normalizeLmstudioModel(options.model, resolvedProvider?.providerId);
-  const providerHeaders = providerOwnsDestination
-    ? await resolveLmstudioProviderHeaders({
-        config: options.config,
-        env: process.env,
-        headers: providerConfig?.headers,
-      })
-    : undefined;
-  // Memory remote headers are resolved snapshot values, never fresh SecretRefs.
-  const headerOverrides = Object.assign(
-    {},
-    providerHeaders,
-    sanitizeLmstudioStringHeaders(options.remote?.headers),
-  );
+  const headerOverrides: Record<string, string> = {};
+  for (const [path, source] of [
+    [
+      `models.providers.${resolvedProvider?.providerId ?? LMSTUDIO_PROVIDER_ID}.headers`,
+      providerOwnsDestination ? providerConfig?.headers : undefined,
+    ],
+    ["memory.search.remote.headers", options.remote?.headers],
+  ] as const) {
+    for (const [name, value] of Object.entries(source ?? {})) {
+      const header = resolveMemorySecretInputString({
+        value: value ?? null,
+        path: `${path}.${name}`,
+      });
+      if (header) {
+        headerOverrides[name] = header;
+      }
+    }
+  }
   const apiKey = hasLmstudioAuthorizationHeader(headerOverrides)
     ? undefined
     : remoteApiKey?.trim() ||

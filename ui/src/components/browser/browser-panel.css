@@ -128,14 +128,6 @@ openclaw-browser-panel {
     background: var(--bg);
     outline: none;
   }
-  /* The tab panel's own body must stretch, otherwise an empty state sizes to its
-     content and sits in the upper third instead of centring in the viewport. */
-  .bp-viewport::part(base) {
-    display: flex;
-    flex: 1 1 auto;
-    min-height: 0;
-    flex-direction: column;
-  }
   .bp-stage {
     position: relative;
     width: 100%;

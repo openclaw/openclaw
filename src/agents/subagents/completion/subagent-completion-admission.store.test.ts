@@ -150,6 +150,7 @@ describe("native subagent completion worker admission", () => {
         readSubagentRun(database, input.subagent.runId),
         "native owner",
       );
+      expect(result.subagent).toEqual({ ...published, cleanupHandled: true });
       await expect(admit()).resolves.toMatchObject({
         claimed: false,
         status: "pending",
@@ -167,25 +168,26 @@ describe("native subagent completion worker admission", () => {
       }));
       await mutateSubagentRuns([input.subagent.runId], updateAcknowledged);
       expect(updateAcknowledged).toHaveBeenCalledOnce();
+      expect(readSubagentRun(database, input.subagent.runId)).toMatchObject({
+        label: "after replay",
+        delivery: published.delivery,
+        completion: published.completion,
+      });
+      expect(result.subagent).toEqual({ ...published, cleanupHandled: true });
     });
   });
 
-  it.each(["queue", "subagent"] as const)(
-    "rolls back both owners after a native failure at %s",
-    async (phase) => {
-      await withAdmissionState(async ({ input, database, context, admit }) => {
-        const before = readSubagentRun(database, input.expected.runId);
-        const target =
-          phase === "queue" ? "INSERT ON delivery_queue_entries" : "UPDATE ON subagent_runs";
-        database.db.exec(
-          `CREATE TRIGGER reject_completion AFTER ${target} BEGIN SELECT RAISE(ABORT, 'completion crash cut'); END`,
-        );
-        await expect(admit()).rejects.toThrow("completion crash cut");
-        expect(await loadPendingSessionDeliveries(context)).toEqual([]);
-        expect(readSubagentRun(database, input.expected.runId)).toEqual(before);
-      });
-    },
-  );
+  it("rolls back both owners after the native subagent write fails", async () => {
+    await withAdmissionState(async ({ input, database, context, admit }) => {
+      const before = readSubagentRun(database, input.expected.runId);
+      database.db.exec(
+        "CREATE TRIGGER reject_completion AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'completion crash cut'); END",
+      );
+      await expect(admit()).rejects.toThrow("completion crash cut");
+      expect(await loadPendingSessionDeliveries(context)).toEqual([]);
+      expect(readSubagentRun(database, input.expected.runId)).toEqual(before);
+    });
+  });
 
   it("refuses mismatched queue and native delivery generations before either write", async () => {
     await withAdmissionState(async ({ input, database, context, admit }) => {
@@ -402,6 +404,13 @@ it("settles a requester cohort after concurrently admitted children complete", a
       release.resolve();
       await Promise.all(completions);
       await expect(settled).resolves.toEqual({ applied: true, publication: "published" });
+      await mutateSubagentRuns([ids[0]!], (rows) => {
+        const current = rows.get(ids[0]!)!;
+        return {
+          value: undefined,
+          postimages: new Map([[current.runId, { ...current, label: "after batch settlement" }]]),
+        };
+      });
       const stored = loadSubagentRegistryFromSqlite();
       for (const [index, input] of inputs.entries()) {
         expect(currentCompletionRun(input)).toMatchObject({
@@ -410,7 +419,12 @@ it("settles a requester cohort after concurrently admitted children complete", a
           delivery: { status: "delivered" },
         });
         expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
-        expect(stored.get(input.subagent.runId)?.delivery?.status).toBe("delivered");
+        expect(stored.get(input.subagent.runId)).toMatchObject({
+          execution: { status: "terminal", outcome: { status: "ok" } },
+          completion: { resultText: `child result ${index}` },
+          delivery: { status: "delivered" },
+          ...(index === 0 ? { label: "after batch settlement" } : {}),
+        });
         expect(stored.get(input.subagent.runId)?.requesterSettleWake).toBeUndefined();
       }
     } finally {

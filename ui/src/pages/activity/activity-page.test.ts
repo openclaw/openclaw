@@ -55,7 +55,7 @@ function createActivityPage(): TestActivityPage {
   return page;
 }
 
-function mountActivityPage(page: TestActivityPage): HTMLDivElement {
+function mountActivityPage(page: TestActivityPage): HTMLElement {
   const mounted = mountSolid(() =>
     createComponent(ActivityPageView, {
       controller: page,
@@ -110,7 +110,7 @@ const activePages = new Set<TestActivityPage>();
 const activeSessions = new Map<ApplicationContext["gateway"], ApplicationContext["sessions"]>();
 const activeAgents = new Map<ApplicationContext["gateway"], ApplicationContext["agents"]>();
 
-function activityContext(source: ApplicationContext["gateway"]) {
+function activityContext(source: ApplicationContext["gateway"]): ApplicationContext {
   let sessions = activeSessions.get(source);
   if (!sessions) {
     sessions = createTestSessionCapability(source);
@@ -121,7 +121,81 @@ function activityContext(source: ApplicationContext["gateway"]) {
     agents = createAgentCapability(source);
     activeAgents.set(source, agents);
   }
-  return { gateway: source, sessions, agents, basePath: "", replace: vi.fn() };
+  return {
+    gateway: source,
+    sessions,
+    agents,
+    basePath: "",
+    resourceBasePath: "",
+    replace: vi.fn(),
+    navigate: vi.fn(),
+    navigateAndWait: vi.fn(async () => {}),
+    revalidate: vi.fn(async () => {}),
+    preload: vi.fn(async () => {}),
+    nativeDeviceSettings: null,
+    nativeNotifications: null,
+    // These tests exercise Activity only; unexpected capability reads must fail.
+    get router(): never {
+      throw new Error("Activity fixture does not provide router");
+    },
+    get connectionBootstrap(): never {
+      throw new Error("Activity fixture does not provide connectionBootstrap");
+    },
+    get agentIdentity(): never {
+      throw new Error("Activity fixture does not provide agentIdentity");
+    },
+    get agentSelection(): never {
+      throw new Error("Activity fixture does not provide agentSelection");
+    },
+    get settingsAgentSelection(): never {
+      throw new Error("Activity fixture does not provide settingsAgentSelection");
+    },
+    get channels(): never {
+      throw new Error("Activity fixture does not provide channels");
+    },
+    get config(): never {
+      throw new Error("Activity fixture does not provide config");
+    },
+    get scopeUpgrade(): never {
+      throw new Error("Activity fixture does not provide scopeUpgrade");
+    },
+    get sidebarAttention(): never {
+      throw new Error("Activity fixture does not provide sidebarAttention");
+    },
+    get runtimeConfig(): never {
+      throw new Error("Activity fixture does not provide runtimeConfig");
+    },
+    get placementStartup(): never {
+      throw new Error("Activity fixture does not provide placementStartup");
+    },
+    get plugins(): never {
+      throw new Error("Activity fixture does not provide plugins");
+    },
+    get assistantDock(): never {
+      throw new Error("Activity fixture does not provide assistantDock");
+    },
+    get overlays(): never {
+      throw new Error("Activity fixture does not provide overlays");
+    },
+    get navigation(): never {
+      throw new Error("Activity fixture does not provide navigation");
+    },
+    get theme(): never {
+      throw new Error("Activity fixture does not provide theme");
+    },
+    get nativeChatDrafts(): never {
+      throw new Error("Activity fixture does not provide nativeChatDrafts");
+    },
+    get webPush(): never {
+      throw new Error("Activity fixture does not provide webPush");
+    },
+    get chatSubmissions(): never {
+      throw new Error("Activity fixture does not provide chatSubmissions");
+    },
+    get chatAttachmentHandoff(): never {
+      throw new Error("Activity fixture does not provide chatAttachmentHandoff");
+    },
+  };
 }
 
 function activityHello(recoveryScope = "activity-owner-a"): GatewayHelloOk {
@@ -154,7 +228,7 @@ function activityGateway() {
 
 function bindActivity(source: ApplicationContext["gateway"]): TestActivityPage {
   const page = createActivityPage();
-  page.context = activityContext(source) as ApplicationContext;
+  page.context = activityContext(source);
   page.routeLocation = { pathname: "/activity", search: "?view=live", hash: "" };
   page.routeData = { mode: "live", selector: null };
   page.connect(page.context);
@@ -237,7 +311,7 @@ afterEach(async () => {
 describe("ActivityPage gateway lifecycle", () => {
   it.each(["sessions", "run"] as const)("skips Live Activity rendering in %s mode", (mode) => {
     const page = createActivityPage();
-    page.context = { ...activityContext(gateway()), basePath: "" } as ApplicationContext;
+    page.context = activityContext(gateway());
     page.entries = [staleEntry()];
     page.routeLocation = {
       pathname: "/activity",
@@ -262,7 +336,7 @@ describe("ActivityPage gateway lifecycle", () => {
 
   it("starts empty on initial bind and source replacement", () => {
     const page = createActivityPage();
-    page.context = activityContext(gateway()) as ApplicationContext;
+    page.context = activityContext(gateway());
     page.routeData = { mode: "live", selector: null };
     page.entries = [staleEntry()];
 
@@ -270,7 +344,7 @@ describe("ActivityPage gateway lifecycle", () => {
     expect(page.entries).toEqual([]);
 
     page.entries = [staleEntry()];
-    page.connect(activityContext(gateway()) as ApplicationContext);
+    page.connect(activityContext(gateway()));
     expect(page.entries).toEqual([]);
 
     page.dispose();
@@ -311,7 +385,7 @@ describe("ActivityPage gateway lifecycle", () => {
       defaults: { model: null, modelProvider: null, contextTokens: null },
     });
     const page = createActivityPage();
-    page.context = { ...activityContext(source), basePath: "" } as ApplicationContext;
+    page.context = activityContext(source);
     request.mockClear();
 
     page.connect(page.context);
@@ -448,7 +522,7 @@ describe("ActivityPage gateway lifecycle", () => {
       ];
       const acquisitions = vi.spyOn(activityContext(source).sessions, "subscribeMessages");
       const page = createActivityPage();
-      page.connect(activityContext(source) as ApplicationContext);
+      page.connect(activityContext(source));
       page.setRouteLocation({ pathname: "/activity", search: "?view=live", hash: "" });
       try {
         await page.sessionActivity.load(source.snapshot.client, "current");
@@ -576,7 +650,7 @@ describe("ActivityPage gateway lifecycle", () => {
           : activityResponse(method, params),
     );
     const page = createActivityPage();
-    page.context = { ...activityContext(source), basePath: "" } as ApplicationContext;
+    page.context = activityContext(source);
     page.routeLocation = { pathname: "/activity", search: "?view=live", hash: "" };
     page.connect(page.context);
     page.setRouteLocation(page.routeLocation);

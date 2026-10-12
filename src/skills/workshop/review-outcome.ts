@@ -144,7 +144,7 @@ export async function postWorkshopChangeNotice(params: {
     log.debug(`skill workshop notice skipped: session ${sessionKey} was reset`);
     return;
   }
-  const { deliveryContext: target, threadId } = extractDeliveryInfo(sessionKey, {
+  const { deliveryContext: target, threadId } = await extractDeliveryInfo(sessionKey, {
     cfg: params.config,
   });
   const channel = target?.channel ? normalizeMessageChannel(target.channel) : undefined;

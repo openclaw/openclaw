@@ -53,7 +53,7 @@ async function withAnnounce(
   });
 }
 
-describe("isolated cron delivery awareness", () => {
+describe("isolated cron delivery notifications", () => {
   beforeAll(async () => {
     setupIsolatedAgentTurnMocks();
     resetSystemEventsForTest();
@@ -88,6 +88,10 @@ describe("isolated cron delivery awareness", () => {
           `final cron summary\nInspect: https://control.example/console/chat/main/${result.sessionKey?.replace(/^agent:main:/, "").replaceAll(":", "/")}`,
           expect.any(Object),
         );
+        expect(deps.telegram).toHaveBeenCalledTimes(2);
+        expect(peekSystemEvents("agent:main:main")).toEqual([]);
+        expect(peekSystemEvents("agent:main:global")).toEqual([]);
+        expect(peekSystemEventEntries("agent:other:global")).toEqual([]);
       },
     );
   });
@@ -99,19 +103,6 @@ describe("isolated cron delivery awareness", () => {
         expect(result.status).toBe("ok");
         expect(result.delivered).toBeFalsy();
         expect(deps.telegram).not.toHaveBeenCalled();
-      },
-    );
-  });
-
-  it("scopes the global main queue to the delivering agent", async () => {
-    await withAnnounce(
-      { texts: ["global cron digest"], cfg: { session: { scope: "global", mainKey: "main" } } },
-      (result) => {
-        expect(result.status).toBe("ok");
-        expect(result.delivered).toBe(true);
-        expect(peekSystemEvents("agent:main:global")).toEqual(["global cron digest"]);
-        expect(peekSystemEventEntries("agent:main:global")).toHaveLength(1);
-        expect(peekSystemEventEntries("agent:other:global")).toEqual([]);
       },
     );
   });

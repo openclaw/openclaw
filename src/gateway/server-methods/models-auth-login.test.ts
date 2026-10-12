@@ -170,6 +170,25 @@ describe("models.authLogin ownership", () => {
     expect(hooks.login).not.toHaveBeenCalled();
   });
 
+  it("rejects a wrong local owner before starting a credential wizard", async () => {
+    const h = harness();
+    const respond = await h.invoke("models.authLogin", {
+      sessionId: "login",
+      authChoice: "fixture/fixture-device",
+      expectedOwnerId: "not-the-current-owner",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        details: { reason: "STATE_OWNER_CHANGED", mutationAccepted: false },
+      }),
+    );
+    expect(hooks.login).not.toHaveBeenCalled();
+    expect(hooks.writeConfig).not.toHaveBeenCalled();
+    expect(h.tracker.wizardSessions.size).toBe(0);
+  });
+
   it("acknowledges start before the provider produces any prompt", async () => {
     const h = harness();
     const finish = createDeferred();

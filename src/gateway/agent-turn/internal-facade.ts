@@ -230,7 +230,7 @@ export function createInternalAgentTurnFacade(
               dispatchOptions.assertAdmissionCurrent?.();
               entry?.release();
               const principal = captureAgentTurnPrincipal(options.client);
-              const preflight = prepareAgentRequestPreflight({
+              const preflight = await prepareAgentRequestPreflight({
                 request,
                 context,
                 client: principal,

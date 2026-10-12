@@ -15,6 +15,7 @@ import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../../config/sessions/session-accessor.sqlite-read.js";
+import * as transcriptMessageAppend from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import * as sessionTranscript from "../../config/sessions/transcript.js";
 import { persistInternalSourceReply } from "../../gateway/internal-source-reply-persistence.js";
@@ -24,12 +25,6 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
-import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import {
-  createSqliteWorkerTransferReceiver,
-  type SqliteWorkerTransferFrame,
-  type SqliteWorkerTransferHandle,
-} from "../../infra/sqlite-worker-transfer.js";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
@@ -100,65 +95,23 @@ describe("WebChat message tool internal source reply", () => {
           async (owner) => {
             const message = "must never become a committed assistant message";
             let commitRequests = 0;
-            let granted = 0;
-            const create = workerAdmission.createSqliteWorkerOperationAdmission;
+            const append = transcriptMessageAppend.appendTranscriptMessageInTransaction;
             const admission = vi
-              .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-              .mockImplementation((admit, attachment) => {
-                let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
-                let transferId: number | undefined;
-                let assistantTurn = false;
-                return create((request, grant) => {
-                  const facts =
-                    isRecord(request.facts) && request.facts.kind === "session-entry-current"
-                      ? request.facts.domainFacts
-                      : request.facts;
-                  const publication = isRecord(facts) ? facts.publication : undefined;
-                  if (isRecord(publication)) {
-                    if (publication.kind === "session-entry-patch-transfer") {
-                      // SAFETY: The real session-entry worker emits this typed transfer handle.
-                      const handle = publication.handle as SqliteWorkerTransferHandle;
-                      transferId = handle.id;
-                      assistantTurn = false;
-                      receiver = createSqliteWorkerTransferReceiver(handle, (record) => {
-                        if (
-                          record.kind === "patch" &&
-                          isRecord(record.value) &&
-                          record.value.kind === "session-turn" &&
-                          isRecord(record.value.result) &&
-                          Array.isArray(record.value.result.appendedMessages)
-                        ) {
-                          assistantTurn = record.value.result.appendedMessages.some(
-                            (appended: unknown) =>
-                              isRecord(appended) &&
-                              isRecord(appended.message) &&
-                              appended.message.role === "assistant" &&
-                              readAssistantDisplayContent(appended.message).some(
-                                (block) => block.type === "text" && block.text === message,
-                              ),
-                          );
-                        }
-                      });
-                    } else if (publication.kind === "session-entry-patch-frame") {
-                      // SAFETY: This frame belongs to the intercepted worker transfer above.
-                      receiver?.accept(publication.frame as SqliteWorkerTransferFrame);
-                    } else if (
-                      request.stage === "commit" &&
-                      publication.kind === "session-entry-patch-committed" &&
-                      publication.transferId === transferId &&
-                      assistantTurn
-                    ) {
-                      commitRequests += 1;
-                      owner.closeAdmission();
-                      return admit(request, () => {
-                        const accepted = grant();
-                        granted += Number(accepted);
-                        return accepted;
-                      });
-                    }
-                  }
-                  return admit(request, grant);
-                }, attachment);
+              .spyOn(transcriptMessageAppend, "appendTranscriptMessageInTransaction")
+              .mockImplementation((database, resolved, options, preparedMessage, projection) => {
+                if (
+                  resolved.sessionKey === sessionKey &&
+                  resolved.sessionId === sessionId &&
+                  isRecord(options.message) &&
+                  options.message.role === "assistant" &&
+                  readAssistantDisplayContent(options.message).some(
+                    (block) => block.type === "text" && block.text === message,
+                  )
+                ) {
+                  commitRequests += 1;
+                  owner.closeAdmission();
+                }
+                return append(database, resolved, options, preparedMessage, projection);
               });
             try {
               const tool = owner.createTool({
@@ -175,9 +128,8 @@ describe("WebChat message tool internal source reply", () => {
               const assistants = (await loadTranscriptEvents(scope)).filter(
                 (event) => readTranscriptEventMessage(event)?.role === "assistant",
               );
-              expect({ commitRequests, granted, assistants }).toEqual({
+              expect({ commitRequests, assistants }).toEqual({
                 commitRequests: 1,
-                granted: 0,
                 assistants: [],
               });
               expect(outcome).toHaveProperty("error");

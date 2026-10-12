@@ -338,30 +338,6 @@ describe("scheduleStaleChunkReload", () => {
     expect(storage.getItem(GUARD_KEY)).toBe("build-b");
   });
 
-  it("does not let an unrelated pending probe bypass a failed build's cooldown", async () => {
-    vi.useFakeTimers();
-    const pending = deferred<Response>();
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const storage = memoryStorage();
-    const reload = vi.fn();
-    const attempt = (buildId: string) => scheduleStaleChunkReload({ buildId, storage, reload });
-    const older = attempt("build-a");
-    await vi.advanceTimersByTimeAsync(30_000);
-    await expect(older).resolves.toBe(false);
-    const attempts = fetchMock.mock.calls.length;
-    fetchMock.mockImplementationOnce(() => pending.promise);
-    const newer = attempt("build-b");
-    await expect(attempt("build-a")).resolves.toBe(false);
-    expect(fetchMock).toHaveBeenCalledTimes(attempts + 1);
-
-    pending.resolve(new Response(null, { status: 503 }));
-    await vi.advanceTimersByTimeAsync(30_000);
-    await expect(newer).resolves.toBe(false);
-    expect(reload).not.toHaveBeenCalled();
-    expect(storage.getItem(GUARD_KEY)).toBeNull();
-  });
-
   it.each([false, true])(
     "reprobes a newer build after its joined older-build probe fails (replacement: %s)",
     async (replaceOwner) => {

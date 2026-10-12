@@ -1,62 +1,53 @@
 /* @vitest-environment jsdom */
 
-import { createSignal } from "solid-js";
 import { expect, it } from "vitest";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { menuItem, menuItemLabels } from "../test-helpers/session-menu.ts";
+import {
+  menuItem,
+  menuItemLabels,
+  mountMenu,
+  settleSessionMenu,
+} from "../test-helpers/session-menu.ts";
 import { createSessionOwnerMenuHarness } from "../test-helpers/session-owner-menu.ts";
-import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
-import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { EMPTY_SESSION_MENU_DATA } from "./session-menu-actions.ts";
-import { SessionMenu, type SessionMenuWork } from "./session-menu.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 
-it("updates Solid menu props and retires its keyboard owner when unmounted", async () => {
-  const [archived, setArchived] = createSignal(false);
+it("updates registered menu props and retires its keyboard owner when unmounted", async () => {
   const calls: string[] = [];
-  const mounted = mountSolid(() => (
-    <SessionMenu
-      session={{ ...EMPTY_SESSION_MENU_DATA, label: "Synthetic session", archived: archived() }}
-      archiveAllowed
-      deleteAllowed
-      onClose={() => calls.push("close")}
-      onAction={(action) => calls.push(action.kind)}
-    />
-  ));
+  const host = await mountMenu({
+    session: { label: "Synthetic session", archived: false },
+    archiveAllowed: true,
+    deleteAllowed: true,
+    onClose: () => calls.push("close"),
+    onAction: (action) => calls.push(action.kind),
+  });
   await waitForSolid(() =>
-    expect(mounted.container.querySelector('[value="toggle-archived"]')?.textContent).toContain(
+    expect(host.querySelector('[value="toggle-archived"]')?.textContent).toContain(
       "Archive session",
     ),
   );
-  setArchived(true);
-  flush();
-  expect(mounted.container.querySelector('[value="toggle-archived"]')?.textContent).toContain(
-    "Restore session",
-  );
+  host.session = { ...host.session, archived: true };
+  await settleSessionMenu(host);
+  expect(host.querySelector('[value="toggle-archived"]')?.textContent).toContain("Restore session");
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "d", cancelable: true }));
   expect(calls).toEqual(["close", "delete"]);
-  mounted.unmount();
+  host.remove();
+  await Promise.resolve();
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "d", cancelable: true }));
   expect(calls).toEqual(["close", "delete"]);
 });
 
 it("preserves focused rows and an open owner search across external updates", async () => {
   const { context } = createSessionOwnerMenuHarness();
-  const provider = createSolidApplicationContextProvider(context);
-  const [session, setSession] = createSignal({ ...EMPTY_SESSION_MENU_DATA, label: "First title" });
-  const [work, setWork] = createSignal<SessionMenuWork | null>(null);
-  const mounted = mountSolid(
-    () => <SessionMenu session={session()} work={work()} archiveAllowed />,
-    {
-      wrapper: provider.wrapper,
-    },
-  );
-  const host = mounted.container.querySelector("openclaw-session-menu")!;
+  const host = await mountMenu({
+    context,
+    session: { label: "First title" },
+    archiveAllowed: true,
+  });
   await waitForSolid(() => expect(menuItemLabels(host)).toContain("Assign to…"));
   const pin = menuItem(host, "Pin session");
   await pin.updateComplete;
   pin.focus();
-  setSession((current) => ({ ...current, label: "Fresh title" }));
-  flush();
+  host.session = { ...host.session, label: "Fresh title" };
+  await settleSessionMenu(host);
   expect(menuItem(host, "Pin session")).toBe(pin);
   expect(document.activeElement).toBe(pin);
 
@@ -68,9 +59,9 @@ it("preserves focused rows and an open owner search across external updates", as
   search.dispatchEvent(new InputEvent("input", { bubbles: true }));
   await waitForSolid(() => expect(menuItemLabels(owner)).toEqual(["Research"]));
   search.focus();
-  setSession((current) => ({ ...current, unread: true }));
-  setWork({ loading: false, pullRequestUrl: "https://example.test/pull/1", worktreePath: null });
-  flush();
+  host.session = { ...host.session, unread: true };
+  host.work = { loading: false, pullRequestUrl: "https://example.test/pull/1", worktreePath: null };
+  await settleSessionMenu(host);
   await waitForSolid(() => expect(menuItemLabels(host)).toContain("Open PR"));
   expect(menuItem(host, "Assign to…")).toBe(owner);
   expect(owner.getAttribute("aria-expanded")).toBe("true");

@@ -596,21 +596,26 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(serialized).not.toContain("adapter-private-marker");
   });
 
-  it("does not transfer completion ownership to an asynchronous acknowledgement", async () => {
-    await runDispatch({
-      bodyForAgent: "audit this turn",
-      runId: "caller-run",
-      onAgentRunStart: () => Promise.resolve("reply-dispatch"),
-    });
+  it.each(["legacy", "prepared"] as const)(
+    "does not transfer completion ownership to an asynchronous %s acknowledgement",
+    async (contract) => {
+      await runDispatch({
+        bodyForAgent: "audit this turn",
+        runId: "caller-run",
+        ...(contract === "legacy"
+          ? { onAgentRunStart: () => Promise.resolve("reply-dispatch") }
+          : { onPreparedAgentRunStart: () => Promise.resolve("reply-dispatch") }),
+      });
 
-    const expected = expect.objectContaining({
-      runId: "caller-run",
-      auditOnly: false,
-      completionSource: undefined,
-    });
-    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(expected);
-    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(expected);
-  });
+      const expected = expect.objectContaining({
+        runId: "caller-run",
+        auditOnly: false,
+        completionSource: undefined,
+      });
+      expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(expected);
+      expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(expected);
+    },
+  );
 
   it("reports uncertain question input when ACP notice delivery fails", async () => {
     routeMocks.routeReply.mockRejectedValueOnce(new Error("synthetic notice delivery failure"));
@@ -876,10 +881,10 @@ describe("tryDispatchAcpReplyCore", () => {
       await nextEventLoopTurn();
       expect(settled).toBe(false);
       expect(transcriptMocks.persistAcpDispatchTranscript).not.toHaveBeenCalled();
-      expect(delivered).toEqual([{ text: prefix }]);
+      expect(delivered).toEqual([{ text: prefix, textMode: "delta" }]);
       deliveryGate.resolve();
       await dispatch;
-      expect(delivered).toEqual([{ text: prefix }]);
+      expect(delivered).toEqual([{ text: prefix, textMode: "delta" }]);
       expectTranscript({ finalText: prefix });
     } finally {
       finishTurn.resolve();
@@ -899,6 +904,13 @@ describe("tryDispatchAcpReplyCore", () => {
         storePath: path.join(state.sessionsDir("codex-acp"), "sessions.json"),
       };
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      managerMocks.resolveSessionAsync.mockResolvedValueOnce({
+        kind: "ready",
+        sessionKey,
+        agentId: target.agentId,
+        entry: { sessionId: target.sessionId, updatedAt: 1 },
+        meta: createAcpSessionMeta(),
+      });
       const text = "Completed output awaiting transcript persistence.";
       mockVisibleTextTurn(text);
       const controller = new AbortController();
@@ -932,8 +944,9 @@ describe("tryDispatchAcpReplyCore", () => {
           preparedMessages.push(structuredClone(message));
           return message;
         },
-        onAgentRunStart: (_runId, _meta, run) => {
-          dispatchedRun = run;
+        onPreparedAgentRunStart: ({ options, transcriptStart }) => {
+          expect(transcriptStart).toMatchObject(target);
+          dispatchedRun = options;
           return "reply-dispatch";
         },
       });

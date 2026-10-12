@@ -57,7 +57,12 @@ type UsageDataState = {
   error: string | null;
   sessions: UsageSessionEntry[];
   creatorOptions: NonNullable<SessionsUsageResult["creatorOptions"]>;
-  sessionsLimitReached: boolean; // True if 1000 session cap was hit
+  overview?: SessionsUsageResult["overview"];
+  sessionPage?: Pick<
+    NonNullable<SessionsUsageResult["overview"]>,
+    "offset" | "limit" | "total" | "unfilteredSessionCount" | "tableTotals" | "tableSessionCount"
+  >;
+  selectedSession?: UsageSessionEntry | null;
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
@@ -132,7 +137,9 @@ type UsageCallbacks = {
     onClearQuery: () => void;
   };
   display: {
-    onExportJson: (data: UsageJsonExport) => void;
+    onExportJson: () => void;
+    onExportCsv: (format: "sessions-csv" | "daily-csv") => void;
+    onPageChange: (offset: number) => void;
     onChange: (display: Partial<UsageDisplayState>) => void;
   };
   details: {

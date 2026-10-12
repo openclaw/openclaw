@@ -13,7 +13,13 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 export type SessionRowFacts =
   | { kind: "unchanged" }
-  | { kind: "replacement"; membership: SessionMembershipFact; lifecycleChanged?: boolean }
+  | {
+      kind: "replacement";
+      membership: SessionMembershipFact;
+      /** Missing policy coverage must not preserve an already prepared send. */
+      communicationBinding?: string;
+      lifecycleChanged?: boolean;
+    }
   | {
       kind: "acp";
       sessionId: string | undefined;
@@ -126,6 +132,15 @@ const captures = resolveGlobalSingleton(
   () => new WeakMap<DatabaseSync, Set<SessionRowChange[]>>(),
 );
 
+const rowRevision = resolveGlobalSingleton(Symbol.for("openclaw.sessionRowChangeRevision"), () => ({
+  value: 0,
+}));
+
+/** Fences derived reports across metadata, sharing, topology, and uncertain writes. */
+export function readSessionRowChangeRevision(): number {
+  return rowRevision.value;
+}
+
 /** Worker receipts borrow the producer's transaction postimages, including savepoint rollback. */
 export function captureSessionRowChanges<T>(
   database: DatabaseSync,
@@ -169,6 +184,7 @@ export const sessionChanges = {
   },
   /** Pending or indeterminate work fences facts without announcing a committed change. */
   invalidate(change: SessionRowChange): void {
+    rowRevision.value += 1;
     notifyListeners(factListeners, change);
     if (!privateFacts.has(change)) {
       notifyListeners(projectionListeners, change);
@@ -211,6 +227,7 @@ export const sessionChanges = {
       }
     };
     const publishFacts = () => {
+      rowRevision.value += 1;
       for (const change of changes) {
         privateFacts.get(change)?.();
       }
@@ -238,6 +255,7 @@ export const sessionChanges = {
       installFacts: publishFacts,
       installProjection: prepareObservers,
       invalidate() {
+        rowRevision.value += 1;
         const invalidations: SessionRowChange[] = changes.map((change) => {
           const invalidated: SessionRowChange =
             "sessionKey" in change

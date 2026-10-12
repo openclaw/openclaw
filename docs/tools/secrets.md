@@ -52,6 +52,8 @@ value must enter the store, it arrives through the human prompt, the
 ## Answering a request
 
 The web Control UI docks the prompt above the composer with a masked input.
+Use the eye button to show or hide what you typed before submitting. The value
+starts hidden for each question, and revealing it does not send it to the agent.
 The prompt always shows who is asking (agent and session), the entry name, the
 agent's stated reason, and an editable list of allowed hosts, so you have the
 final say on where the credential may be used. If the name already exists, the

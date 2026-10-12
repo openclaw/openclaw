@@ -6,7 +6,7 @@ import type {
 import type {
   SubagentRegistryWrite,
   SubagentRegistryWriteReceipt,
-} from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+} from "../agents/subagents/registry/subagent-registry.store.types.js";
 import type {
   WorkspaceAttestation,
   WorkspaceAttestationInput,
@@ -48,14 +48,12 @@ import type {
 import type { UpdateRunWriteOperations } from "../infra/update-run-mutation.types.js";
 import type { UpdateRunReconciliationOperations } from "../infra/update-run-reconciliation.types.js";
 import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
-import type {
-  PluginMetadataStateKey,
-  PluginMetadataStateRow,
-  PluginMetadataStateSelector,
-} from "../plugins/installed-plugin-index-row.js";
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
-import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
+import type {
+  SecretStoreExpiryCutoffs,
+  SecretStoreExpiryResult,
+} from "../secrets/store/secret-store-expiry.kernel.js";
 import type * as secretWrites from "../secrets/store/secret-store-write.js";
 import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker-contract.js";
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
@@ -196,7 +194,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       >;
       output: void;
     };
-    "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
+    "secrets.purge": { input: SecretStoreExpiryCutoffs; output: SecretStoreExpiryResult };
     "secrets.writeForConfigRef": {
       input: SecretStoreConfigRefWrite;
       output: { name: string };
@@ -210,13 +208,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
     "sessionGroups.mutate": {
       input: SessionGroupCatalogMutation;
       output: SessionGroupCatalogMutationResult;
-    };
-    "plugins.metadata.read": {
-      input: (
-        | { selector: PluginMetadataStateSelector }
-        | { stateKeys: readonly PluginMetadataStateKey[] }
-      ) & { artifactPreservingReadOnly?: boolean };
-      output: { value_json: string } | PluginMetadataStateRow[] | undefined;
     };
     "claws.install-schema-versions": {
       input: { artifactPreservingReadOnly: boolean };
@@ -262,7 +253,6 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
   Parameters<OpenClawStateWorkerBackend["execute"]>[0],
   {
     type:
-      | "plugins.metadata.read"
       | "database.inspectIdle"
       | "database.walMaintenance"
       | "agentDatabases.releaseExitedLease"

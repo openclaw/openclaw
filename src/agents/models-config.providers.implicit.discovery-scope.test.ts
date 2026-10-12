@@ -138,6 +138,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
   ) {
     return resolveImplicitProviders({
       agentDir: state.agentDir(),
+      authStore: { version: 1, profiles: {} },
       config: {},
       env: state.env,
       ...options,
@@ -554,6 +555,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
         await resolveImplicitProviders({
           agentDir: state.agentDir(),
           config: {},
+          authStore: { version: 1, profiles: {} },
           env: {
             ...state.env,
             OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
@@ -591,6 +593,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     const providers = await resolveImplicitProviders({
       agentDir: state.agentDir(),
+      authStore: { version: 1, profiles: {} },
       config: { models: { providers: { "amazon-bedrock": explicitProvider } } },
       env: { ...state.env, AWS_PROFILE: "default" },
       explicitProviders: { "amazon-bedrock": explicitProvider },
@@ -625,6 +628,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     const providers = await resolveImplicitProviders({
       agentDir: state.agentDir(),
+      authStore: { version: 1, profiles: {} },
       config: {
         agents: {
           defaults: {

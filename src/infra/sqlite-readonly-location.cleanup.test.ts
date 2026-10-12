@@ -10,7 +10,6 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   adoptPreparedLocation,
-  adoptRetainedPreparedLocation,
   registerRetainedSnapshotTempDirectory,
   retainSnapshotTempDirectory,
   cleanupSnapshotOperations,
@@ -51,7 +50,7 @@ it("retains bytes after a serviced cleanup failure and retries the same director
     retirements.push(retirement);
     return retirement.operation;
   });
-  const prepared = adoptRetainedPreparedLocation(location, directory);
+  const prepared = adoptPreparedLocation(location, directory);
   const first = prepared.startCleanup();
   expect(first.read()).toEqual({ status: "pending" });
   expect(fs.readFileSync(location, "utf8")).toBe("retained snapshot bytes");

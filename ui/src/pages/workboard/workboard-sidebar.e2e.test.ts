@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "../../e2e/sidebar-customization.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiElementScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -75,7 +76,7 @@ suite.define(() => {
       });
       await page.goto(suite.server.baseUrl + "new?agent=main");
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+      await openSidebarPages(page);
       const workboardEntry = sidebar.locator(".sidebar-pages__entry").filter({
         has: page.locator('[data-sidebar-entry="plugin:workboard/workboard"]'),
       });
@@ -87,41 +88,26 @@ suite.define(() => {
           rows.map((row) => {
             const link = row.querySelector(".nav-item")!;
             const icon = link.querySelector(".nav-item__icon")!;
-            const menu = row.querySelector(".sidebar-reorder-trigger")!;
             const rowBox = row.getBoundingClientRect();
             const linkBox = link.getBoundingClientRect();
-            const menuBox = menu.getBoundingClientRect();
-            const menuIconBox = menu.querySelector("svg")!.getBoundingClientRect();
             const iconBox = icon.getBoundingClientRect();
             return {
               label: link.textContent?.trim(),
               width: linkBox.width,
               available: rowBox.width,
               height: linkBox.height,
-              gripStart: menuBox.left - rowBox.left,
-              gripEnd: menuBox.right - rowBox.left,
-              gripTop: menuBox.top - rowBox.top,
-              gripBottom: menuBox.bottom - rowBox.top,
-              gripWidth: menuBox.width,
-              gripHeight: menuBox.height,
-              rowHeight: rowBox.height,
-              railEnd: row.closest(".sidebar-rail")!.getBoundingClientRect().right - rowBox.left,
-              gripIconContained:
-                menuIconBox.left >= menuBox.left &&
-                menuIconBox.right <= menuBox.right &&
-                menuIconBox.top >= menuBox.top &&
-                menuIconBox.bottom <= menuBox.bottom,
-              glyphClearOfGrip:
-                menuBox.left >= iconBox.right ||
-                menuBox.right <= iconBox.left ||
-                menuBox.top >= iconBox.bottom ||
-                menuBox.bottom <= iconBox.top,
+              iconContained:
+                iconBox.left >= linkBox.left &&
+                iconBox.right <= linkBox.right &&
+                iconBox.top >= linkBox.top &&
+                iconBox.bottom <= linkBox.bottom,
               iconCenter: iconBox.left + iconBox.width / 2 - linkBox.left,
               labelWidth: link.querySelector(".nav-item__text")!.getBoundingClientRect().width,
             };
           }),
         );
       await workboard.waitFor();
+      expect(await rail.locator(".sidebar-reorder-trigger").count()).toBe(0);
       await expect
         .poll(async () => (await widths()).find((row) => row.label === "Workboard")?.width)
         .toBeCloseTo(36, 1);
@@ -156,21 +142,17 @@ suite.define(() => {
       expect(finalWidths.map((row) => row.label)).toEqual(initialWidths.map((row) => row.label));
       for (const row of finalWidths) {
         expect.soft(row.width, row.label).toBeCloseTo(row.available, 1);
-        expect.soft(row.gripStart, row.label).toBeGreaterThanOrEqual(-0.1);
-        expect.soft(row.gripEnd, row.label).toBeLessThanOrEqual(row.available);
-        expect.soft(row.gripEnd, row.label).toBeLessThanOrEqual(row.railEnd);
-        expect.soft(row.gripTop, row.label).toBeGreaterThanOrEqual(0);
-        expect.soft(row.gripBottom, row.label).toBeLessThanOrEqual(row.rowHeight);
-        expect.soft(row.gripWidth, row.label).toBeGreaterThanOrEqual(24);
-        expect.soft(row.gripHeight, row.label).toBeGreaterThanOrEqual(24);
-        expect.soft(row.gripIconContained, row.label).toBe(true);
-        // Either axis may separate a stacked or adjacent control from its glyph.
-        expect.soft(row.glyphClearOfGrip, row.label).toBe(true);
+        expect.soft(row.iconContained, row.label).toBe(true);
         expect.soft(row.height, row.label).toBeCloseTo(36, 1);
         expect.soft(row.iconCenter, row.label).toBeCloseTo(row.width / 2, 1);
         expect.soft(row.labelWidth, row.label).toBeLessThanOrEqual(1);
       }
-      await page.locator(".sidebar-brand__new-thread").click();
+      const sessionsView = sidebar.getByRole("button", { name: "Sessions", exact: true });
+      const newConversation = sidebar.getByRole("link", { name: "New conversation", exact: true });
+      if (!(await newConversation.isVisible())) {
+        await sessionsView.click();
+      }
+      await newConversation.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       expect.soft(await widths()).toEqual(finalWidths);
       await assertSessionSectionCountAlignment(page, [

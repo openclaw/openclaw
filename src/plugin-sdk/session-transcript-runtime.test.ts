@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptEvent,
   listSessionEntriesCore,
@@ -12,7 +13,6 @@ import {
 import * as sessionEntryWriter from "../config/sessions/session-entry-patch.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { reconcileSessionTranscriptIndexes } from "../config/sessions/session-transcript-reconcile.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -49,7 +49,7 @@ import {
   createSessionCatalogGitHubLinker,
   createSessionCatalogSourceActorProjector,
   readSessionTranscriptCatalogPage,
-  readSessionTranscriptCatalogTitle,
+  readSessionTranscriptCatalogTitleAsync,
 } from "./session-transcript-runtime.js";
 
 describe("session transcript runtime SDK", () => {
@@ -219,27 +219,7 @@ describe("session transcript runtime SDK", () => {
     const steps: string[] = [];
     const firstRead = createDeferredCore();
     const releaseFirst = createDeferredCore();
-    const secondTargetRead = createDeferredCore();
     const secondQueued = createDeferredCore();
-    const read = projectionLane.pool.run.bind(projectionLane.pool);
-    let targetReads = 0;
-    vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await read(...args);
-      if (
-        reply.ok &&
-        typeof reply.value !== "boolean" &&
-        !Array.isArray(reply.value) &&
-        reply.value.kind === "session-runtime-target"
-      ) {
-        if (++targetReads === 1) {
-          await secondTargetRead.promise;
-        } else if (targetReads === 2) {
-          secondTargetRead.resolve();
-          await firstRead.promise;
-        }
-      }
-      return reply;
-    });
     const enqueueWrite = sessionEntryWriter.runSessionEntryWorkerOperation;
     let queuedWrites = 0;
     vi.spyOn(sessionEntryWriter, "runSessionEntryWorkerOperation").mockImplementation((params) => {
@@ -253,7 +233,6 @@ describe("session transcript runtime SDK", () => {
     let enteredWrites = 0;
     const appendIfMissing = async () =>
       await withSessionTranscriptWriteLock(scope, async (locked) => {
-        // Target preparation can finish out of order before either caller acquires the lock.
         const label = ++enteredWrites === 1 ? "first" : "second";
         steps.push(`${label}:read`);
         const events = await locked.readEvents();
@@ -289,14 +268,12 @@ describe("session transcript runtime SDK", () => {
       );
       expect(steps).toEqual(["first:read"]);
     } finally {
-      secondTargetRead.resolve();
       firstRead.resolve();
       releaseFirst.resolve();
       await Promise.allSettled([first, second]);
     }
     await writes;
 
-    expect(targetReads).toBe(2);
     expect(steps).toEqual(["first:read", "first:done", "second:read", "second:done"]);
     const assistantMessages = (await readSessionTranscriptEvents(scope)).filter((event) => {
       const message = (event as { message?: { role?: unknown } }).message;
@@ -399,7 +376,14 @@ describe("native transcript catalog SDK", () => {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const before = fs.readFileSync(databasePath);
-      const first = await read(2);
+      const sql = observeHostDataSql();
+      let first: Awaited<ReturnType<typeof read>>;
+      try {
+        first = await read(2);
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       expect(first.items.map((item) => [item.type, item.text])).toEqual([
         ["agentMessage", "Answer"],
         ["agentMessage", "Second answer part"],
@@ -416,7 +400,7 @@ describe("native transcript catalog SDK", () => {
     });
   });
 
-  it("redacts before clipping text and derives the same human title as local sessions", async () => {
+  it("preserves text before clipping and derives the same human title as local sessions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed([
         { role: "user", content: "A useful session title" },
@@ -427,19 +411,44 @@ describe("native transcript catalog SDK", () => {
       ]);
       const page = await read(1);
       expect(page.items[0]).toMatchObject({ type: "agentMessage", truncated: true });
-      expect(page.items[0]?.text).not.toContain("synthetic-secret-token");
+      expect(page.items[0]?.text).toMatch(/^Authorization: Bearer synthetic-secret-token\n/);
       expect(page.items[0]?.text?.length).toBeLessThanOrEqual(6000);
       const entry = loadSessionEntryReadOnly(scope);
       if (!entry) {
         throw new Error("missing fixture entry");
       }
-      expect(readSessionTranscriptCatalogTitle({ ...scope, entry })).toBe("A useful session title");
-      expect(
-        readSessionTranscriptCatalogTitle({
+      await expect(readSessionTranscriptCatalogTitleAsync({ ...scope, entry })).resolves.toBe(
+        "A useful session title",
+      );
+      await expect(
+        readSessionTranscriptCatalogTitleAsync({
           ...scope,
           entry: { ...entry, label: "Named", displayName: "Display" },
         }),
-      ).toBe("Named");
+      ).resolves.toBe("Named");
+    });
+  });
+
+  it("reads a first title after an in-process append without caller SQL", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await seed([]);
+      const entry = { sessionId: scope.sessionId, updatedAt: 1 };
+      await expect(
+        readSessionTranscriptCatalogTitleAsync({ ...scope, entry }),
+      ).resolves.toBeUndefined();
+      await appendTranscriptMessage(scope, {
+        eventId: "first-title",
+        message: { role: "user", content: "Fresh title after append" },
+      });
+      const sql = observeHostDataSql();
+      try {
+        await expect(readSessionTranscriptCatalogTitleAsync({ ...scope, entry })).resolves.toBe(
+          "Fresh title after append",
+        );
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
     });
   });
 
@@ -510,6 +519,7 @@ describe("native transcript catalog SDK", () => {
           message: { role: "user", content: eventId },
         });
       }
+      await reconcileSessionTranscriptIndexes({ agentId: scope.agentId });
       // Equal-length branch replacements must not reuse the old ordinal as an anchor.
       await expect(read(2, first.nextCursor)).rejects.toThrow("no longer matches");
     });

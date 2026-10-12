@@ -8,7 +8,6 @@ import {
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
 import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "./mutation-lineage.js";
-import { captureOAuthRefreshClaimPublication } from "./oauth-refresh-marker.js";
 import {
   captureRuntimeAuthProfileLegacyCandidates,
   createEmptyAuthProfileStore,
@@ -78,13 +77,7 @@ export async function publishAuthProfileStoreUpdate(
     currentStore =
       loadPersistedAuthProfileStoreFromRows(rows, owner.databasePath) ??
       createEmptyAuthProfileStore();
-    mutation = {
-      ...committed.publication,
-      oauthRefreshClaimIds: captureOAuthRefreshClaimPublication(
-        currentStore.profiles,
-        committed.publication.profileIds,
-      ),
-    };
+    mutation = committed.publication;
     isCommittedCurrent =
       getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(owner.databasePath) === revision
         ? current

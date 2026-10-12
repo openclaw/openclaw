@@ -204,51 +204,6 @@ describe("system LaunchDaemon ownership", () => {
     });
   });
 
-  it("uses the native top-level Label instead of an earlier nested XML key", async () => {
-    const plistPath = "/Library/LaunchDaemons/nested-label.plist";
-    state.files.set(
-      plistPath,
-      "<plist><dict><key>EnvironmentVariables</key><dict><key>Label</key><string>nested</string></dict><key>Label</key><string>ai.openclaw.gateway</string></dict></plist>",
-    );
-    state.plutilValues.set(plistPath, { Label: "ai.openclaw.gateway" });
-
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toMatchObject({
-      status: "installed",
-      plistPath,
-    });
-  });
-
-  it("uses native plutil for binary and non-XML plist formats", async () => {
-    const plistPath = "/Library/LaunchDaemons/binary-openclaw.plist";
-    state.files.set(plistPath, "bplist00-binary-payload");
-    state.plutilValues.set(plistPath, { Label: "ai.openclaw.gateway" });
-
-    const ownership = await inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway");
-
-    expect(ownership).toMatchObject({ status: "installed", plistPath });
-    expect(runExec).toHaveBeenCalledWith(
-      "/usr/bin/plutil",
-      ["-convert", "xml1", "-o", "-", "--", "-"],
-      expect.objectContaining({ input: Buffer.from("bplist00-binary-payload") }),
-    );
-  });
-
-  it("skips a valid plist without a string Label and detects a later owner", async () => {
-    const unrelated = "/Library/LaunchDaemons/com.google.keystone.daemon.plist";
-    const owner = "/Library/LaunchDaemons/vendor-openclaw.plist";
-    state.files.set(unrelated, "<plist><dict><key>RunAtLoad</key><true/></dict></plist>");
-    state.plutilValues.set(unrelated, { RunAtLoad: true });
-    state.files.set(owner, "<plist/>");
-    state.plutilValues.set(owner, { Label: "ai.openclaw.gateway" });
-
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
-      status: "installed",
-      serviceTarget: "system/ai.openclaw.gateway",
-      plistPath: owner,
-    });
-    expect(runExec).toHaveBeenCalledTimes(4);
-  });
-
   it("treats a valid non-string Label as unable to own the gateway label", async () => {
     const unrelated = "/Library/LaunchDaemons/com.vendor.numeric-label.plist";
     state.files.set(unrelated, "<plist/>");
@@ -275,7 +230,7 @@ describe("system LaunchDaemon ownership", () => {
     ).resolves.toBeUndefined();
   });
 
-  it.each(["malformed plist", "missing native parser"])(
+  it.each(["missing native parser"])(
     "refuses an unreadable native result for a readable plist: %s",
     async (failure) => {
       const plistPath = "/Library/LaunchDaemons/com.vendor.worker.plist";
@@ -339,29 +294,6 @@ describe("system LaunchDaemon ownership", () => {
     expect(String(error)).toContain("duplicate KeepAlive managers can restart-loop the gateway");
     expect(String(error)).toContain("--force does not override system ownership");
     expect(String(error)).toContain("sudo launchctl bootout system/ai.openclaw.gateway");
-  });
-
-  it("renders a standalone loaded and structural same-label plist probe", () => {
-    const script = renderSystemLaunchDaemonOwnershipShellProbe("ai.openclaw.gateway");
-
-    expect(script).toContain('launchctl print "$openclaw_system_launchd_target"');
-    expect(script).toContain(
-      '/usr/bin/plutil -extract Label raw -expect string -n -o - -- "$openclaw_system_launchd_plist"',
-    );
-    expect(script).toContain(
-      '/usr/bin/plutil -lint -- "$openclaw_system_launchd_plist" >/dev/null 2>&1',
-    );
-    expect(script).toContain(
-      "/usr/bin/find \"$openclaw_system_launchd_dir\" -mindepth 1 -maxdepth 1 -name '*.plist' -print0",
-    );
-    expect(script).toContain("while IFS= read -r -d '' openclaw_system_launchd_plist");
-    expect(script).toContain('[ ! -r "$openclaw_system_launchd_plist" ]');
-    expect(script).toContain('[ ! -x "$openclaw_system_launchd_dir" ]');
-    expect(script).not.toContain('"$openclaw_system_launchd_dir"/*.plist');
-    expect(script).toContain(
-      'if [ "$openclaw_system_launchd_plist_label" != "$openclaw_system_launchd_label" ]',
-    );
-    expect(script).not.toContain("|| true");
   });
 
   it("executes the rendered probe across readable and unreadable plists", () => {

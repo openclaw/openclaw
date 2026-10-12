@@ -67,10 +67,10 @@ export type CurrentTurnTranscriptFinal = Pick<
 export type FreshTelegramSessionEntryLoader = ((
   agentId: string,
   sessionKey: string,
-) => {
+) => Promise<{
   storePath: string;
   entry?: SessionEntry;
-}) & {
+}>) & {
   clear: () => void;
 };
 

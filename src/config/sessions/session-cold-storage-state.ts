@@ -7,6 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import { readTranscriptContextFacts } from "./session-transcript-context-facts.js";
 
 export type SessionColdArchive = Selectable<DB["session_transcript_cold_archives"]>;
 
@@ -82,7 +83,11 @@ export function assertSessionTranscriptHot(db: DatabaseSync, sessionId: string):
     }
     return;
   }
-  if (getColdTranscriptQueries(db).marker(sessionId).rows.length > 0) {
+  const context = readTranscriptContextFacts({ db }, sessionId);
+  if (context?.cold === false) {
+    return;
+  }
+  if (context?.cold || getColdTranscriptQueries(db).marker(sessionId).rows.length > 0) {
     throw new SessionTranscriptColdError(sessionId);
   }
 }

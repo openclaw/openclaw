@@ -8,6 +8,7 @@ import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-p
 import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
 import { resolveCapturedRegistryPath } from "../infra/update-recovery-path.js";
 import * as pluginResources from "../plugins/doctor-contract-registry.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import * as agentRegistry from "../state/openclaw-agent-db-registry.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
@@ -162,8 +163,10 @@ it("binds semantic preservation to original backups across a partial migration a
     try {
       await maintenance!.run(async () => {
         const scope = getOpenClawDatabaseMaintenanceScope()!;
-        const capture = (runId: string) =>
-          captureUpdateRecoveryBaseline({
+        const capture = async (runId: string) => {
+          // Registry assertions reopen this handle; drain its WAL maintenance before raw capture.
+          await closeOpenClawStateDatabaseAsync();
+          return captureUpdateRecoveryBaseline({
             runId,
             installRoot: process.cwd(),
             env: state.env,
@@ -171,6 +174,7 @@ it("binds semantic preservation to original backups across a partial migration a
             assertCurrent: scope.assertAdmission,
             acquisition: { mode: "maintenance-owner" },
           });
+        };
         await backupDoctorMigrationDatabases({
           env: state.env,
           pendingDatabasePaths: [external],
@@ -198,7 +202,9 @@ it("binds semantic preservation to original backups across a partial migration a
         const partialResult = await migrate();
         registration.mockRestore();
         expect(partialResult.warnings.join("\n")).toContain("fixture registration interrupted");
-        expect(externalDatabase.prepare("PRAGMA user_version").get()?.user_version).toBe(25);
+        expect(externalDatabase.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
         const registryVersions = () =>
           openOpenClawStateDatabase()
             .db.prepare(
@@ -222,8 +228,10 @@ it("binds semantic preservation to original backups across a partial migration a
         });
         const retry = await migrate();
         expect(retry.warnings).toEqual([]);
-        expect(externalDatabase.prepare("PRAGMA user_version").get()?.user_version).toBe(25);
-        expect(registryVersions()).toEqual([24, 25]);
+        expect(externalDatabase.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(registryVersions()).toEqual([24, OPENCLAW_AGENT_SCHEMA_VERSION]);
         expect(await fs.readFile(backupPath)).toEqual(backupBytes);
         expect(await fs.readFile(original.manifestPath)).toEqual(originalBytes);
         const candidate = (await capture("witness-migrated")).ref;

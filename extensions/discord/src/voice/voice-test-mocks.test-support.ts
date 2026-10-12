@@ -497,7 +497,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
       };
     },
     controlRealtimeVoiceAgentRun: controlRealtimeVoiceAgentRunMock,
-    resolveConfiguredRealtimeVoiceProvider: resolveConfiguredRealtimeVoiceProviderMock,
+    resolveConfiguredRealtimeVoiceProviderAsync: resolveConfiguredRealtimeVoiceProviderMock,
   };
 });
 

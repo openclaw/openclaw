@@ -16,11 +16,9 @@ import {
   clearSessionLifecycleQueues,
   prepareSessionFollowupCleanup,
 } from "../../auto-reply/reply/queue/cleanup.js";
-import {
-  isConfiguredSessionStoreAgentId,
-  resolveExistingAgentSessionStoreTargetsSync,
-} from "../../config/sessions.js";
+import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { resolveExistingAgentSessionStoreTargetsAsync } from "../../config/sessions/targets-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -43,7 +41,7 @@ import {
   resolveStoredSessionKeyForAgentStore,
   resolveStoredSessionOwnerAgentId,
 } from "../session-store-key.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { withGatewaySessionEntry } from "../session-utils-store.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { resolveChatAbortRequester } from "./chat-abort-authorization.js";
 import { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
@@ -265,7 +263,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const configuredTarget = isConfiguredSessionStoreAgentId(cfg, targetAgentId);
     const existingTargets = configuredTarget
       ? []
-      : resolveExistingAgentSessionStoreTargetsSync(cfg, targetAgentId);
+      : await resolveExistingAgentSessionStoreTargetsAsync(cfg, targetAgentId);
     const stableTargetOwner = tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
     const hasExactActiveRun = requestedRunId
       ? (scopedActiveRunSessionKey === key &&
@@ -298,7 +296,12 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     // neither config nor persistence owns it; that edge is the only one that could create state.
     const loadedSession =
       configuredTarget || existingTargets.length > 0
-        ? loadSessionEntry(key, { agentId: targetAgentId })
+        ? await withGatewaySessionEntry(
+            key,
+            { agentId: targetAgentId },
+            (selected) => selected,
+            cfg,
+          )
         : undefined;
     const canonicalKey =
       loadedSession?.canonicalKey ??

@@ -17,6 +17,7 @@ import {
 } from "./package-update-activation-custody.js";
 import {
   openPackageActivationJournal,
+  openPackageActivationSettlementJournal,
   assertPackageActivationOperation,
   assertPackageActivationLayout,
   resolvePackageActivationControl,
@@ -33,7 +34,10 @@ import {
   resolvePackageActivationRecoveryCommand as recoveryCommand,
   type PackageActivationPreparation,
 } from "./package-update-activation-prepare.js";
-import { verifyPackagePublicationSettlement } from "./package-update-activation-settlement.js";
+import {
+  inspectRemountedPackagePublication,
+  verifyPackagePublicationSettlement,
+} from "./package-update-activation-settlement.js";
 import {
   readReleasedPackageActivationReceipt,
   readPackageActivationRecordStatus as status,
@@ -230,20 +234,52 @@ type PackageActivationSettlement = {
 };
 
 /** Explicit repair settles untouched preparation or obsolete custody, never pending restoration. */
+export async function settleRemountedPackageActivation(anchor: string, operationId: string) {
+  const journal = openPackageActivationSettlementJournal(anchor);
+  const inspected = (await journal.readForRecovery()).record;
+  assertPackageActivationOperation(inspected, operationId);
+  // This path cannot fall through to manual-install settlement or general recovery.
+  inspectRemountedPackagePublication(anchor, inspected);
+  return settlePackageActivation(
+    inspected.descriptor.authority.installKey,
+    undefined,
+    undefined,
+    undefined,
+    { journal, inspected },
+  );
+}
+
 export async function settlePendingPackageActivation(
   installKey: string,
   onSettled?: (settlement: PackageActivationSettlement) => void,
   expectedCompleted?: PackageActivationRecord,
   options?: { onlyStaleLease?: boolean; dryRun?: boolean },
 ) {
+  return settlePackageActivation(installKey, onSettled, expectedCompleted, options);
+}
+
+async function settlePackageActivation(
+  installKey: string,
+  onSettled?: (settlement: PackageActivationSettlement) => void,
+  expectedCompleted?: PackageActivationRecord,
+  options?: { onlyStaleLease?: boolean; dryRun?: boolean },
+  remounted?: {
+    journal: ReturnType<typeof openPackageActivationSettlementJournal>;
+    inspected: PackageActivationRecord;
+  },
+) {
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!expectedCompleted && !fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
     assertNoPendingPackageActivation(installKey);
     return undefined;
   }
-  const journal = openPackageActivationJournal(anchor);
+  const journal = remounted?.journal ?? openPackageActivationJournal(anchor);
   const admission = options?.dryRun ? undefined : await journal.readForRecovery();
   const initial = admission?.record ?? journal.read();
+  if (remounted && !isDeepStrictEqual(initial, remounted.inspected)) {
+    throw new Error("Package publication changed before remount settlement.");
+  }
+  const remount = remounted ? inspectRemountedPackagePublication(anchor, initial) : undefined;
   const complete = isPackageActivationComplete(anchor, initial);
   if (expectedCompleted && (!complete || !isDeepStrictEqual(initial, expectedCompleted))) {
     throw new Error("Completed package receipt changed; inspect recovery status before retrying.");
@@ -291,7 +327,7 @@ export async function settlePendingPackageActivation(
       ? "recovery-lease-identity-changed"
       : "superseded-by-manual-install";
   const externalPublication =
-    replacementIdentity === initial.descriptor.candidate.identity &&
+    replacementIdentity === (remount?.candidateIdentity ?? initial.descriptor.candidate.identity) &&
     (initial.phase === "prepared" ||
       initial.phase === "publishing" ||
       initial.phase === "publication-complete" ||
@@ -400,7 +436,7 @@ export async function settlePendingPackageActivation(
         return warning ? { ...settled, warning } : finish(settled, false);
       }
       if (externalPublication) {
-        const verified = await verifyPackagePublicationSettlement(initial, assertCurrent);
+        const verified = await verifyPackagePublicationSettlement(initial, assertCurrent, remount);
         // Persist a lost launcher rename acknowledgement before disarming recovery.
         const outcome = await syncDirectory(initial.descriptor.binDir);
         verified.assertUnchanged();
@@ -423,6 +459,7 @@ export async function settlePendingPackageActivation(
             detail: settled.detail,
           },
           assertCurrent: verified.assertUnchanged,
+          assertArchiveCurrent: verified.assertInstalledUnchanged,
           onSettled: () => onSettled?.(settled),
         });
         return { ...settled, warning: result.archiveWarning };

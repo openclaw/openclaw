@@ -35,9 +35,9 @@ import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-rec
 import { useTempSessionsFixture } from "./test-helpers.js";
 import {
   createExactAssistantMessage,
-  transcriptMessage,
   type ExactAssistantMessage,
 } from "./transcript-message.test-support.js";
+import { registerRecentTranscriptTextSnapshotTests } from "./transcript-recent-text.test-support.js";
 import {
   bindOwnedSessionTranscriptWrites,
   runWithOwnedSessionTranscriptWrite,
@@ -284,11 +284,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it.each([
     [
       '/debug set gateway.auth.token="synthetic-private-token"',
-      '/debug set gateway.auth.token="__OPEN…ED__"',
+      '/debug set gateway.auth.token="__OPENCLAW_REDACTED__"',
     ],
     [
       '/config set gateway.auth={"mode":"token","token":"synthetic-private-token"}',
-      '/config set gateway.auth={"mode":"token","token":"__OPEN…ED__"}',
+      '/config set gateway.auth={"mode":"token","token":"__OPENCLAW_REDACTED__"}',
     ],
     [
       "/debug set channels.telegram.botToken=synthetic-private-token",
@@ -1186,80 +1186,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     ]);
   });
 
-  it("reads recent context only from the active transcript branch", async () => {
-    await writeTranscriptStore();
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
-      {
-        updateMode: "none",
-        messages: [
-          transcriptMessage("root-user", null, {
-            role: "user",
-            content: "keep this branch",
-            timestamp: 1_000,
-          }),
-          transcriptMessage("active-reply", "root-user", {
-            role: "assistant",
-            content: "active answer",
-            timestamp: 2_000,
-          }),
-          transcriptMessage("abandoned-reply", "root-user", {
-            role: "assistant",
-            content: "abandoned answer",
-            timestamp: 3_000,
-          }),
-        ],
-      },
-    );
-    await appendTranscriptEvent(
-      { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
-      { type: "leaf", id: "active-leaf", parentId: "abandoned-reply", targetId: "active-reply" },
-    );
-
-    await expect(
-      readRecentUserAssistantTextForSession({
-        agentId: "main",
-        sessionKey,
-        storePath: fixture.storePath(),
-      }),
-    ).resolves.toEqual([]);
-    const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.storePath(), {
-      agentId: "main",
-    }).path;
-    await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: databasePath });
-
-    await expect(
-      readRecentUserAssistantTextForSession({
-        agentId: "main",
-        sessionKey,
-        storePath: fixture.storePath(),
-      }),
-    ).resolves.toEqual([
-      { id: "root-user", role: "user", text: "keep this branch", timestamp: 1_000 },
-      { id: "active-reply", role: "assistant", text: "active answer", timestamp: 2_000 },
-    ]);
-
-    const futureMessages = Array.from({ length: 260 }, (_, index) => ({
-      eventId: `future-${index}`,
-      parentId: index === 0 ? "active-reply" : `future-${index - 1}`,
-      message: { role: "user" as const, content: `future ${index}`, timestamp: 10_000 + index },
-    }));
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
-      { updateMode: "none", messages: futureMessages },
-    );
-    await expect(
-      readRecentUserAssistantTextForSession({
-        agentId: "main",
-        sessionKey,
-        storePath: fixture.storePath(),
-        beforeTimestampMs: 2_500,
-        limit: 2,
-      }),
-    ).resolves.toEqual([
-      { id: "root-user", role: "user", text: "keep this branch", timestamp: 1_000 },
-      { id: "active-reply", role: "assistant", text: "active answer", timestamp: 2_000 },
-    ]);
+  registerRecentTranscriptTextSnapshotTests({
+    fixture,
+    sessionId,
+    sessionKey,
+    createFixtureTranscriptScope,
+    writeTranscriptStore,
   });
 
   it("rejects a session key scoped to a different agent", async () => {

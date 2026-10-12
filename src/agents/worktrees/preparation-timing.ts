@@ -33,9 +33,16 @@ type PreparationPhase =
   | "containerStart"
   | "workspaceLayout";
 type TemplateState = "warm" | "cold" | "unavailable" | "reused";
+type TemplateDetails = {
+  reason?: string;
+  backend?: string;
+  cloneBytes?: number;
+  errorCode?: string;
+};
 type PreparationTimingState = {
   enabled: boolean;
   template: TemplateState;
+  templateDetails: TemplateDetails;
   phases: Partial<Record<PreparationPhase, number>>;
   activePhases: number;
   coveredSince: number;
@@ -51,10 +58,16 @@ export function markManagedWorktreePreparation() {
   }
 }
 
-export function setWorktreePreparationTemplate(template: TemplateState) {
+export function setWorktreePreparationTemplate(
+  template: TemplateState | undefined,
+  details?: TemplateDetails,
+) {
   const current = preparation.getStore();
   if (current) {
-    current.template = template;
+    if (template) {
+      current.template = template;
+    }
+    Object.assign(current.templateDetails, details);
   }
 }
 
@@ -100,6 +113,7 @@ export async function withWorktreePreparationTiming<T>(
   const current: PreparationTimingState = {
     enabled: kind === "managed",
     template: "unavailable",
+    templateDetails: { reason: "not-requested" },
     phases: {},
     activePhases: 0,
     coveredSince: 0,
@@ -122,9 +136,10 @@ export async function withWorktreePreparationTiming<T>(
           Object.entries(current.phases).map(([phase, duration]) => [phase, Math.round(duration)]),
         );
         log.info("managed worktree preparation", {
-          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} outcome=${outcome} durationMs=${durationMs} unattributedMs=${unattributedMs} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
+          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} outcome=${outcome} durationMs=${durationMs} unattributedMs=${unattributedMs} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
           kind,
           template: current.template,
+          templateDetails: current.templateDetails,
           outcome,
           durationMs,
           unattributedMs,
@@ -138,6 +153,12 @@ export async function withWorktreePreparationTiming<T>(
           details: {
             kind,
             template: current.template,
+            ...Object.fromEntries(
+              Object.entries(current.templateDetails).map(([key, value]) => [
+                `template.${key}`,
+                value,
+              ]),
+            ),
             outcome,
             unattributedMs,
             ...phaseDurationsMs,

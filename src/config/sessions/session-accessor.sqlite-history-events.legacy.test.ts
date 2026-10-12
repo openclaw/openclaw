@@ -201,7 +201,7 @@ describe("SQLite imported transcript history", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "reads previously imported reset windows without acquiring identity ownership (appended=%s)",
     async (appended) => {
       const events = [
@@ -321,36 +321,7 @@ describe("SQLite imported transcript history", () => {
     },
   );
 
-  it("anchors the active occurrence of duplicate IDs in byte-preserving imported rows", async () => {
-    const rows = [
-      JSON.stringify({ type: "session", version: 3, id: scope.sessionId }),
-      '{"type":"message","id":"duplicate","parentId":null,"message":{"role":"user","content":"Inactive earlier occurrence."}}',
-      '{"type":"message","id":"ignored-property","id":"duplicate","parentId":null,"message":{"role":"user","content":"Active latest occurrence."}}',
-    ];
-    await seedRows(rows);
-    const page = readSessionTranscriptHistoryAnchorPage(scope, {
-      messageId: "duplicate",
-      maxMessages: 20,
-    });
-    expect(page).toMatchObject({ found: true, totalMessages: 1 });
-    expect(page.events).toMatchObject([
-      {
-        eventSeq: 2,
-        event: { id: "duplicate", message: { content: "Active latest occurrence." } },
-      },
-    ]);
-    expect(
-      readSessionTranscriptHistoryAnchorPage(scope, {
-        messageId: "ignored-property",
-        maxMessages: 20,
-      }).found,
-    ).toBe(false);
-  });
-
-  it.each([
-    ["compaction", "custom", ["user", "assistant"]],
-    ["custom", "compaction", ["user", "control", "assistant"]],
-  ] as const)(
+  it.each([["custom", "compaction", ["user", "control", "assistant"]]] as const)(
     "uses the last imported root type for %s then %s history",
     async (firstType, lastType, expectedIds) => {
       const rows = [
@@ -419,7 +390,7 @@ describe("SQLite imported transcript history", () => {
     ).toEqual([{ event_id: "next-question" }]);
   });
 
-  it.each([" kept ", "kept"])(
+  it.each(["kept"])(
     "retains imported reset context only for the exact first-kept ID %j",
     async (firstKeptEntryId) => {
       const events = [

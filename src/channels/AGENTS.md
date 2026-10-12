@@ -1,7 +1,6 @@
 # Channels Boundary
 
-`src/channels/**` is core channel implementation. Plugin authors should not
-import from this tree directly.
+`src/channels/**` = core channel implementation. Plugin authors: no direct imports from tree.
 
 ## Public Contracts
 
@@ -18,40 +17,19 @@ import from this tree directly.
 
 ## Boundary Rules
 
-- Keep extension-facing channel surfaces flowing through `openclaw/plugin-sdk/*`
-  instead of direct imports from `src/channels/**`.
-- When a bundled or third-party channel needs a new seam, add a typed SDK
-  contract or facade first.
-- Treat channel entrypoints such as `channel.ts`, `shared.ts`,
-  `channel.setup.ts`, `gateway.ts`, and `outbound.ts` as hot import paths. Do
-  not statically pull async-only surfaces like send, monitor, probe,
-  directory-live, setup/login flows, or large `runtime-api.ts` barrels into
-  those files unless startup truly needs them.
-- Prefer a small local seam such as `channel-api.ts`, `*.runtime.ts`, or
-  `*.runtime-api.ts` to keep heavy runtime code off the hot path.
-- For core discovery paths used by Gateway or agent tools, prefer lightweight
-  bundled-plugin artifacts first and full channel plugin loading only as a
-  fallback.
-- When a caller only needs already-registered plugin fixtures in a test, offer a
-  loaded-plugin-only mode instead of silently falling back to bundled runtime
-  materialization.
-- Put target parsing, thread-binding hints, native command descriptors, message
-  tool descriptors, gateway auth bypass paths, and setup-promotion hints in
-  small plugin-owned helpers reused by both the full channel plugin and any
-  lightweight artifact.
-- If a helper is called repeatedly by tests, install/reset the test plugin
-  registry in the same lifecycle scope as the runtime reset. A `beforeAll`
-  registry with `afterEach` runtime reset is a signal that later tests may fall
-  through to bundled/default runtime loading.
-- Do not mix static and dynamic imports for the same heavy module family across
-  a channel boundary change. If the path should stay lazy, keep it lazy end to
-  end.
-- Remember that shared channel changes affect both built-in and extension
-  channels. Check routing, pairing, allowlists, command gating, onboarding, and
-  reply behavior across the full set.
+- Extension-facing channel surfaces: `openclaw/plugin-sdk/*`, never direct `src/channels/**` imports.
+- Bundled/third-party channel needing new seam: typed SDK contract/facade first.
+- Hot import paths: `channel.ts`, `shared.ts`, `channel.setup.ts`, `gateway.ts`, `outbound.ts`. Never statically pull async-only surfaces (send, monitor, probe, directory-live, setup/login flows, large `runtime-api.ts` barrels) into them unless startup truly needs them.
+- Prefer small local seam (`channel-api.ts`, `*.runtime.ts`, `*.runtime-api.ts`) to keep heavy runtime off hot path.
+- Core discovery used by Gateway/agent tools: lightweight bundled-plugin artifacts first; full channel plugin loading only as fallback.
+- Test caller needing only already-registered plugin fixtures: offer loaded-plugin-only mode; never silently fall back to bundled runtime materialization.
+- Target parsing, thread-binding hints, native command descriptors, message tool descriptors, gateway auth bypass paths, setup-promotion hints: small plugin-owned helpers reused by full channel plugin + lightweight artifact.
+- Repeated test helper calls: install/reset test plugin registry in same lifecycle scope as runtime reset. `beforeAll` registry + `afterEach` runtime reset = later tests may fall through to bundled/default runtime loading.
+- Never mix static/dynamic imports for same heavy module family across channel boundary change. Lazy path: lazy end to end.
+- Shared channel changes affect built-in + extension channels. Check routing, pairing, allowlists, command gating, onboarding, reply behavior across full set.
 
 ## Verification
 
-- If you touch hot channel entrypoints or lazy-loading seams, run `pnpm build`.
-- For bundled plugin channel changes that can affect startup/import cost, run:
+- Hot channel entrypoint/lazy-loading seam changes: `pnpm build`.
+- Bundled plugin channel changes that can affect startup/import cost:
   `OPENCLAW_LOCAL_CHECK=0 node --import tsx scripts/profile-extension-memory.mts --extension <id> --skip-combined --concurrency 1`

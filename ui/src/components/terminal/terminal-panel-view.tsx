@@ -62,7 +62,7 @@ export type TerminalPanelViewState = {
   onHide: () => void;
 };
 
-function SessionPickerTrigger(props: { state: TerminalSessionPickerState; dialogId: string }) {
+function SessionPickerTrigger(props: { state: TerminalSessionPickerState; dialogId?: string }) {
   return (
     <button
       ref={(element) => untrack(() => props.state.triggerRef(element))}
@@ -158,15 +158,16 @@ function ActionButton(props: {
   label: string;
   icon: Parameters<typeof Icon>[0]["name"];
   class?: string;
+  hosted?: boolean;
   disabled?: boolean;
   newTab?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
-      class={props.class ?? "rail-header__action tp-icon"}
+      class={props.class ?? (props.hosted ? "rail-header__action" : "rail-header__action tp-icon")}
       type="button"
-      title={props.label}
+      title={props.hosted ? undefined : props.label}
       aria-label={props.label}
       disabled={props.disabled}
       data-new-tab-action={props.newTab ? "" : undefined}
@@ -174,6 +175,36 @@ function ActionButton(props: {
     >
       <Icon name={props.icon} />
     </button>
+  );
+}
+
+export function TerminalPanelHostedActions(props: { state: TerminalPanelViewState }) {
+  return (
+    <>
+      <openclaw-tooltip prop:content={t("terminal.sessions")}>
+        <SessionPickerTrigger state={props.state.picker} />
+      </openclaw-tooltip>
+      <Show when={props.state.upload.uploadsEnabled()}>
+        <openclaw-tooltip prop:content={t("terminal.addFiles")}>
+          <ActionButton
+            hosted
+            label={t("terminal.addFiles")}
+            icon="paperclip"
+            disabled={!props.state.upload.hasActiveTab() || props.state.upload.hasPendingBatch()}
+            onClick={props.state.upload.chooseFiles}
+          />
+        </openclaw-tooltip>
+      </Show>
+      <openclaw-tooltip prop:content={t("terminal.dockBottom")}>
+        <ActionButton
+          hosted
+          label={t("terminal.dockBottom")}
+          icon="panelBottomOpen"
+          disabled={props.state.dockDisabled}
+          onClick={() => props.state.onDock("bottom")}
+        />
+      </openclaw-tooltip>
+    </>
   );
 }
 
@@ -400,11 +431,11 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
             </div>
           )}
         </Show>
-        <wa-tab-panel
+        <div
           id={viewportId}
           class="tp-viewport"
-          name={props.view().activeId ?? "terminal"}
-          prop:active={true}
+          role="tabpanel"
+          aria-hidden="false"
           aria-labelledby={
             props.view().activeId && !props.view().hosted
               ? `${idPrefix}-tab-${props.view().activeId}`
@@ -439,7 +470,7 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
             />
           </Show>
           <UploadLayer state={props.view()} />
-        </wa-tab-panel>
+        </div>
       </section>
     </Show>
   );

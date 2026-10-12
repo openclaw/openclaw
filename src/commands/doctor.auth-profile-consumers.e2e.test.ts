@@ -22,7 +22,6 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   clearUserProfileAuthLink,
   listUserProfileAuthLinks,
-  resolveUserProfileAuthLink,
   setUserProfileAuthLink,
 } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -475,9 +474,6 @@ describe("doctor auth-profile consumers", () => {
           expect(repaired.messages?.responsePrefix).toBe(
             "literal anthropic/test-model@claude-cli:work",
           );
-          expect(
-            resolveUserProfileAuthLink({ profileId: person.id, providers: ["anthropic"] }),
-          ).toBe(renamed);
           const links = readStoredLinks(person.id);
           expect(links).toEqual({
             version: 1,

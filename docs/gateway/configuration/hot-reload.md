@@ -22,12 +22,35 @@ accepted source revision and whether it came from a Gateway write or a file edit
 Later hot-reloadable writes do not erase a committed restart requirement while
 its application is pending.
 
+UI preferences remain in `ui.prefs`. Changing them preserves prepared model
+catalogs, provider authentication, and plugin registrations. Display changes
+still publish the updated config to consumers that read those settings.
+
 The `agents.create`, `agents.update`, and `agents.delete` Gateway methods wait
 for runtime application before reporting success. A successful response lets
 clients immediately create sessions or read the updated agent roster. If the
 config was saved but could not be applied, including when reload is `off`, the
 method returns `UNAVAILABLE` with recovery guidance instead of reporting the
 agent change as ready. Inspect `config.get` before retrying a saved mutation.
+An active config application finishes before the next queued config. When a newer
+config preserves a pending or unfinished Gateway write's changes, that write waits
+for the newer config to apply. A superseding edit that overwrites an unapplied
+change still reports that earlier write as unconfirmed.
+
+Agent-only edits retain session admission and active runtimes for unchanged agents.
+Creation prepares the new agent's runtime database before publishing its config entry.
+Overlapping creation and deletion preserve unchanged agents' prepared model generations
+and session creation. Registry discovery follows completed roster publications;
+removing an agent still revokes access to that agent's stores.
+Concurrent writers release each completed reload's lifecycle lease through the shared
+writer queue, so a busy database does not leave later reloads waiting for lease expiry.
+A database-open refusal for a deleting agent leaves other agents' admitted work usable.
+Overlapping agent edits can supersede an earlier model-runtime refresh. If that
+refresh fails, the newer config retries the unfinished preparation without
+requiring a Gateway restart, including when the newer edit does not change models.
+If that successor is invalid or fails preparation, the affected model owners can stay
+unavailable until a valid config is applied. Correct the rejected config and reapply
+it; even an unchanged valid config completes the pending model preparation.
 
 If a busy state store temporarily refuses the reload's lifecycle lease, the
 Gateway keeps the change pending and retries automatically with increasing backoff,

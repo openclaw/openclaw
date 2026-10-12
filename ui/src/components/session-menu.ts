@@ -1,7 +1,8 @@
-export {
-  SessionMenu,
-  type SessionMenuWork,
-  type SessionMenuAction,
-  type SessionMenuActionKind,
-  type PluginSessionMenuAction,
+import "./session-menu-solid.tsx";
+
+export type {
+  SessionMenuWork,
+  SessionMenuAction,
+  SessionMenuActionKind,
+  PluginSessionMenuAction,
 } from "./session-menu-solid.tsx";

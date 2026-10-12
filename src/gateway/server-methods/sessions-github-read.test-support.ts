@@ -7,9 +7,9 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   createPersonalGitHubOAuthLifecycle,
-  personalGitHubStatus,
   type PersonalGitHubAction,
 } from "../github-personal-oauth.js";
+import { personalGitHubStatusAsync as personalGitHubStatus } from "../github-personal-status.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -128,7 +128,7 @@ function createFixture(
       preparePersonalStatus,
       sharedStatus,
       latestShared,
-      personalStatus,
+      personalStatusAsync: personalStatus,
       personalPending,
       requestForSessionV2: requestForSession,
     },

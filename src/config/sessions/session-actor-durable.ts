@@ -43,9 +43,7 @@ export function captureDurableSessionActor(params: {
       target: params.target,
       lifetime,
       currentGeneration() {
-        const generation = execution.capturePreparedGenerationClaim();
-        generation?.assertCurrent();
-        return generation?.incarnation;
+        return execution.capturePreparedGenerationClaim()?.incarnation;
       },
     }),
     transport: {
@@ -57,7 +55,6 @@ export function captureDurableSessionActor(params: {
           async (_execution, source) => {
             await execution.prepare(source);
             return operation({
-              captureGeneration: () => execution.captureGenerationClaim(),
               async execute(command) {
                 const result = await execution.runExisting(source, (worker) =>
                   worker.execute(command),

@@ -36,8 +36,9 @@ vi.mock("./reply-dispatcher.js", () => ({
     ensureNoVisibleReplyFallback: vi.fn(),
   })),
 }));
+// mock-isolation: thread admission keeps previews disabled without reading persisted session reasoning settings.
 vi.mock("./reasoning-preview.js", () => ({
-  resolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
+  resolveFeishuReasoningPreviewEnabled: vi.fn(async () => false),
 }));
 vi.mock("./bot-group-name.js", () => ({ resolveGroupName: vi.fn(async () => undefined) }));
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {

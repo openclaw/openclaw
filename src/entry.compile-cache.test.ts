@@ -15,10 +15,8 @@ import {
   type Mock,
   type MockInstance,
 } from "vitest";
-import { maintainOpenClawCompileCache } from "../node-compile-cache.mjs";
 import { awaitGateBeforeSettlement } from "../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
-import { mockNodeBuiltinModule } from "./plugin-sdk/test-helpers/node-builtin-mocks.js";
 import { createDeferredCore } from "./shared/deferred.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "./test-utils/env.js";
 import { withMockedPlatform } from "./test-utils/vitest-spies.js";
@@ -37,19 +35,21 @@ const { enableCompileCache, getCompileCacheDir, spawn, attachChildProcessBridge 
 
 // Node's enabled cache survives subsequent calls in the same instance. Observe the
 // API boundary without enabling a real cache in the shared Vitest worker.
-vi.mock("node:module", async (importOriginal) =>
-  mockNodeBuiltinModule(() => importOriginal<typeof import("node:module")>(), {
+vi.mock("node:module", async (importOriginal) => {
+  const { mockNodeBuiltinModule } = await import("./plugin-sdk/test-helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(() => importOriginal<typeof import("node:module")>(), {
     enableCompileCache,
     getCompileCacheDir,
-  }),
-);
-vi.mock("node:child_process", async (importOriginal) =>
+  });
+});
+vi.mock("node:child_process", async (importOriginal) => {
+  const { mockNodeBuiltinModule } = await import("./plugin-sdk/test-helpers/node-builtin-mocks.js");
   // The fixture covers the three-argument spawn call used with inherited stdio.
-  mockNodeBuiltinModule<{ spawn: Spawn }>(
+  return mockNodeBuiltinModule<{ spawn: Spawn }>(
     () => importOriginal<typeof import("node:child_process")>(),
     { spawn },
-  ),
-);
+  );
+});
 vi.mock("./process/child-process-bridge.js", () => ({ attachChildProcessBridge }));
 
 import {
@@ -78,7 +78,8 @@ describe("entry compile cache", () => {
   let writeStderr: MockInstance<typeof process.stderr.write>;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    const { constants } = await import("node:module");
     root = tempDirs.make("openclaw-compile-cache-");
     entryFile = path.join(root, "dist", "entry.js");
     argv = [process.execPath, entryFile, "status", "--json"];
@@ -91,7 +92,10 @@ describe("entry compile cache", () => {
     setTestEnvValue("NODE_COMPILE_CACHE", path.join(root, ".node-cache"));
     deleteTestEnvValue("NODE_DISABLE_COMPILE_CACHE");
     deleteTestEnvValue("OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED");
-    enableCompileCache.mockReset();
+    enableCompileCache.mockReset().mockReturnValue({
+      status: constants.compileCacheStatus.ALREADY_ENABLED,
+      directory: path.join(root, ".node-cache"),
+    });
     getCompileCacheDir.mockReset();
     attachChildProcessBridge.mockReset().mockReturnValue({ detach: vi.fn() });
     child = new EventEmitter() as ChildProcess;
@@ -192,7 +196,7 @@ describe("entry compile cache", () => {
     expect(env.NODE_COMPILE_CACHE).toBe(directory);
   });
 
-  it("retires a replaced installation without deleting other applications' compile caches", async () => {
+  it("isolates replaced installation metadata without build information", async () => {
     const packageJsonPath = path.join(root, "package.json");
     const env = { NODE_COMPILE_CACHE: path.join(root, ".node-cache") };
     await fs.writeFile(packageJsonPath, '{"version":"2026.4.29"}\n', "utf8");
@@ -201,11 +205,6 @@ describe("entry compile cache", () => {
     expect(originalDirectory).toContain(path.join(".node-cache", "openclaw"));
     expect(originalDirectory).toContain("2026.4.29");
     expect(path.basename(originalDirectory)).toMatch(/^\d+-\d+$/);
-    await fs.mkdir(originalDirectory, { recursive: true });
-    const originalCacheEntry = path.join(originalDirectory, "keep.txt");
-    await fs.writeFile(originalCacheEntry, "previous cached installation\n", "utf8");
-    const sharedCacheEntry = path.join(env.NODE_COMPILE_CACHE, "another-application");
-    await fs.writeFile(sharedCacheEntry, "keep\n");
     await fs.writeFile(
       packageJsonPath,
       '{"version":"2026.4.29","installation":"replacement"}\n',
@@ -215,9 +214,6 @@ describe("entry compile cache", () => {
     const replacementDirectory = enabledDirectory(1);
     expect(replacementDirectory).toContain(path.join("openclaw", "2026.4.29"));
     expect(replacementDirectory).not.toBe(originalDirectory);
-    await maintainOpenClawCompileCache(replacementDirectory);
-    await expect(fs.stat(originalDirectory)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.readFile(sharedCacheEntry, "utf8")).resolves.toBe("keep\n");
   });
 
   it.each(["inherited", "active"])(

@@ -67,6 +67,7 @@ export function prepareAgentAuthProfileRowsRead(options: {
   agentId: string;
   env: NodeJS.ProcessEnv;
 }): {
+  identity: string | undefined;
   read: () => Promise<AuthProfileRowRead>;
   assertCurrent: () => void;
   dispose: () => Promise<void>;
@@ -110,7 +111,11 @@ export function prepareAgentAuthProfileRowsRead(options: {
     }
     captured.value.admission.assertCurrent();
     captured.value.maintenanceScope?.assertAdmission();
-    if (identity && inspectDatabasePathIdentitySync(databasePath)?.key !== identity.key) {
+    // Captured absence stays empty; a first session may create the file without replacing a read source.
+    if (
+      identity?.key.startsWith("file:") &&
+      inspectDatabasePathIdentitySync(databasePath)?.key !== identity.key
+    ) {
       throw new Error("Auth profile database file identity changed during its read");
     }
     // Cached rows still borrow this read's revocable authority through host composition.
@@ -198,7 +203,12 @@ export function prepareAgentAuthProfileRowsRead(options: {
     void operation.finally(() => pending.delete(operation)).catch(() => undefined);
     return operation;
   };
-  return { read, assertCurrent, dispose };
+  return {
+    identity: identity && `${identity.key}:${identity.birthtime ?? ""}`,
+    read,
+    assertCurrent,
+    dispose,
+  };
 }
 
 /** Shared auth reads reuse the canonical actor and never request a writable open. */

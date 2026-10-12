@@ -158,13 +158,7 @@ function readQuery(
     .selectFrom("meeting_transcript_summaries as notes")
     .whereRef("notes.session_id", "=", "meeting_transcript_sessions.session_id")
     .whereRef("notes.session_started_at", "=", "meeting_transcript_sessions.started_at");
-  const overview = notes
-    .select((n) =>
-      n
-        .fn<string | null>("json_extract", [n.ref("notes.summary_json"), n.val("$.overview")])
-        .as("overview"),
-    )
-    .$asScalar();
+  const overview = notes.select("notes.overview").$asScalar();
   const summarySource = notes
     .select((n) =>
       n
@@ -338,24 +332,10 @@ function readTranscriptPage<Entry>(
     query = query.where("provider_id", "=", options.providerId);
   }
   if (options.accountId) {
-    const accountId = options.accountId;
-    query = query.where((eb) =>
-      eb(
-        eb.fn<string>("json_extract", [eb.ref("source_json"), eb.val("$.accountId")]),
-        "=",
-        accountId,
-      ),
-    );
+    query = query.where("source_account_id", "=", options.accountId);
   }
   if (options.agentId) {
-    const agentId = options.agentId;
-    query = query.where((eb) =>
-      eb(
-        eb.fn<string>("json_extract", [eb.ref("metadata_json"), eb.val("$.agentId")]),
-        "=",
-        agentId,
-      ),
-    );
+    query = query.where("metadata_agent_id", "=", options.agentId);
   }
   if (options.startedAfter) {
     const startedAfter = parseTranscriptDate(options.startedAfter) ?? null;
@@ -399,9 +379,11 @@ function readTranscriptPage<Entry>(
         eb.ref("provider_id"),
         // Raw meeting URLs can contain credentials or tokens hidden by the public
         // projection. Search must not expose those values through result membership.
-        ...["accountId", "guildId", "channelId", "threadTs", "fileId"].map((key) =>
-          eb.fn<string>("json_extract", [eb.ref("source_json"), eb.val(`$.${key}`)]),
-        ),
+        eb.ref("source_account_id"),
+        eb.ref("source_guild_id"),
+        eb.ref("source_channel_id"),
+        eb.ref("source_thread_ts"),
+        eb.ref("source_file_id"),
       ];
       return eb.or([
         ...fields.map(matches),
@@ -414,12 +396,7 @@ function readTranscriptPage<Entry>(
             .where((notes) =>
               notes.or([
                 matches(notes.ref("notes.markdown")),
-                matches(
-                  notes.fn<string | null>("json_extract", [
-                    notes.ref("notes.summary_json"),
-                    notes.val("$.overview"),
-                  ]),
-                ),
+                matches(notes.ref("notes.overview")),
               ]),
             ),
         ),

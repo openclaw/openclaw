@@ -1,15 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  loadTranscriptSuffixEventsBoundedSync,
-  readPreviousIndexedTranscriptEventSync,
   readTranscriptIdentityByEventId,
-  readTranscriptMutationAtSync,
   replaceTranscriptSuffixEventsSync,
 } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  loadTranscriptSuffixEventsBoundedSync,
+  readPreviousIndexedTranscriptEventSync,
+} from "../../config/sessions/session-accessor.sqlite-suffix-read.js";
 import type { SessionMaintenanceOperations } from "../../config/sessions/session-manager-write-contract.js";
 import type {
   SessionTranscriptMaintenanceRead,
@@ -189,22 +190,6 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
       const previousEntry = previous as SessionEntry | undefined;
       if (previousEntry && predicate(previousEntry)) {
         throw new RangeError("Bounded transcript cleanup cannot cross the hydrated removal window");
-      }
-    }
-    // Fence only an actual mutation. Defensive cleanup remains a no-op when its target is absent,
-    // even if another writer advanced the durable transcript after this manager was opened.
-    if (this.persistenceTarget && this.transcriptMutationAt !== undefined) {
-      const target = this.persistenceTarget;
-      const mutationAt = yield* sessionPersistenceStep(
-        () => readTranscriptMutationAtSync(target),
-        worker
-          ? async () => (await worker.read({ operation: "version" })).version?.updatedAt
-          : undefined,
-      );
-      if (mutationAt !== this.transcriptMutationAt) {
-        throw new Error(
-          `SQLite transcript changed while preparing suffix removal for ${this.persistenceTarget.sessionId}`,
-        );
       }
     }
     const candidate = activeBranch[candidateRemoveStart];

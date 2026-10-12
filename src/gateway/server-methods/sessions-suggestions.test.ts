@@ -5,11 +5,9 @@ import {
   readSessionTranscriptMessageEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { addSessionSuggestionInWorker as addSessionSuggestion } from "../../config/sessions/session-metadata-write.async.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
-import {
-  addSessionSuggestion,
-  SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
-} from "../../config/sessions/session-suggestion-store.js";
+import { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "../../config/sessions/session-suggestion-store.js";
 import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -52,7 +50,7 @@ describe("session suggestion handlers", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       await upsertDefaultSuggestionSession();
       const scope = { agentId: "main", sessionKey, env: state.env };
-      addSessionSuggestion(scope, {
+      await addSessionSuggestion(scope, {
         id: "revoke-before-finalize",
         authorId: "owner",
         text: "synthetic suggestion",
@@ -124,7 +122,7 @@ describe("session suggestion handlers", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       await upsertDefaultSuggestionSession();
       const scope = { agentId: "main", sessionKey, env: state.env };
-      addSessionSuggestion(scope, {
+      await addSessionSuggestion(scope, {
         id: "settle-accepted-send",
         authorId: "owner",
         text: "synthetic suggestion",
@@ -277,7 +275,7 @@ describe("session suggestion handlers", () => {
           visibility: "suggest",
         },
       );
-      addSessionSuggestion(
+      await addSessionSuggestion(
         { agentId: "main", sessionKey: archivedKey },
         {
           id: "archived-suggestion",

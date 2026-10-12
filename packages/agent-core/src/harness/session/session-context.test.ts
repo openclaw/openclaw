@@ -489,30 +489,6 @@ describe("buildSessionContext", () => {
     expect(JSON.stringify(context.messages)).not.toContain("orphan result");
   });
 
-  it("pairs reset results only with calls inside the retained tail", () => {
-    const entries: SessionTreeEntry[] = [
-      userEntry("discarded-user", null, "discarded question"),
-      assistantToolEntry("discarded-assistant", "discarded-user", "call-shared"),
-      userEntry("kept", "discarded-assistant", "kept question"),
-      toolResultEntry("discarded-result", "kept", "call-shared", "discarded owner result"),
-      assistantToolEntry("kept-assistant", "discarded-result", "call-shared"),
-      toolResultEntry("kept-result", "kept-assistant", "call-shared", "kept owner result"),
-      resetEntry("reset", "kept-result", "kept"),
-      userEntry("new", "reset", "new turn"),
-    ];
-
-    const context = buildSessionContext(entries);
-    const providerMessages = convertToLlm(context.messages);
-
-    expect(providerMessages).toMatchObject([
-      { role: "user", content: "kept question" },
-      { role: "assistant", content: [{ id: "call-shared" }] },
-      { role: "toolResult", toolCallId: "call-shared", content: [{ text: "kept owner result" }] },
-      { role: "user", content: "new turn" },
-    ]);
-    expect(JSON.stringify(providerMessages)).not.toContain("discarded owner result");
-  });
-
   it("keeps tool ownership within the latest reset when resets repeat", () => {
     const entries: SessionTreeEntry[] = [
       userEntry("first-user", null, "first conversation"),

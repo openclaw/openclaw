@@ -353,7 +353,7 @@ describe("admitted lazy session writer", () => {
   });
 
   it.each([false])(
-    "uses a stale-version postimage once without replaying a durable append (incognito=%s)",
+    "refuses an explicitly stale actor append without replay or persistence (incognito=%s)",
     async (incognito) => {
       await withInitialWriter(
         async ({ manager, target, transcript }) => {
@@ -372,14 +372,14 @@ describe("admitted lazy session writer", () => {
             );
           const read = vi.spyOn(actor, "read");
           try {
-            const id = await manager.appendCustomEntryAsync("after-stale-version");
-            expect(stale).toHaveBeenCalledTimes(2);
+            await expect(
+              manager.appendCustomEntryAsync("after-stale-version"),
+            ).rejects.toMatchObject({
+              name: "SessionActorStaleVersionError",
+            });
+            expect(stale).toHaveBeenCalledOnce();
             expect(read).not.toHaveBeenCalled();
-            const persisted = loadTranscriptEventsSync(target);
-            expect(persisted.slice(0, before.length)).toEqual(before);
-            expect(persisted.slice(before.length)).toMatchObject([
-              { id, customType: "after-stale-version" },
-            ]);
+            expect(loadTranscriptEventsSync(target)).toEqual(before);
           } finally {
             stale.mockRestore();
             read.mockRestore();
@@ -537,22 +537,22 @@ describe("admitted lazy session writer", () => {
   });
 
   it.each([false])(
-    "settles one terminal error after attempt teardown (existing=%s)",
+    "preserves one committed terminal error through attempt teardown (existing=%s)",
     async (existing) => {
       await withInitialWriter(
-        async ({ manager, promptState, runParams, target }) => {
+        async ({ manager, promptState, target }) => {
           manager.appendMessage(userMessage);
-          const owner = createAssistantErrorTranscript({ runId: runParams.runId });
+          const owner = createAssistantErrorTranscript();
           installSessionToolResultGuard(manager, { assistantErrorTranscript: owner });
           manager.appendMessage(makeAgentAssistantMessage({ content: [], stopReason: "error" }));
           expect(
             SessionManager.open(target)
               .getBranch()
               .filter((entry) => entry.type === "message"),
-          ).toHaveLength(1);
+          ).toHaveLength(2);
           return async () => {
             await promptState[Symbol.asyncDispose]();
-            await owner.settle(true);
+            owner.settle(true);
             expect(
               SessionManager.open(target)
                 .getBranch()

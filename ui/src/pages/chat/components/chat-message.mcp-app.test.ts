@@ -26,16 +26,18 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
     ),
     "assistant",
   );
-  await renderToolFixture(
-    renderMessageGroup(group, {
-      showReasoning: true,
-      showToolCalls: true,
-      assistantName: "OpenClaw",
-      assistantAvatar: null,
-      sessionKey: "agent:main:main",
-    }),
-    container,
-  );
+  const draw = () =>
+    renderToolFixture(
+      renderMessageGroup(group, {
+        showReasoning: true,
+        showToolCalls: true,
+        assistantName: "OpenClaw",
+        assistantAvatar: null,
+        sessionKey: "agent:main:main",
+      }),
+      container,
+    );
+  await draw();
   await vi.dynamicImportSettled();
   expect(customElements.get("mcp-app-view")).toBeDefined();
   await settleToolBridges(container);
@@ -43,14 +45,24 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
   const dropdown = container.querySelector("wa-dropdown");
   expect(dropdown).toBeInstanceOf(HTMLElement);
   expect(dropdown?.querySelectorAll("wa-dropdown-item")).toHaveLength(1);
-  dropdown?.dispatchEvent(
-    new CustomEvent("wa-select", {
-      detail: { item: { value: "raw-details" } },
-    }),
-  );
-  expect(
+  const selectRawDetails = () =>
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "raw-details" } },
+      }),
+    );
+  const expanded = () =>
     container
       .querySelector(".chat-tool-card__widget-raw .chat-tool-card__raw-toggle")
-      ?.getAttribute("aria-expanded"),
-  ).toBe("true");
+      ?.getAttribute("aria-expanded");
+  selectRawDetails();
+  expect(expanded()).toBe("true");
+  expect(dropdown?.querySelector("[data-raw-label]")?.textContent).toBe("Hide raw details");
+  await draw();
+  expect(container.querySelector("wa-dropdown")).toBe(dropdown);
+  expect(expanded()).toBe("true");
+  expect(dropdown?.querySelector("[data-raw-label]")?.textContent).toBe("Hide raw details");
+  selectRawDetails();
+  expect(expanded()).toBe("false");
+  expect(dropdown?.querySelector("[data-raw-label]")?.textContent).toBe("Show raw details");
 });

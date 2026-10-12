@@ -6,7 +6,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { retainSqliteWorkerErrorCode } from "../infra/sqlite-worker-contract.js";
-import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+import {
+  assertExistingDatabaseIdentity,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -72,6 +75,8 @@ export function createAgentDatabaseExecution(
   const { agentId, pathname, identity, initialIdentity, expectedCreationIdentity } = prepared;
   const context = captureOpenClawStateWorkerContext({ env: options.env });
   const executionOptions = { agentId, path: pathname, env: context.environment };
+  const deletionCleanup = getAgentDeletionDatabaseCleanup(executionOptions);
+  const cleanupOwner = deletionCleanup?.ownsDatabase ? deletionCleanup : undefined;
   const creationClaim = creationClaims.captureAgentCreationClaim(options);
   const aliases = new Map<string, () => void>();
   const assertAgentAdmitted = captureAgentDatabaseAdmission(agentId, { env: context.environment });
@@ -316,15 +321,15 @@ export function createAgentDatabaseExecution(
     },
     borrow(borrowedPath, expected, creating, requestedPath) {
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
-      if (cleanup?.worker && !generation?.isPrepared()) {
-        registerAgentDeletionExecutionCleanup(
-          owner,
-          { ...executionOptions, path: borrowedPath },
-          () => drainAgentDatabaseResources({ path: borrowedPath, agentId }, async () => {}),
-        );
-      }
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
       const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;
+      if (fileIdentity) {
+        assertExistingDatabaseIdentity(
+          borrowedPath,
+          `file:${fileIdentity.physicalIdentity}`,
+          fileIdentity.birthtime,
+        );
+      }
       const assertReferenceCurrent = (nativeIdentity?: AgentDatabaseExecutionFileIdentity) => {
         assertCurrent();
         assertBorrowedAgentDatabaseFileIdentity({
@@ -410,7 +415,6 @@ export function createAgentDatabaseExecution(
         assertCurrent: assertBorrowed,
         captureGenerationClaim,
         capturePreparedGenerationClaim() {
-          assertBorrowed();
           if (
             agentDatabaseLifecycle.pending.has(pathname) ||
             nativeClosing ||
@@ -418,6 +422,7 @@ export function createAgentDatabaseExecution(
             generation?.failure() ||
             !generation?.isPrepared()
           ) {
+            assertBorrowed();
             return undefined;
           }
           return captureGenerationClaim();
@@ -509,7 +514,7 @@ export function createAgentDatabaseExecution(
               }
             }
             borrowers -= 1;
-            if (borrowers !== 0 || retired || cleanupFailure) {
+            if (borrowers !== 0 || retired || cleanupFailure || cleanupOwner) {
               return;
             }
             const drainSignal = getGatewayRestartDrainSignal();
@@ -563,6 +568,15 @@ export function createAgentDatabaseExecution(
       // A reborrow may have retained the owner or started its next native generation.
       if (borrowers === 0 && !generation) {
         finishRetirement();
+      }
+    },
+    async retireForCleanup() {
+      if (!cleanupOwner) {
+        // Accepted writes keep their original owner through publication and settlement.
+        while (acceptedWork.pending.size > 0) {
+          await Promise.allSettled(acceptedWork.pending.keys());
+        }
+        await owner.close();
       }
     },
     close() {
@@ -623,6 +637,9 @@ export function createAgentDatabaseExecution(
   try {
     retainAlias(pathname);
     retainAlias(identity.canonicalPath);
+    registerAgentDeletionExecutionCleanup(owner, executionOptions, () =>
+      drainAgentDatabaseResources({ path: pathname, agentId }, async () => {}, cleanupOwner),
+    );
     // Config changes do not drain captured executors; unused stores expire normally.
     // Callers resolve new routing, while accepted work keeps its original physical store.
     unregisterShared = registerOpenClawStateDatabaseAsyncResource({

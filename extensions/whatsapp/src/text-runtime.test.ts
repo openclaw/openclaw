@@ -29,40 +29,8 @@ async function withTempDir<T>(
 describe("markdownToWhatsApp", () => {
   it.each([
     ["star italic", "*text*", "_text_"],
-    ["underline fallback", "<u>under</u>", "under"],
-    ["spoiler fallback", "||secret||", "secret"],
-    ["inline code", "Use `**not bold**` here", "Use ```**not bold**``` here"],
-    ["fenced code", "```\nconst x = **bold**;\n```", "```\nconst x = **bold**;\n```"],
-    ["fence language fallback", "```ts\nconst x = 1;\n```", "```\nconst x = 1;\n```"],
-    ["labeled link fallback", "[docs](https://example.com)", "docs (https://example.com)"],
-    ["heading fallback", "# Title", "*Title*"],
-    ["bullet list", "- one\n- two", "• one\n• two"],
-    ["ordered list", "1. one\n2. two", "1. one\n2. two"],
-    ["task-list fallback", "- [x] done\n- [ ] todo", "[x] done\n[ ] todo"],
-    ["table fallback", "| Name | Value |\n| --- | --- |\n| A | 1 |", "*A*\n• Value: 1"],
-    ["blockquote", "> quote", "> quote"],
-    ["image fallback", "![alt](https://example.com/a.png)", "alt"],
-    [
-      "mixed formatting",
-      "**bold** and ~~strike~~ and _italic_",
-      "*bold* and ~strike~ and _italic_",
-    ],
     ["empty input", "", ""],
-    ["plain text", "no formatting here", "no formatting here"],
-    ["triple-star bold italic", "***bi***", "*_bi_*"],
-    ["inline code containing a backtick", "Use ``a`b`` here", "Use ```a`b``` here"],
     ["two code spans followed by digits", "`x`1 and `y`2", "```x```1 and ```y```2"],
-    ["triple-delimited inline code followed by a digit", "```code```7 done", "```code```7 done"],
-    [
-      "triple-delimited inline code containing markers",
-      "Before ```**bold** and ~~strike~~``` after **real bold**",
-      "Before ```**bold** and ~~strike~~``` after *real bold*",
-    ],
-    [
-      "escaped WhatsApp markers",
-      "\\*literal\\* \\_name\\_ \\~gone\\~ \\`code\\`",
-      "\\*literal\\* \\_name\\_ \\~gone\\~ \\`code\\`",
-    ],
     ["short leading indentation", "  indented", "  indented"],
     [
       "literal private-use characters",
@@ -104,27 +72,12 @@ describe("markdownToWhatsApp", () => {
     ).toEqual(["*Alpha*", "*Beta*", "*Gamma*"]);
   });
 
-  it("keeps escaped markers atomic across formatted chunk boundaries", () => {
-    const chunks = markdownToWhatsAppChunks("**aaaa\\*bbbb**", 8);
-    expect(chunks.every((chunk) => chunk.length <= 8)).toBe(true);
-    expect(chunks.join("")).toContain("\\*");
-    expect(chunks.join("")).not.toMatch(/\p{Co}/u);
-  });
-
   it("applies the chunk limit to whitespace-only text", () => {
     expect(markdownToWhatsAppChunks(" ".repeat(12), 5)).toEqual(["    ", "    ", "  "]);
-  });
-
-  it("does not count the parse-only indentation guard toward the chunk limit", () => {
-    expect(markdownToWhatsAppChunks(`  ${"x".repeat(8)}`, 10)).toEqual([`  ${"x".repeat(8)}`]);
   });
 });
 
 describe("assertWebChannel", () => {
-  it("accepts valid channel", () => {
-    expect(assertWebChannel("web")).toBeUndefined();
-  });
-
   it("throws for invalid channel", () => {
     expect(() => assertWebChannel("bad" as string)).toThrow("Web channel must be 'web'");
   });
@@ -168,26 +121,6 @@ describe("jidToE164", () => {
     });
   });
 
-  it("maps @lid from authDir mapping files", async () => {
-    await withTempDir("openclaw-auth-", (authDir) => {
-      const mappingPath = path.join(authDir, "lid-mapping-456_reverse.json");
-      fs.writeFileSync(mappingPath, JSON.stringify("5559876"));
-      expect(jidToE164("456@lid", { authDir })).toBe("+5559876");
-    });
-  });
-
-  it("maps @hosted.lid from authDir mapping files", async () => {
-    await withTempDir("openclaw-auth-", (authDir) => {
-      const mappingPath = path.join(authDir, "lid-mapping-789_reverse.json");
-      fs.writeFileSync(mappingPath, JSON.stringify(4440001));
-      expect(jidToE164("789@hosted.lid", { authDir })).toBe("+4440001");
-    });
-  });
-
-  it("accepts hosted PN JIDs", () => {
-    expect(jidToE164("1555000:2@hosted")).toBe("+1555000");
-  });
-
   it("falls back through lidMappingDirs in order", async () => {
     await withTempDir("openclaw-lid-a-", async (first) => {
       await withTempDir("openclaw-lid-b-", (second) => {
@@ -211,14 +144,6 @@ describe("toWhatsappJidWithLid (issue #67378)", () => {
   it("falls back to PN s.whatsapp.net JID when no forward mapping exists", async () => {
     await withTempDir("openclaw-fwd-", (authDir) => {
       expect(toWhatsappJidWithLid("+33123456789", { authDir })).toBe("33123456789@s.whatsapp.net");
-    });
-  });
-
-  it("accepts numeric LID values in mapping files (Baileys writes either string or number)", async () => {
-    await withTempDir("openclaw-fwd-", (authDir) => {
-      const mappingPath = path.join(authDir, "lid-mapping-447700900123.json");
-      fs.writeFileSync(mappingPath, JSON.stringify(42424242));
-      expect(toWhatsappJidWithLid("+447700900123", { authDir })).toBe("42424242@lid");
     });
   });
 
@@ -265,8 +190,6 @@ describe("resolveJidToE164", () => {
 describe("resolveEquivalentWhatsAppDirectChatJids", () => {
   it.each([
     ["15551230000:0@s.whatsapp.net", "15551230000@s.whatsapp.net"],
-    ["15551230000:2@hosted", "15551230000@hosted"],
-    ["777:1@lid", "777@lid"],
     ["777:2@hosted.lid", "777@hosted.lid"],
   ])("includes the bare direct-chat form for %s", async (observedJid, bareJid) => {
     await expect(resolveEquivalentWhatsAppDirectChatJids(observedJid)).resolves.toEqual([

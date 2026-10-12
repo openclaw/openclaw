@@ -146,6 +146,12 @@ hashing. Plugin lifecycle operations prepare fresh metadata in their own cache
 generation. Account health and authentication state are not part of the
 immutable package inventory.
 
+Setup provider detection loads providers from the metadata snapshot that
+selected its choices. Its operation cache owns only the probe registrations and
+plugin instances, which retire after the probes settle, so repeated detection
+does not rediscover plugin packages. Setup activation still prepares fresh
+metadata because it can install the plugin it is about to load.
+
 An explicit install or refresh clears mutable discovery caches for the command,
 so its next metadata phase observes the updated inventory. Immutable runtime
 generations keep their captured metadata. Each process normally owns one Gateway.

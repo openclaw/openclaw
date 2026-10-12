@@ -2,8 +2,10 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const isProviderApiKeyConfiguredMock = vi.hoisted(() => vi.fn<(p: unknown) => boolean>());
+// mock-isolation: Discovery tests control credential availability without reading host auth state.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
+  isProviderApiKeyConfiguredAsync: async (params: unknown) =>
+    isProviderApiKeyConfiguredMock(params),
 }));
 
 import { buildDeepInfraProvider } from "./api.js";

@@ -60,6 +60,7 @@ export type SessionEntryPatchCommit = {
 export type SessionEntryPatchCommitted = {
   kind: "session-entry-patch";
   entry: SessionEntry | null;
+  applied: boolean;
   publication?: SessionEntryReplacementPublication;
   /** Guard snapshot before the entry patch, carried only while the session ID is unchanged. */
   transcriptPredicate?: {

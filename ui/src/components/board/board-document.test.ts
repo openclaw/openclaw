@@ -2,9 +2,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { settleLitElement } from "../../test-helpers/lit-settle.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { boardWidget, settleCells, snapshot } from "./board-view.test-support.ts";
-import "./board-document.ts";
+import "./board-document.tsx";
 
 const mounted: HTMLElement[] = [];
 
@@ -138,9 +138,11 @@ it("retains failed Remove feedback after automatic unchanged dashboard reconcili
     },
   } as ApplicationGatewaySnapshot;
   document.body.append(element);
-  await settleLitElement(element);
-  const view = element.querySelector("openclaw-board-view")!;
-  expect(view).not.toBeNull();
+  const view = await waitForSolid(() => {
+    const current = element.querySelector("openclaw-board-view");
+    expect(current?.snapshot?.revision).toBe(1);
+    return current!;
+  });
   await settleCells(view);
   const remove = view.querySelector<HTMLElement>(".board-widget__menu-danger")!;
   expect(remove).not.toBeNull();
@@ -157,19 +159,21 @@ it("retains failed Remove feedback after automatic unchanged dashboard reconcili
     widget:
       view.querySelector('[data-test-id="board-widget-action-error"]')?.textContent?.trim() ?? null,
   });
+  await waitForSolid(() => {
+    expect(errors().board).toContain("could not be saved");
+    expect(errors().widget).toContain("Dashboard write rejected");
+  });
   const beforeRefresh = errors();
-  expect(beforeRefresh.board).toContain("could not be saved");
-  expect(beforeRefresh.widget).toContain("Dashboard write rejected");
-
+  const previousSnapshot = view.snapshot;
   recovery.resolve(structuredClone(initial));
-  await settleLitElement(element);
+  await waitForSolid(() => expect(view.snapshot).not.toBe(previousSnapshot));
   await settleCells(view);
   expect(view.snapshot?.revision).toBe(1);
   expect(view.querySelectorAll("openclaw-board-widget-cell")).toHaveLength(1);
   expect(errors()).toEqual(beforeRefresh);
 
   remove.click();
-  await settleLitElement(element);
+  await waitForSolid(() => expect(view.snapshot?.revision).toBe(2));
   await settleCells(view);
   expect(writes).toBe(2);
   expect(view.snapshot?.revision).toBe(2);

@@ -353,12 +353,7 @@ final class NodeAppModel {
     // multiple pending requests and cause the onboarding UI to "flip-flop".
     var gatewayPairingPaused: Bool = false
     var gatewayPairingRequestId: String?
-    // Bumped on every non-nil assignment, including re-reports of an equal problem;
-    // value equality alone cannot tell the UI to re-surface a dismissed toast.
-    private(set) var gatewayProblemReportCount = 0
-    private(set) var lastGatewayProblem: GatewayConnectionProblem? {
-        didSet { if self.lastGatewayProblem != nil { self.gatewayProblemReportCount &+= 1 } }
-    }
+    private(set) var lastGatewayProblem: GatewayConnectionProblem?
 
     // Live connection problems drive retry behavior. lastGatewayProblem may outlive both so the UI
     // keeps the previous failure readable while an explicit reconnect starts a fresh attempt.
@@ -367,6 +362,18 @@ final class NodeAppModel {
     private var gatewayPreconnectProblem: (stableID: String, problem: GatewayConnectionProblem)?
     var gatewayDisplayStatusText: String {
         self.lastGatewayProblem?.localizedStatusText ?? self.gatewayStatusText
+    }
+
+    var gatewayProblemForToast: GatewayConnectionProblem? {
+        guard let problem = self.lastGatewayProblem else { return nil }
+        // Keep transient network failures in Settings while the operator route is live,
+        // including display history retained after reconnect clears the live problems.
+        if self.operatorConnected, problem.owner == .network,
+           problem.retryable, !problem.pauseReconnect, !problem.needsPairingApproval
+        {
+            return nil
+        }
+        return problem
     }
 
     private var mainSessionBaseKey: String = "main"

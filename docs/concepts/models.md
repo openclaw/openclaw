@@ -67,6 +67,14 @@ Related model-config surfaces:
 
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
+Utility tasks request thinking off so their bounded output budgets go to the
+title, observer digest, or summary rather than hidden reasoning. This also
+overrides configured native Ollama `think`/`thinking` and OpenAI-compatible
+`enable_thinking` switches for these requests, without changing ordinary chat
+reasoning, other model parameters, or task timeouts. Providers that require
+reasoning still apply their supported minimum; see
+[Ollama thinking control](/providers/ollama/advanced).
+
 For the typed decision model class, available models, rubrics, and plugin API,
 see [Decision models](/concepts/decision-models).
 
@@ -477,9 +485,10 @@ provider model discovery, then publishes its model rows and prices together
 without restarting. Picker reads keep using the current generation during
 preparation; a failed or superseded preparation leaves it in place. A provider
 whose discovery fails publishes with the new generation's built-in rows.
-Reply, scheduled-run, and agent RPC preparation retain their captured model
-generation through admission. Publishing a newer catalog does not interrupt
-those turns before their first model request. Native model lookups can finish
+Admitted turns retain their captured model generation. If a newer catalog
+supersedes an agent RPC's runtime preparation before acceptance, the request
+returns a retryable `UNAVAILABLE` response without starting the turn. Retry the
+request to prepare against the current runtime. Native model lookups can finish
 for an admitted turn without replacing the newer shared catalog. Nested model
 calls keep the admitted config, and each usage-estimation operation uses one
 pricing context.

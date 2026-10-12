@@ -1,14 +1,14 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   registerSessionPendingInputOwner,
   releaseSessionPendingInputOwner,
-  type SessionPendingInputOwner,
 } from "../config/sessions/session-accessor.sqlite-pending-inputs.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import type { SessionPendingInputOwner } from "../config/sessions/session-pending-input-owner.types.js";
 import { createIncognitoSessionHistoryReader } from "../gateway/session-history-snapshot.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as workerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";

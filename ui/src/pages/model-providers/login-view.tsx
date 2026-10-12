@@ -23,18 +23,7 @@ export function ModelProviderLoginView(props: {
       when={picker()}
       fallback={
         <div onModal-cancel={(event: Event) => event.preventDefault()}>
-          <ModelSetupWizard
-            mode={wizard().mode}
-            state={wizard().state}
-            refreshWarning={wizard().refreshWarning}
-            doneMessage={wizard().doneMessage}
-            cancellationNotice={wizard().cancellationNotice}
-            value={wizard().value}
-            onValueChange={(value) => wizard().onValueChange(value)}
-            onAnswer={(value, includeValue) => wizard().onAnswer(value, includeValue)}
-            onCancel={() => wizard().onCancel()}
-            onClose={() => wizard().onClose()}
-          />
+          <ModelSetupWizard {...wizard()} />
         </div>
       }
     >

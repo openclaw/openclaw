@@ -610,16 +610,19 @@ export class CronPageController {
       // stays on the captured CronState after navigation.
       const stillEditing = editing || Boolean(cronState.cronEditingJob);
       this.deliveryDirectory.afterSave(cronState, connectionScope, editorGeneration, stillEditing);
-      if (stillEditing) {
+      if (editing) {
         return;
       }
       if (runNow && result.jobId) {
         // Explicit create-and-run intent survives navigation while saving.
         await runCronJob(cronState, result.jobId, "force");
       }
-      cronState.cronCreateOpen = false;
       // Creating returns to the overview's all-job history.
-      if (cronState.cronRunsScope === "job") {
+      if (
+        !cronState.cronEditingJob &&
+        !cronState.cronCreateOpen &&
+        cronState.cronRunsScope === "job"
+      ) {
         await loadCronRunsForJob(cronState, null);
       }
     });
@@ -643,8 +646,14 @@ export class CronPageController {
       onOpenCreate: (patch) => this.openCreate(patch),
       onClosePanel: () => this.closePanel(),
       onClone: (job) => this.cloneJob(job),
-      onToggle: (job, enabled) =>
-        this.runCronAdminTask((cronState) => toggleCronJob(cronState, job, enabled)),
+      onToggle: (job, enabled) => {
+        const scope = this.gateway.capture();
+        const editorGeneration = this.deliveryDirectory.generation;
+        this.runCronAdminTask(async (cronState) => {
+          await toggleCronJob(cronState, job, enabled);
+          this.deliveryDirectory.reconcileRoute(cronState, scope, editorGeneration);
+        });
+      },
       onRun: (job, mode) =>
         this.runCronAdminTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
       onRemove: (job) => void this.removeJob(job),

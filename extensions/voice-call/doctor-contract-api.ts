@@ -63,6 +63,8 @@ const schemaMigrationDescriptions = {
     "prepared workers -> one-use capacity and fixed workspace ownership",
   "github-publication-requester-authority-v18":
     "GitHub publication receipts -> original requesting authority",
+  "predicate-columns-v21":
+    "meeting transcripts and delivery retention -> derived predicate columns",
   "worker-placement-execution-mode-v8": "cloud worker placements -> execution-mode claims",
   "operator-approvals-system-agent": "operator approvals -> OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors -> provenance column",

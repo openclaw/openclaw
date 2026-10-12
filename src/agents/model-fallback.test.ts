@@ -105,8 +105,10 @@ const authRuntimeMock = vi.hoisted(() => {
       stores.set(keyFor(agentDir), store);
     },
     runtime: {
-      ensureAuthProfileStore: vi.fn((agentDir?: string, _options?: unknown) => getStore(agentDir)),
-      loadAuthProfileStoreForRuntime: vi.fn((agentDir?: string) => getStore(agentDir)),
+      ensureAuthProfileStoreAsync: vi.fn((agentDir?: string, _options?: unknown) =>
+        getStore(agentDir),
+      ),
+      loadAuthProfileStoreForRuntimeAsync: vi.fn(async (agentDir?: string) => getStore(agentDir)),
       resolveAuthProfileOrder: vi.fn(
         (params: {
           store: AuthProfileStore;
@@ -186,8 +188,8 @@ function resetModelFallbackTestState(): void {
   resetFallbackSkipCacheForTest();
   clearAgentHarnesses();
   authRuntimeMock.clear();
-  authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
-  authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
+  authRuntimeMock.runtime.ensureAuthProfileStoreAsync.mockClear();
+  authRuntimeMock.runtime.loadAuthProfileStoreForRuntimeAsync.mockClear();
   authRuntimeMock.runtime.resolveAuthProfileOrder.mockClear();
   authRuntimeMock.runtime.maybeReprobeWhamBlockedProfiles.mockReset();
   authSourceCheckMock.hasAnyAuthProfileStoreSourceAsync.mockReset().mockReturnValue(false);
@@ -1175,7 +1177,7 @@ describe("runWithModelFallback", () => {
       expect.objectContaining({ profileIds: [pendingProfileId, backupProfileId] }),
     );
     expect(store.order?.[provider]).toEqual([backupProfileId]);
-    expect(authRuntimeMock.runtime.ensureAuthProfileStore).toHaveBeenCalledWith(
+    expect(authRuntimeMock.runtime.ensureAuthProfileStoreAsync).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
         profileId: pendingProfileId,

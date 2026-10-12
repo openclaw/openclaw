@@ -9,17 +9,16 @@ import {
 } from "../../routing/session-key.js";
 import { getSpeechProvider, listSpeechProviders } from "../../tts/provider-registry.js";
 import {
-  getResolvedSpeechProviderConfig,
   getLastTtsAttempt,
   getTtsMaxLength,
   getTtsPersona,
-  getTtsProvider,
+  getTtsProviderAsync,
   isSummarizationEnabled,
   isTtsEnabled,
-  isTtsProviderConfigured,
+  isTtsProviderConfiguredAsync,
   listTtsPersonas,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
   setLastTtsAttempt,
   setSummarizationEnabled,
   setTtsEnabled,
@@ -218,15 +217,15 @@ async function handleTtsLatestAction(
   return stopWithText(audio.reply);
 }
 
-function handleTtsStatusAction(
+async function handleTtsStatusAction(
   params: TtsCommandParams,
   config: ReturnType<typeof resolveTtsConfig>,
   prefsPath: string,
-): CommandHandlerResult {
+): Promise<CommandHandlerResult> {
   const enabled = isTtsEnabled(config, prefsPath);
-  const provider = getTtsProvider(config, prefsPath);
+  const provider = await getTtsProviderAsync(config, prefsPath);
   const persona = getTtsPersona(config, prefsPath);
-  const hasKey = isTtsProviderConfigured(config, provider, params.cfg);
+  const hasKey = await isTtsProviderConfiguredAsync(config, provider, params.cfg);
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath);
   const last = getLastTtsAttempt();
@@ -290,7 +289,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       channelId: params.command.channel,
       accountId,
     });
-    const prefsPath = resolveTtsPrefsPath(config);
+    const prefsPath = await resolveTtsPrefsPathAsync(config);
     const { action, args } = parsed;
 
     if (action === "help") {
@@ -332,30 +331,19 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
     }
 
     if (action === "provider") {
-      const currentProvider = getTtsProvider(config, prefsPath);
+      const currentProvider = await getTtsProviderAsync(config, prefsPath);
       if (!args) {
         const providers = listSpeechProviders(params.cfg);
+        const providerStates = await Promise.all(
+          providers.map(
+            async (provider) =>
+              `${provider.label}: ${(await isTtsProviderConfiguredAsync(config, provider, params.cfg)) ? "✅" : "❌"}`,
+          ),
+        );
         return stopWithText(
           `🎙️ TTS provider\n` +
             `Primary: ${currentProvider}\n` +
-            providers
-              .map(
-                (provider) =>
-                  `${provider.label}: ${
-                    provider.isConfigured({
-                      cfg: params.cfg,
-                      providerConfig: getResolvedSpeechProviderConfig(
-                        config,
-                        provider.id,
-                        params.cfg,
-                      ),
-                      timeoutMs: config.timeoutMs,
-                    })
-                      ? "✅"
-                      : "❌"
-                  }`,
-              )
-              .join("\n") +
+            providerStates.join("\n") +
             `\nUsage: /tts provider <id>`,
         );
       }

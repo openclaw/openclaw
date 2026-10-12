@@ -52,7 +52,7 @@ export class McpAppUnmountGate<Value = unknown> {
     key: McpAppUnmountKey,
     renderValue: () => Value,
     leavingRoots: () => Iterable<ParentNode>,
-    options: { retainRenderedValue?: boolean } = {},
+    options: { retainRenderedValue?: boolean; afterCommit?: (effect: () => void) => void } = {},
   ): Value {
     if (this.pending) {
       return this.renderedValue;
@@ -68,7 +68,9 @@ export class McpAppUnmountGate<Value = unknown> {
           }
         }
       };
-      if (this.afterCommit) {
+      if (options.afterCommit) {
+        options.afterCommit(restart);
+      } else if (this.afterCommit) {
         void this.afterCommit().then(restart);
       } else {
         queueMicrotask(restart);

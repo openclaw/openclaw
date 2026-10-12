@@ -12,7 +12,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { publishAgentDeletionWorkAdmission } from "../sessions/session-agent-work-admission.js";
 import {
   captureAgentDatabasePreparationDeletionForIdentity,
   readAgentDatabaseAdmissionRefusal,
@@ -39,10 +39,7 @@ import {
   type AgentLifecycleStoreFacts,
 } from "../state/agent-lifecycle-read.kernel.js";
 import type { AgentProvenance } from "../state/agent-provenance.js";
-import {
-  invalidateRegisteredAgentDatabasesMemo,
-  emitOpenClawAgentDatabaseRegistryChange,
-} from "../state/openclaw-agent-db-registry-listing.js";
+import { prepareOpenClawAgentDatabaseRegistryRemoval } from "../state/openclaw-agent-db-registry-listing.js";
 import { invalidateOpenClawAgentDatabaseValidationsForAgent } from "../state/openclaw-agent-db-validation-cache.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import type {
@@ -72,8 +69,9 @@ import type { DomainScope } from "../state/openclaw-state-worker-store.types.js"
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
   beginRemoteAgentDeletionJournal,
+  fenceAgentDeletionJournalPaths,
   rollbackRemoteAgentDeletionJournal,
-} from "./agent-deletion-journal-remote.js";
+} from "./agent-deletion-journal-mutations.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 export {
   AgentDeletionAuthorityRollbackError,
@@ -92,6 +90,7 @@ export type AgentLifecycleBinding = Readonly<{
 type AgentDeletionBeginOptions = {
   expectedClawInstall?: PersistedClawInstall | null;
   preserveDeleteFiles?: boolean;
+  recoveryOperationId?: string;
 };
 
 export type AgentDeletionOperation = AgentDeletionWorkerAuthority & {
@@ -102,6 +101,7 @@ export type AgentDeletionOperation = AgentDeletionWorkerAuthority & {
   runDatabaseCleanup: ReturnType<typeof createAgentDeletionDatabaseCleanup>;
   fenceDatabasePaths(paths: readonly string[]): Promise<void>;
   fenceCleanupPaths(paths: readonly AgentDeletionJournalCleanupPath[]): Promise<void>;
+  retire(): Promise<void>;
   finish(options?: { unregisterDatabases?: boolean }): Promise<void>;
   releaseClawRows(input: {
     files: Array<{ path: string; action: string }>;
@@ -152,6 +152,7 @@ export function withAgentDeletion<T>(
     context,
     async (lease) =>
       withOpenClawStateLeaseWorkerAdmission(lease, statePath, async (lifetime) => {
+        let publishRegistryRemoval: () => void;
         let begun = false;
         let closed = false;
         let currentOperationId: string | undefined;
@@ -161,7 +162,7 @@ export function withAgentDeletion<T>(
           }
           lifetime.assertCurrent();
         };
-        const execute = <Result>(
+        const execute = async <Result>(
           apply: (
             scope: DomainScope,
             identity: typeof lifetime.identity,
@@ -217,11 +218,9 @@ export function withAgentDeletion<T>(
                       throw error;
                     }
                     if (facts.unregisterDatabases === true) {
-                      invalidateRegisteredAgentDatabasesMemo({ path: statePath });
                       invalidateOpenClawAgentDatabaseValidationsForAgent(id, []);
-                      emitOpenClawAgentDatabaseRegistryChange(id);
                     }
-                    sessionChanges.emit({ all: true, scope: "stores" });
+                    publishRegistryRemoval();
                   };
                   observeSqliteWorkerCommittedFacts(created.admission, ({ facts }) =>
                     onCommitted(facts),
@@ -259,9 +258,26 @@ export function withAgentDeletion<T>(
             }
             begun = true;
             const capturedEntry = structuredClone(entry);
+            publishRegistryRemoval = await prepareOpenClawAgentDatabaseRegistryRemoval(id, {
+              path: statePath,
+              env: context.environment,
+            });
+            assertCurrentHost();
             const preserveDeleteFiles = beginOptions.preserveDeleteFiles;
             const operationId = crypto.randomUUID();
             currentOperationId = operationId;
+            const publishIngress = (pending: boolean) => {
+              (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
+              publishAgentDeletionWorkAdmission(
+                { agentId: id, statePath, env: context.environment },
+                operationId,
+                pending,
+              );
+            };
+            const completeOperation = () => {
+              closed = true;
+              publishIngress(false);
+            };
             const predicate: AgentDeletionWorkerPredicate = {
               agentId: id,
               operationId,
@@ -298,19 +314,22 @@ export function withAgentDeletion<T>(
                         lease: identity,
                         expectedClawInstall: predicate.expectedClawInstall,
                         preserveDeleteFiles,
+                        recoveryOperationId: beginOptions.recoveryOperationId,
                       },
                     }),
                   {
                     onCommitted: () => {
+                      publishIngress(true);
                       invalidatePreparation();
                       cancelCronRuns();
                     },
                   },
                 );
             if (remoteOwner) {
+              publishIngress(true);
               invalidatePreparation();
               cancelCronRuns();
-              sessionChanges.emit({ all: true, scope: "stores" });
+              publishRegistryRemoval();
             }
             assertCurrentHost();
             const authority: AgentDeletionWorkerAuthority = {
@@ -401,7 +420,18 @@ export function withAgentDeletion<T>(
               previousEntry,
               assertCurrentAsync,
               assertCurrentFinal,
+              retire: () =>
+                authority.runWithWorker(
+                  (scope, guard) =>
+                    scope.execute({ type: "agentDeletion.retire", input: { guard } }),
+                  {
+                    onCommitted: () => {
+                      journal.phase = "retiring";
+                    },
+                  },
+                ),
               runDatabaseCleanup: createAgentDeletionDatabaseCleanup({
+                agentId: id,
                 statePath,
                 workerAuthority: authority,
                 assertCurrent: assertNativeCurrent,
@@ -455,50 +485,25 @@ export function withAgentDeletion<T>(
                   }
                 },
               }),
-              fenceDatabasePaths: async (paths) => {
-                const normalized = [...new Set(paths.map((pathname) => path.resolve(pathname)))];
-                await authority.runWithWorker(
-                  (scope, guard) =>
-                    scope.execute({
-                      type: "agentDeletion.fencePaths",
-                      input: { guard, paths: { kind: "database", paths: normalized } },
-                    }),
-                  {
-                    onCommitted: () => {
-                      journal.databasePaths = normalized;
-                    },
-                  },
-                );
-              },
-              fenceCleanupPaths: async (paths) => {
-                const captured = structuredClone([...paths]);
-                await authority.runWithWorker(
-                  (scope, guard) =>
-                    scope.execute({
-                      type: "agentDeletion.fencePaths",
-                      input: { guard, paths: { kind: "cleanup", paths: captured } },
-                    }),
-                  {
-                    onCommitted: () => {
-                      journal.cleanupPaths = captured;
-                    },
-                  },
-                );
-              },
-              finish: async (finishOptions) => {
-                await authority.runWithWorker(
+              fenceDatabasePaths: (paths) =>
+                fenceAgentDeletionJournalPaths(authority, journal, {
+                  kind: "database",
+                  paths: [...new Set(paths.map((pathname) => path.resolve(pathname)))],
+                }),
+              fenceCleanupPaths: (paths) =>
+                fenceAgentDeletionJournalPaths(authority, journal, {
+                  kind: "cleanup",
+                  paths: structuredClone([...paths]),
+                }),
+              finish: (finishOptions) =>
+                authority.runWithWorker(
                   (scope, guard) =>
                     scope.execute({
                       type: "agentDeletion.finish",
                       input: { guard, ...finishOptions },
                     }),
-                  {
-                    onCommitted: () => {
-                      closed = true;
-                    },
-                  },
-                );
-              },
+                  { onCommitted: completeOperation },
+                ),
               releaseClawRows: async (input) => {
                 const completed = await authority.runWithWorker(
                   (scope, guard) =>
@@ -509,7 +514,7 @@ export function withAgentDeletion<T>(
                   {
                     onCommitted: () => {
                       if (input.complete) {
-                        closed = true;
+                        completeOperation();
                       }
                     },
                   },
@@ -542,8 +547,8 @@ export function withAgentDeletion<T>(
               rollback: async () => {
                 if (remoteOwner) {
                   await rollbackRemoteAgentDeletionJournal(remoteOwner, id, operationId);
-                  closed = true;
-                  sessionChanges.emit({ all: true, scope: "stores" });
+                  completeOperation();
+                  publishRegistryRemoval();
                   return;
                 }
                 await execute(
@@ -554,11 +559,7 @@ export function withAgentDeletion<T>(
                         guard: { lease: identity, predicate },
                       },
                     }),
-                  {
-                    onCommitted: () => {
-                      closed = true;
-                    },
-                  },
+                  { onCommitted: completeOperation },
                 );
               },
             };

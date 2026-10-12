@@ -11,7 +11,6 @@ import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as census from "../infra/openclaw-process-census.js";
 import * as sqliteDiagnostics from "../infra/sqlite-error-diagnostics.js";
 import * as stagingToken from "../infra/sqlite-staging-token.js";
-import * as temporaryUsage from "../infra/temp-directory-usage.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -452,11 +451,10 @@ it.each([
   },
 );
 
-it("reclaims aged tokenless roots proven inactive and retries locked roots", async () => {
+it("reclaims aged tokenless roots and retries locked roots", async () => {
   const stateDir = temp.make("capture-recovery-legacy-");
   const stateTemp = path.join(stateDir, "tmp");
   fs.mkdirSync(stateTemp);
-  vi.spyOn(temporaryUsage, "inspectTemporaryDirectoryUsage").mockReturnValue({ kind: "inactive" });
   const create = (parent: string, name: string) => {
     const directory = path.join(parent, name);
     fs.mkdirSync(directory);
@@ -478,12 +476,12 @@ it("reclaims aged tokenless roots proven inactive and retries locked roots", asy
   const fresh = create(tmpdir(), "openclaw-plugin-build-fresh");
   // Filesystem timestamps use the real clock even when Date is faked.
   fs.utimesSync(fresh, new Date(), new Date());
-  const rename = fsPromises.rename.bind(fsPromises);
-  const probe = vi.spyOn(fsPromises, "rename").mockImplementation(async (from, to) => {
-    if (from === busy) {
+  const remove = fsPromises.rm.bind(fsPromises);
+  const probe = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
+    if (target === busy) {
       throw locked;
     }
-    await rename(from, to);
+    await remove(target, options);
   });
   await sweepPluginSourceCapturesForTest(stateDir);
   expect(old.filter((directory) => fs.existsSync(directory))).toHaveLength(0);
@@ -491,7 +489,6 @@ it("reclaims aged tokenless roots proven inactive and retries locked roots", asy
   for (const kept of [fresh, busy, tokened, unrelated, link]) {
     expect(fs.existsSync(kept)).toBe(true);
   }
-  // Renaming alone must not count as reclaiming the payload.
   expect(fs.readdirSync(stateTemp)).toEqual([]);
   const retainedNames = () =>
     fs
@@ -510,7 +507,6 @@ it("reclaims aged tokenless roots proven inactive and retries locked roots", asy
 });
 
 it("retries partial tokenless removal without exhausting directory name limits", async () => {
-  vi.spyOn(temporaryUsage, "inspectTemporaryDirectoryUsage").mockReturnValue({ kind: "inactive" });
   const stateDir = temp.make("capture-recovery-retry-");
   const managed = path.join(stateDir, "tmp", "plugin-captures");
   const directory = path.join(managed, "interrupted-instance");

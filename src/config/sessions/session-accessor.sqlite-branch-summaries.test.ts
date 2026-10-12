@@ -1,9 +1,9 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -200,7 +200,7 @@ const cases: Array<{
         { type: "text", text: "joined" },
       ]),
       message("analysis", "root", "not the headline", { role: "assistant", phase: "commentary" }),
-      message("answer", "analysis", " final\n  answer ", {
+      message("answer", "analysis", "## **final**\n  [answer](https://example.com) ", {
         role: "assistant",
         phase: "final_answer",
       }),
@@ -282,7 +282,7 @@ async function seedStoredBranchEvents(events: Record<string, unknown>[]) {
             events.map((event, index) => ({
               session_id: scope.sessionId,
               seq: index + 2,
-              event_json: JSON.stringify(event),
+              ...prepareTranscriptPayload(database.db, JSON.stringify(event)),
               created_at: 1,
             })),
           ),
@@ -459,7 +459,8 @@ it("uses one snapshot for navigation and lazy headline reads", async () => {
     message("tail", "root", "tool payload", { role: "toolResult" }),
   ]);
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
-  const writer = new DatabaseSync(database.path);
+  const writer = sqliteRuntime.openNodeSqliteDatabase(database.path);
+  admitSqliteSchema(writer);
   const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
   if (typeof databaseIdentity !== "string") {
     throw new Error("expected a persisted branch fixture");

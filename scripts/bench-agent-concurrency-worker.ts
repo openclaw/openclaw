@@ -259,6 +259,8 @@ async function runSpawnSample(
       buildRegistration: () => ({
         runId,
         childSessionKey: `agent:bench:subagent:${mode}:${serial}:${index}`,
+        childAgentId: "bench",
+        sessionEntry: { sessionId: runId },
         requesterSessionKey: "agent:bench:main",
         requesterDisplayKey: "bench",
         task: `benchmark child ${index}`,
@@ -452,6 +454,8 @@ function sweepRow(child: number, generation: number, now: number): SubagentRunRe
   return {
     runId: `bench-sweep-${child}-${generation}`,
     childSessionKey: `agent:bench:subagent:sweep-${child}`,
+    childAgentId: "bench",
+    childSessionIdentity: { sessionId: `bench-sweep-${child}` },
     requesterSessionKey: "agent:bench:main",
     requesterDisplayKey: "bench",
     task: `sweep child ${child}`,

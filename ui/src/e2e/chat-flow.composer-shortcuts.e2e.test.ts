@@ -71,7 +71,9 @@ suite.define(() => {
       expect(await composer.inputValue()).toContain("\n");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      await composer.fill("default enter send");
+      // Firefox fill() emits compositionend; type deliberate sends through keyboard events.
+      await composer.fill("");
+      await composer.pressSequentially("default enter send");
       await composer.press("Enter");
       const defaultRequest = await gateway.waitForRequest("chat.send");
       const defaultParams = requireRecord(defaultRequest.params);
@@ -107,7 +109,8 @@ suite.define(() => {
       await composer.dispatchEvent("compositionend");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      await composer.fill("modifier send");
+      await composer.fill("");
+      await composer.pressSequentially("modifier send");
       await composer.press("Meta+Enter");
       const modifierRequest = await gateway.waitForRequest("chat.send");
       expect(requireRecord(modifierRequest.params).message).toBe("modifier send");

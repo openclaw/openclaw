@@ -1,4 +1,4 @@
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { z } from "zod";
 import { isRetryableError, MattermostPostSchema, type MattermostUser } from "./client.js";
@@ -61,8 +61,8 @@ export function createMattermostThreadBackfill(params: {
   // Evicting an LRU marker must never free capacity for another unresolved request.
   const inFlight = new Set<Promise<HistoryEntry[]>>();
 
-  const readIdentity = (turn: ThreadTurn): string | null => {
-    const entry = getSessionEntry({
+  const readIdentity = async (turn: ThreadTurn): Promise<string | null> => {
+    const entry = await getSessionEntryAsync({
       agentId: turn.agentId,
       storePath: resolveStorePath(cfg.session?.store, { agentId: turn.agentId }),
       sessionKey: turn.historyKey,
@@ -193,7 +193,7 @@ export function createMattermostThreadBackfill(params: {
     }
     let identity: string | null;
     try {
-      identity = readIdentity(turn);
+      identity = await readIdentity(turn);
     } catch {
       monitor.logVerboseMessage("mattermost: thread recovery skipped (session store unavailable)");
       return {};

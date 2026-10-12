@@ -35,6 +35,7 @@ import {
   transcriptEventNavigationSql,
   transcriptEventResetNavigationSql,
 } from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 type VisibleMessagePositions = {
   boundaryActivePosition?: number;
@@ -612,26 +613,20 @@ export function hasOversizedVisibleMessages(
   maxBytes: number,
   roles: readonly string[],
 ): boolean {
-  return selectVisibleMessageRanges(projection, start, endExclusive).some(
-    (range) =>
-      executeSqliteQueryTakeFirstSync(
-        projection.database.db,
-        selectMessageRows(projection.database, projection.resolved.sessionId, range)
-          .select("active.event_seq")
-          .where((eb) => eb(transcriptEventReadBytesSql("event"), ">=", maxBytes))
-          .where((eb) =>
-            eb(
-              eb.fn<string>("json_extract", [
-                transcriptEventNavigationSql("event"),
-                eb.val("$.message.role"),
-              ]),
-              "in",
-              roles,
-            ),
-          )
-          .limit(1),
-      ) !== undefined,
-  );
+  return selectVisibleMessageRanges(projection, start, endExclusive).some((range) => {
+    const row = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      selectMessageRows(projection.database, projection.resolved.sessionId, range)
+        .select(["active.event_seq", "event.navigation_valid"])
+        .where((eb) => eb(transcriptEventReadBytesSql("event"), ">=", maxBytes))
+        .where((eb) =>
+          eb.or([eb("event.message_role", "in", roles), eb("event.navigation_valid", "=", 0)]),
+        )
+        .limit(1),
+    );
+    assertTranscriptNavigationValid(row?.navigation_valid);
+    return row !== undefined;
+  });
 }
 
 /** Byte-bounded tails can stop sizing at their first excluded predecessor. */

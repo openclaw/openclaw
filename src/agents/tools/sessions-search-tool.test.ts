@@ -1,4 +1,4 @@
-/** sessions_search visibility, bounds, redaction, and input tests. */
+/** sessions_search visibility, bounds, fidelity, and input tests. */
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
@@ -382,7 +382,7 @@ describe("sessions_search tool", () => {
     expect(searchedKeys).toEqual([["agent:main:child:spawned", "agent:main:main"]]);
   });
 
-  it("redacts and truncates snippets, limits rows, and caps bytes", async () => {
+  it("preserves and truncates snippets, limits rows, and caps bytes", async () => {
     const token = ["sk", "or", "v1", "abcdef0123456789"].join("-");
     // Assembled so the pre-review secret scanner never sees a key-shaped literal.
     const keyShaped = `${["OPENROUTER", "API", "KEY"].join("_")}=${token}`;
@@ -398,7 +398,7 @@ describe("sessions_search tool", () => {
     const details = limited.details as { results: unknown[]; truncated?: boolean };
     expect(details.results).toHaveLength(2);
     expect(details.truncated).toBe(true);
-    expect(JSON.stringify(details)).not.toContain(token);
+    expect(JSON.stringify(details)).toContain(token);
 
     const oversized = createTool({
       results: [hit({ messageId: "x".repeat(40_000) })],

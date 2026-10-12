@@ -8,13 +8,9 @@ type ProfileAppearancePrefs = {
   profileId: string;
   scope: string;
   prefs: ServerUiPrefs;
-  sidebarEntriesReady: boolean;
 };
 export type ProfilePreferencesReadOptions = {
-  configObject: unknown;
-  canMigrate: boolean | (() => boolean);
   isCurrent: () => boolean;
-  onSidebarEntriesUnavailable?: (error: unknown) => void;
 };
 
 // The asynchronous reader borrows this same owner, never a copied publication state.

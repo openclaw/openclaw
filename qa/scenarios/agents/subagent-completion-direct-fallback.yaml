@@ -261,7 +261,7 @@ flow:
               # Denying outbound messaging must not disable the parent's orchestration tools.
               - set: activePhase
                 value: private-config
-              - call: restartGatewayWithConfigPatch
+              - call: patchConfig
                 args:
                   - env:
                       ref: env
@@ -472,7 +472,7 @@ flow:
                       - tools.deny
                       - agents.entries.qa.tools.deny
                       - gateway.controlUi.allowedOrigins
-                    skipRestartDeferral: true
+              - call: env.gateway.restart
               - call: waitForGatewayHealthy
                 args:
                   - ref: env

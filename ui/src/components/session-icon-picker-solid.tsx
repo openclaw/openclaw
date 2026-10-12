@@ -16,7 +16,7 @@ import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
 
-type AppearancePickerProps = {
+export type AppearancePickerProps = {
   inline?: boolean;
   allowSvg?: boolean;
   clearable?: boolean;

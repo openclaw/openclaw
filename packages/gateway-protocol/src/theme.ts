@@ -259,6 +259,14 @@ function requireText(value: unknown, label: string, maxLength: number): string {
   return value.trim();
 }
 
+function requireChoice<T extends string>(value: unknown, allowed: readonly T[], label: string): T {
+  const choice = allowed.find((candidate) => candidate === value);
+  if (!choice) {
+    throw new Error(`${label} must be one of ${allowed.join(", ")}`);
+  }
+  return choice;
+}
+
 const NUMBER = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
 const COMPONENT = `${NUMBER}%?`;
 const HUE = `${NUMBER}(?:deg|grad|rad|turn)?`;
@@ -388,11 +396,7 @@ export function normalizeThemeDefinition(
     ...(record.dark !== undefined ? { dark: normalizePalette(record.dark, "dark") } : {}),
   };
   if (record.mascot !== undefined) {
-    const mascot = THEME_MASCOT_VALUES.find((candidate) => candidate === record.mascot);
-    if (!mascot) {
-      throw new Error(`theme.mascot must be one of ${THEME_MASCOT_VALUES.join(", ")}`);
-    }
-    definition.mascot = mascot;
+    definition.mascot = requireChoice(record.mascot, THEME_MASCOT_VALUES, "theme.mascot");
   }
   if (record.brandName !== undefined) {
     const brandName = requireText(record.brandName, "theme.brandName", THEME_BRAND_NAME_MAX_LENGTH);
@@ -402,23 +406,18 @@ export function normalizeThemeDefinition(
     definition.brandName = brandName;
   }
   if (record.brandIcon !== undefined) {
-    const allowedIds = [...THEME_BRAND_ICON_IDS, ...(options?.iconIds ?? [])];
-    const brandIcon = allowedIds.find((id) => id === record.brandIcon);
-    if (!brandIcon) {
-      throw new Error(`theme.brandIcon must be one of ${allowedIds.join(", ")}`);
-    }
-    definition.brandIcon = brandIcon;
+    definition.brandIcon = requireChoice(
+      record.brandIcon,
+      [...THEME_BRAND_ICON_IDS, ...(options?.iconIds ?? [])],
+      "theme.brandIcon",
+    );
   }
   if (record.workingIndicator !== undefined) {
-    const workingIndicator = THEME_WORKING_INDICATOR_VALUES.find(
-      (value) => value === record.workingIndicator,
+    definition.workingIndicator = requireChoice(
+      record.workingIndicator,
+      THEME_WORKING_INDICATOR_VALUES,
+      "theme.workingIndicator",
     );
-    if (!workingIndicator) {
-      throw new Error(
-        `theme.workingIndicator must be one of ${THEME_WORKING_INDICATOR_VALUES.join(", ")}`,
-      );
-    }
-    definition.workingIndicator = workingIndicator;
   }
   for (const key of ["lobsterdex", "communityLinks"] as const) {
     if (record[key] !== undefined) {
@@ -450,25 +449,20 @@ export function normalizeThemeDefinition(
       throw new Error("theme.critters must be an array of at most 8 entries");
     }
     const allowedIds = [...THEME_CRITTER_IDS, ...(options?.critterIds ?? [])];
-    const critters = Array.from(record.critters, (entry, index) => {
-      const critter = allowedIds.find((id) => id === entry);
-      if (!critter) {
-        throw new Error(`theme.critters[${index}] must be one of ${allowedIds.join(", ")}`);
-      }
-      return critter;
-    });
+    const critters = Array.from(record.critters, (entry, index) =>
+      requireChoice(entry, allowedIds, `theme.critters[${index}]`),
+    );
     if (new Set(critters).size !== critters.length) {
       throw new Error("theme.critters must not contain duplicate entries");
     }
     definition.critters = critters;
   }
   if (record.avatarHat !== undefined) {
-    const allowedIds = [...THEME_AVATAR_HAT_IDS, ...(options?.hatIds ?? [])];
-    const avatarHat = allowedIds.find((id) => id === record.avatarHat);
-    if (!avatarHat) {
-      throw new Error(`theme.avatarHat must be one of ${allowedIds.join(", ")}`);
-    }
-    definition.avatarHat = avatarHat;
+    definition.avatarHat = requireChoice(
+      record.avatarHat,
+      [...THEME_AVATAR_HAT_IDS, ...(options?.hatIds ?? [])],
+      "theme.avatarHat",
+    );
   }
   if (!definition.light && !definition.dark) {
     throw new Error("theme must provide at least one light or dark palette");

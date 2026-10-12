@@ -7,10 +7,10 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import type { PreparedTranscriptCommit } from "./transcript-commit-policy.js";
 import {
   applyPreparedTranscriptCommit,
   prepareTranscriptCommit,
-  type PreparedTranscriptCommit,
 } from "./transcript-commit.kernel.js";
 import type {
   ApplyTranscriptCommitResult,

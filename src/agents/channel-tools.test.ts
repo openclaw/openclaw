@@ -6,10 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import {
-  listAllChannelSupportedActionsSteps,
-  listChannelSupportedActionsSteps,
-} from "./channel-tools.js";
+import { listChannelSupportedActionsSteps } from "./channel-tools.js";
 
 const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG = {
   version: 0,
@@ -55,8 +52,9 @@ describe("channel tools", () => {
   it("keeps an explicitly empty prepared catalog authoritative", async () => {
     expect(
       await runMessageActionDiscoveryAsync(
-        listAllChannelSupportedActionsSteps({
+        listChannelSupportedActionsSteps({
           cfg: {} as OpenClawConfig,
+          channel: "test",
           preparedMessageToolCatalog: EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
         }),
       ),
@@ -67,12 +65,16 @@ describe("channel tools", () => {
   it("skips crashing plugins and logs once", async () => {
     const cfg = {} as OpenClawConfig;
     expect(
-      await runMessageActionDiscoveryAsync(listAllChannelSupportedActionsSteps({ cfg })),
+      await runMessageActionDiscoveryAsync(
+        listChannelSupportedActionsSteps({ cfg, channel: "test" }),
+      ),
     ).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
     expect(
-      await runMessageActionDiscoveryAsync(listAllChannelSupportedActionsSteps({ cfg })),
+      await runMessageActionDiscoveryAsync(
+        listChannelSupportedActionsSteps({ cfg, channel: "test" }),
+      ),
     ).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });
@@ -108,9 +110,6 @@ describe("channel tools", () => {
       await runMessageActionDiscoveryAsync(
         listChannelSupportedActionsSteps({ cfg, channel: "polltest" }),
       ),
-    ).toStrictEqual([]);
-    expect(
-      await runMessageActionDiscoveryAsync(listAllChannelSupportedActionsSteps({ cfg })),
     ).toStrictEqual([]);
   });
 

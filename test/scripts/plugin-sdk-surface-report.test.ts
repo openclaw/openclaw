@@ -25,21 +25,6 @@ function baseSurfaceReportEnv(): NodeJS.ProcessEnv {
   );
 }
 
-type PublicSurfaceCounts = {
-  callableExports: number;
-  exports: number;
-  wildcardReexports: number;
-};
-
-function readDefaultPublicSurfaceBudgets(): PublicSurfaceCounts {
-  const { budgets } = readPluginSdkSurfaceBudgets({});
-  return {
-    exports: budgets.publicExports,
-    callableExports: budgets.publicFunctionExports,
-    wildcardReexports: budgets.publicWildcardReexports,
-  };
-}
-
 type SurfaceReport = Awaited<ReturnType<typeof collectPluginSdkSurfaceReport>>;
 let surfaceReport: SurfaceReport;
 
@@ -136,13 +121,13 @@ describe("plugin SDK surface report", () => {
   });
 
   it("rejects callable surface growth from the canonical source graph", () => {
-    const budget = readDefaultPublicSurfaceBudgets().callableExports;
+    const callableExports = surfaceReport.publicStats.totals.callableExports;
     const budgetConfig = readPluginSdkSurfaceBudgets({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: String(budget - 1),
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: String(callableExports - 1),
     });
 
     expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toContain(
-      `public callable exports ${budget} > ${budget - 1}`,
+      `public callable exports ${callableExports} > ${callableExports - 1}`,
     );
   });
 

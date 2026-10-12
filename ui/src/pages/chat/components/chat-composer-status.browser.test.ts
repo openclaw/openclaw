@@ -2,9 +2,10 @@ import type { CDPSession } from "@vitest/browser-playwright";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cdp } from "vitest/browser";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import "../../../components/tooltip.ts";
 import { buildCompactionDividerItem } from "../chat-progress.ts";
-import { renderFallbackIndicator } from "./chat-composer-status.ts";
+import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import { renderChatDivider } from "./chat-divider.ts";
 import baseStyles from "../../../styles/base.css?inline";
 import composerStatusStyles from "../../../styles/chat/composer-status.css?inline";
@@ -108,15 +109,16 @@ describe("inline compaction motion", () => {
   });
 
   it.each(["active", "cleared"] as const)("preserves the %s fallback pill", async (phase) => {
-    render(
-      renderFallbackIndicator({
-        phase,
-        selected: "provider/selected",
-        active: "provider/active",
-        attempts: [],
-        occurredAt: Date.now(),
-      }),
-      container,
+    mountSolid(
+      () =>
+        renderFallbackIndicatorSolid({
+          phase,
+          selected: "provider/selected",
+          active: "provider/active",
+          attempts: [],
+          occurredAt: Date.now(),
+        }),
+      { container },
     );
     await container.querySelector("openclaw-tooltip")!.updateComplete;
     const indicator = container.querySelector<HTMLElement>(".compaction-indicator")!;

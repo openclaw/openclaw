@@ -13,3 +13,14 @@ describe("Control UI model defaults bootstrap", () => {
     },
   );
 });
+
+it.each([undefined, false, true])(
+  "projects the bubble lab only when enabled: %s",
+  (chatBubbles) => {
+    expect(
+      resolveControlUiBootstrapPresentation({
+        gateway: { controlUi: { experimental: { chatBubbles } } },
+      }).chatBubblesEnabled,
+    ).toBe(chatBubbles === true);
+  },
+);

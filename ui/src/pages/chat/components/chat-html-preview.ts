@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
@@ -10,7 +10,12 @@ import type {
   AttachmentSidebarRuntime,
   SessionFileSource,
 } from "./chat-sidebar-content-types.ts";
-import type { FileViewControls } from "./chat-sidebar-file-view.ts";
+export type FileHtmlPreviewControls = {
+  source: boolean;
+  presentation: TemplateResult | typeof nothing;
+  sourceFallback?: TemplateResult;
+  onToggle: () => void;
+};
 
 registerFilePreviewEnglish();
 
@@ -123,7 +128,7 @@ export class FileHtmlPreviewController {
     onToggle: () => void;
     runtime: AttachmentSidebarRuntime;
     mode: EmbedSandboxMode;
-  }): FileViewControls["htmlPreview"] {
+  }): FileHtmlPreviewControls | undefined {
     const file = this.file;
     if (!file) {
       return undefined;

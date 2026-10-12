@@ -24,6 +24,9 @@ const METRICS = [
   "todoSolid2",
 ] as const satisfies readonly (keyof MigrationMetrics)[];
 
+// This boundary hosts existing Lit templates for Solid callers until the final Lit cutover.
+const LIT_CONTENT_OWNER = "ui/src/lit/solid-content.tsx";
+
 function loadsModule(node: ts.Node): boolean {
   return (
     (ts.isCallExpression(node) &&
@@ -117,6 +120,7 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       ([file, counts]) =>
         counts.litImports > 0 &&
         !previous.has(file) &&
+        file !== LIT_CONTENT_OWNER &&
         !isTest(file) &&
         !isMovedSource(file, currentSources.get(file)!, previous, currentSources, baseCounts),
     );

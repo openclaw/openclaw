@@ -302,6 +302,7 @@ export function makeChatHost(
         chatPersistCommentary: next.chatPersistCommentary,
         chatSendShortcut: next.chatSendShortcut,
         chatBubbleSessionKeys: next.chatBubbleSessionKeys,
+        chatBubbleDisabledSessionKeys: next.chatBubbleDisabledSessionKeys,
       });
     }),
     ...hostOverrides,

@@ -1,4 +1,8 @@
 import { isFencedProviderReadAction } from "../../channels/plugins/message-action-dispatch.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveCurrentPromptReaction,
@@ -35,18 +39,21 @@ export function createMessageToolTurnAuthority(params: {
     channels.push(requester.channel);
   }
   return {
-    captureCaller: (signal: AbortSignal | undefined, capture: () => (() => void) | undefined) => {
+    captureCaller: (
+      signal: AbortSignal | undefined,
+      capture: () => SessionSourceAssertion | undefined,
+    ) => {
       if (signal?.aborted) {
         throw createAbortError("Message send aborted");
       }
       const assertCurrent = capture();
       assertCurrent?.();
-      return () => {
-        assertCurrent?.();
+      return composeSessionSourceAssertion([assertCurrent], (assertSource) => {
+        assertSource();
         if (signal?.aborted) {
           throw createAbortError("Message action aborted");
         }
-      };
+      });
     },
     beginInvocation: (action: string) => {
       const authorization = resolve();
@@ -73,6 +80,7 @@ export function createMessageToolTurnAuthority(params: {
         assertDashboardReadCurrent: isRead ? dashboardRead : undefined,
       };
     },
+    isScheduledRun: Boolean(scheduled),
     hasCurrentPromptReaction: Boolean(lookup && resolveCurrentPromptReaction(lookup)),
     scheduledAccountScope:
       policy?.mode === "account" && (origin?.kind === "local" || channels.length > 0)

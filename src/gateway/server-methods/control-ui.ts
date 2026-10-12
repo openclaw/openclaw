@@ -13,7 +13,6 @@ import {
 } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
-import { redactToolPayloadText } from "../../logging/redact.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { truncateUtf16Safe } from "../../utils.js";
@@ -89,6 +88,7 @@ async function prepareControlUiGitHubIdentity(
         config,
         sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
         agentId,
+        allowStale: true,
         getCurrentConfig: () => context.getRuntimeConfig(),
         assertActive,
         refresh: () => requestCurrentGitHubOAuthRefresh(agentId),
@@ -187,9 +187,7 @@ function projectSessionPreview(source: SessionPreviewSource | null): ControlUiSe
   if (!source) {
     return { status: "unavailable" };
   }
-  const lastMessagePreview = boundedPreviewText(
-    source.lastMessagePreview ? redactToolPayloadText(source.lastMessagePreview) : undefined,
-  );
+  const lastMessagePreview = boundedPreviewText(source.lastMessagePreview || undefined);
   const title = boundedPreviewText(source.title);
   const derivedTitle = boundedPreviewText(source.derivedTitle);
   const kind = boundedPreviewText(source.kind, 64);

@@ -8,7 +8,6 @@ import type { ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import {
   createMessageActionDiscoveryContext,
-  listMessageActionDiscoveryChannels,
   type MessageActionDiscoverySteps,
   resolveMessageActionDiscoveryChannelId,
   resolveCurrentChannelMessageToolDiscoveryAdapter,
@@ -68,31 +67,6 @@ export function* listChannelSupportedActionsSteps(
     includeActions: true,
   };
   return discovered.actions;
-}
-
-/**
- * Get the list of all supported message actions across all configured channels.
- */
-export function* listAllChannelSupportedActionsSteps(
-  params: ChannelMessageActionDiscoveryParams,
-): MessageActionDiscoverySteps<ChannelMessageActionName[]> {
-  const actions = new Set<ChannelMessageActionName>();
-  const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
-  for (const plugin of channels) {
-    const discovered = yield {
-      pluginId: plugin.id,
-      actions: plugin.actions,
-      context: createMessageActionDiscoveryContext({
-        ...params,
-        currentChannelProvider: plugin.id,
-      }),
-      includeActions: true,
-    };
-    for (const action of discovered.actions) {
-      actions.add(action);
-    }
-  }
-  return Array.from(actions);
 }
 
 /** List agent tools contributed by registered channel plugins. */

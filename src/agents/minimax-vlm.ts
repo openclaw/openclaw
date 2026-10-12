@@ -13,8 +13,8 @@ import {
   createProviderErrorTextRedactor,
   readProviderJsonResponse,
 } from "./provider-http-errors.js";
+import { resolveProviderTransportSsrFPolicy } from "./provider-network-policy.js";
 import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.types.js";
-import { resolveProviderTransportSsrFPolicy } from "./provider-transport-fetch.js";
 
 type MinimaxBaseResp = {
   status_code?: number;

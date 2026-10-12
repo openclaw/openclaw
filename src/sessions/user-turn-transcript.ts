@@ -307,6 +307,7 @@ export function createUserTurnTranscriptRecorder(
       message?: PersistedUserTurnMessage;
     },
   ): Promise<UserTurnTranscriptPersistResult | undefined> => {
+    const storageTarget = options.storageTarget ? { ...options.storageTarget } : undefined;
     if (options.skipWhenBlocked && blocked) {
       return undefined;
     }
@@ -355,7 +356,19 @@ export function createUserTurnTranscriptRecorder(
       if (!target) {
         return undefined;
       }
-      const resolvedTarget = options.cwd ? { ...target, cwd: options.cwd } : target;
+      if (
+        storageTarget &&
+        (storageTarget.agentId !== target.agentId ||
+          storageTarget.sessionKey !== target.sessionKey ||
+          storageTarget.sessionId !== target.sessionId)
+      ) {
+        throw new Error("User turn transcript identity changed before its admitted storage write");
+      }
+      const resolvedTarget = {
+        ...target,
+        ...(storageTarget ? { storePath: storageTarget.storePath } : {}),
+        ...(options.cwd ? { cwd: options.cwd } : {}),
+      };
       resolvedPersistenceTarget = resolvedTarget;
       const updateMode = options.updateMode ?? params.updateMode ?? "inline";
       const persistMessage = async (
@@ -564,7 +577,7 @@ export function createUserTurnTranscriptRecorder(
     },
     getPersistedMessage: () =>
       admittedMessage ?? runtimePersistedMessage ?? persistedResult?.message,
-    captureModelPromptProjection: async (text, assertCurrent, options) => {
+    captureModelPromptProjection: async (text, assertCurrent) => {
       assertCurrent();
       await waitForRuntimePersistence();
       assertCurrent();
@@ -582,9 +595,6 @@ export function createUserTurnTranscriptRecorder(
         admission,
         message: admittedMessage,
         text,
-        requestLocal: options?.requestLocal,
-        // SAFETY: This is the host config already consumed by persistUserTurnTranscript.
-        config: resolvedPersistenceTarget?.config as SessionTranscriptTurnPersistOptions["config"],
         assertCurrent,
         assertWritable: () => {
           assertCurrent();
@@ -637,6 +647,7 @@ export function createUserTurnTranscriptRecorder(
         waitForRuntime: false,
         skipWhenBlocked: true,
         target: options?.target,
+        storageTarget: options?.storageTarget,
         updateMode: options?.updateMode,
         cwd: options?.cwd,
         expectedSessionId: options?.expectedSessionId,
@@ -651,6 +662,7 @@ export function createUserTurnTranscriptRecorder(
         skipWhenBlocked: false,
         message: blockedMessage,
         target: options?.target,
+        storageTarget: options?.storageTarget,
         updateMode: options?.updateMode,
         cwd: options?.cwd,
       });
@@ -660,6 +672,7 @@ export function createUserTurnTranscriptRecorder(
         waitForRuntime: true,
         skipWhenBlocked: true,
         target: options?.target,
+        storageTarget: options?.storageTarget,
         updateMode: options?.updateMode,
         cwd: options?.cwd,
       }),
@@ -684,10 +697,4 @@ export function createUserTurnTranscriptRecorder(
   });
   inheritUserTurnPromptReactionSource(recorder, params.pendingInputSources);
   return recorder;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.userTurnTranscriptTestApi")] = {
-    persistUserTurnTranscript,
-  };
 }

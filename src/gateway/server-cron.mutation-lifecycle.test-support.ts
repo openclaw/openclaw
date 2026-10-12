@@ -28,7 +28,11 @@ function holdNextCronMutation() {
   const execute = runtimeMutation.runCronRuntimeMutation;
   const held = vi
     .spyOn(runtimeMutation, "runCronRuntimeMutation")
-    .mockImplementationOnce(async (params) => {
+    .mockImplementation(async (params) => {
+      if (params.type !== "cron.mutateJobs") {
+        return execute(params);
+      }
+      held.mockRestore();
       entered.resolve();
       await release.promise;
       return execute(params);

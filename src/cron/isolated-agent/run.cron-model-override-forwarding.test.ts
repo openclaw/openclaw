@@ -1,22 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, afterEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { classifyEmbeddedAgentRunResultForModelFallback } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
-import {
-  abortEmbeddedAgentRun,
-  isEmbeddedAgentRunHandleActive,
-} from "../../agents/embedded-agent-runner/runs.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import {
   runFallbackModelAttempt,
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
-import type { CliSessionReseedReceipt, CliSessionBinding } from "../../config/sessions.js";
-import type { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { CliSessionReseedReceipt } from "../../config/sessions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
-import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   ensureAgentWorkspaceMock,
@@ -44,9 +38,6 @@ import {
   runCliAgentMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
-  clearFastTestEnv,
-  resetRunCronIsolatedAgentTurnHarness,
-  restoreFastTestEnv,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -549,31 +540,56 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     resolveCronSessionMock.mockReturnValue(cronSession);
   });
 
-  it("session entry already carries cron model at pre-run persist time (race condition)", async () => {
-    const persistedSnapshots: unknown[] = [];
-    const persist = expectDefined(patchSessionEntryMock.getMockImplementation(), "persist mock");
-    patchSessionEntryMock.mockImplementation(async (...args) => {
-      const committed = await persist(...args);
-      if (committed && !args[0].sessionKey.includes(":run:")) {
-        persistedSnapshots.push(structuredClone(committed));
+  it.each([false, true])(
+    "persists the model and harness before execution (pre-run write fails: %s)",
+    async (preRunWriteFails) => {
+      const persistedSnapshots: { sessionKey: string; entry: unknown }[] = [];
+      const persist = expectDefined(patchSessionEntryMock.getMockImplementation(), "persist mock");
+      let failNextBaseWrite = preRunWriteFails;
+      patchSessionEntryMock.mockImplementation(async (...args) => {
+        const sessionKey = args[0].sessionKey;
+        if (failNextBaseWrite && !sessionKey.includes(":run:")) {
+          failNextBaseWrite = false;
+          throw new Error("ENOSPC: no space left on device");
+        }
+        const committed = await persist(...args);
+        if (committed) {
+          persistedSnapshots.push({ sessionKey, entry: structuredClone(committed) });
+        }
+        return committed;
+      });
+
+      let snapshotsAtRun: typeof persistedSnapshots = [];
+      mockRunCronFallbackPassthrough();
+      runEmbeddedAgentMock.mockImplementationOnce(async () => {
+        snapshotsAtRun = structuredClone(persistedSnapshots);
+        return {
+          payloads: [{ text: "summary done" }],
+          meta: { agentMeta: { provider: "anthropic", model: "claude-sonnet-4-6" } },
+        };
+      });
+      const result = await runCronIsolatedAgentTurn(makePersistParams());
+      expect(result.status).toBe("ok");
+
+      expect(snapshotsAtRun).toHaveLength(preRunWriteFails ? 3 : 2);
+      expect(snapshotsAtRun.filter(({ sessionKey }) => !sessionKey.includes(":run:"))).toHaveLength(
+        1,
+      );
+      for (const { entry } of snapshotsAtRun) {
+        expect(entry).toMatchObject({
+          model: "claude-sonnet-4-6",
+          modelProvider: "anthropic",
+          agentHarnessId: "openclaw",
+          systemSent: true,
+        });
       }
-      return committed;
-    });
-
-    let snapshotAtRun: unknown;
-    runWithModelFallbackMock.mockImplementationOnce(async () => {
-      snapshotAtRun = persistedSnapshots.at(-1);
-      throw new Error("LLM provider timeout");
-    });
-    const result = await runCronIsolatedAgentTurn(makePersistParams());
-    expect(result.status).toBe("error");
-
-    expect(snapshotAtRun).toMatchObject({
-      model: "claude-sonnet-4-6",
-      modelProvider: "anthropic",
-      systemSent: true,
-    });
-  });
+      if (preRunWriteFails) {
+        expect(logWarnMock).toHaveBeenCalledWith(
+          "[cron:digest-job] Failed to persist pre-run session entry: Error: ENOSPC: no space left on device",
+        );
+      }
+    },
+  );
 
   it("selects the configured model auth profile separately", async () => {
     const ref = { provider: "openai", model: "gpt-5.6-luna" };
@@ -637,10 +653,9 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     };
     cronSession.initialSessionEntry = initialEntry;
     loadSessionEntryMock.mockReturnValue(initialEntry);
-    let basePersistCount = 0;
     const persist = expectDefined(patchSessionEntryMock.getMockImplementation(), "persist mock");
     patchSessionEntryMock.mockImplementation(async (...args) => {
-      if (!args[0].sessionKey.includes(":run:") && ++basePersistCount === 2) {
+      if (!args[0].sessionKey.includes(":run:") && args[2]?.fallbackEntry?.systemSent === true) {
         throw new Error("ENOSPC: no space left on device");
       }
       return persist(...args);
@@ -856,6 +871,50 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(cronSession.sessionEntry.authProfileOverrideSource).toBe("user");
   });
 
+  it("retries persistence after a pre-candidate model switch write fails", async () => {
+    const persist = expectDefined(patchSessionEntryMock.getMockImplementation(), "persist mock");
+    let failSwitchWrite = false;
+    let persistedBase: unknown;
+    patchSessionEntryMock.mockImplementation(async (...args) => {
+      const isBase = !args[0].sessionKey.includes(":run:");
+      if (isBase && failSwitchWrite) {
+        failSwitchWrite = false;
+        throw new Error("ENOSPC: no space left on device");
+      }
+      const committed = await persist(...args);
+      if (isBase) {
+        persistedBase = structuredClone(committed);
+      }
+      return committed;
+    });
+    mockRunCronFallbackPassthrough();
+    runWithModelFallbackMock.mockImplementationOnce(async () => {
+      failSwitchWrite = true;
+      throw new LiveSessionModelSwitchError({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        authProfileId: "profile-b",
+        authProfileIdSource: "user",
+      });
+    });
+    let persistedAtExecution: unknown;
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      persistedAtExecution = structuredClone(persistedBase);
+      return makeSuccessfulRunResult("anthropic", "claude-sonnet-4-6").result.result;
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeSwitchParams());
+
+    expect(result.status).toBe("ok");
+    expect(persistedAtExecution).toMatchObject({
+      authProfileOverride: "profile-b",
+      authProfileOverrideSource: "user",
+    });
+    expect(logWarnMock).toHaveBeenCalledWith(
+      "[cron:cron-model-switch-job] Failed to persist model switch session entry: Error: ENOSPC: no space left on device",
+    );
+  });
+
   it("retries a same-model switch with the runtime carried by the error", async () => {
     resolveConfiguredModelRefMock.mockReturnValue({
       provider: "openai",
@@ -926,160 +985,5 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(logWarnMock).toHaveBeenCalledWith(
       "[cron:cron-model-switch-job] LiveSessionModelSwitchError retry limit reached (2); aborting",
     );
-  });
-});
-
-const sessionId = "cron-cli-diagnostic-session";
-
-function makeCliOwnershipParams(): RunCronAgentTurnParams {
-  return {
-    deliveryAttemptFence: null,
-    cfg: {},
-    deps: {},
-    job: {
-      id: "cli-diagnostic-job",
-      name: "CLI diagnostic ownership",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-      sessionTarget: "session:existing-cron-session",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "summarize", model: "test-cli/test-model" },
-      state: {},
-    },
-    message: "summarize",
-    sessionKey: "existing-cron-session",
-  };
-}
-
-describe("cron project: runCronIsolatedAgentTurn CLI ownership", () => {
-  let previousFastTestEnv: string | undefined;
-
-  beforeEach(() => {
-    previousFastTestEnv = clearFastTestEnv();
-    resetRunCronIsolatedAgentTurnHarness();
-    isCliProviderMock.mockImplementation((provider: string) => provider === "test-cli");
-    resolveConfiguredModelRefMock.mockReturnValue({ provider: "test-cli", model: "test-model" });
-    resolveAllowedModelRefMock.mockReturnValue({
-      ref: { provider: "test-cli", model: "test-model" },
-    });
-    resolveThinkingDefaultMock.mockReturnValue("off");
-    resolveCronSessionMock.mockReturnValue(
-      makeCronSession({ sessionEntry: makeCronSessionEntry({ sessionId }), isNewSession: true }),
-    );
-    mockRunCronFallbackPassthrough();
-  });
-
-  afterEach(() => {
-    restoreFastTestEnv(previousFastTestEnv);
-  });
-
-  it.each([
-    { outcome: "accepted", abort: false },
-    { outcome: "canceled", abort: true },
-  ])("holds ownership during a pending continuity write ($outcome)", async ({ abort }) => {
-    const writeStarted = createDeferred();
-    const releaseWrite = createDeferred();
-    const upstream = new AbortController();
-    const cronSession = makeCronSession({
-      sessionEntry: makeCronSessionEntry({ sessionId }),
-      isNewSession: true,
-    });
-    resolveCronSessionMock.mockReturnValue(cronSession);
-    const binding: CliSessionBinding = {
-      sessionId: "native-cli-session",
-      reseedReceipt: {
-        version: 1,
-        promptHash: "a".repeat(64),
-        localSessionId: sessionId,
-        userTurnDisposition: "persisted",
-      },
-    };
-    const persist = expectDefined(
-      patchSessionEntryMock.getMockImplementation(),
-      "expected persistence fixture",
-    );
-    let continuityCommitted = false;
-    const holdContinuityWrite: typeof patchSessionEntryCore = async (scope, update, options) => {
-      const assertCommitAllowed = expectDefined(
-        options?.workerGuard?.assertCurrent,
-        "expected continuity commit guard",
-      );
-      writeStarted.resolve();
-      await releaseWrite.promise;
-      assertCommitAllowed();
-      const committed = await persist(scope, update, options);
-      continuityCommitted = true;
-      return committed;
-    };
-    runCliAgentMock.mockImplementationOnce(async (params) => {
-      expect(params.diagnosticOwner).toEqual(
-        expect.objectContaining({ sessionId, generation: expect.anything() }),
-      );
-      expect(params.abortSignal).toBeInstanceOf(AbortSignal);
-      expect(params.abortSignal.aborted).toBe(false);
-      expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
-      patchSessionEntryMock.mockImplementationOnce(holdContinuityWrite);
-      return {
-        payloads: [{ text: "summary done" }],
-        meta: {
-          durationMs: 1,
-          executionTrace: { runner: "cli" },
-          agentMeta: {
-            provider: "test-cli",
-            model: "test-model",
-            cliSessionBinding: binding,
-            usage: { input: 1, output: 1 },
-          },
-        },
-      };
-    });
-
-    const runPromise = runCronIsolatedAgentTurn({
-      ...makeCliOwnershipParams(),
-      abortSignal: upstream.signal,
-    });
-    try {
-      await Promise.race([
-        writeStarted.promise,
-        runPromise.then(() => {
-          throw new Error("Cron finished before the continuity write");
-        }),
-      ]);
-      expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
-      expect(continuityCommitted).toBe(false);
-      if (abort) {
-        expect(abortEmbeddedAgentRun(sessionId)).toBe(true);
-        expect(upstream.signal.aborted).toBe(false);
-      }
-      releaseWrite.resolve();
-      const result = await runPromise;
-
-      expect(result.status).toBe(abort ? "error" : "ok");
-      expect(continuityCommitted).toBe(!abort);
-      expect(cronSession.sessionEntry.cliSessionBindings?.["test-cli"]).toEqual(
-        abort ? undefined : binding,
-      );
-      expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
-    } finally {
-      releaseWrite.resolve();
-      await runPromise;
-    }
-  });
-
-  it("preserves handle cancellation as a terminal abort when the CLI rejects", async () => {
-    runCliAgentMock.mockImplementationOnce(async (params) => {
-      expect(params.abortSignal.aborted).toBe(false);
-      expect(abortEmbeddedAgentRun(sessionId)).toBe(true);
-      expect(params.abortSignal.aborted).toBe(true);
-      throw Object.assign(new Error("CLI run aborted"), { name: "AbortError" });
-    });
-
-    const result = await runCronIsolatedAgentTurn(makeCliOwnershipParams());
-
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("agent run aborted | OPENCLAW_DIRECT_ABORT");
-    expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
   });
 });

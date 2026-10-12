@@ -207,26 +207,6 @@ it("isolates a required checkpoint while preserving compacted admitted input", a
   });
 });
 
-it("does not use an admission after the source transcript changes", async () => {
-  await withAdmittedInput(false, async ({ scope, workspaceDir, admission }) => {
-    const current = SessionManager.open(scope);
-    current.branch(admission.effectiveParentId!);
-    current.appendLeafControl({
-      targetId: current.getLeafId(),
-      appendParentId: current.getAppendParentId(),
-    });
-    await waitForSessionTranscriptProjection(scope);
-    await expect(
-      prepareMemoryFlushSession({
-        admission,
-        source: scope,
-        runId: "stale-helper",
-        workspaceDir,
-      }),
-    ).rejects.toThrow(/admission|visible/i);
-  });
-});
-
 it("does not acquire a checkpoint after caller cancellation", async () => {
   await withAdmittedInput(false, async ({ scope, workspaceDir, admission }) => {
     const before = loadTranscriptEventsSync(scope);

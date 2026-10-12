@@ -246,7 +246,7 @@ export function listTranscriptInstancesFromDatabase(params: {
     .filter((entry): entry is SessionTranscriptInstance => entry !== undefined);
 }
 
-/** Read retained archive identities through the same physical and logical session owner. */
+/** @deprecated Main-thread callers must await listSessionTranscriptArchivesInWorker. */
 export function listSessionTranscriptArchivesReadOnly(scope: SessionArchiveInventoryScope) {
   const selectors = [...new Set(scope.sessionIds ?? [])];
   const archiveNames = [...new Set(scope.archiveNames ?? [])];

@@ -3,28 +3,38 @@ import { registerPreparedModelRuntimePublicationListener } from "../agents/prepa
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import type { Inputs } from "./session-row-projection-record.js";
 
-function hasSameModelFacts(previous: Inputs["modelCatalog"], next: Inputs["modelCatalog"]) {
+function changedModelAgents(previous: Inputs["modelCatalog"], next: Inputs["modelCatalog"]) {
   // Missing policy owners can still resolve rows through active plugin metadata.
-  if (!(previous instanceof Map) || !(next instanceof Map) || previous.size === 0) {
-    return false;
+  if (
+    !(previous instanceof Map) ||
+    !(next instanceof Map) ||
+    previous.size === 0 ||
+    previous.size !== next.size
+  ) {
+    return undefined;
   }
-  return (
-    previous.size === next.size &&
-    [...previous].every(([agentId, catalog]) => {
-      const replacement = next.get(agentId);
-      const metadata = readPreparedGatewayModelCatalogMetadata(catalog);
-      return (
-        catalog !== undefined &&
-        replacement !== undefined &&
-        catalog.pluginRegistry !== undefined &&
-        metadata !== undefined &&
-        catalog.pluginRegistry === replacement.pluginRegistry &&
-        metadata === readPreparedGatewayModelCatalogMetadata(replacement) &&
-        isDeepStrictEqual(catalog.entries, replacement.entries) &&
-        isDeepStrictEqual(catalog.routeVariants, replacement.routeVariants)
-      );
-    })
-  );
+  const changed = new Set<string>();
+  for (const [agentId, catalog] of previous) {
+    const replacement = next.get(agentId);
+    const metadata = readPreparedGatewayModelCatalogMetadata(catalog);
+    if (
+      catalog === undefined ||
+      replacement === undefined ||
+      catalog.pluginRegistry === undefined ||
+      metadata === undefined ||
+      catalog.pluginRegistry !== replacement.pluginRegistry ||
+      metadata !== readPreparedGatewayModelCatalogMetadata(replacement)
+    ) {
+      return undefined;
+    }
+    if (
+      !isDeepStrictEqual(catalog.entries, replacement.entries) ||
+      !isDeepStrictEqual(catalog.routeVariants, replacement.routeVariants)
+    ) {
+      changed.add(agentId);
+    }
+  }
+  return changed;
 }
 
 /** The projection's one catalog snapshot survives asynchronous renewal. */
@@ -32,7 +42,7 @@ export function createSessionRowProjectionCatalog(params: {
   modelCatalog?: Inputs["modelCatalog"];
   getModelCatalog?: () => Promise<Inputs["modelCatalog"]>;
   onInvalidated: () => void;
-  onRefreshed: (changed: boolean) => void;
+  onRefreshed: (changedAgents: ReadonlySet<string> | undefined) => void;
 }) {
   let modelCatalog = params.modelCatalog;
   let catalogDirty = Boolean(params.getModelCatalog);
@@ -93,7 +103,7 @@ export function createSessionRowProjectionCatalog(params: {
           return;
         }
         // A concurrent catalog change is adopted by the next publication.
-        const changed = !hasSameModelFacts(modelCatalog, next);
+        const changed = changedModelAgents(modelCatalog, next);
         modelCatalog = next;
         catalogDirty = false;
         params.onRefreshed(changed);

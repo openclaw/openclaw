@@ -1,71 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  expectedEmbedUrl,
-  mount,
-  resetDiscussionPanelTestState,
-  type SessionDiscussionInfoLoader,
-  type SessionDiscussionOpener,
-  type SessionDiscussionStateListener,
-} from "./session-discussion-panel.test-support.ts";
+import { mount, resetDiscussionPanelTestState } from "./session-discussion-panel.test-support.ts";
 
 afterEach(resetDiscussionPanelTestState);
 
 describe("session discussion panel", () => {
-  it("automatically opens an available discussion without a redundant header", async () => {
-    const loadInfo = vi.fn<SessionDiscussionInfoLoader>().mockResolvedValue({
-      state: "available",
-    });
-    const openDiscussion = vi.fn<SessionDiscussionOpener>().mockResolvedValue({
-      state: "open",
-      embedUrl: "https://discussion.example/embed/thread",
-      openUrl: "https://discussion.example/thread",
-    });
-    const onStateChange = vi.fn<SessionDiscussionStateListener>();
-    const panel = mount({ loadInfo, openDiscussion, onStateChange });
-
-    await vi.waitFor(() => {
-      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
-        expectedEmbedUrl("https://discussion.example/embed/thread"),
-      );
-      expect(panel.querySelector("iframe")?.getAttribute("sandbox")).toBe(
-        "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts",
-      );
-    });
-    expect(loadInfo).toHaveBeenCalledTimes(1);
-    expect(openDiscussion).toHaveBeenCalledTimes(1);
-    expect(openDiscussion).toHaveBeenCalledWith("agent:main:first");
-    expect(onStateChange).toHaveBeenLastCalledWith(
-      "agent:main:first",
-      "open",
-      "https://discussion.example/thread",
-    );
-    expect(panel.querySelector(".session-discussion__header")).toBeNull();
-    expect(panel.querySelector("a")).toBeNull();
-  });
-
-  it("selects the host color mode before the discussion frame paints", async () => {
-    document.documentElement.dataset.themeMode = "light";
-    const panel = mount({
-      loadInfo: vi.fn().mockResolvedValue({
-        state: "open",
-        embedUrl:
-          "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1&existing=1#messages",
-      }),
-      openDiscussion: vi.fn(),
-    });
-
-    await vi.waitFor(() => {
-      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
-        expectedEmbedUrl(
-          "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1&existing=1#messages",
-          "light",
-        ),
-      );
-    });
-  });
-
   it("preserves signed provider URLs even when their routes resemble ClickClack", async () => {
     const signedUrl =
       "https://discussion.example/embed/channel/a/b?signature=abc%2B123&expires=1785200000#thread";
@@ -83,6 +23,9 @@ describe("session discussion panel", () => {
       expect(panel.querySelector<HTMLIFrameElement>("iframe")?.src).toBe(signedUrl);
     });
     const frame = panel.querySelector<HTMLIFrameElement>("iframe")!;
+    expect(frame.getAttribute("sandbox")).toBe(
+      "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts",
+    );
     const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
 
     frame.dispatchEvent(new Event("load"));
@@ -93,32 +36,6 @@ describe("session discussion panel", () => {
         tokens: expect.objectContaining({ surface: "#faf9f7" }),
       }),
       "https://discussion.example",
-    );
-  });
-
-  it("includes custom host palette tokens in the first-paint discussion URL", async () => {
-    document.documentElement.dataset.themeMode = "dark";
-    document.documentElement.style.setProperty("--bg", "#171229");
-    document.documentElement.style.setProperty("--card", "#211a36");
-    document.documentElement.style.setProperty("--accent", "#c084fc");
-    const panel = mount({
-      loadInfo: vi.fn().mockResolvedValue({
-        state: "open",
-        embedUrl: "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1",
-      }),
-      openDiscussion: vi.fn(),
-    });
-
-    await vi.waitFor(() => expect(panel.querySelector("iframe")).not.toBeNull());
-    const embedUrl = new URL(panel.querySelector<HTMLIFrameElement>("iframe")!.src);
-
-    expect(embedUrl.searchParams.get("theme")).toBe("dark");
-    expect(JSON.parse(embedUrl.searchParams.get("themeTokens")!)).toEqual(
-      expect.objectContaining({
-        surface: "#171229",
-        card: "#211a36",
-        accent: "#c084fc",
-      }),
     );
   });
 

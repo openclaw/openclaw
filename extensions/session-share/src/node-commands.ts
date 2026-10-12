@@ -1,5 +1,4 @@
 import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -13,7 +12,7 @@ import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   prepareSessionCatalogSourceActorProjector,
   readSessionTranscriptCatalogPage,
-  readSessionTranscriptCatalogTitle,
+  readSessionTranscriptCatalogTitleAsync,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { sessionShareGroups } from "./config.js";
 
@@ -161,7 +160,12 @@ export function createSessionShareNodeCommands(
           assertSourceCurrent,
         } of await readSharedEntries()) {
           const name = search
-            ? readSessionTranscriptCatalogTitle({ agentId, sessionKey, storePath, entry })
+            ? await readSessionTranscriptCatalogTitleAsync({
+                agentId,
+                sessionKey,
+                storePath,
+                entry,
+              })
             : undefined;
           if (
             search &&
@@ -191,7 +195,7 @@ export function createSessionShareNodeCommands(
         const selected = sessions.slice(offset, offset + params.limit);
         if (!search) {
           for (const session of selected) {
-            session.name = readSessionTranscriptCatalogTitle({
+            session.name = await readSessionTranscriptCatalogTitleAsync({
               agentId: session.agentId,
               sessionKey: session.threadId,
               storePath: session.storePath,
@@ -240,14 +244,12 @@ export function createSessionShareNodeCommands(
             threadId,
             name,
             color: entry.color,
-            cwd: cwd ? redactToolPayloadText(cwd).slice(0, 6000) : undefined,
+            cwd: cwd ? cwd.slice(0, 6000) : undefined,
             status: archived ? "archived" : "idle",
             createdAt: entry.createdAt,
             updatedAt: entry.updatedAt,
             recencyAt,
-            gitBranch: entry.worktree?.branch
-              ? redactToolPayloadText(entry.worktree.branch).slice(0, 6000)
-              : undefined,
+            gitBranch: entry.worktree?.branch ? entry.worktree.branch.slice(0, 6000) : undefined,
             archived,
             canContinue: false,
             canArchive: false,

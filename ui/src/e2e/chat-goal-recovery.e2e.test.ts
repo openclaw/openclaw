@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -207,6 +209,19 @@ suite.define(() => {
           if (!isRecord(first.params)) {
             throw new Error("Missing goal operation parameters");
           }
+          if (action === "resume") {
+            const card = page.locator(".agent-chat__goal");
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              card,
+              [card.locator(".agent-chat__goal-label")],
+              { animations: "disabled", elements: [card] },
+            );
+            await writeFile(path.join(artifacts, "resume-pending.png"), frame.png);
+            expect(await page.locator(".agent-chat__goal-label").textContent()).toBe(
+              "Resuming goal…",
+            );
+          }
           // Commit and publish the authoritative state while withholding only this RPC's ACK.
           const committed =
             action === "clear"
@@ -229,22 +244,47 @@ suite.define(() => {
             await gateway.emitGatewayEvent("tick", { ts: Date.now() });
             await page.clock.fastForward(5_001);
           }
-          if (committed) {
+          if (action === "resume") {
+            await page.clock.fastForward(1_001);
+            const automatic = await gateway.waitForRequest(method, { after: 1 });
+            expect(automatic.params).toEqual(first.params);
+            await gateway.rejectDeferred(method, {
+              code: "UNAVAILABLE",
+              message: "ACK still unavailable",
+            });
+          } else if (committed) {
             await page.locator(`.agent-chat__goal--${committed.status}`).waitFor();
           } else {
             await expect.poll(() => page.locator(".agent-chat__goal").count()).toBe(0);
           }
           await page.screenshot({ path: path.join(artifacts, "lost-ack.png") });
-          const checkOutcome = page.getByRole("button", { name: "Check outcome", exact: true });
+          const checkOutcome = page.getByRole("button", {
+            name: action === "resume" ? "Retry resume" : "Check outcome",
+            exact: true,
+          });
           await expect.poll(() => checkOutcome.isEnabled()).toBe(true);
           expect(await gateway.getSocketCount()).toBe(sockets);
-          expect(await gateway.getRequests(method)).toHaveLength(1);
+          expect(await gateway.getRequests(method)).toHaveLength(action === "resume" ? 2 : 1);
+          if (action === "resume") {
+            const card = page.locator(".agent-chat__goal");
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              card,
+              [card.locator(".agent-chat__goal-label"), checkOutcome],
+              { animations: "disabled", elements: [card], viewport: { width: 390, height: 844 } },
+            );
+            await writeFile(path.join(artifacts, "resume-retry-mobile.png"), frame.png);
+            expect(await checkOutcome.isVisible()).toBe(true);
+            await page.setViewportSize({ width: 1440, height: 900 });
+          }
           await page.reload();
           await checkOutcome.waitFor();
           expect(await gateway.getRequests(method)).toHaveLength(0);
           expect(await original.count()).toBe(0);
           if (committed) {
-            await page.locator(`.agent-chat__goal--${committed.status}`).waitFor();
+            await page
+              .locator(`.agent-chat__goal--${action === "resume" ? "resuming" : committed.status}`)
+              .waitFor();
           } else {
             expect(await page.locator(".agent-chat__goal").count()).toBe(0);
           }
@@ -277,7 +317,7 @@ suite.define(() => {
     },
   );
 
-  it("shows a failed Check outcome without retiring or replaying a different goal operation", async () => {
+  it("shows a failed Resume retry without retiring or replaying a different goal operation", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 900 }, colorScheme: "light" },
       async ({ page }) => {
@@ -333,14 +373,23 @@ suite.define(() => {
         expect(await resume.count()).toBe(0);
         expect(await gateway.getRequests(method)).toHaveLength(0);
         await admitHistory();
+        await page.clock.install();
         await resume.click();
         const first = await gateway.waitForRequest(method);
         expect(first.params).toMatchObject({ sessionId: "goal-check-session" });
+        const beforeRetry = (await gateway.getRequests(method)).length;
+        await gateway.deferNext(method);
         await gateway.rejectDeferred(method, {
           code: "UNAVAILABLE",
           message: "Gateway response unavailable",
         });
-        const checkOutcome = page.getByRole("button", { name: "Check outcome", exact: true });
+        await page.clock.fastForward(1_001);
+        await gateway.waitForRequest(method, { after: beforeRetry });
+        await gateway.rejectDeferred(method, {
+          code: "UNAVAILABLE",
+          message: "Gateway response unavailable",
+        });
+        const checkOutcome = page.getByRole("button", { name: "Retry resume", exact: true });
         await checkOutcome.waitFor();
         await page.reload();
         await admitHistory();
@@ -348,13 +397,21 @@ suite.define(() => {
         await checkOutcome.click();
         const retried = await gateway.waitForRequest(method);
         expect(retried.params).toEqual(first.params);
+        await gateway.deferNext(method);
+        await gateway.rejectDeferred(method, {
+          code: "UNAVAILABLE",
+          message: "Gateway response unavailable",
+        });
+        await page.clock.fastForward(1_001);
+        const automatic = await gateway.waitForRequest(method, { after: 1 });
+        expect(automatic.params).toEqual(first.params);
         await gateway.rejectDeferred(method, {
           code: "UNAVAILABLE",
           message: "Gateway response unavailable",
         });
         await page.getByText("Gateway response unavailable", { exact: false }).waitFor();
         expect(await checkOutcome.isEnabled()).toBe(true);
-        expect(await gateway.getRequests(method)).toHaveLength(1);
+        expect(await gateway.getRequests(method)).toHaveLength(2);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         await page.reload();
         await admitHistory();

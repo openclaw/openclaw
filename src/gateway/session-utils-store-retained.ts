@@ -1,7 +1,13 @@
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { QualifiedSessionEntryAccessTarget } from "../config/sessions/session-accessor.types.js";
+import type { SessionActorHotState } from "../config/sessions/session-actor-contract.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryWorkerRead } from "../config/sessions/session-entry-read-runtime.types.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
@@ -116,7 +122,7 @@ export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
   preparedSource?: SessionEntryWorkerRead["preparedSource"];
   readOptions?: Pick<
     SessionEntryWorkerRead,
-    "projection" | "snapshotFields" | "lifecycleSessionKey"
+    "projection" | "snapshotFields" | "lifecycleSessionKey" | "transcript"
   >;
   consume: (
     target: GatewaySessionStoreTargetWithStore,
@@ -154,7 +160,6 @@ export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
           storePath: params.logicalStorePath,
           preparedSource: params.preparedSource,
           sessionKeys: params.target.storeKeys,
-          lifecycleSessionKey: params.target.storeKey,
           projection: "full",
           includeMembers: params.includeMembership,
           includeAuthorization: true,
@@ -191,6 +196,7 @@ export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
             ),
             readSource: selected.database,
             lifecycleTimestamps: selected.result.lifecycleTimestamps,
+            ...(selected.result.transcript ? { transcript: selected.result.transcript } : {}),
             ...(capturedReadSource ? { capturedReadSource } : {}),
             capturedReadSources: capturedReadSource ? [capturedReadSource] : [],
           },
@@ -224,6 +230,52 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
     assertCurrent: () => void,
   ) => T;
 }): T | Promise<T> {
+  const memory = getSessionActorStorageBinding({});
+  if (memory) {
+    const { actor, authority } = memory;
+    const { agentId, canonicalKey: sessionKey } = params.identity;
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({
+      agentId,
+      env: params.env ?? { OPENCLAW_STATE_DIR: path.resolve(memory.path, "../../../..") },
+    });
+    const captured = captureSessionActorStorageOwner({ agentId, storePath, sessionActor: memory });
+    let snapshot: SessionActorHotState | undefined;
+    if (actor.target.sessionKey === sessionKey) {
+      snapshot = actor.snapshot(authority);
+    } else {
+      actor.assertReadable();
+      snapshot = captured?.owner?.readSession(sessionKey, authority);
+    }
+    let consuming = true;
+    const assertCurrent = () => {
+      if (!consuming) {
+        throw new Error("Incognito session source is no longer retained");
+      }
+      actor.assertReadable();
+      authority.assertCurrent();
+    };
+    try {
+      const result = params.consume(
+        {
+          agentId,
+          canonicalKey: sessionKey,
+          storePath: captured?.path ?? storePath,
+          storeKeys: [sessionKey],
+          store: snapshot?.entry ? { [sessionKey]: snapshot.entry } : {},
+          readSource: { agentId, path: captured?.path ?? storePath },
+        },
+        params.includeMembership ? new Map([[sessionKey, snapshot?.members ?? []]]) : new Map(),
+        assertCurrent,
+      );
+      if (isPromiseLike(result)) {
+        void Promise.resolve(result).catch(() => undefined);
+        throw new Error("Session entry consumers must remain synchronous");
+      }
+      return result;
+    } finally {
+      consuming = false;
+    }
+  }
   const binding = captureIncognitoSessionBinding({
     agentId: params.identity.agentId,
     sessionKey: params.identity.canonicalKey,

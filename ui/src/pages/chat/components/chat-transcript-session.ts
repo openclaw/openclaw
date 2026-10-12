@@ -1,6 +1,7 @@
 // Render contract between the transcript projection and the per-session
 // virtualizer host owned by ChatTranscriptController.
-import type { ReactiveController, ReactiveControllerHost, TemplateResult } from "lit";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { PresentationValue } from "../../../lit/presentation-binding.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
@@ -52,7 +53,8 @@ export type ChatTranscriptSession = {
     announce: boolean,
     overlay?: unknown,
     header?: TranscriptHeader | null,
-  ): TemplateResult;
+    presented?: PresentationValue,
+  ): HTMLDivElement;
   syncMessageRows(
     messageRowKeysById: ReadonlyMap<string, string>,
     messageRowsByKey: ReadonlyMap<string, string>,
@@ -76,6 +78,7 @@ export type TranscriptRenderSnapshot<T> = {
   messageRows: ReadonlyMap<string, string>;
   renderKeyRows: ReadonlyMap<string, string>;
   entryKeys: ChatMessageEntryAnimations["projectedKeys"];
+  presented: PresentationValue;
 };
 
 /** Session-owned deferred measurements after width changes and smooth scrolling. */

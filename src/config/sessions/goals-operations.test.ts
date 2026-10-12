@@ -202,12 +202,15 @@ describe("typed Goal operation persistence", () => {
             : null,
     );
     let edited: Awaited<ReturnType<typeof mutateSessionGoal>>;
+    const assertCurrent = vi.fn();
     try {
       edited = await mutateSessionGoal({
         ...scope(),
         expectedSessionId: sessionId,
         operation: editOperation,
+        assertCurrent,
       });
+      expect(assertCurrent).toHaveBeenCalled();
       expect.soft(editReads.counts.sessionNodeSelects).toBe(0);
       expect.soft(editReads.rowCounts.sessionNodeSelects).toBe(0);
       expect.soft(editReads.counts.receiptStatements).toBe(0);
@@ -274,12 +277,15 @@ describe("typed Goal operation persistence", () => {
           goalId: goal.id,
           objective: "must not commit",
         },
-        assertCurrent: () => {
-          replaceSessionEntrySync(scope(), {
-            ...before!,
-            sessionId: "replacement-session",
-          });
-        },
+        assertCurrent: Object.assign(
+          () => {
+            replaceSessionEntrySync(scope(), {
+              ...before!,
+              sessionId: "replacement-session",
+            });
+          },
+          { nativeSource: true },
+        ),
       }),
     ).rejects.toMatchObject({ code: "session-rebound" });
     expect(loadSessionEntry(scope())).toEqual(before);
@@ -632,9 +638,10 @@ describe("typed Goal operation persistence", () => {
         if (
           request.stage === stage &&
           isRecord(request.facts) &&
-          isRecord(request.facts.publication) &&
-          request.facts.publication.kind ===
-            (stage === "commit" ? "session-entry-patch-committed" : "session-entry-patch-transfer")
+          (stage === "transaction"
+            ? request.facts.publication === undefined
+            : isRecord(request.facts.publication) &&
+              request.facts.publication.kind === "session-entry-patch-committed")
         ) {
           admitted = true;
         }

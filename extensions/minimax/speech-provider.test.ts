@@ -7,7 +7,10 @@ import {
   saveAuthProfileStore,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-auth";
+import {
+  isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
+} from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
@@ -46,7 +49,10 @@ function seedMinimaxPortalProfile(agentDir: string) {
 }
 
 describe("buildMinimaxSpeechProvider", () => {
-  const provider = buildMinimaxSpeechProvider({ isProviderAuthProfileConfigured });
+  const provider = buildMinimaxSpeechProvider({
+    isProviderAuthProfileConfigured,
+    isProviderAuthProfileConfiguredAsync,
+  });
 
   function resolveProviderConfig(
     params: Parameters<NonNullable<typeof provider.resolveConfig>>[0],
@@ -144,7 +150,9 @@ describe("buildMinimaxSpeechProvider", () => {
     it("returns true when a MiniMax portal auth profile is available", async () => {
       seedMinimaxPortalProfile(tempAgentDir);
 
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
+      expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 30000 })).toBe(
+        true,
+      );
     });
   });
 

@@ -91,12 +91,16 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   sessionResultsByAgent: Record<string, SessionsListResult> = {};
 
   private readonly subscriptions: SubscriptionsController;
+  private readonly renderSubscription: SubscriptionsController;
+  private invalidateRender: (() => void) | undefined;
   readonly sessionCatalogLive = new SessionCatalogLiveState();
   sessionScopeGeneration = 0;
   sessionCatalogAgentId: string | null = null;
   sessionCatalogRevision = 0;
   readonly sessionCatalogPageDepths = new Map<string, number>();
   private sessionScopeAgentId: string | null = null;
+  private agentSelectionSource: ApplicationContext["agentSelection"] | undefined;
+  private agentSelectionIntentRevision: number | undefined;
   private sessionsSource: SessionCapability | null = null;
   private filteredSessionScope: string | null = null;
   private unsubscribeFilteredSessions: (() => void) | null = null;
@@ -115,7 +119,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   // Retiring the epoch aborts it so a dialog open across a reconnect dismisses
   // itself instead of confirming into a mutation scope that no longer applies.
   private sessionMutationAbortController = new AbortController();
-  private readonly scroll = new SessionDataScrollController(() => this.requestSessionDataUpdate());
+  // Scroll observations already publish in their layout frame.
+  private readonly scroll = new SessionDataScrollController(() => this.host.requestUpdate());
   private readonly lineage = new SessionLineageController(
     this,
     () => ({ routeId: this.host.activeRouteId, key: this.host.getRouteSessionKey() }),
@@ -125,13 +130,29 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   constructor(private readonly host: SessionDataControllerHost) {
     host.addController(this);
     // Subscribe before connecting catalog listeners; unsubscribe after session cleanup.
-    this.subscriptions = new SubscriptionsController({
+    const subscriptionHost = {
       addController: () => undefined,
       removeController: () => undefined,
       requestUpdate: () => host.requestUpdate(),
       get updateComplete() {
         return host.updateComplete;
       },
+    };
+    // Every session source shares one frame; state still updates before its notification.
+    this.renderSubscription = new SubscriptionsController(subscriptionHost).watch(
+      () => this,
+      (_, notify) => {
+        this.invalidateRender = notify;
+        return () => {
+          this.invalidateRender = undefined;
+        };
+      },
+      undefined,
+      () => undefined,
+    );
+    this.subscriptions = new SubscriptionsController({
+      ...subscriptionHost,
+      requestUpdate: () => this.requestSessionDataUpdate(),
     });
     this.subscriptions
       .watchStore(
@@ -181,11 +202,12 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   sessionCatalogIdsWithoutVisibleRows = (): readonly string[] =>
     this.host.sessionCatalogIdsWithoutVisibleRows();
 
-  readonly requestSessionDataUpdate = () => this.host.requestUpdate();
+  readonly requestSessionDataUpdate = () => this.invalidateRender?.();
 
   sessionListQuery = (agentId: string) => sidebarSessionListQuery(this.host, agentId);
 
   hostConnected(): void {
+    this.renderSubscription.hostConnected();
     this.subscriptions.hostConnected();
     this.stopCatalogBrowserEvents = subscribeSessionCatalogBrowserEvents(
       this.handleCatalogSessionContinued as EventListener,
@@ -211,6 +233,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   hostDisconnected(): void {
+    this.renderSubscription.hostDisconnected();
     this.ownerCounts.dispose();
     this.resetChildSessionState();
     this.retireFilteredSessions();
@@ -222,6 +245,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.gatewayClient = null;
     this.gatewayConnected = false;
     this.gatewayAvailable = false;
+    this.agentSelectionSource = undefined;
+    this.agentSelectionIntentRevision = undefined;
     this.retireSessionCatalogData();
     this.scroll.dispose();
     this.lineage.disconnect();
@@ -262,6 +287,14 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   synchronizeSessionScope(): void {
     const context = this.context;
+    const selection = context?.agentSelection;
+    const foreground =
+      selection !== undefined &&
+      selection === this.agentSelectionSource &&
+      selection.intentRevision !== this.agentSelectionIntentRevision;
+    // Consume same-agent intent too, before a later automatic scope change can reuse it.
+    this.agentSelectionSource = selection;
+    this.agentSelectionIntentRevision = selection?.intentRevision;
     const nextAgentId = context ? normalizeAgentId(this.host.expandedAgentId()) : null;
     // A reconnect cannot revoke ownership until its replacement hello is authoritative.
     const nextCatalogAgentId =
@@ -309,7 +342,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       context?.gateway.snapshot.phase === "connected" &&
       hasSidebarListFilter(this.host)
     ) {
-      void this.scheduleSidebarSessions();
+      void (foreground ? this.refreshSidebarSessions() : this.scheduleSidebarSessions());
     }
   }
 

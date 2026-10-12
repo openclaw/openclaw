@@ -24,7 +24,7 @@ function buildResultPreview(result: unknown): string {
   return entry.outputPreview;
 }
 
-describe("activity model output preview redaction", () => {
+describe("activity model output preview fidelity", () => {
   it.each([
     ["short UTF-16 text", "\ud800 visible 🦞 text", "\ud800 visible 🦞 text"],
     ["a surrogate pair at the cap", "a".repeat(1_999) + "🦞tail", "a".repeat(1_999)],
@@ -33,7 +33,7 @@ describe("activity model output preview redaction", () => {
     expect(buildResultPreview({ text: source })).toBe(expected);
   });
 
-  it("redacts dotted API key assignments emitted by tool output", () => {
+  it("preserves dotted API key assignments emitted by tool output", () => {
     const preview = buildResultPreview({
       text: [
         "app.api.key=visible-leaked-value-1234567890",
@@ -42,23 +42,21 @@ describe("activity model output preview redaction", () => {
       ].join("\n"),
     });
 
-    expect(preview).toContain("app.api.key=[redacted]");
-    expect(preview).toContain("spring.datasource.password=[redacted]");
+    expect(preview).toContain("app.api.key=visible-leaked-value-1234567890");
+    expect(preview).toContain("spring.datasource.password=visible-db-password-1234567890");
     expect(preview).toContain("server.port=8080");
-    expect(preview).not.toContain("visible-leaked-value-1234567890");
-    expect(preview).not.toContain("visible-db-password-1234567890");
   });
 
-  it("redacts dotted API keys in object-shaped tool results", () => {
+  it("preserves dotted API keys in object-shaped tool results", () => {
     const preview = buildResultPreview({
       "app.api.key": 'visible secret with spaces, apostrophe: don\'t, quote: "keep hidden"',
       "server.port": 8080,
     });
 
-    expect(preview).toContain('"app.api.key": "[redacted]"');
+    expect(JSON.parse(preview)["app.api.key"]).toBe(
+      'visible secret with spaces, apostrophe: don\'t, quote: "keep hidden"',
+    );
     expect(preview).toContain('"server.port": 8080');
-    expect(preview).not.toContain("visible secret");
-    expect(preview).not.toContain("keep hidden");
   });
 });
 
@@ -86,7 +84,6 @@ describe("activity preview retention", () => {
               return process.memoryUsage().heapUsed;
             }
             function append(index, size) {
-              // Keep all discarded bytes without benchmarking long-token redaction.
               const payload = "x".repeat(2_000) + "!".repeat(size - 2_000);
               const text = JSON.parse(JSON.stringify("Synthetic " + index + ": " + payload));
               entries = updateToolActivity(entries, {
