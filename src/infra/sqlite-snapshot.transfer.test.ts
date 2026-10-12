@@ -94,9 +94,11 @@ function mockExclusiveCopyTransfer() {
     const target = await fs.open(options.targetPath, "r+");
     try {
       await target.sync();
+      const { dev, ino } = await target.stat({ bigint: true });
       return {
         method: "exclusive-copy",
         identity: await target.stat(),
+        exactIdentity: { dev, ino },
         directorySync: await syncDirectory(path.dirname(options.targetPath)),
       };
     } finally {
