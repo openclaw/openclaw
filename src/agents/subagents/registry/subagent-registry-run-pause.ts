@@ -10,9 +10,39 @@ import {
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { mutateSubagentRuns, SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner, latestSubagentRun } from "./subagent-run-generation.js";
+import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
 import { resolveCompletionAfterHardRunDeadline } from "./subagent-run-timeout.js";
+
+const COLLECTOR_YIELD_ERROR =
+  "Collector yielded under a build that predates the admission gate, so it has no recorded collectorCompletion and nothing can continue it. Rerun the collector and have it end its turn normally instead of calling sessions_yield.";
+
+type YieldedRunContinuation = { state: "continuable" } | { state: "unreachable"; error: string };
+
+/**
+ * Owns "can a continuation still resume this yielded run?" for a row where
+ * `isYieldedSubagentRun` (run liveness) holds. Callers settle an unreachable run through the
+ * completion owner instead of leaving it parked. Every other yielded row stays continuable.
+ */
+export function resolveYieldedRunContinuation(entry: SubagentRunRecord): YieldedRunContinuation {
+  // A collector result is read by an explicit wait, never delivered by a continuation.
+  return entry.collect === true && entry.collectorCompletion === undefined
+    ? { state: "unreachable", error: COLLECTOR_YIELD_ERROR }
+    : { state: "continuable" };
+}
+
+/** Whether the yield pause refuses this completion; a kill or an explicit settle may pass it. */
+export function isCompletionHeldByYield(
+  entry: SubagentRunRecord,
+  request: Pick<SubagentCompletionRequest, "reason" | "settleYielded">,
+): boolean {
+  // A settle request outlives the sweep that issued it; it must not rewrite a run that has
+  // since resumed, finished, or been claimed by a kill. A kill claim keeps its pause reason.
+  return request.settleYielded === true
+    ? !isYieldedSubagentRun(entry)
+    : entry.pauseReason === "sessions_yield" && request.reason !== SUBAGENT_ENDED_REASON_KILLED;
+}
 
 /** Return the admitted observation so delayed lifecycle classification retains its attempt. */
 export async function preserveSubagentRunForRestart(params: {

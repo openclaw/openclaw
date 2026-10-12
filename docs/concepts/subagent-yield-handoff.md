@@ -49,6 +49,15 @@ registry accepts the wait. The attempt carries that fact into terminal reply
 presentation, so a registered message wait does not produce a missing-continuation
 warning. Refused or unregistered waits do not provide that evidence.
 
+`resolveYieldedRunContinuation` owns whether a paused run can still be continued.
+A collector without a recorded result never can, because an explicit wait reads a
+collector and no continuation resumes it. The registry sweeper settles that run
+through the existing completion owner as an `error` that keeps the end time the
+yield recorded. Every other paused run stays continuable however long it has been
+paused: a declared message wait, a leaf that an earlier version left paused, and an
+orchestrator waiting on descendants are not bounded by this settlement. A kill
+claim on a paused run is never settled over; cancellation stays with the kill path.
+
 Private child results wait for their spawning turn to settle before individual
 announcement admission. Normal settlement resumes each finished private child,
 even while siblings are still running. Explicit yield assigns the frozen batch

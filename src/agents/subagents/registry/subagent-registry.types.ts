@@ -48,6 +48,8 @@ export type SubagentCompletionRequest = {
   sessionEffects?: SubagentSessionEffects;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
   terminalReply?: AgentRunTerminalReplySnapshot;
+  /** Explicitly settle a yielded run that no continuation can reach; kill is the only other exception. */
+  settleYielded?: true;
 };
 
 export type ContextEngineSubagentEndedParams = {
