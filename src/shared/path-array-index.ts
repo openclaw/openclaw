@@ -9,5 +9,5 @@ export function parseConfigPathArrayIndex(segment: string): number | undefined {
     return undefined;
   }
   const index = Number(segment);
-  return Number.isSafeInteger(index) && index <= MAX_CONFIG_PATH_ARRAY_INDEX ? index : undefined;
+  return index <= MAX_CONFIG_PATH_ARRAY_INDEX ? index : undefined;
 }

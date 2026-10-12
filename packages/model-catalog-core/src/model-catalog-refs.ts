@@ -57,7 +57,7 @@ export function parseProviderModelRef(value: string): ProviderModelRef | null {
   }
   const provider = trimmed.slice(0, slashIndex).trim();
   const model = trimmed.slice(slashIndex + 1).trim();
-  return provider && model ? { provider, model } : null;
+  return { provider, model };
 }
 
 /** Parse a strict provider/model catalog reference. */
