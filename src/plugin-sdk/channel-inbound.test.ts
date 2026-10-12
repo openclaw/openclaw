@@ -2,11 +2,13 @@
  * Tests channel inbound context and dispatch helper behavior.
  */
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readChannelContextAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
 import { recordInboundSession } from "../channels/session.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
@@ -118,7 +120,9 @@ describe("channel-inbound public helpers", () => {
     },
   );
 
-  it("dispatches a published inbound event before automatic session maintenance", async () => {
+  it("dispatches a published inbound event without waiting for automatic session maintenance", async ({
+    signal,
+  }) => {
     const storePath = `${tempDirs.make("openclaw-channel-inbound-maintenance-")}/sessions.json`;
     const staleSessionKey = "agent:main:published-inbound-stale";
     const activeSessionKey = "agent:main:test:peer";
@@ -129,6 +133,17 @@ describe("channel-inbound public helpers", () => {
     let staleEntryAtDispatch: ReturnType<typeof loadSessionEntry>;
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
     const maintenanceCommitted = createDeferredCore();
+    const maintenancePrepared = createDeferredCore();
+    const releaseMaintenance = createDeferredCore();
+    // Metadata and last-route writes can yield to maintenance. Hold its real preparation
+    // so this proves dispatch is independent of completion, not event-loop timing.
+    onTestFinished(
+      registerSessionMaintenancePreserveKeysProvider(async () => {
+        maintenancePrepared.resolve();
+        await releaseMaintenance.promise;
+        return { capture: () => [], dispose() {} };
+      }),
+    );
     // Cold Worker startup can exceed a polling deadline; observe its committed row instead.
     onTestFinished(
       sessionChanges.subscribe((change) => {
@@ -142,54 +157,62 @@ describe("channel-inbound public helpers", () => {
       }),
     );
 
-    const result = await runChannelInboundEvent({
-      channel: "test",
-      raw: { id: "msg-1", text: "hello" },
-      adapter: {
-        ingest: () => ({ id: "msg-1", rawText: "hello" }),
-        resolveTurn: () => ({
+    try {
+      const result = await withinTest(
+        runChannelInboundEvent({
           channel: "test",
-          routeSessionKey: activeSessionKey,
-          storePath,
-          ctxPayload: {
-            Body: "hello",
-            CommandAuthorized: false,
-            RawBody: "hello",
-            CommandBody: "hello",
-            From: "test:user:peer",
-            To: "test:bot",
-            SessionKey: activeSessionKey,
-            Provider: "test",
-            Surface: "test",
-          },
-          recordInboundSession,
-          record: {
-            updateLastRoute: {
-              accountId: "default",
+          raw: { id: "msg-1", text: "hello" },
+          adapter: {
+            ingest: () => ({ id: "msg-1", rawText: "hello" }),
+            resolveTurn: () => ({
               channel: "test",
-              sessionKey: activeSessionKey,
-              to: "user:peer",
-            },
-            onRecordError: (error: unknown) => {
-              throw error;
-            },
-          },
-          runDispatch: async () => {
-            staleEntryAtDispatch = loadSessionEntry({ storePath, sessionKey: staleSessionKey });
-            return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-          },
-          runDispatchLifecycle: {
-            turnAdoptionLifecycle: undefined,
-            onDispatchSkipped: vi.fn(),
+              routeSessionKey: activeSessionKey,
+              storePath,
+              ctxPayload: {
+                Body: "hello",
+                CommandAuthorized: false,
+                RawBody: "hello",
+                CommandBody: "hello",
+                From: "test:user:peer",
+                To: "test:bot",
+                SessionKey: activeSessionKey,
+                Provider: "test",
+                Surface: "test",
+              },
+              recordInboundSession,
+              afterRecord: () => withinTest(maintenancePrepared.promise, signal),
+              record: {
+                updateLastRoute: {
+                  accountId: "default",
+                  channel: "test",
+                  sessionKey: activeSessionKey,
+                  to: "user:peer",
+                },
+                onRecordError: (error: unknown) => {
+                  throw error;
+                },
+              },
+              runDispatch: async () => {
+                staleEntryAtDispatch = loadSessionEntry({ storePath, sessionKey: staleSessionKey });
+                return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+              },
+              runDispatchLifecycle: {
+                turnAdoptionLifecycle: undefined,
+                onDispatchSkipped: vi.fn(),
+              },
+            }),
           },
         }),
-      },
-    });
+        signal,
+      );
 
-    expect(result.dispatched).toBe(true);
-    expect(staleEntryAtDispatch).toMatchObject({ sessionId: "published-inbound-stale" });
-    expect(staleEntryAtDispatch?.archivedAt).toBeUndefined();
-    await maintenanceCommitted.promise;
+      expect(result.dispatched).toBe(true);
+      expect(staleEntryAtDispatch).toMatchObject({ sessionId: "published-inbound-stale" });
+      expect(staleEntryAtDispatch?.archivedAt).toBeUndefined();
+    } finally {
+      releaseMaintenance.resolve();
+    }
+    await withinTest(maintenanceCommitted.promise, signal);
     expect(loadSessionEntry({ storePath, sessionKey: staleSessionKey })).toMatchObject({
       sessionId: "published-inbound-stale",
       updatedAt: 1,
