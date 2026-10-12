@@ -76,16 +76,50 @@ function prepareTelegramConversationRoute(params: ResolveTelegramConversationRou
     resolvedThreadId,
     chatId: params.chatId,
   });
-  let route = resolveAgentRoute({
-    cfg: params.cfg,
+  const routeInput = {
     channel: "telegram",
     accountId: params.accountId,
     peer: {
-      kind: params.isGroup ? "group" : "direct",
+      kind: params.isGroup ? ("group" as const) : ("direct" as const),
       id: peerId,
     },
     parentPeer,
+  };
+  const conversation = {
+    channel: "telegram",
+    accountId: params.accountId,
+    conversationId,
+  };
+  // The binding owner supplies its agent before ordinary agent selection, which rejects an
+  // ambiguous multi-agent roster even when this conversation's binding already names its
+  // agent. Session-only config keeps scope derivation from consulting the roster at all.
+  // SAFETY: Widens the null initializer; TS does not see the synchronous callback's assignment.
+  let selection = null as {
+    route: TelegramResolvedRoute;
+    ownerBinding: TelegramRuntimeBindingRecord | null;
+  } | null;
+  resolveRuntimeConversationBindingRoute({
+    conversation,
+    touchBinding: false,
+    resolveRoute: ({ bindingRecord, boundAgentId }) => {
+      selection = boundAgentId
+        ? {
+            route: resolveAgentRoute({
+              ...routeInput,
+              cfg: { session: params.cfg.session },
+              defaultAgentId: boundAgentId,
+            }),
+            ownerBinding: bindingRecord,
+          }
+        : { route: resolveAgentRoute({ ...routeInput, cfg: params.cfg }), ownerBinding: null };
+      return selection.route;
+    },
   });
+  if (!selection) {
+    throw new Error("Telegram route selection did not run");
+  }
+  const { ownerBinding } = selection;
+  let route = selection.route;
 
   const rawTopicAgentId = params.topicAgentId?.trim();
   if (rawTopicAgentId) {
@@ -150,12 +184,28 @@ function prepareTelegramConversationRoute(params: ResolveTelegramConversationRou
   return {
     route,
     bindingMode,
-    conversation: {
-      channel: "telegram",
-      accountId: params.accountId,
-      conversationId,
-    },
+    conversation,
+    // The binding that chose the agent above; the awaited resolution must still see it.
+    ownerBinding,
   };
+}
+
+type TelegramRuntimeBindingRecord = NonNullable<
+  RuntimeConversationBindingRouteResult["bindingRecord"]
+>;
+
+function isSameBindingOwner(
+  selected: TelegramRuntimeBindingRecord,
+  current: TelegramRuntimeBindingRecord | null,
+): boolean {
+  return Boolean(
+    current &&
+    current.bindingId === selected.bindingId &&
+    current.boundAt === selected.boundAt &&
+    current.targetSessionKey === selected.targetSessionKey &&
+    current.targetKind === selected.targetKind &&
+    current.metadata?.agentId === selected.metadata?.agentId,
+  );
 }
 
 function applyTelegramRuntimeRoute(
@@ -191,13 +241,28 @@ function applyTelegramRuntimeRoute(
   };
 }
 
+const MAX_TELEGRAM_ROUTE_ATTEMPTS = 3;
+
 export async function resolveTelegramConversationRoute(
   params: ResolveTelegramConversationRouteParams,
 ): Promise<TelegramConversationRouteResult> {
-  const prepared = prepareTelegramConversationRoute(params);
-  return applyTelegramRuntimeRoute(
-    prepared,
-    await resolveRuntimeConversationBindingRouteAsync(prepared),
+  for (let attempt = 0; attempt < MAX_TELEGRAM_ROUTE_ATTEMPTS; attempt += 1) {
+    const prepared = prepareTelegramConversationRoute(params);
+    const runtimeRoute = await resolveRuntimeConversationBindingRouteAsync(prepared);
+    // A binding revoked or replaced during the await must not leave its former agent
+    // selected; prepare again so selection reflects the current owner.
+    if (
+      !prepared.ownerBinding ||
+      isSameBindingOwner(prepared.ownerBinding, runtimeRoute.bindingRecord)
+    ) {
+      return applyTelegramRuntimeRoute(prepared, runtimeRoute);
+    }
+    logVerbose(
+      `telegram: binding owner changed while routing ${prepared.conversation.conversationId}; re-resolving`,
+    );
+  }
+  throw new Error(
+    "Telegram conversation binding changed repeatedly while routing. Retry the message.",
   );
 }
 
