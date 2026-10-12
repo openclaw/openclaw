@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
-  buildGroupDisplayName,
   deriveSessionKey,
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
@@ -13,6 +12,7 @@ import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDirForAgent,
 } from "./sessions.js";
+import { buildGroupDisplayName } from "./sessions/group-display.js";
 
 describe("sessions", () => {
   let fixtureRoot = "";

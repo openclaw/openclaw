@@ -9,7 +9,7 @@ import type {
   MentionStoreSource,
 } from "./mention-inbox-store.js";
 
-export const MAX_GLOBAL_ITEMS = 10_000;
+const MAX_GLOBAL_ITEMS = 10_000;
 
 export type StoredMention = {
   id: string;

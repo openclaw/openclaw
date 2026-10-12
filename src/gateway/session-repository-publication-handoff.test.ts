@@ -45,8 +45,9 @@ vi.mock("../process/exec.js", async (original) => ({
   runCommandBuffered: mocked.run,
   runCommandWithTimeout: mocked.timed,
 }));
+// mock-isolation: Publication handoff does not discover worker GitHub credentials.
 vi.mock("./worker-environments/worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: async () => undefined,
+  prepareGitHubPublicationFact: async () => undefined,
 }));
 afterEach(() => vi.restoreAllMocks());
 it.each([

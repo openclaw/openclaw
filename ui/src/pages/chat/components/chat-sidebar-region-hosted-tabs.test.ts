@@ -95,6 +95,18 @@ afterEach(() => {
 });
 
 describe("chat sidebar hosted tabs", () => {
+  it("restores an expanded hosted panel only from its active page tab", async () => {
+    const { region, shell } = await mount();
+    region.layout = { ...region.layout, expanded: true, expandedSide: true };
+    await region.updateComplete;
+    shell
+      .querySelector<HTMLElement>('wa-tab[panel="hosted:browser:remote:page:1"]')!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(region.callbacks?.togglePanelExpanded).toHaveBeenCalledExactlyOnceWith("browser");
+    shell.querySelector<HTMLElement>('wa-tab[panel="hosted:browser:native:page:2"]')!.click();
+    expect(region.callbacks?.togglePanelExpanded).toHaveBeenCalledTimes(1);
+  });
+
   it("drags passive header chrome while keeping changing tabs and controls interactive", async () => {
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawWindowDrag: { postMessage } } });

@@ -195,6 +195,17 @@ export async function ensureConfigReady(params: {
         getPluginMetadataSnapshotCache(preflightResult.pluginMetadataSnapshot),
       );
     }
+    if (prepareGatewayState && preflightResult && snapshot.exists) {
+      const [{ getDeferredPluginMigrationConfigFacts }, { acceptGatewayRunPreflightMigrations }] =
+        await Promise.all([
+          import("../../config/deferred-plugin-migration-config.js"),
+          import("../gateway-cli/pre-bootstrap.js"),
+        ]);
+      // Gateway preflight reads resolve migration rows; snapshots record only nonempty sets.
+      acceptGatewayRunPreflightMigrations(
+        getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig) ?? [],
+      );
+    }
     return;
   }
 

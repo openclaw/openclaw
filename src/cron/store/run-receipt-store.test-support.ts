@@ -4,8 +4,10 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronJob } from "../types.js";
 import { cronStoreKey } from "./key.js";
+import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import { cronRunReceiptSettlement } from "./run-receipt-settlement.js";
 import {
+  adjudicateActiveCronRunReceiptInDatabase,
   claimCronRunReceiptInDatabase,
   claimLocalCronRunReceiptOwnership,
   findActiveCronRunReceiptInDatabase,
@@ -73,11 +75,26 @@ export function claimCronRunReceiptForTest(storePath: string, job: CronJob, star
   );
 }
 
-export function claimCronRunReceiptInDatabaseForTest(
-  params: Omit<Parameters<typeof claimCronRunReceiptInDatabase>[0], "receiptSchema">,
-) {
+export function claimCronRunReceiptInDatabaseForTest(params: {
+  database: Parameters<typeof claimCronRunReceiptInDatabase>[0]["database"];
+  prepared: PreparedCronRunReceiptClaim;
+  resolveAgentId: (job: CronJob) => string;
+}) {
+  const { handle: preparedHandle } = params.prepared;
+  adjudicateActiveCronRunReceiptInDatabase({
+    database: params.database,
+    jobId: preparedHandle.jobId,
+    prepared: params.prepared,
+    finishedAtMs: preparedHandle.startedAtMs,
+  });
   const handle = claimCronRunReceiptInDatabase({
-    ...params,
+    database: params.database,
+    handle: preparedHandle,
+    job: loadedCronStoreFromRows(
+      loadCronRows(params.database, preparedHandle.storeKey, new Set([preparedHandle.jobId])),
+    ).store.jobs[0],
+    requestRunId: params.prepared.requestRunId,
+    resolveAgentId: params.resolveAgentId,
     receiptSchema: prepareCronRunReceiptWriteSchema(params.database),
   });
   claimLocalCronRunReceiptOwnership(handle);

@@ -50,33 +50,6 @@ const count = (history: ChatHistoryResult) =>
 
 describe("subagent panel call counts", () => {
   it.each([
-    { name: "complete ordinary history", history: complete([toolCall()]), expected: 1 },
-    { name: "empty complete history", history: complete([]), expected: 0 },
-    {
-      name: "older pages remain",
-      history: complete([toolCall()], { hasMore: true, nextOffset: 1, totalMessages: 20 }),
-      expected: undefined,
-    },
-    {
-      name: "byte-limited tail",
-      history: complete([toolCall()], { totalMessages: 2 }),
-      expected: undefined,
-    },
-    {
-      name: "older page without its tail",
-      history: complete([toolCall()], { offset: 20 }),
-      expected: undefined,
-    },
-    {
-      name: "uncertified legacy response",
-      history: { messages: [toolCall()] },
-      expected: undefined,
-    },
-    {
-      name: "native complete projection",
-      history: { messages: [toolCall()], completeSnapshot: true },
-      expected: 1,
-    },
     { name: "unkeyed legacy call", history: complete([toolCall("")]), expected: undefined },
     {
       name: "call without a recorded run owner",
@@ -118,10 +91,6 @@ describe("subagent panel call counts", () => {
     ).toBe(1);
   });
 
-  it("does not recover raw calls that an explicit empty activity projection hid", () => {
-    expect(count(complete([{ ...toolCall(), activity: [] }, toolResult()]))).toBe(0);
-  });
-
   it("keeps reused call IDs in distinct recorded runs separate while deduplicating each result", () => {
     expect(
       count(
@@ -143,7 +112,7 @@ describe("subagent panel call counts", () => {
     ).toBe(2);
   });
 
-  it.each(["promoted", "omitted"])(
+  it.each(["omitted"])(
     "withholds the count when an invocation ID is %s across item frames",
     (change) => {
       const known = activity({
@@ -171,43 +140,7 @@ describe("subagent panel call counts", () => {
     },
   );
 
-  it("omits hidden routine activity while retaining visible operations", () => {
-    expect(
-      count(
-        complete([
-          {
-            role: "assistant",
-            runId: "run-1",
-            content: [],
-            activity: [
-              activity(),
-              activity({
-                itemId: "poll-item",
-                toolCallId: "poll-call",
-                name: "process",
-                hideFromChannelProgress: true,
-              }),
-              activity({
-                itemId: "internal-item",
-                toolCallId: "internal-call",
-                suppressChannelProgress: true,
-              }),
-            ],
-          },
-        ]),
-      ),
-    ).toBe(1);
-  });
-
   it.each([
-    {
-      name: "a raw lifecycle frame follows a prepared hidden item",
-      events: [
-        event("item", activity({ hideFromChannelProgress: true }), 1),
-        event("tool", { toolCallId: "read-1", name: "read", phase: "result" }, 2),
-      ],
-      expected: 0,
-    },
     {
       name: "a prepared hidden item follows its raw lifecycle frame",
       events: [

@@ -58,7 +58,6 @@ export type CronRunExecutionParams = Pick<
       agentRuntime: string,
     ) => Promise<ModelCatalogEntry[]>;
     persistRunContinuationSession?: CronRunContinuationSession["sync"];
-    setRunContinuationCliExecutionProvider?: (provider?: string) => Promise<void>;
     abortSignal?: AbortSignal;
     abortReason: () => string;
     isAborted: () => boolean;

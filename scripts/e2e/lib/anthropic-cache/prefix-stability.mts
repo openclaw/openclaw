@@ -77,7 +77,7 @@ function firstDifference(before: unknown, after: unknown, path = "$"): string {
   return `path=${path} leafPrevious=${digest(left)} leafNext=${digest(right)} leafBytes=${left === undefined ? 0 : Buffer.byteLength(left)}:${right === undefined ? 0 : Buffer.byteLength(right)}`;
 }
 
-/** Preserve wire ordering and bytes; only movable conversation cache markers are separate. */
+/** Preserve history order and content bytes; normalize text shorthand and separate cache markers. */
 export function snapshotProviderPrefix(
   api: CacheRequestApi,
   payload: unknown,
@@ -101,7 +101,12 @@ export function snapshotProviderPrefix(
         if (cache_control !== undefined) {
           breakpoints.push({ index: history.length, policy: bytes(cache_control) });
         }
-        history.push(bytes({ ...envelope, block }));
+        // Anthropic accepts a string as shorthand for one text block. Its synthetic
+        // envelope must not acquire a different key order from sorted captured JSON.
+        const { type, text, ...fields } = block;
+        history.push(
+          bytes({ ...envelope, block: type === "text" ? { type, text, ...fields } : block }),
+        );
       }
     } else {
       history.push(bytes(message));

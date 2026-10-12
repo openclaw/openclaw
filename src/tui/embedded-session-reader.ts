@@ -1,5 +1,10 @@
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { readSessionRuntimeOwnershipAsync } from "../agents/harness/session-runtime-ownership.js";
+import {
+  getSubagentSessionListReadSnapshotIdentity,
+  prepareOptionalSubagentSessionListReadCache,
+} from "../agents/subagents/registry/subagent-registry-state.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { withReadySessionRows } from "../gateway/session-row-prepared-read.js";
 import type * as records from "../gateway/session-row-projection-record.js";
@@ -7,9 +12,22 @@ import type { SessionRowProjection } from "../gateway/session-row-projection.js"
 import { listProjectedSessions } from "../gateway/session-utils-list.js";
 import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
 import { createGatewaySessionEntryReader } from "../gateway/session-utils-store-lineage.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../gateway/session-utils-store-worker.js";
 import type { loadGatewaySessionEntryReadOnly } from "../gateway/session-utils-store.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { TuiBackend } from "./tui-backend.js";
+
+export async function readEmbeddedHistorySession(opts: Parameters<TuiBackend["loadHistory"]>[0]) {
+  if (!getSubagentSessionListReadSnapshotIdentity()) {
+    await prepareOptionalSubagentSessionListReadCache();
+  }
+  return loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: getRuntimeConfig(),
+    key: opts.sessionKey,
+    ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    includeStoreChildEntries: true,
+  });
+}
 
 export function readEmbeddedHistorySessionInfo(
   projection: SessionRowProjection,

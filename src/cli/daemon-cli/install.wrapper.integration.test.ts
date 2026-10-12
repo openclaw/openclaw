@@ -5,13 +5,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import * as runtimePaths from "../../daemon/runtime-paths.js";
+import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceInstallArgs,
 } from "../../daemon/service-types.js";
+import {
+  GatewayServiceAuthorityError,
+  withGatewayServiceUpdateAuthority,
+} from "../../daemon/service-update-authority.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { ExitError } from "../../runtime.js";
 import { addGatewayServiceCommands } from "./register-service-commands.js";
+import { createDaemonActionContext } from "./response.js";
+import { runGatewayServiceUpdateCommand } from "./update-executor.js";
 
 const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } = await vi.hoisted(
   async () => {
@@ -27,6 +34,28 @@ const service = vi.hoisted(() => ({
   isLoaded: vi.fn(async () => true),
   readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(),
   readDefinitionMutationCapability: vi.fn(async () => ({ kind: "writable" as const })),
+}));
+const executor = vi.hoisted(() => ({ current: true }));
+
+vi.mock("../../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/openclaw-root.js")>()),
+  resolveOpenClawPackageRoot: async () => path.dirname(path.dirname(process.argv[1]!)),
+}));
+vi.mock("../update-cli/update-command-executor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../update-cli/update-command-executor.js")>()),
+  withDelegatedUpdateCommandExecutor: async (
+    _grant: unknown,
+    _runId: string,
+    _root: string,
+    operation: (fence: { assertCurrent: () => void }) => Promise<unknown>,
+  ) =>
+    operation({
+      assertCurrent: () => {
+        if (!executor.current) {
+          throw new Error("executor fence lost");
+        }
+      },
+    }),
 }));
 
 vi.mock("../../daemon/service.js", () => ({ resolveGatewayService: () => service }));
@@ -111,6 +140,7 @@ beforeEach(async () => {
   clearConfigCache();
   clearRuntimeConfigSnapshot();
   resetRuntimeCapture();
+  executor.current = true;
   service.install.mockReset();
   service.install.mockResolvedValue(undefined);
   service.readCommand.mockReset();
@@ -124,6 +154,130 @@ beforeEach(async () => {
   await fs.mkdir(path.dirname(entrypoint));
   await fs.writeFile(entrypoint, "");
   process.argv = [process.execPath, entrypoint];
+});
+
+function supplyExecutorInput(rebind = false) {
+  const root = path.dirname(path.dirname(entrypoint));
+  const input = {
+    action: "install",
+    targetRoot: root,
+    executor: {
+      runId: "fixture-run",
+      root,
+      databasePath: path.join(root, "leases.sqlite"),
+      databaseIdentity: {},
+      childKey: "child",
+      originalChildKey: "child",
+      parent: { key: root },
+      originalParent: { key: root },
+      spawner: { key: root },
+    },
+    ...(rebind ? { originalDefinition: "a".repeat(64) } : {}),
+  };
+  vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
+    yield Buffer.from(JSON.stringify(input));
+    return undefined;
+  });
+}
+
+describe("update executor failure reporting", () => {
+  it.each([false, true])("retains a pre-write install refusal (rebind=%s)", async (rebind) => {
+    supplyExecutorInput(rebind);
+    const message =
+      "Service definition inspection or backup failed; the definition was preserved: inspection failed";
+    service.readCommand.mockRejectedValue(
+      new ServiceStartRefusalError({ reason: "disabled-no-start", message }),
+    );
+    const exit = new ExitError(1);
+    await defaultRuntime.exit.withImplementation(
+      () => {
+        throw exit;
+      },
+      async () => {
+        const program = new Command().name("openclaw");
+        addGatewayServiceCommands(program.command("gateway"));
+        await expect(
+          program.parseAsync(
+            ["gateway", "install", "--force", "--json", "--update-executor", "run"],
+            { from: "user" },
+          ),
+        ).rejects.toBe(exit);
+      },
+    );
+    expect(JSON.parse(runtimeLogs[0]!)).toMatchObject({
+      ok: false,
+      error: `SERVICE_DEFINITION_UNKNOWN: ${message}`,
+    });
+    expect(runtimeErrors).toEqual([]);
+    expect(service.install).not.toHaveBeenCalled();
+  });
+
+  it("labels an operation exit after its executor fence is lost", async () => {
+    supplyExecutorInput();
+    await expect(
+      runGatewayServiceUpdateCommand("run", "install", async () => {
+        executor.current = false;
+        throw new ExitError(1);
+      }),
+    ).rejects.toThrow("UPDATE_NATIVE_AUTHORITY: executor fence lost");
+  });
+
+  it.each(["closed scope", "recovery unverified"])(
+    "retains a reported nested authority loss with a current executor: %s",
+    async (failure) => {
+      supplyExecutorInput();
+      let error: unknown;
+      if (failure === "closed scope") {
+        let assertClosed!: () => void;
+        await withGatewayServiceUpdateAuthority(undefined, async (assertCurrent) => {
+          assertClosed = assertCurrent;
+        });
+        try {
+          assertClosed();
+        } catch (cause) {
+          error = cause;
+        }
+      } else {
+        error = new GatewayServiceAuthorityError(
+          new GatewayServiceAuthorityError(
+            new Error("UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified"),
+            "recovery-pending",
+          ),
+          "recovery-pending",
+        );
+      }
+      const exit = new ExitError(1);
+      await defaultRuntime.exit.withImplementation(
+        () => {
+          throw exit;
+        },
+        async () => {
+          await expect(
+            runGatewayServiceUpdateCommand("run", "install", async () => {
+              createDaemonActionContext({ action: "install", json: true }).fail(String(error));
+            }),
+          ).rejects.toBe(exit);
+        },
+      );
+      const reported = JSON.parse(runtimeLogs[0]!).error;
+      expect(reported).toContain(
+        failure === "closed scope"
+          ? "UPDATE_NATIVE_AUTHORITY: Native service authority has closed."
+          : "UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified",
+      );
+      expect(reported.match(/UPDATE_NATIVE_AUTHORITY:/g)).toHaveLength(1);
+      expect(runtimeErrors).toEqual([]);
+    },
+  );
+
+  it("does not unwrap an operation exit from an aggregate failure", async () => {
+    supplyExecutorInput();
+    await expect(
+      runGatewayServiceUpdateCommand("run", "install", async () => {
+        throw new AggregateError([new ExitError(1)], "settlement failed");
+      }),
+    ).rejects.toThrow("UPDATE_NATIVE_AUTHORITY: settlement failed");
+  });
 });
 
 afterEach(() => {

@@ -8,6 +8,7 @@ import {
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
+import { listLocallyOwnedCronRunReceiptIds } from "../store/run-receipt-store.js";
 import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import type { CronJob } from "../types.js";
 import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
@@ -18,7 +19,7 @@ import {
 } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { skipCronJobsWithoutOwners } from "./run-owner.js";
-import { requestCronRuns, drainCronRunQueue } from "./run-queue.js";
+import { requestCronRuns } from "./run-queue.js";
 import { emitInterruptedCronRun } from "./run-recovery-events.js";
 import { recoverCronRunProposals } from "./run-recovery.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
@@ -156,13 +157,19 @@ async function onAdmittedTimer(state: CronServiceState) {
   armRunningRecheckTimer(state);
   try {
     const dueJobs = await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true });
+      await ensureLoaded(state);
       if (state.stopped || state.startupCatchup || state.lifecycleGeneration !== generation) {
         state.deps.log.warn({}, "cron: due job request skipped - scheduler unavailable");
         return [];
       }
+      const locallyOwned = new Set(listLocallyOwnedCronRunReceiptIds());
       const proposals = (state.store?.jobs ?? [])
-        .filter((job) => job.state.queuedAtMs !== undefined || job.state.runningAtMs !== undefined)
+        .filter(
+          (job) =>
+            job.state.queuedAtMs !== undefined ||
+            (job.state.runningAtMs !== undefined &&
+              (!job.state.runningReceiptId || !locallyOwned.has(job.state.runningReceiptId))),
+        )
         .map((job) => ({
           jobId: job.id,
           queuedAtMs: job.state.queuedAtMs,
@@ -231,7 +238,6 @@ async function onAdmittedTimer(state: CronServiceState) {
       return;
     }
     const requests = await requestCronRuns(state, dueJobs);
-    await drainCronRunQueue(state);
     if (state.lifecycleGeneration === generation) {
       // Queued rows are durable; completion pumps their next activation.
       armTimer(state);

@@ -84,6 +84,7 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     pendingArchives = projected.archiveRecovery.pending;
   }
   const beforeCount = readSessionEntryCount(database);
+  let afterCount = beforeCount;
   const validatedRemovalEntries = new Map<string, SessionEntry>();
   const validatedRemovalRows = new Map<string, ReturnType<typeof readProjectedRemovalEntry>>();
   const validatedRemovals = projected.removals.filter((removal) => {
@@ -197,6 +198,9 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
       postimages: options.postimages,
       ...(routeContext !== undefined ? { routeContext } : {}),
     });
+    if (!currentEntry) {
+      afterCount += 1;
+    }
     const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
       const removedSessionId = removal.expectedEntry.sessionId;
       return removal.sessionKey !== sessionKey &&
@@ -239,10 +243,19 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
       });
     }
     removedSessionKeys.push(removal.sessionKey);
+    afterCount -= 1;
   }
   return {
     archivedTranscripts,
     beforeCount,
+    // Offline repair and native callbacks can change rows outside the ordinary lifecycle delta.
+    afterCount:
+      options.allowCanonicalRepair ||
+      projected.removals.some(({ removal }) => removal.expectedRawEntryJson !== undefined) ||
+      options.afterUpsertsInTransaction ||
+      options.afterFreshUpsertsInTransaction
+        ? readSessionEntryCount(database)
+        : afterCount,
     maintenancePlans: [options.applyMaintenance(database, options.postimages)],
     removedSessionKeys,
     pendingArchives,

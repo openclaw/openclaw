@@ -1,5 +1,5 @@
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../i18n/index.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
 
 const FALLBACK_TOAST_DURATION_MS = 8000;
