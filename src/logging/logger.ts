@@ -31,7 +31,7 @@ import {
 } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
 import { buildFileLogMessage, type FileLogMessagePart } from "./logger-file-message.js";
-import { fileLogTransport } from "./logger-file-transport.js";
+import { ensureLogDirectorySync, fileLogTransport } from "./logger-file-transport.js";
 import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
 import {
   redactSecrets,
@@ -548,9 +548,13 @@ function buildLogger(): TsLogger<LogObj> {
         const nextActiveFile = resolveActiveLogFileWithMode(settings.file, settings.rolling);
         if (nextActiveFile !== activeFile) {
           activeFile = nextActiveFile;
-          fs.mkdirSync(path.dirname(activeFile), { recursive: true });
-          if (settings.rolling) {
-            pruneOldRollingLogs(path.dirname(activeFile));
+          try {
+            ensureLogDirectorySync(path.dirname(activeFile));
+            if (settings.rolling) {
+              pruneOldRollingLogs(path.dirname(activeFile));
+            }
+          } catch {
+            // Still enqueue: the failed append reports this record through the transport warning.
           }
         }
         const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });

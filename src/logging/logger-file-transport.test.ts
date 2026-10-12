@@ -291,6 +291,32 @@ describe("async logger file transport", () => {
     expect(fs.readFileSync(secondPath, "utf8")).toContain("second-file-recovery");
   });
 
+  // A deleted directory reached through its open descriptor mirrors a stale mounted
+  // /tmp: children fail with ENOENT while the parent path still resolves, the shape
+  // on which Node's recursive mkdirSync never returns.
+  it.skipIf(process.platform !== "linux")(
+    "drops records with a warning when the log directory parent is deleted but still resolvable",
+    async () => {
+      const deletedDir = logPathTracker.nextPath();
+      fs.mkdirSync(deletedDir);
+      const fd = fs.openSync(deletedDir, "r");
+      try {
+        fs.rmdirSync(deletedDir);
+        const logPath = `/proc/self/fd/${fd}/openclaw/openclaw.log`;
+        const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+        setLoggerOverride({ level: "info", file: logPath });
+
+        getLogger().info("only-record-after-deletion");
+        await testApi.flushFileLogQueueForTests();
+
+        const warnings = stderrSpy.mock.calls.map(([line]) => String(line));
+        expect(warnings.some((line) => line.includes(`file=${logPath}`))).toBe(true);
+      } finally {
+        fs.closeSync(fd);
+      }
+    },
+  );
+
   it("writes a piped append warning before process exit", () => {
     const logPath = logPathTracker.nextPath();
     fs.mkdirSync(logPath);
