@@ -21,6 +21,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { readJsonIfExists, writeJsonAtomic, writeTextAtomic } from "../../infra/json-files.js";
 import { removePackageUpdatePath } from "../../infra/package-update-filesystem.js";
+import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import {
   createUpdateDatabaseBackup,
   UpdateDatabaseBackupSchema,
@@ -106,8 +107,8 @@ async function saveReceipt(file: string, receipt: Receipt) {
 async function readIdentities(databases: readonly string[]) {
   const identities: Receipt["databaseIdentities"] = {};
   for (const database of databases) {
-    const info = await fs.stat(database).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") {
+    const info = await fs.stat(database).catch((error: unknown) => {
+      if (hasNodeErrorCode(error, "ENOENT")) {
         return undefined;
       }
       throw error;
@@ -368,7 +369,7 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
             await writeTextAtomic(configPath, config.raw, {
               mode: 0o600,
               durable: true,
-              beforeRename: assertCurrent,
+              beforeRename: async () => assertCurrent(),
             });
           } else {
             assertCurrent();
