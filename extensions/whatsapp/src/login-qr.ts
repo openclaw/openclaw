@@ -15,7 +15,6 @@ import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getActiveWebListener } from "./active-listener.js";
 import {
-  closeWaSocket,
   waitForWhatsAppLoginResult,
   WHATSAPP_LOGGED_OUT_QR_MESSAGE,
 } from "./connection-controller.js";
@@ -28,6 +27,7 @@ import {
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
 } from "./session.js";
+import { closeWaSocket } from "./socket-close.js";
 import { resolveWhatsAppSocketTiming, type WhatsAppSocketTimingOptions } from "./socket-timing.js";
 
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;

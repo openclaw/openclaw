@@ -5,9 +5,10 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, success, defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { restoreCredsFromBackupIfNeeded } from "./auth-store.js";
-import { closeWaSocketSoon, waitForWhatsAppLoginResult } from "./connection-controller.js";
+import { waitForWhatsAppLoginResult } from "./connection-controller.js";
 import { renderQrTerminal } from "./qr-terminal.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
+import { closeWaSocketSoon } from "./socket-close.js";
 import { resolveWhatsAppSocketTiming } from "./socket-timing.js";
 
 const QR_LINK_INSTRUCTION = "Open the WhatsApp app, go to Linked Devices, then scan this QR:";

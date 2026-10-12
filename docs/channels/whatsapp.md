@@ -598,6 +598,8 @@ openclaw channels status
     openclaw gateway status
     ```
 
+    If logs repeat `Another process owns this WhatsApp connection` after a restart, the previous connection could not finish saving credentials and still holds the account. OpenClaw keeps that ownership so two sockets never share one auth directory, and the next start finishes the earlier cleanup before connecting. If it keeps failing, check disk space and permissions on the auth directory, then restart the Gateway.
+
     If the loop persists after host connectivity and timing are fixed, back up the account auth directory and re-link:
 
     ```bash

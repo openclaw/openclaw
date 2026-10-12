@@ -10,7 +10,7 @@ import {
 } from "./connection-controller-runtime-context.js";
 import {
   acquireWhatsAppGatewayConnectionOwner,
-  type WhatsAppConnectionOwnerLease,
+  type WhatsAppGatewayConnectionOwnerLease,
 } from "./connection-owner.js";
 import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
 import type { ActiveWebListener, WebListenerCloseReason } from "./inbound/types.js";
@@ -26,7 +26,7 @@ import {
   waitForWaConnection,
   WhatsAppAuthUnstableError,
 } from "./session.js";
-import { closeWhatsAppSocketAndWait } from "./socket-close.js";
+import { closeWaSocket, closeWhatsAppSocketAndWait } from "./socket-close.js";
 import {
   DEFAULT_WHATSAPP_SOCKET_TIMING,
   type WhatsAppSocketTimingOptions,
@@ -135,57 +135,8 @@ type SocketActivityEmitter = {
   removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
 };
 
-async function closeWebSocketBestEffort(sock: { ws?: { close?: () => void | Promise<void> } }) {
-  try {
-    await sock.ws?.close?.();
-  } catch {
-    // ignore best-effort shutdown failures
-  }
-}
-
-export function closeWaSocket(
-  sock:
-    | {
-        end?: (error: Error | undefined) => void | Promise<void>;
-        ws?: { close?: () => void };
-      }
-    | null
-    | undefined,
-): void {
-  try {
-    if (typeof sock?.end === "function") {
-      void Promise.resolve(sock.end(new Error("OpenClaw WhatsApp socket close"))).catch(
-        async () => await closeWebSocketBestEffort(sock),
-      );
-      return;
-    }
-    if (sock) {
-      void closeWebSocketBestEffort(sock);
-    }
-  } catch {
-    if (sock) {
-      void closeWebSocketBestEffort(sock);
-    }
-  }
-}
-
 function stoppedControllerError(): Error {
   return new Error("WhatsApp connection controller is shutting down");
-}
-
-export function closeWaSocketSoon(
-  sock:
-    | {
-        end?: (error: Error | undefined) => void;
-        ws?: { close?: () => void };
-      }
-    | null
-    | undefined,
-  delayMs = 500,
-): void {
-  setTimeout(() => {
-    closeWaSocket(sock);
-  }, delayMs);
 }
 
 type WhatsAppLoginWaitResult =
@@ -394,8 +345,9 @@ export class WhatsAppConnectionController {
   private current: WhatsAppLiveConnection | null = null;
   private runtimeContextLease: { dispose: () => void } | null = null;
   private pendingOwnerContextLease: { dispose: () => void } | null = null;
-  private connectionOwnerLease: WhatsAppConnectionOwnerLease | null = null;
-  private retainedOwnerReleaseLease: WhatsAppConnectionOwnerLease | null = null;
+  private connectionOwnerLease: WhatsAppGatewayConnectionOwnerLease | null = null;
+  private retainedOwnerReleaseLease: WhatsAppGatewayConnectionOwnerLease | null = null;
+  private shutdownPromise: Promise<void> | null = null;
   private connectionOwnerLeasePromise: Promise<void> | null = null;
   private connectionSetupPromise: Promise<WhatsAppLiveConnection> | null = null;
   private pendingSocketCleanup: WhatsAppSocketCleanup | null = null;
@@ -826,7 +778,23 @@ export class WhatsAppConnectionController {
     await this.sleep(delayMs, this.params.abortSignal);
   }
 
+  /**
+   * Single-flight: a replacement monitor may retry this cleanup through the owner
+   * lease while the original shutdown is still running.
+   */
   async shutdown(): Promise<void> {
+    if (!this.shutdownPromise) {
+      const attempt = this.runShutdown().finally(() => {
+        if (this.shutdownPromise === attempt) {
+          this.shutdownPromise = null;
+        }
+      });
+      this.shutdownPromise = attempt;
+    }
+    await this.shutdownPromise;
+  }
+
+  private async runShutdown(): Promise<void> {
     this.shuttingDown = true;
     const stoppedError = stoppedControllerError();
     this.ownerAcquireAbortController.abort(stoppedError);
@@ -909,6 +877,13 @@ export class WhatsAppConnectionController {
           this.authDir,
           this.ownerAcquireAbortController.signal,
         );
+        // A failed shutdown keeps this lease held after the monitor has exited, so a
+        // later startup finishes the cleanup through the lease. Healthy owners ignore it.
+        ownerLease.setCleanupRetry(async () => {
+          if (this.shuttingDown) {
+            await this.shutdown();
+          }
+        });
         try {
           if (this.shuttingDown) {
             throw stoppedControllerError();

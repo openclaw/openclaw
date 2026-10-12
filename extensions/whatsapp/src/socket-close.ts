@@ -68,3 +68,53 @@ export async function closeWhatsAppSocketAndWait(
   }
   throw new AggregateError(errors, "WhatsApp socket close could not be confirmed");
 }
+
+// Fire-and-forget close variants for callers that cannot wait on the transport.
+async function closeWebSocketBestEffort(sock: { ws?: { close?: () => void | Promise<void> } }) {
+  try {
+    await sock.ws?.close?.();
+  } catch {
+    // ignore best-effort shutdown failures
+  }
+}
+
+export function closeWaSocket(
+  sock:
+    | {
+        end?: (error: Error | undefined) => void | Promise<void>;
+        ws?: { close?: () => void };
+      }
+    | null
+    | undefined,
+): void {
+  try {
+    if (typeof sock?.end === "function") {
+      void Promise.resolve(sock.end(new Error("OpenClaw WhatsApp socket close"))).catch(
+        async () => await closeWebSocketBestEffort(sock),
+      );
+      return;
+    }
+    if (sock) {
+      void closeWebSocketBestEffort(sock);
+    }
+  } catch {
+    if (sock) {
+      void closeWebSocketBestEffort(sock);
+    }
+  }
+}
+
+export function closeWaSocketSoon(
+  sock:
+    | {
+        end?: (error: Error | undefined) => void;
+        ws?: { close?: () => void };
+      }
+    | null
+    | undefined,
+  delayMs = 500,
+): void {
+  setTimeout(() => {
+    closeWaSocket(sock);
+  }, delayMs);
+}

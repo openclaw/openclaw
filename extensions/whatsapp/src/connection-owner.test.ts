@@ -2,7 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   acquireWhatsAppGatewayConnectionOwner,
   acquireWhatsAppStandaloneConnectionOwner,
@@ -75,6 +76,154 @@ describe("WhatsApp connection owner", () => {
 
     const owner = await acquireWhatsAppStandaloneConnectionOwner(authDir);
     await owner.release();
+  });
+
+  describe("incumbent cleanup retry", () => {
+    async function createAuthDir(): Promise<string> {
+      const parent = await createTempParent();
+      const authDir = path.join(parent, "auth");
+      await fs.mkdir(authDir);
+      return authDir;
+    }
+
+    it("finishes a failed incumbent cleanup before the replacement owner acquires", async () => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const authDir = await createAuthDir();
+      const incumbent = await acquireWhatsAppGatewayConnectionOwner(authDir);
+      const firstAttempt = createDeferred<void>();
+      const retry = vi
+        .fn<() => Promise<void>>()
+        .mockImplementationOnce(async () => {
+          firstAttempt.resolve();
+          throw new Error("still draining");
+        })
+        .mockImplementationOnce(async () => {
+          await incumbent.release();
+        });
+      incumbent.setCleanupRetry(retry);
+
+      const replacementPromise = acquireWhatsAppGatewayConnectionOwner(authDir);
+      // The acquire reaches its wait loop after real filesystem I/O; only then can
+      // the fake clock drive the backoff.
+      await firstAttempt.promise;
+      await vi.advanceTimersByTimeAsync(10_000);
+      const replacement = await replacementPromise;
+
+      expect(retry).toHaveBeenCalledTimes(2);
+      await replacement.release();
+    });
+
+    it("keeps the incumbent fail-closed when its cleanup never completes", async () => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const authDir = await createAuthDir();
+      const incumbent = await acquireWhatsAppGatewayConnectionOwner(authDir);
+      const cleanupError = new Error("credential persistence did not drain");
+      const firstAttempt = createDeferred<void>();
+      const retry = vi.fn<() => Promise<void>>().mockImplementation(async () => {
+        firstAttempt.resolve();
+        throw cleanupError;
+      });
+      incumbent.setCleanupRetry(retry);
+
+      const replacement = acquireWhatsAppGatewayConnectionOwner(authDir);
+      const outcome = expect(replacement).rejects.toMatchObject({
+        code: "whatsapp_connection_owner_busy",
+        cause: cleanupError,
+      });
+      await firstAttempt.promise;
+      await vi.advanceTimersByTimeAsync(150_000);
+      await outcome;
+
+      expect(retry.mock.calls.length).toBeGreaterThan(1);
+      await expect(acquireWhatsAppStandaloneConnectionOwner(authDir)).rejects.toMatchObject({
+        code: "whatsapp_connection_owner_busy",
+      });
+      await incumbent.release();
+    });
+
+    it("reports a retry that throws synchronously as owner busy with the cause", async () => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const authDir = await createAuthDir();
+      const incumbent = await acquireWhatsAppGatewayConnectionOwner(authDir);
+      const cleanupError = new Error("retry exploded");
+      const firstAttempt = createDeferred<void>();
+      incumbent.setCleanupRetry(() => {
+        firstAttempt.resolve();
+        throw cleanupError;
+      });
+
+      const replacement = acquireWhatsAppGatewayConnectionOwner(authDir);
+      const outcome = expect(replacement).rejects.toMatchObject({
+        code: "whatsapp_connection_owner_busy",
+        cause: cleanupError,
+      });
+      await firstAttempt.promise;
+      await vi.advanceTimersByTimeAsync(150_000);
+      await outcome;
+      await incumbent.release();
+    });
+
+    it("shares one retry between concurrent replacement owners", async () => {
+      const authDir = await createAuthDir();
+      const incumbent = await acquireWhatsAppGatewayConnectionOwner(authDir);
+      const retry = vi.fn(async () => {
+        await incumbent.release();
+      });
+      incumbent.setCleanupRetry(retry);
+
+      // Whichever replacement wins releases at once so the other can follow.
+      await Promise.all([
+        acquireWhatsAppGatewayConnectionOwner(authDir).then((lease) => lease.release()),
+        acquireWhatsAppGatewayConnectionOwner(authDir).then((lease) => lease.release()),
+      ]);
+
+      expect(retry).toHaveBeenCalledOnce();
+    });
+
+    it("cancels a replacement that is waiting on incumbent cleanup", async () => {
+      const authDir = await createAuthDir();
+      const incumbent = await acquireWhatsAppGatewayConnectionOwner(authDir);
+      const cleanupStarted = createDeferred<void>();
+      const retry = vi.fn(async () => {
+        cleanupStarted.resolve();
+        throw new Error("still draining");
+      });
+      incumbent.setCleanupRetry(retry);
+      const abortController = new AbortController();
+
+      const replacement = acquireWhatsAppGatewayConnectionOwner(authDir, abortController.signal);
+      const outcome = expect(replacement).rejects.toThrow("shutdown");
+      // Abort only once the replacement is inside the incumbent cleanup wait.
+      await cleanupStarted.promise;
+      abortController.abort(new Error("shutdown"));
+
+      await outcome;
+      expect(retry).toHaveBeenCalledOnce();
+      await incumbent.release();
+    });
+
+    it("does not run the incumbent cleanup for standalone lookups", async () => {
+      const authDir = await createAuthDir();
+      const incumbent = await acquireWhatsAppGatewayConnectionOwner(authDir);
+      const retry = vi.fn(async () => {});
+      incumbent.setCleanupRetry(retry);
+
+      await expect(acquireWhatsAppStandaloneConnectionOwner(authDir)).rejects.toMatchObject({
+        code: "whatsapp_connection_owner_busy",
+      });
+
+      expect(retry).not.toHaveBeenCalled();
+      await incumbent.release();
+    });
   });
 
   it("cancels cross-process owner retries during shutdown", async () => {
