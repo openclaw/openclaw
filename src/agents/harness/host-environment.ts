@@ -71,8 +71,9 @@ export function prepareAgentHarnessEnvironment(params: {
   const localProcessEnv = installationTargetEnv(params.installationTarget);
   // Empty token scrubs are not enough: GitHub CLI treats them as unset and can
   // use the runtime user's stored account. Native adapters consume these maps.
+  // Reuse the prepared missing directory so start and resume share one profile.
   const unavailableProfileDir = identity.invalidGitHubSelection
-    ? unavailableGitHubExecProfileDir()
+    ? (identity.localIdentityEnv.GH_CONFIG_DIR ?? unavailableGitHubExecProfileDir())
     : undefined;
   return Object.freeze({
     credentialScrubEnv: Object.freeze({

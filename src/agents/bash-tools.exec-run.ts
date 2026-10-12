@@ -512,12 +512,20 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           throw new Error("exec internal error: local execution requires a resolved workdir");
         }
 
+        const unavailableProfileDir =
+          preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR ||
+          unavailableGitHubExecProfileDir();
+        // Direct gh uses the refusing launcher. Other commands still run, but their
+        // environment keeps this missing directory so an indirect gh cannot open
+        // another account's config.
         const githubProfileDir =
           host === "gateway" &&
           preparedRunEnvironment.invalidGitHubSelection &&
           commandInvokesGitHubCli(params.command)
-            ? unavailableGitHubExecProfileDir()
-            : host === "gateway" && preparedRunEnvironment.managedLocalIdentity
+            ? unavailableProfileDir
+            : host === "gateway" &&
+                preparedRunEnvironment.managedLocalIdentity &&
+                !preparedRunEnvironment.invalidGitHubSelection
               ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
               : undefined;
 

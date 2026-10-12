@@ -94,8 +94,11 @@ describe("invalid GitHub profile selection", () => {
     expect(prepared).toMatchObject({
       invalidGitHubSelection: true,
       managedLocalIdentity: true,
-      localIdentityEnv: {},
+      localIdentityEnv: { GH_CONFIG_DIR: expect.any(String) },
     });
+    const unavailableDir = prepared.localIdentityEnv.GH_CONFIG_DIR;
+    expect(unavailableDir).not.toBe(systemProfileDir);
+    await expect(fs.access(unavailableDir ?? "")).rejects.toThrow();
     expect(JSON.stringify(prepared)).not.toContain(systemProfileDir);
     expect(JSON.stringify(prepared)).not.toContain("shared-should-not-be-used");
 

@@ -11,18 +11,26 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { INVALID_GITHUB_SELECTION_EXEC_TOKEN } from "./github-invalid-selection.js";
-import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
+import {
+  prepareGitHubToolEnvironment,
+  resolveManagedGitHubProfileDir,
+} from "./github-tool-identity.js";
 
 const storeMocks = vi.hoisted(() => ({ readSecretStoreExecEnvironment: vi.fn() }));
 vi.mock("../secrets/store/secret-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../secrets/store/secret-store.js")>()),
   readSecretStoreExecEnvironment: storeMocks.readSecretStoreExecEnvironment,
 }));
+const OTHER_ACCOUNT_TOKEN = "fixture-other-github-account";
 const snapshot = captureEnv([
+  "GH_CONFIG_DIR",
+  "GH_ENTERPRISE_TOKEN",
   "GH_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
   "GITHUB_TOKEN",
-  "PREVIEW_SERVICE_TOKEN",
   "GIT_CONFIG_PARAMETERS",
+  "PREVIEW_SERVICE_TOKEN",
+  "XDG_CONFIG_HOME",
 ]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const execFileAsync = promisify(execFile);
@@ -261,7 +269,10 @@ describe("exec GitHub identity", () => {
       });
       expect(preparedRunEnvironment.invalidGitHubSelection).toBe(true);
       expect(preparedRunEnvironment.managedLocalIdentity).toBe(true);
-      expect(preparedRunEnvironment.localIdentityEnv).not.toHaveProperty("GH_CONFIG_DIR");
+      expect(preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR).toEqual(expect.any(String));
+      await expect(
+        fs.access(preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR ?? ""),
+      ).rejects.toThrow();
       const tool = createExecTool({
         host: "gateway",
         security: "full",
@@ -321,7 +332,9 @@ describe("exec GitHub identity", () => {
         ...prepared,
         warnings: [],
       });
-      expect(resolved.env.GH_CONFIG_DIR).toBeUndefined();
+      expect(resolved.env.GH_CONFIG_DIR).toBe(prepared.localIdentityEnv.GH_CONFIG_DIR);
+      expect(resolved.env.GH_CONFIG_DIR).not.toContain(systemProfileId);
+      await expect(fs.access(resolved.env.GH_CONFIG_DIR ?? "")).rejects.toThrow();
       expect(resolved.env.GH_TOKEN).toBe(INVALID_GITHUB_SELECTION_EXEC_TOKEN);
       expect(resolved.env.GITHUB_TOKEN).toBe(INVALID_GITHUB_SELECTION_EXEC_TOKEN);
       expect(JSON.stringify(resolved.env)).not.toContain(systemProfileId);
@@ -438,4 +451,151 @@ describe("exec GitHub identity", () => {
       await fs.rm(profileRoot, { recursive: true, force: true });
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps indirect gh and scripts off another available account",
+    async () => {
+      storeMocks.readSecretStoreExecEnvironment.mockReturnValue({ env: {} });
+      const root = await fs.realpath(tempDirs.make("exec-github-invalid-client-"));
+      const bin = path.join(root, "bin");
+      const otherConfig = path.join(root, "other-gh");
+      const xdg = path.join(root, "xdg");
+      const sharedProfileId = "ghp_11111111111111111111111111111111";
+      const legacyProfileId = `ghp_${"Z".repeat(36)}`;
+      const stateDir = path.join(root, "state");
+      await fs.mkdir(bin, { recursive: true });
+      await writeOtherAccount(otherConfig);
+      await writeOtherAccount(path.join(xdg, "gh"));
+      const sharedDir = resolveManagedGitHubProfileDir({
+        agentId: "main",
+        scope: "system",
+        profileId: sharedProfileId,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      await writeOtherAccount(sharedDir);
+      const stubPath = path.join(root, "gh-stub.mjs");
+      await fs.writeFile(stubPath, GH_CLIENT_STUB_SOURCE);
+      const node = JSON.stringify(process.execPath);
+      const stub = JSON.stringify(stubPath);
+      await fs.writeFile(path.join(bin, "gh"), `#!/bin/sh\nexec ${node} ${stub} "$@"\n`, {
+        mode: 0o755,
+      });
+      const scriptPath = path.join(root, "call-gh.sh");
+      await fs.writeFile(scriptPath, "#!/bin/sh\ngh api user\n", { mode: 0o755 });
+
+      setTestEnvValue("GH_TOKEN", OTHER_ACCOUNT_TOKEN);
+      setTestEnvValue("GITHUB_TOKEN", OTHER_ACCOUNT_TOKEN);
+      setTestEnvValue("GH_ENTERPRISE_TOKEN", OTHER_ACCOUNT_TOKEN);
+      setTestEnvValue("GITHUB_ENTERPRISE_TOKEN", OTHER_ACCOUNT_TOKEN);
+      setTestEnvValue("GH_CONFIG_DIR", otherConfig);
+      setTestEnvValue("XDG_CONFIG_HOME", xdg);
+
+      const config = {
+        tools: { github: { profileId: sharedProfileId, kind: "oauth" as const } },
+        agents: {
+          entries: {
+            main: {
+              tools: { github: { profileId: legacyProfileId, kind: "oauth" as const } },
+            },
+          },
+        },
+      };
+      const prepared = prepareGitHubToolEnvironment({
+        config,
+        agentId: "main",
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      expect(prepared.invalidGitHubSelection).toBe(true);
+      expect(prepared.localIdentityEnv.GH_CONFIG_DIR).not.toBe(sharedDir);
+      expect(prepared.localIdentityEnv.GH_CONFIG_DIR).not.toBe(otherConfig);
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        allowBackground: false,
+        pathPrepend: [bin],
+        config,
+        agentId: "main",
+        preparedRunEnvironment: prepared,
+      });
+
+      const echo = await tool.execute("legacy-echo", { command: "echo hello-legacy" });
+      expect(echo.details).toMatchObject({ status: "completed", exitCode: 0 });
+      expect(echo.details.status === "completed" ? echo.details.aggregated : "").toContain(
+        "hello-legacy",
+      );
+
+      const direct = await tool.execute("legacy-direct-gh", { command: "gh api user" });
+      expect(direct.details).toMatchObject({ status: "completed", exitCode: 1 });
+      const directOutput = direct.details.status === "completed" ? direct.details.aggregated : "";
+      expect(directOutput).toContain("GitHub Identity credential is unavailable or insecure");
+      expect(directOutput).not.toContain(OTHER_ACCOUNT_TOKEN);
+      expect(directOutput).not.toContain("AUTH=other-account");
+
+      for (const [id, command] of [
+        ["legacy-indirect-gh", "sh -c 'gh api user'"],
+        ["legacy-script-gh", `sh ${JSON.stringify(scriptPath)}`],
+      ] as const) {
+        const result = await tool.execute(id, { command });
+        expect(result.details).toMatchObject({ status: "completed", exitCode: 1 });
+        const output = result.details.status === "completed" ? result.details.aggregated : "";
+        expect(output).toContain("AUTH=sentinel");
+        expect(output).toContain("FALLTHROUGH=none");
+        expect(output).not.toContain(OTHER_ACCOUNT_TOKEN);
+        expect(output).not.toContain("AUTH=other-account");
+        expect(output).not.toContain(sharedDir);
+        expect(output).not.toContain(otherConfig);
+      }
+    },
+  );
 });
+
+const GH_CLIENT_STUB_SOURCE = `
+import fs from "node:fs";
+import path from "node:path";
+
+const other = ${JSON.stringify(OTHER_ACCOUNT_TOKEN)};
+const sentinel = ${JSON.stringify(INVALID_GITHUB_SELECTION_EXEC_TOKEN)};
+const tokenNames = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"];
+const selected = tokenNames.find((name) => process.env[name]);
+const configured = process.env.GH_CONFIG_DIR;
+const configDir = configured
+  ? configured
+  : path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || "", ".config"), "gh");
+let hosts = "";
+try {
+  hosts = fs.readFileSync(path.join(configDir, "hosts.yml"), "utf8");
+} catch {
+  hosts = "";
+}
+const fallthrough = hosts.includes(other)
+  ? "other-account"
+  : hosts.includes("oauth_token:")
+    ? "configured"
+    : "none";
+if (selected) {
+  const value = process.env[selected];
+  if (value === sentinel) {
+    process.stdout.write("AUTH=sentinel\\nFALLTHROUGH=" + fallthrough + "\\n");
+    process.exit(1);
+  }
+  if (value === other) {
+    process.stdout.write("AUTH=other-account\\nFALLTHROUGH=" + fallthrough + "\\n");
+    process.exit(0);
+  }
+  process.stdout.write("AUTH=unexpected-env\\nFALLTHROUGH=" + fallthrough + "\\n");
+  process.exit(0);
+}
+const auth = fallthrough === "other-account" ? "other-account" : "none";
+process.stdout.write("AUTH=" + auth + "\\nFALLTHROUGH=" + fallthrough + "\\n");
+process.exit(fallthrough === "none" ? 1 : 0);
+`;
+
+async function writeOtherAccount(dir: string) {
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(
+    path.join(dir, "hosts.yml"),
+    `github.com:\n  user: other-account\n  oauth_token: ${OTHER_ACCOUNT_TOKEN}\n`,
+    { mode: 0o600 },
+  );
+}

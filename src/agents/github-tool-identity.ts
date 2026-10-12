@@ -33,6 +33,7 @@ import {
   INVALID_GITHUB_PROFILE_SELECTION_MESSAGE,
   isConfiguredGitHubToolIdentity,
   isInvalidGitHubToolIdentity,
+  unavailableGitHubExecProfileDir,
   unavailableGitHubIdentityFacts,
   type ResolvedGitHubToolIdentity,
   type ScopedGitHubToolIdentity,
@@ -195,7 +196,9 @@ function prepareGitHubToolEnvironmentForIdentity(
             profileDir: identity.profileDir,
             gitAuthor: identity.config.gitAuthor,
           })
-        : {},
+        : invalidSelection
+          ? { GH_CONFIG_DIR: unavailableGitHubExecProfileDir() }
+          : {},
     ),
     // Execution adapters append this after resolving their native Git configuration.
     localGitConfigParameters: AGENT_GIT_CONFIG_PARAMETERS,
