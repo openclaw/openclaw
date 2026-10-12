@@ -244,7 +244,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     this.updateMetadataState({ ...this.metadataState, status: "error" });
   }
 
-  private selectDraftAccount(account: UserModelAccount, model: string): Promise<boolean> {
+  private selectDraftAccount(
+    account: Pick<UserModelAccount, "authProfileId" | "provider">,
+    model: string,
+  ): Promise<boolean> {
     const client = this.metadataClient;
     if (!client || !model) {
       return Promise.resolve(false);

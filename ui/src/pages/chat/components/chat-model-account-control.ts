@@ -12,7 +12,6 @@ import { t } from "../../../i18n/index.ts";
 import { registerModelAccountsEnglish } from "../../../i18n/locales/en-model-accounts.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import { handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
 
 registerModelAccountsEnglish();
@@ -25,8 +24,11 @@ type AccountInventory = {
   loading: boolean;
   open: boolean;
   error: string | null;
+  authStatus?: ModelAuthStatusResult | null;
   isCurrent: () => boolean;
 };
+
+type AccountChoice = Pick<UserModelAccount, "authProfileId" | "provider" | "label">;
 
 const inventories = new WeakMap<object, AccountInventory>();
 
@@ -43,7 +45,7 @@ export function renderChatModelAccountControl(params: {
   model: string;
   disabled: boolean;
   ownsSelection: () => boolean;
-  onSelect: (account: UserModelAccount) => Promise<boolean>;
+  onSelect: (account: AccountChoice) => Promise<boolean>;
   onAutomatic?: () => void;
   onManage?: () => void;
   onRequestUpdate: () => void;
@@ -70,6 +72,8 @@ export function renderChatModelAccountControl(params: {
     inventories.set(owner, inventory);
   }
   const currentInventory = inventory;
+  const authStatus = params.modelAuthStatusResult;
+  currentInventory.authStatus = authStatus;
   const ownsInventory = () =>
     inventories.get(owner) === currentInventory && currentInventory.isCurrent();
   const loadAccounts = async (cursor?: string) => {
@@ -107,15 +111,30 @@ export function renderChatModelAccountControl(params: {
   const provider = params.model.includes("/")
     ? normalizeChatModelProviderId(params.model.slice(0, params.model.indexOf("/")))
     : "";
+  const matchesProvider = (candidate: string) =>
+    normalizeChatModelProviderId(candidate) === provider;
   const currentId = selection.kind === "automatic" ? undefined : selection.authProfileId;
   const profiles =
-    params.modelAuthStatusResult?.providers
-      .filter(
-        (p) =>
-          canonicalModelAuthProviderId(normalizeChatModelProviderId(p.provider)) ===
-          canonicalModelAuthProviderId(provider),
-      )
-      .flatMap((p) => p.profiles) ?? [];
+    authStatus?.providers.filter((p) => matchesProvider(p.provider)).flatMap((p) => p.profiles) ??
+    [];
+  // Personal inventory excludes shared credentials. The scoped auth snapshot
+  // already exposes the shared profiles this agent's model route can use.
+  const accountsById = new Map<string, AccountChoice>(
+    currentInventory.accounts
+      .filter((account) => matchesProvider(account.provider))
+      .map((account) => [account.authProfileId, account]),
+  );
+  for (const profile of profiles) {
+    if (profile.reasonCode === "setup_inactive" || accountsById.has(profile.profileId)) {
+      continue;
+    }
+    accountsById.set(profile.profileId, {
+      authProfileId: profile.profileId,
+      provider,
+      label: profile.displayName || profile.email || profile.profileId,
+    });
+  }
+  const accounts = [...accountsById.values()];
   const email = (profileId: string | undefined) =>
     profiles.find((profile) => profile.profileId === profileId)?.email;
   const selectedProfile = profiles.find((profile) => profile.profileId === currentId);
@@ -123,14 +142,12 @@ export function renderChatModelAccountControl(params: {
   const selectedIdentity = [
     ...new Set([selectedProfile?.email, selectedLabel].filter(Boolean)),
   ].join(" · ");
-  const description = (account: UserModelAccount | undefined) =>
+  const description = (account: AccountChoice | undefined) =>
     email(account?.authProfileId) ??
     (account &&
-    currentInventory.accounts.some(
+    accounts.some(
       (candidate) =>
-        candidate.authProfileId !== account.authProfileId &&
-        candidate.provider === account.provider &&
-        candidate.label === account.label,
+        candidate.authProfileId !== account.authProfileId && candidate.label === account.label,
     )
       ? account.authProfileId
       : undefined);
@@ -142,12 +159,10 @@ export function renderChatModelAccountControl(params: {
         label: selectedLabel,
         description:
           email(currentId) ??
-          description(
-            currentInventory.accounts.find((account) => account.authProfileId === currentId),
-          ),
+          description(accounts.find((account) => account.authProfileId === currentId)),
       },
-      ...currentInventory.accounts
-        .filter((account) => account.provider === provider && account.authProfileId !== currentId)
+      ...accounts
+        .filter((account) => account.authProfileId !== currentId)
         .map((account) => ({
           value: `account:${account.authProfileId}`,
           label: account.label,
@@ -172,7 +187,7 @@ export function renderChatModelAccountControl(params: {
     ];
   const selectAccount = (value: string, event: MouseEvent) => {
     event.stopPropagation();
-    if (!ownsInventory() || params.disabled) {
+    if (!ownsInventory() || currentInventory.authStatus !== authStatus || params.disabled) {
       return;
     }
     if (value === "manage") {
@@ -183,10 +198,7 @@ export function renderChatModelAccountControl(params: {
       event.preventDefault();
       void loadAccounts(currentInventory.nextCursor);
     } else {
-      const account = currentInventory.accounts.find(
-        (candidate) =>
-          `account:${candidate.authProfileId}` === value && candidate.provider === provider,
-      );
+      const account = accounts.find((candidate) => `account:${candidate.authProfileId}` === value);
       if (account) {
         void params.onSelect(account);
       }
