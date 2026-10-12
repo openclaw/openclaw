@@ -4,6 +4,7 @@ import { createTestWebAudioInboundMessage } from "../../inbound/test-message.tes
 // Mock the lazy-loaded audio preflight runtime boundary
 const transcribeFirstAudioMock = vi.fn();
 const maybeSendAckReactionMock = vi.fn();
+const getMentionIdentitiesMock = vi.fn();
 
 vi.mock("./audio-preflight.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
@@ -23,11 +24,16 @@ vi.mock("../../accounts.js", () => ({
   }),
 }));
 
-vi.mock("../../identity.js", () => ({
-  getPrimaryIdentityId: () => undefined,
-  getSelfIdentity: () => ({ e164: "+15550000001" }),
-  getSenderIdentity: () => ({ e164: "+15550000002", name: "Alice" }),
-}));
+vi.mock("../../identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../identity.js")>();
+  return {
+    ...actual,
+    getMentionIdentities: (...args: unknown[]) => getMentionIdentitiesMock(...args),
+    getPrimaryIdentityId: () => undefined,
+    getSelfIdentity: () => ({ e164: "+15550000001" }),
+    getSenderIdentity: () => ({ e164: "+15550000002", name: "Alice" }),
+  };
+});
 
 vi.mock("../../reconnect.js", () => ({
   newConnectionId: () => "test-conn-id",
@@ -233,6 +239,8 @@ describe("processMessage audio preflight transcription", () => {
     transcribeFirstAudioMock.mockReset();
     maybeSendAckReactionMock.mockReset();
     maybeSendAckReactionMock.mockResolvedValue(null);
+    getMentionIdentitiesMock.mockReset();
+    getMentionIdentitiesMock.mockReturnValue([]);
     shouldComputeCommandResult = false;
     shouldComputeCommandBodies = [];
     vi.mocked(createWhatsAppReplyPlan).mockClear();
@@ -279,6 +287,26 @@ describe("processMessage audio preflight transcription", () => {
           transcribed: true,
         }),
       ],
+    });
+  });
+
+  it("keeps transcript framing ahead of self-LID mention rendering", async () => {
+    const rawBody = "@900000000000001 summarize this";
+    const transcript = 'heard "@900000000000001" in the voice note';
+
+    await processMessage({
+      ...makeParams({ body: rawBody }),
+      preflightAudioTranscript: transcript,
+    });
+
+    const framedTranscript = `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
+    expect(getMentionIdentitiesMock).not.toHaveBeenCalled();
+    expectContextFields(firstDispatchContext(), {
+      Body: framedTranscript,
+      BodyForAgent: framedTranscript,
+      CommandBody: rawBody,
+      RawBody: rawBody,
+      Transcript: transcript,
     });
   });
 
