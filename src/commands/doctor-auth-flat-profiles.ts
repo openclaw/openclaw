@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -545,6 +546,15 @@ function hasImportableAuthProfileStore(store: AuthProfileStore | null): store is
   return Boolean(store && (Object.keys(store.profiles).length > 0 || hasAuthProfileState(store)));
 }
 
+function decodeAuthProfileSourceBytes(bytes: Buffer, sourcePath: string): string {
+  if (!isUtf8(bytes)) {
+    throw new Error(
+      `legacy auth source must be valid UTF-8: ${sourcePath}. The source and existing credentials were left untouched. Restore a valid UTF-8 copy from a verified backup, then rerun ${formatCliCommand("openclaw doctor --fix")}. Do not convert the file with a lossy encoding or delete it.`,
+    );
+  }
+  return bytes.toString("utf8");
+}
+
 function prepareAuthProfileSourceReceipt(params: {
   pathname: string;
   targetDatabasePath: string;
@@ -554,9 +564,10 @@ function prepareAuthProfileSourceReceipt(params: {
   env?: NodeJS.ProcessEnv;
 }): AuthProfileMigrationSourceReceipt {
   const sourceBytes = fs.readFileSync(params.pathname);
+  const sourceText = decodeAuthProfileSourceBytes(sourceBytes, params.pathname);
   let sourceRecordCount = 0;
   try {
-    const parsed = JSON.parse(sourceBytes.toString("utf8")) as unknown;
+    const parsed = JSON.parse(sourceText) as unknown;
     sourceRecordCount = isRecord(parsed) ? Object.keys(parsed).length : 0;
   } catch {
     // The migration parser reports malformed input separately; receipts never include its bytes.
@@ -600,8 +611,13 @@ function parseAuthProfileMigrationSource(
     return null;
   }
   try {
-    return JSON.parse(receipt.sourceBytes.toString("utf8")) as unknown;
-  } catch {
+    return JSON.parse(
+      decodeAuthProfileSourceBytes(receipt.sourceBytes, receipt.sourcePath),
+    ) as unknown;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("must be valid UTF-8")) {
+      throw error;
+    }
     return null;
   }
 }
@@ -1762,7 +1778,9 @@ function recoverArchivedAuthProfileMappings(params: {
         ) {
           continue;
         }
-        const archivedStore = JSON.parse(sourceBytes.toString("utf8")) as unknown;
+        const archivedStore = JSON.parse(
+          decodeAuthProfileSourceBytes(sourceBytes, archive.path),
+        ) as unknown;
         const sourceStore =
           coerceLegacyAuthProfileStore(archivedStore) ??
           coerceLegacyFlatAuthProfileStore(archivedStore);

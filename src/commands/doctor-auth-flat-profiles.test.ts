@@ -1965,4 +1965,68 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
     await expectSelectedCodexAccountStatus({ cfg, state, sessionKey, storePath });
   });
 });
+
+describe("maybeMigrateAuthProfileJsonStoresToSqlite UTF-8 admission", () => {
+  it("rejects malformed UTF-8 legacy auth JSON before writing credentials", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "sk-keep" },
+      },
+    });
+    const poisoned = Buffer.concat([
+      Buffer.from(
+        '{"version":1,"profiles":{"openai:default":{"type":"api_key","provider":"openai","key":"sk-',
+      ),
+      Buffer.from([0xff]),
+      Buffer.from('keep"}}}'),
+    ]);
+    fs.writeFileSync(authPath, poisoned);
+
+    const repaired = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      env: state.env,
+    });
+
+    expect(repaired.changes).toEqual([]);
+    expect(repaired.warnings).toEqual([
+      expect.stringMatching(/valid UTF-8[\s\S]*left untouched[\s\S]*verified backup/),
+    ]);
+    expect(fs.readFileSync(authPath)).toEqual(poisoned);
+    expect(
+      loadPersistedSharedAuthProfileStore(state.env)?.profiles["openai:default"],
+    ).toBeUndefined();
+    expect(
+      loadPersistedAuthProfileStore(state.agentDir())?.profiles["openai:default"],
+    ).toBeUndefined();
+  });
+
+  it("still migrates valid Unicode credentials", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "sk-合法-�-😀" },
+      },
+    });
+
+    const repaired = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      env: state.env,
+    });
+
+    expect(repaired.warnings).toEqual([]);
+    expect(
+      loadPersistedSharedAuthProfileStore(state.env)?.profiles["openai:default"],
+    ).toMatchObject({
+      type: "api_key",
+      provider: "openai",
+      key: "sk-合法-�-😀",
+    });
+    expectMigratedArchive(authPath);
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
