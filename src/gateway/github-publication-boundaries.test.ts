@@ -158,6 +158,7 @@ describe("Gateway GitHub publication boundaries", () => {
         worktree: { id: "worktree-1", branch: "main", repoRoot: "/repo" },
       },
     });
+    await persistPublicationTestSession();
     const coordinator = createLocalCoordinator();
 
     await expect(
@@ -686,6 +687,7 @@ describe("Gateway GitHub publication boundaries", () => {
     { label: "a mismatched run identity", claimRunId: "run-active", expectedRunId: "run-other" },
     { label: "its own active turn", claimRunId: "run-active", expectedRunId: "run-active" },
   ])("queues a cloud session publication with $label", async ({ claimRunId, expectedRunId }) => {
+    await persistClaimPublicationWorkspace();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     seedAttachedPlacementEnvironment(database, {

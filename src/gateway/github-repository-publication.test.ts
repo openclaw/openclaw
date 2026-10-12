@@ -375,7 +375,11 @@ describe("repository checkpoint GitHub publication", () => {
     f.runtime.afterHeadObservation = () => {
       current = false;
     };
-    expect((await f.coordinator.requestForSessionV2(request)).status).toBe("requested");
+    expect(await f.coordinator.requestForSessionV2(request)).toMatchObject({
+      requestId: first.requestId,
+      status: "failed",
+      code: "identity_changed",
+    });
     expect(readRepositoryGitHubPublication(first.requestId)?.pushed_head_commit).toBe(
       f.runtime.head,
     );

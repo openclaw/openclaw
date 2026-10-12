@@ -491,7 +491,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     ...createSharedGitHubPublicationReadMethods("worktree"),
 
     async readAsync(requestId: string): Promise<SessionGitHubPublicationResult | undefined> {
-      const row = await readGitHubPublicationRequestInWorker(requestId);
+      const row = await readGitHubPublicationRequestAsync({ requestId });
       return row ? publicationResult(row) : undefined;
     },
   };

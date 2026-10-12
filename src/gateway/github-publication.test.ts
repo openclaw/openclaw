@@ -509,6 +509,7 @@ describe("Gateway GitHub publication", () => {
   });
 
   it("binds the accepted worker snapshot before acceptance and never recaptures it", async () => {
+    await persistClaimPublicationWorkspace();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     seedAttachedPlacementEnvironment(database, {

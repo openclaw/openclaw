@@ -16,6 +16,7 @@ import {
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  persistClaimPublicationWorkspace,
   root,
 } from "./github-publication.test-support.js";
 import {
@@ -34,6 +35,9 @@ const rejection = (idempotencyKey: string) => ({
 });
 
 async function sharedAdmission(surface: "local" | "deferred" | "claim") {
+  if (surface !== "local") {
+    await persistClaimPublicationWorkspace();
+  }
   const database = openOpenClawStateDatabase();
   const db = database.db;
   const placements = createWorkerSessionPlacementStore({ database });
@@ -133,6 +137,7 @@ describe("GitHub publication selection admission", () => {
   });
 
   it("rejects reuse of a worker publication idempotency key by a later turn", async () => {
+    await persistClaimPublicationWorkspace();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     seedAttachedPlacementEnvironment(database, {
