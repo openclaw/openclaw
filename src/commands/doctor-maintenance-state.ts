@@ -165,6 +165,21 @@ export function createDoctorMaintenanceState(options: {
       captureAdmitted = true;
     }
   };
+  const assertOwnerCurrent = (databasePath?: string) => {
+    const assertCurrent = () => {
+      owner!.assertCurrent(options.assertCurrent);
+      if (databasePath !== undefined) {
+        owner!.assertDatabaseAccess(databasePath);
+      }
+    };
+    // Post-repair work runs outside the checks callback. Its policy reads must
+    // retain the repair scope's cached handles until that scope has drained.
+    if (resources) {
+      resources.run(assertCurrent);
+    } else {
+      owner!.run(assertCurrent);
+    }
+  };
   const state = {
     get owner() {
       return owner;
@@ -260,8 +275,7 @@ export function createDoctorMaintenanceState(options: {
       const { repairDoctorSqliteNoCow } = await import("./doctor-sqlite-nocow.js");
       const stateDir = resolveStateDir(selectedEnv);
       const databasePath = resolveOpenClawStateSqlitePath(selectedEnv);
-      options.assertCurrent?.();
-      owner!.assertCurrent();
+      assertOwnerCurrent();
       await closeResources(stateDir);
       try {
         return await owner!.run(async () => {
@@ -271,11 +285,7 @@ export function createDoctorMaintenanceState(options: {
           return repairDoctorSqliteNoCow({
             paths,
             stateDir,
-            assertCurrent: () => {
-              options.assertCurrent?.();
-              owner!.assertCurrent();
-              owner!.assertDatabaseAccess(databasePath);
-            },
+            assertCurrent: () => assertOwnerCurrent(databasePath),
           });
         });
       } finally {
@@ -289,8 +299,7 @@ export function createDoctorMaintenanceState(options: {
         await import("../state/openclaw-agent-db-lifecycle.js");
       const databasePath = resolveOpenClawStateSqlitePath(selectedEnv);
       options.signal.throwIfAborted();
-      options.assertCurrent?.();
-      owner!.assertCurrent();
+      assertOwnerCurrent();
       await resources!.run(async () => {
         for (const agent of agents) {
           await closeOpenClawAgentDatabaseByPathAsync(agent.path, agent.agentId);
@@ -307,11 +316,7 @@ export function createDoctorMaintenanceState(options: {
             env: selectedEnv,
             agents,
             signal: options.signal,
-            assertCurrent: () => {
-              options.assertCurrent?.();
-              owner!.assertCurrent();
-              owner!.assertDatabaseAccess(databasePath);
-            },
+            assertCurrent: () => assertOwnerCurrent(databasePath),
             log: params.runtime.log,
           });
         });
@@ -342,8 +347,7 @@ export function createDoctorMaintenanceState(options: {
       const { retireIdleOpenClawStateReadWorkers } =
         await import("../state/openclaw-state-read-worker.js");
       const { prepareRetainedUpdateRuntimeCleanup } = await import("./doctor-retained-runtime.js");
-      options.assertCurrent?.();
-      owner!.assertCurrent();
+      assertOwnerCurrent();
       const cleanup = await state.run(() =>
         prepareRetainedUpdateRuntimeCleanup(selectedEnv, { inspectService }),
       );
@@ -366,8 +370,7 @@ export function createDoctorMaintenanceState(options: {
         await owner!.run(() =>
           cleanup(true, {
             assertCurrent() {
-              options.assertCurrent?.();
-              owner!.assertCurrent();
+              assertOwnerCurrent();
               owner!.assertDatabaseAccess(resolveOpenClawStateSqlitePath(selectedEnv));
             },
             assertResourcesSettled() {
