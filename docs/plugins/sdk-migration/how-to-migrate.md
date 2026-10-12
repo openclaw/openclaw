@@ -1142,8 +1142,19 @@ authoritative; conflicting rows receive no completed receipt and keep their
 source files. Receipts suppress repeat imports even after queue rows are consumed
 or pruned. Changed source bytes form a distinct source generation.
 Historical receipt and failure timestamps are preserved. Imported rows start
-their mutation age at import time so pending-row pruning cannot discard old
-updates before their first replay.
+their mutation age at import time; the plugin must apply its transport's age
+policy before import rather than relying on pending-row pruning. Telegram
+imports updates older than 24 hours as payload-free `stale-legacy-import`
+tombstones.
+
+For previously imported work, `listLegacyPendingEntries()` inspects
+only pending rows linked to committed import receipts, including their original
+receipt times and payloads. Apply the transport age policy to that inventory. The offline-only
+`retireLegacyEntries({ entries, reason, failedAt })` backs up the database,
+rechecks that inventory, and converts matching rows into payload-free failure
+tombstones. It returns `entries`, `changes`, and `warnings`; include the backup
+messages in the migration result. Both methods are optional on older hosts.
+They leave native queue rows and completed or failed imports unchanged.
 
 After a successful import or confirmed prior receipt, call
 `backup.removeSource(() => { result.markSourcesRemoved([backup.snapshot.sourcePath]); })`.

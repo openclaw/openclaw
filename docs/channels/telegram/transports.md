@@ -67,6 +67,19 @@ deduplication, not exactly-once processing. See
 
 ### Replay limits
 
+During upgrades, the Telegram legacy spool migration imports updates older than
+24 hours as `stale-legacy-import` failure tombstones instead of replaying them.
+It checks the original receipt time and the message date (or edit date for an
+edited message). A genuinely unprocessed update outside Telegram's retention
+window is not replayed because a stale instruction could trigger unintended
+actions. Fresh spool entries still enter the normal queue.
+
+The same migration backs up and retires still-pending, previously imported legacy
+rows whose original receipt or message timestamp is older than 24 hours. It preserves source
+bytes and import receipts, and reports one warning with the count and oldest/newest
+dates. These payload-free tombstones cannot be resubmitted. This repair runs before
+dispatch; `openclaw doctor --fix` also runs it against the selected state directory.
+
 Both transports record the account's bot identity before accepting updates, even
 without a polling offset. Replacing a known bot clears its old ingress rows before
 the replacement starts. Same-bot restarts and token rotations retain queued work

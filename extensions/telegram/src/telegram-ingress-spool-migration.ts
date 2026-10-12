@@ -18,6 +18,36 @@ type SpoolSource = {
   failed: boolean;
 };
 type SourceBackup = Awaited<ReturnType<typeof migrationSdk.backupLegacyStateSource>>;
+const LEGACY_UPDATE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const STALE_LEGACY_REASON = "stale-legacy-import";
+
+function updateTimestamp(update: unknown): number | undefined {
+  if (!isRecord(update)) {
+    return undefined;
+  }
+  for (const key of [
+    "message",
+    "edited_message",
+    "channel_post",
+    "edited_channel_post",
+    "business_message",
+    "edited_business_message",
+  ]) {
+    const message = update[key];
+    if (isRecord(message)) {
+      const date = message.edit_date ?? message.date;
+      if (isNonNegativeSafeInteger(date) && Number.isSafeInteger(date * 1000)) {
+        return date * 1000;
+      }
+    }
+  }
+  return undefined;
+}
+
+function legacyTimestamp(entry: { receivedAt: number; payload: unknown }): number {
+  const payload = isRecord(entry.payload) ? entry.payload : undefined;
+  return Math.min(entry.receivedAt, updateTimestamp(payload?.update) ?? entry.receivedAt);
+}
 
 async function listSpoolSources(stateDir: string): Promise<SpoolSource[]> {
   const telegramDir = path.join(stateDir, "telegram");
@@ -74,10 +104,15 @@ function parseSource(source: SpoolSource, bytes: Buffer): ChannelIngressLegacyEn
     !isRecord(value) ||
     value.version !== 1 ||
     !isNonNegativeSafeInteger(value.updateId) ||
-    String(value.updateId).padStart(16, "0") !== source.id ||
-    !isNonNegativeSafeInteger(value.receivedAt)
+    String(value.updateId).padStart(16, "0") !== source.id
   ) {
     throw new Error("invalid version, update ID, or receipt timestamp");
+  }
+  const receivedAt = isNonNegativeSafeInteger(value.receivedAt)
+    ? value.receivedAt
+    : updateTimestamp(value.update);
+  if (receivedAt === undefined) {
+    throw new Error("invalid receipt timestamp");
   }
   if (source.failed) {
     const failure = value.failure;
@@ -92,7 +127,7 @@ function parseSource(source: SpoolSource, bytes: Buffer): ChannelIngressLegacyEn
     }
     return {
       id: source.id,
-      receivedAt: value.receivedAt,
+      receivedAt,
       status: "failed",
       reason: failure.reason,
       message: failure.message,
@@ -104,12 +139,12 @@ function parseSource(source: SpoolSource, bytes: Buffer): ChannelIngressLegacyEn
   }
   return {
     id: source.id,
-    receivedAt: value.receivedAt,
+    receivedAt,
     status: "pending",
     payload: {
       version: 1,
       updateId: value.updateId,
-      receivedAt: value.receivedAt,
+      receivedAt,
       update: value.update,
     },
   };
@@ -122,11 +157,22 @@ export const telegramIngressSpoolMigration = {
     { path: path.join(stateDir, "telegram"), kind: "directory" },
     { path: path.join(stateDir, "state", "openclaw.sqlite"), kind: "sqlite" },
   ],
-  async detectLegacyState({ stateDir }) {
+  async detectLegacyState({ stateDir, context }) {
     const sources = await listSpoolSources(stateDir);
-    return sources.length
-      ? { preview: [`- Import ${sources.length} Telegram JSON spool file(s) into SQLite ingress`] }
-      : null;
+    const stale =
+      context.channelIngressQueues
+        ?.find((entry) => entry.channelId === "telegram")
+        ?.listLegacyPendingEntries?.()
+        .filter((entry) => legacyTimestamp(entry) < Date.now() - LEGACY_UPDATE_MAX_AGE_MS) ?? [];
+    const preview = [
+      ...(sources.length
+        ? [`- Import ${sources.length} Telegram JSON spool file(s) into SQLite ingress`]
+        : []),
+      ...(stale.length
+        ? [`- Retire ${stale.length} stale legacy Telegram update(s) before dispatch`]
+        : []),
+    ];
+    return preview.length ? { preview } : null;
   },
   async migrateLegacyState({ stateDir, context }) {
     const changes: string[] = [];
@@ -141,6 +187,26 @@ export const telegramIngressSpoolMigration = {
           "Telegram JSON spool import requires offline Doctor ingress access. Upgrade the host and run openclaw doctor --fix; legacy files remain unchanged.",
         ],
       };
+    }
+    const now = Date.now();
+    const cutoff = now - LEGACY_UPDATE_MAX_AGE_MS;
+    const staleDates: number[] = [];
+    const stale =
+      access.listLegacyPendingEntries?.().filter((entry) => legacyTimestamp(entry) < cutoff) ?? [];
+    if (stale.length) {
+      if (!access.retireLegacyEntries) {
+        throw new Error(
+          "Upgrade OpenClaw and run openclaw doctor --fix to retire stale legacy Telegram updates.",
+        );
+      }
+      const retired = await access.retireLegacyEntries({
+        entries: stale,
+        reason: STALE_LEGACY_REASON,
+        failedAt: now,
+      });
+      changes.push(...retired.changes);
+      warnings.push(...retired.warnings);
+      staleDates.push(...retired.entries.map(legacyTimestamp));
     }
     const groups = new Map<string, SpoolSource[]>();
     for (const source of await listSpoolSources(stateDir)) {
@@ -172,7 +238,22 @@ export const telegramIngressSpoolMigration = {
           throw new Error("pending, processing, and failed sources disagree");
         }
         // A published failure tombstone suppresses pending crash leftovers; old process claims expire.
-        const entry = failed ?? pending[0]!;
+        let entry = failed ?? pending[0]!;
+        let staleDate: number | undefined;
+        if (entry.status === "pending") {
+          const timestamp = legacyTimestamp(entry);
+          // Unprocessed updates older than 24 hours are sacrificed rather than replaying stale instructions.
+          if (timestamp < cutoff) {
+            staleDate = timestamp;
+            entry = {
+              id: entry.id,
+              receivedAt: entry.receivedAt,
+              status: "failed",
+              reason: STALE_LEGACY_REASON,
+              failedAt: now,
+            };
+          }
+        }
         for (const backup of backups) {
           backup.assertUnchanged();
         }
@@ -196,6 +277,9 @@ export const telegramIngressSpoolMigration = {
         if (!imported && !result.present.includes(entry.id)) {
           throw new Error("SQLite ingress import did not confirm a committed event or receipt");
         }
+        if (imported && staleDate !== undefined) {
+          staleDates.push(staleDate);
+        }
         let removedSources = 0;
         for (const backup of backups) {
           try {
@@ -218,15 +302,23 @@ export const telegramIngressSpoolMigration = {
           : removedSources === backups.length
             ? `Retired redundant Telegram spool source ${first.accountId}/${first.id}; preserved canonical ingress state and import history`
             : `Confirmed prior Telegram spool import ${first.accountId}/${first.id}; source cleanup remains pending`;
-        changes.push(
-          `${outcome}; original bytes: ${backups.map((backup) => backup.backupPath).join(", ")}`,
-        );
+        if (staleDate === undefined) {
+          changes.push(
+            `${outcome}; original bytes: ${backups.map((backup) => backup.backupPath).join(", ")}`,
+          );
+        }
       } catch (error) {
         hasRefusal = true;
         warnings.push(
           `Telegram spool migration incomplete for ${first.filePath}: ${String(error)}. Check retained sources and backups, resolve the reported failure, then run openclaw doctor --fix.`,
         );
       }
+    }
+    if (staleDates.length) {
+      staleDates.sort((a, b) => a - b);
+      warnings.push(
+        `Retired ${staleDates.length} stale legacy Telegram update(s) older than 24 hours as ${STALE_LEGACY_REASON}; oldest ${new Date(staleDates[0]!).toISOString()}, newest ${new Date(staleDates.at(-1)!).toISOString()}. Original bytes and import receipts are retained; these updates will not be dispatched.`,
+      );
     }
     return {
       changes,

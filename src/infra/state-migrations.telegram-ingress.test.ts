@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import fsSync, { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import {
   coercePluginDoctorContractModule,
@@ -11,9 +13,11 @@ import {
 } from "../plugins/doctor-contract-module.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 
 type MigrationInput = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
+const receivedAt = Date.now() - 60_000;
 
 async function runDetectedMigrations(input: MigrationInput) {
   const { stateMigrations } = coercePluginDoctorContractModule(
@@ -34,7 +38,7 @@ function pending(updateId: number, text = "legacy update") {
   return {
     version: 1,
     updateId,
-    receivedAt: 1_779_900_000_000 + updateId,
+    receivedAt: receivedAt + updateId,
     update: {
       update_id: updateId,
       message: {
@@ -48,6 +52,177 @@ function pending(updateId: number, text = "legacy update") {
 }
 
 describe("Telegram JSON spool Doctor import", () => {
+  it.each([
+    "stale",
+    "fresh",
+    "message-date",
+    "edited-message",
+    "missing-receipt",
+    "already-imported",
+    "already-imported-message-date",
+    "already-imported-edited-message",
+  ] as const)(
+    "%s legacy update passes through migration before the drain can dispatch",
+    async (scenario) => {
+      await withOpenClawTestState(
+        { label: "telegram-stale-import", applyEnv: false },
+        async ({ env, stateDir }) => {
+          const spoolDir = path.join(stateDir, "telegram", "ingress-spool-default");
+          await fs.mkdir(spoolDir, { recursive: true });
+          const shouldDispatch = [
+            "fresh",
+            "edited-message",
+            "missing-receipt",
+            "already-imported-edited-message",
+          ].includes(scenario);
+          const originalReceivedAt =
+            scenario === "stale" || scenario === "already-imported"
+              ? receivedAt - 120 * 86_400_000
+              : receivedAt;
+          const message = {
+            ...pending(41).update.message,
+            date: Math.floor(
+              (scenario.includes("message-date") || scenario.includes("edited-message")
+                ? receivedAt - 120 * 86_400_000
+                : originalReceivedAt) / 1000,
+            ),
+          };
+          const payload = {
+            ...pending(41),
+            receivedAt: originalReceivedAt,
+            update: scenario.includes("edited-message")
+              ? {
+                  update_id: 41,
+                  edited_message: { ...message, edit_date: Math.floor(receivedAt / 1000) },
+                }
+              : { update_id: 41, message },
+          };
+          const bytes = JSON.stringify(
+            scenario === "missing-receipt" ? { ...payload, receivedAt: undefined } : payload,
+          );
+          const sourcePath = path.join(spoolDir, "0000000000000041.json");
+          await fs.writeFile(sourcePath, bytes);
+          const nativeQueue = createChannelIngressQueue({
+            channelId: "telegram",
+            accountId: "native",
+            stateDir,
+          });
+          if (scenario.startsWith("already-imported")) {
+            await nativeQueue.enqueue("0000000000000041", pending(42), {
+              receivedAt: originalReceivedAt,
+            });
+          }
+          const context = createPluginDoctorStateMigrationContext({
+            pluginId: "telegram",
+            env,
+            config: {},
+            channelIngress: {
+              channelIds: ["telegram"],
+              stateDir,
+              mutation: { assertCurrent() {} },
+            },
+          });
+          if (scenario.startsWith("already-imported")) {
+            context.channelIngressQueues![0]!.importLegacyEntries!({
+              accountId: "default",
+              entries: [
+                {
+                  entry: {
+                    id: "0000000000000041",
+                    receivedAt: originalReceivedAt,
+                    status: "pending",
+                    payload,
+                  },
+                  sources: [
+                    {
+                      sourcePath,
+                      sha256: createHash("sha256").update(bytes).digest("hex"),
+                      size: Buffer.byteLength(bytes),
+                    },
+                  ],
+                },
+              ],
+            });
+            await fs.rename(sourcePath, `${sourcePath}.migrated`);
+          }
+          const input = {
+            config: {},
+            env,
+            stateDir,
+            oauthDir: path.join(stateDir, "credentials"),
+            context,
+          };
+          const results = await runDetectedMigrations(input);
+          if (scenario.startsWith("already-imported")) {
+            expect((await nativeQueue.listPending()).map((entry) => entry.id)).toEqual([
+              "0000000000000041",
+            ]);
+          }
+          if (scenario.startsWith("already-imported") && !shouldDispatch) {
+            const backupPath = results[0]?.changes
+              .find((line) => line.startsWith("Saved pre-migration SQLite backup: "))
+              ?.slice("Saved pre-migration SQLite backup: ".length);
+            expect(backupPath).toBeDefined();
+            const backup = openNodeSqliteDatabase(backupPath!, { readOnly: true });
+            try {
+              expect(
+                backup
+                  .prepare(
+                    "SELECT status, payload_json FROM channel_ingress_events WHERE account_id = 'default' AND event_id = ?",
+                  )
+                  .get("0000000000000041"),
+              ).toEqual({ status: "pending", payload_json: JSON.stringify(payload) });
+            } finally {
+              backup.close();
+            }
+          }
+          const queue = createChannelIngressQueue<typeof payload>({
+            channelId: "telegram",
+            stateDir,
+          });
+          const handleUpdate = vi.fn();
+          const drain = createChannelIngressDrain({
+            queue,
+            dispatchClaimedEvent: async (event, lifecycle) => {
+              handleUpdate(event.payload.update);
+              await lifecycle.onAdopted();
+            },
+          });
+          try {
+            await drain.drainOnce();
+            await drain.waitForIdle();
+            expect(handleUpdate).toHaveBeenCalledTimes(shouldDispatch ? 1 : 0);
+            if (!shouldDispatch) {
+              expect(results[0]?.warnings).toEqual([
+                expect.stringContaining("1 stale legacy Telegram update"),
+              ]);
+              expect(results[0]?.warnings[0]).toContain(
+                new Date(message.date * 1000).toISOString(),
+              );
+              expect(results[0]?.warningDisposition).toBe("recoverable");
+              expect(await queue.listFailed?.()).toEqual([
+                expect.objectContaining({
+                  reason: "stale-legacy-import",
+                  receivedAt: originalReceivedAt,
+                }),
+              ]);
+              expect(await queue.resubmit?.("0000000000000041")).toMatchObject({
+                kind: "unrecoverable",
+              });
+            } else {
+              expect(handleUpdate).toHaveBeenCalledWith(payload.update);
+              expect(results[0]?.warnings ?? []).toEqual([]);
+            }
+            expect(await fs.readFile(`${sourcePath}.migrated`, "utf8")).toBe(bytes);
+            expect(await runDetectedMigrations(input)).toEqual([]);
+          } finally {
+            drain.dispose();
+          }
+        },
+      );
+    },
+  );
+
   it("backs up published spool bytes, replays pending claims in order, and retains failure tombstones", async () => {
     await withOpenClawTestState(
       { label: "telegram-spool-import", applyEnv: false },
@@ -61,7 +236,7 @@ describe("Telegram JSON spool Doctor import", () => {
             "0000000000000042.json.processing",
             {
               ...pending(42),
-              claim: { processId: "999999:old", processPid: 999999, claimedAt: 1_779_900_000_100 },
+              claim: { processId: "999999:old", processPid: 999999, claimedAt: receivedAt + 100 },
             },
           ],
           [
@@ -69,11 +244,11 @@ describe("Telegram JSON spool Doctor import", () => {
             {
               version: 1,
               updateId: 43,
-              receivedAt: 1_779_900_000_043,
+              receivedAt: receivedAt + 43,
               failure: {
                 reason: "handler_timeout",
                 message: "synthetic timeout",
-                failedAt: 1_779_900_000_200,
+                failedAt: receivedAt + 200,
               },
             },
           ],
@@ -104,7 +279,6 @@ describe("Telegram JSON spool Doctor import", () => {
         };
         const importStartedAt = Date.now();
         const results = await runDetectedMigrations(input);
-        // Baseline has no registered spool importer, so this fails at the real Doctor contract.
         expect(results).toHaveLength(1);
         expect(results[0]?.warnings).toEqual([]);
         for (const [name, bytes] of originals) {
@@ -116,19 +290,20 @@ describe("Telegram JSON spool Doctor import", () => {
           });
         }
         const queue = createChannelIngressQueue({ channelId: "telegram", stateDir });
-        // Historical receipt times must not make newly imported pending work expire before replay.
+        // Fresh imported work remains eligible for replay within Telegram’s 24-hour window.
         expect(await queue.prune({ pendingTtlMs: 86_400_000, now: importStartedAt })).toBe(0);
         const beforeRetry = await queue.listPending({ orderBy: "id" });
         expect(beforeRetry.map((row) => row.payload)).toEqual([pending(41), pending(42)]);
         expect(beforeRetry.map((row) => row.receivedAt)).toEqual([
-          1_779_900_000_041, 1_779_900_000_042,
+          receivedAt + 41,
+          receivedAt + 42,
         ]);
         expect(await queue.listClaims()).toEqual([]);
         expect(await queue.listFailed?.()).toEqual([
           expect.objectContaining({
             id: "0000000000000043",
-            receivedAt: 1_779_900_000_043,
-            failedAt: 1_779_900_000_200,
+            receivedAt: receivedAt + 43,
+            failedAt: receivedAt + 200,
             reason: "handler_timeout",
             message: "synthetic timeout",
           }),
@@ -144,9 +319,9 @@ describe("Telegram JSON spool Doctor import", () => {
         expect(await runDetectedMigrations(input)).toEqual([]);
         const first = await queue.claimNext({ orderBy: "id" });
         expect(first?.id).toBe("0000000000000041");
-        expect(await queue.complete(first!, { completedAt: 1_779_900_001_000 })).toBe(true);
+        expect(await queue.complete(first!, { completedAt: receivedAt + 1_000 })).toBe(true);
         expect((await queue.claimNext({ orderBy: "id" }))?.id).toBe("0000000000000042");
-        await queue.prune({ completedTtlMs: 1, failedTtlMs: 1, now: 1_779_900_001_002 });
+        await queue.prune({ completedTtlMs: 1, failedTtlMs: 1, now: receivedAt + 1_002 });
         await fs.writeFile(
           path.join(spoolDir, "0000000000000041.json"),
           originals.get("0000000000000041.json")!,
@@ -206,7 +381,7 @@ describe("Telegram JSON spool Doctor import", () => {
           stateDir,
         });
         await queue.enqueue("0000000000000041", pending(41, "canonical"), {
-          receivedAt: 1_779_900_000_041,
+          receivedAt: receivedAt + 41,
         });
         const original = await queue.listPending();
         const context = createPluginDoctorStateMigrationContext({

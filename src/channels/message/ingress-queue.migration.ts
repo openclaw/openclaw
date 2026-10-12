@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -13,8 +14,10 @@ import {
   recordLegacyMigrationReceipt,
   resolveLegacyMigrationSourceKey,
 } from "../../infra/state-migrations.receipts.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveChannelIngressStateEnv } from "./ingress-queue-client.js";
 
 export type ChannelIngressLegacyEntry = {
@@ -36,6 +39,149 @@ export type ChannelIngressLegacyImport = {
   entry: ChannelIngressLegacyEntry;
   sources: readonly { sourcePath: string; sha256: string; size: number }[];
 };
+
+export type ChannelIngressLegacyPendingEntry = {
+  id: string;
+  accountId: string;
+  receivedAt: number;
+  payload: unknown;
+};
+
+function legacyPendingEntries(
+  db: DatabaseSync,
+  channelId: string,
+): ChannelIngressLegacyPendingEntry[] {
+  const query = getNodeSqliteKysely<DB>(db)
+    .selectFrom("channel_ingress_events as event")
+    .innerJoin("migration_sources as source", (join) =>
+      join.on((eb) =>
+        eb.and([
+          eb("source.migration_kind", "=", "channel-ingress"),
+          eb("source.target_table", "=", "channel_ingress_events"),
+          eb(
+            eb.fn<string>("json_extract", ["source.report_json", eb.val("$.queueName")]),
+            "=",
+            eb.ref("event.queue_name"),
+          ),
+          eb(
+            eb.fn<string>("json_extract", ["source.report_json", eb.val("$.eventId")]),
+            "=",
+            eb.ref("event.event_id"),
+          ),
+        ]),
+      ),
+    )
+    .select([
+      "event.event_id as id",
+      "event.account_id as accountId",
+      "event.received_at as receivedAt",
+      "event.payload_json as payloadJson",
+    ])
+    .distinct()
+    .where("event.channel_id", "=", channelId)
+    .where("event.status", "=", "pending")
+    .orderBy("event.queue_name")
+    .orderBy("event.event_id");
+  return executeSqliteQuerySync(db, query).rows.map(
+    ({ id, accountId, receivedAt, payloadJson }) => ({
+      id,
+      accountId,
+      receivedAt,
+      payload: JSON.parse(payloadJson) as unknown,
+    }),
+  );
+}
+
+/** Migration-only inspection: a receipt, not the payload shape, proves legacy origin. */
+export function listLegacyPendingChannelIngressEntries(params: {
+  channelId: string;
+  stateDir: string;
+}): ChannelIngressLegacyPendingEntry[] {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => legacyPendingEntries(db, params.channelId),
+      { env: resolveChannelIngressStateEnv(params.stateDir) },
+    ) ?? []
+  );
+}
+
+/** The offline migration owner supplies age policy; receipts and original bytes survive. */
+export async function retireLegacyChannelIngressEntries(params: {
+  channelId: string;
+  stateDir: string;
+  entries: readonly ChannelIngressLegacyPendingEntry[];
+  reason: string;
+  failedAt: number;
+  assertCurrent: () => void;
+}): Promise<{
+  entries: ChannelIngressLegacyPendingEntry[];
+  changes: string[];
+  warnings: string[];
+}> {
+  params.assertCurrent();
+  const env = resolveChannelIngressStateEnv(params.stateDir);
+  const entries = [...params.entries];
+  if (!entries.length) {
+    return { entries, changes: [], warnings: [] };
+  }
+  const validate = (db: DatabaseSync) => {
+    const keys = new Set(entries.map((entry) => JSON.stringify([entry.accountId, entry.id])));
+    const current = legacyPendingEntries(db, params.channelId).filter((entry) =>
+      keys.has(JSON.stringify([entry.accountId, entry.id])),
+    );
+    if (!isDeepStrictEqual(current, entries)) {
+      throw new Error(
+        "Legacy ingress changed during Doctor repair; inspect again before retrying.",
+      );
+    }
+  };
+  const { backupDoctorSqliteDatabases } = await import("../../commands/doctor-migration-backup.js");
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  const backup = await backupDoctorSqliteDatabases({
+    env,
+    pendingDatabasePaths: [databasePath],
+    databasePaths: [databasePath],
+    authority: { assertCurrent: params.assertCurrent },
+    repair: {
+      key: createHash("sha256")
+        .update(JSON.stringify([params.channelId, params.reason, entries]))
+        .digest("hex"),
+      validate,
+    },
+  });
+  params.assertCurrent();
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      params.assertCurrent();
+      validate(db);
+      const kysely = getNodeSqliteKysely<DB>(db);
+      for (const entry of entries) {
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("channel_ingress_events")
+            .set({
+              status: "failed",
+              payload_json: "null",
+              metadata_json: null,
+              last_error: null,
+              failed_reason: params.reason,
+              failed_at: params.failedAt,
+              updated_at: params.failedAt,
+            })
+            .where("channel_id", "=", params.channelId)
+            .where("account_id", "=", entry.accountId)
+            .where("event_id", "=", entry.id)
+            .where("status", "=", "pending"),
+        );
+      }
+      params.assertCurrent();
+    },
+    { env },
+    { operationLabel: "doctor retire legacy ingress" },
+  );
+  return { entries, ...backup };
+}
 
 /** Offline Doctor import: failure tombstones must never pass through pending state. */
 export function importLegacyChannelIngressEntries(params: {

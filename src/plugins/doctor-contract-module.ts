@@ -4,6 +4,7 @@ import type { ChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type {
   ChannelIngressLegacyImport,
   ChannelIngressLegacyImportResult,
+  ChannelIngressLegacyPendingEntry,
 } from "../channels/message/ingress-queue.migration.js";
 import type { ChannelDoctorConfigMutation } from "../channels/plugins/types.adapters.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
@@ -121,6 +122,18 @@ export type PluginDoctorChannelIngressQueueAccess = {
     accountId: string;
     entries: readonly ChannelIngressLegacyImport[];
   }) => ChannelIngressLegacyImportResult;
+  /** Migration-only inspection of pending rows with committed legacy source receipts. */
+  listLegacyPendingEntries?: () => ChannelIngressLegacyPendingEntry[];
+  /** Offline repair after backup; replaces only receipt-backed pending rows with payload-free tombstones. */
+  retireLegacyEntries?: (params: {
+    entries: readonly ChannelIngressLegacyPendingEntry[];
+    reason: string;
+    failedAt: number;
+  }) => Promise<{
+    entries: ChannelIngressLegacyPendingEntry[];
+    changes: string[];
+    warnings: string[];
+  }>;
   /** Inspection-only access, available in every phase including detection. */
   openChannelIngressQueueForInspection: <TPayload, TMetadata = unknown>(options?: {
     accountId?: string;

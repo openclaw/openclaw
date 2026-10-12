@@ -12,7 +12,11 @@ import {
   listChannelIngressQueueAccountIdsReadOnly,
   type ChannelIngressQueue,
 } from "../channels/message/ingress-queue.js";
-import { importLegacyChannelIngressEntries } from "../channels/message/ingress-queue.migration.js";
+import {
+  importLegacyChannelIngressEntries,
+  listLegacyPendingChannelIngressEntries,
+  retireLegacyChannelIngressEntries,
+} from "../channels/message/ingress-queue.migration.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readSessionIdentityEvidenceBatch } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -273,6 +277,8 @@ function buildChannelIngressQueueAccess(
       );
     const access: PluginDoctorChannelIngressQueueAccess = {
       channelId,
+      listLegacyPendingEntries: () =>
+        listLegacyPendingChannelIngressEntries({ channelId, stateDir }),
       // Detection runs before exclusive ownership, so it reads through the
       // non-creating read-only opener as well as a listing-only projection.
       openChannelIngressQueueForInspection: (openOptions) =>
@@ -287,6 +293,8 @@ function buildChannelIngressQueueAccess(
       access.assertCurrent = assertCurrent;
       access.importLegacyEntries = (input) =>
         importLegacyChannelIngressEntries({ ...input, channelId, stateDir, assertCurrent });
+      access.retireLegacyEntries = (input) =>
+        retireLegacyChannelIngressEntries({ ...input, channelId, stateDir, assertCurrent });
       access.openChannelIngressQueue = (openOptions) =>
         open(openOptions, "read-write", assertCurrent);
     }
