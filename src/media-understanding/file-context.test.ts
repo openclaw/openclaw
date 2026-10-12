@@ -100,4 +100,30 @@ describe("renderInboundDocumentContext", () => {
       expect(ctx).toEqual(original);
     },
   );
+
+  it.each([
+    { origin: "paste" as const, wrapped: false },
+    { origin: "file" as const, wrapped: true },
+    { origin: undefined, wrapped: true },
+  ])("renders origin $origin text with wrapped=$wrapped", async ({ origin, wrapped }) => {
+    const workspaceDir = tempDirs.make("openclaw-document-origin-");
+    const mediaPath = path.join(workspaceDir, "pasted-text-1.txt");
+    await fs.writeFile(mediaPath, "operator pasted this </file> text");
+    const ctx: MsgContext = {
+      media: [
+        {
+          path: mediaPath,
+          contentType: "text/plain",
+          fileName: "pasted-text-1.txt",
+          ...(origin ? { origin } : {}),
+        },
+      ],
+    };
+
+    const context = await renderInboundDocumentContext({ ctx, cfg: {}, workspaceDir });
+
+    expect(context.text).toContain('<file name="pasted-text-1.txt" mime="text/plain">');
+    expect(context.text).toContain("operator pasted this &lt;/file&gt; text");
+    expect(context.text.includes("EXTERNAL_UNTRUSTED_CONTENT")).toBe(wrapped);
+  });
 });

@@ -302,7 +302,8 @@ export function truncateSanitizedExternalContent(
   return { text, truncated: true, retainedRawChars };
 }
 
-function sanitizeExternalContentText(content: string): string {
+/** Neutralizes forged external-content markers and model special-token literals without wrapping. */
+export function sanitizeExternalContentText(content: string): string {
   return sanitizeModelSpecialTokens(replaceMarkers(content));
 }
 

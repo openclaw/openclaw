@@ -245,6 +245,7 @@ export async function extractFileContext(params: {
     }
     const blockText = renderFileAttachmentOutcome(outcome, {
       selfServeLocalPath: params.selfServePathsEnabled ? undefined : false,
+      userPaste: attachment.origin === "paste",
     });
     if (blockText === null) {
       continue;

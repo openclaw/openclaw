@@ -24,6 +24,12 @@ export type MediaAttachment = {
    * display only, never format detection.
    */
   fileName?: string;
+  /**
+   * Gateway-recorded input origin. `paste` = text the authenticated gateway
+   * client pasted into its composer (Control UI turns long pastes into a file);
+   * channels never set it.
+   */
+  origin?: "paste" | "file";
   workspaceDir?: string;
   index: number;
   alreadyTranscribed?: boolean;

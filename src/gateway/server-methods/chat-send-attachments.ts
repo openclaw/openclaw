@@ -84,6 +84,7 @@ async function prestageMediaPathOffloads(params: {
         path: ref.path,
         contentType: ref.mimeType,
         fileName: ref.label,
+        origin: ref.origin,
         workspaceDir: path.dirname(ref.path),
       }));
     // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
@@ -191,6 +192,7 @@ async function prestageMediaPathOffloads(params: {
         url: ref.mediaRef,
         contentType: resolved?.contentType ?? ref.mimeType,
         fileName: ref.label,
+        origin: ref.origin,
         workspaceDir: sandbox.workspaceDir,
       };
     });

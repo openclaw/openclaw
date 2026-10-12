@@ -49,6 +49,9 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
       if (fact.workspaceDir) {
         attachment.workspaceDir = fact.workspaceDir;
       }
+      if (fact.origin) {
+        attachment.origin = fact.origin;
+      }
       return attachment;
     })
     .filter((entry) => Boolean(entry.path ?? entry.url));

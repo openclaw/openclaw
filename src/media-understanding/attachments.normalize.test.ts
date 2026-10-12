@@ -81,6 +81,18 @@ describe("normalizeAttachments", () => {
     ]);
   });
 
+  it("carries the gateway-recorded input origin", () => {
+    expect(
+      normalizeAttachments({
+        media: [
+          { path: "/tmp/pasted-text-1.txt", contentType: "text/plain", origin: "paste" },
+          { path: "/tmp/notes.txt", contentType: "text/plain", origin: "file" },
+          { path: "/tmp/channel.txt", contentType: "text/plain" },
+        ],
+      }).map((attachment) => attachment.origin),
+    ).toEqual(["paste", "file", undefined]);
+  });
+
   it("uses staged fact paths at the attachment consumer", () => {
     expect(
       normalizeAttachments({

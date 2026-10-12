@@ -45,6 +45,7 @@ it.each(["off", "all"] as const)(
                 fileName,
                 mimeType: "text/plain",
                 content: Buffer.from(bytes).toString("base64"),
+                ...(agentId === "main" ? { origin: "paste" } : {}),
               },
             ],
           },
@@ -79,6 +80,8 @@ it.each(["off", "all"] as const)(
         }
         const media = result.value.mediaPathOffloads[0]!;
         expect(media.fileName).toBe(fileName);
+        // The prompt-side fact keeps the paste origin the transcript already records.
+        expect(media.origin).toBe(agentId === "main" ? "paste" : undefined);
         const file = path.resolve(media.workspaceDir!, media.path!);
         expect(await fs.readFile(file, "utf8")).toBe(bytes);
         paths.push(file);
