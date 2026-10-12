@@ -579,6 +579,7 @@ describe("exec settlement recovery", () => {
         expect(getActiveBackgroundExecSessionCount()).toBe(0);
         expect(run.session.finalizing).toBe(false);
         expect(run.session.terminalStatus).toBe("completed");
+        expect(run.session.agentId).toBe("main");
         if (boundary !== "stdin") {
           expect(getFinishedSession(run.session.id)).toMatchObject({
             terminalStatus: "completed",

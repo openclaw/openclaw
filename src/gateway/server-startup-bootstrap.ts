@@ -56,6 +56,7 @@ import {
   resumeGatewayRestartTraceFromHandoff,
 } from "./restart-trace.js";
 import type { GatewayServerOptions } from "./server-public.js";
+import { resolveGatewayStartupSourceConfig } from "./server-startup-secret-surfaces.js";
 import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
@@ -420,7 +421,10 @@ export async function prepareGatewayServerBootstrap(input: {
       return applied;
     };
     const reapplyRuntimeOverlays = (config: OpenClawConfig): OpenClawConfig =>
-      applyFixedGatewayOverlays(applyReloadableGatewayAuthRefs(reapplyCompareOverlays(config)));
+      resolveGatewayStartupSourceConfig(
+        applyFixedGatewayOverlays(applyReloadableGatewayAuthRefs(reapplyCompareOverlays(config))),
+        runtimeEnv.env,
+      );
     const runtimeConfig = reapplyRuntimeOverlays(params.runtimeConfig);
     // Both managed writes and watcher reloads must reject unmigrated workspaces
     // before persistence or publication, using the candidate's final config and env.

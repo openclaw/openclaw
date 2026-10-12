@@ -314,6 +314,7 @@ src/agents/worktrees/capacity.ts
 src/agents/worktrees/capacity.worker.ts
 src/agents/worktrees/checkout-apfs.ts
 src/agents/worktrees/checkout-git-config.ts
+src/agents/worktrees/checkout-policy-key.ts
 src/agents/worktrees/checkout.ts
 src/agents/worktrees/errors.ts
 src/agents/worktrees/eviction.runtime.ts
@@ -344,6 +345,8 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
+src/sessions/communication-admission.ts
+src/sessions/communication-policy.ts
 src/config/sessions/session-actor-command.ts
 src/config/sessions/session-actor-executor.ts
 src/config/sessions/session-actor-sqlite.ts
@@ -403,6 +406,7 @@ src/channels/plugins/setup-contract.ts
 src/channels/registry-lookup.ts
 src/channels/registry-normalize.ts
 src/channels/registry.ts
+src/claws/provenance-secondary-references.ts
 src/cli/command-format.ts
 src/cli/daemon-cli/restart-health.types.ts
 src/cli/parse-bytes.ts
@@ -1016,7 +1020,6 @@ src/infra/secure-random.ts
 src/infra/semver.ts
 src/infra/session-cost-usage-cache-migration.ts
 src/infra/session-cost-usage-rollup-codec.ts
-src/infra/session-cost-usage-worker.types.ts
 src/infra/shell-env.ts
 src/infra/shell-inline-command.ts
 src/infra/shell-wrapper-resolution.ts
@@ -2010,6 +2013,10 @@ src/config/sessions/store-maintenance-activity.ts
 src/utils/chunk-items.ts
 src/utils/message-channel-normalize.ts
 src/utils/message-channel.ts
+src/state/agent-deletion-journal-authority.worker.ts
+src/infra/session-cost-usage-worker.types.ts
+src/sessions/session-agent-work-admission.ts
+src/sessions/session-lifecycle-identity.ts
 src/config/sessions/cli-history-boundary.ts
 src/config/sessions/session-accessor.sqlite-identity.ts
 src/config/sessions/session-accessor.sqlite-worker-coordination.ts

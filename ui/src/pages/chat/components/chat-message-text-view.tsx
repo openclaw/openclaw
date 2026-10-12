@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, getOwner, onCleanup, runWithOwner, Show } from "solid-js";
 import {
   createMarkdownRef,
   type MarkdownContentValue,
@@ -24,22 +24,6 @@ import {
 export type { AssistantMessageDisclosure } from "./chat-message-text-preparation.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
-
-export function renderSolidMessageJson(
-  json: MarkdownJson,
-  messageKey: string,
-  options: MessageTextOptions,
-  markdownOptions: MarkdownRenderOptions,
-) {
-  return (
-    <MessageJson
-      json={json}
-      messageKey={messageKey}
-      options={options}
-      markdownOptions={markdownOptions}
-    />
-  );
-}
 
 export function MessageJson(props: {
   json: MarkdownJson;
@@ -68,26 +52,6 @@ export type MessageMarkdownProps = {
   duplicateSuffix?: DuplicateSuffix;
   media?: MarkdownMedia;
 };
-
-export function renderSolidMessageMarkdown(
-  markdown: string,
-  messageKey: string,
-  options: MessageTextOptions,
-  markdownOptions: MarkdownRenderOptions,
-  duplicateSuffix?: DuplicateSuffix,
-  media?: MarkdownMedia,
-) {
-  return (
-    <MessageMarkdown
-      markdown={markdown}
-      messageKey={messageKey}
-      options={options}
-      markdownOptions={markdownOptions}
-      duplicateSuffix={duplicateSuffix}
-      media={media}
-    />
-  );
-}
 
 export function MessageMarkdown(props: MessageMarkdownProps) {
   const presentation = createMemo(() =>
@@ -219,8 +183,6 @@ function DisclosureContent(props: {
   );
 }
 
-export type { MarkdownContentValue } from "../../../components/markdown-dom-ref.ts";
-
 type MarkdownContentProps = {
   content: MarkdownContentValue;
   media?: MarkdownMedia;
@@ -229,6 +191,7 @@ type MarkdownContentProps = {
 
 /** Both transcript text and legacy slots share the same incremental DOM owner. */
 export function MarkdownContent(props: MarkdownContentProps) {
+  const solidOwner = getOwner();
   const fragment = document.createDocumentFragment();
   const markdown = createMarkdownRef(() => {
     const media = props.media;
@@ -236,7 +199,9 @@ export function MarkdownContent(props: MarkdownContentProps) {
       prefix: media.prefix,
       render(index, container) {
         const item = media.items[index];
-        return item ? mountLitContent(media.render(item, index), container) : undefined;
+        return item
+          ? runWithOwner(solidOwner, () => mountLitContent(media.render(item, index), container))
+          : undefined;
       },
     };
     return { content: props.content, media: renderer, incremental: props.incremental };

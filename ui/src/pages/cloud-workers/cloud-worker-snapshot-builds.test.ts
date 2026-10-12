@@ -356,7 +356,7 @@ describe("Snapshot builds", () => {
         method === "environments.list"
           ? { environments: builds }
           : method === "crabbox.images.list"
-            ? { ...result, images }
+            ? structuredClone({ ...result, images })
             : undefined,
     });
     try {

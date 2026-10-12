@@ -171,30 +171,12 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       }
     : undefined;
   if (request.kind === "rpc" || request.kind === "rpc-message") {
-    const params = request.params;
-    const captured = {
-      encodeResponse: params.encodeResponse,
-      compactionMetrics: params.compactionMetrics?.map((metric) => ({ ...metric })),
+    const captured = { ...request };
+    captured.params = {
+      ...structuredClone({ ...request.params, entry: undefined }),
       entry: capturedEntry,
-      provider: params.provider,
-      sessionId: params.sessionId,
-      storePath: params.storePath,
-      sessionAgentId: params.sessionAgentId,
-      canonicalKey: params.canonicalKey,
-      max: params.max,
-      maxHistoryBytes: params.maxHistoryBytes,
-      responseHistoryBytes: params.responseHistoryBytes,
-      effectiveMaxChars: params.effectiveMaxChars,
-      toolResultMaxChars: params.toolResultMaxChars,
-      offset: params.offset,
-      messageId: params.messageId,
-      ...(params.pageCursor ? { pageCursor: { ...params.pageCursor } } : {}),
-      ignoreCliSessionImports: params.ignoreCliSessionImports,
-      cliHistoryHomeDir: params.cliHistoryHomeDir,
     };
-    return request.kind === "rpc-message"
-      ? { kind: "rpc-message", params: { ...captured, messageId: request.params.messageId } }
-      : { kind: "rpc", params: captured };
+    return captured;
   }
   const params = request.params;
   return {

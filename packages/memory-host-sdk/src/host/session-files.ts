@@ -6,6 +6,7 @@ import { normalizeAgentId } from "./config-utils.js";
 import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
 import { createSubsystemLogger } from "./openclaw-runtime-io.js";
+import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
 import {
   assertBoundIncognitoMemorySyncAccess,
   captureIncognitoMemoryReader,
@@ -17,7 +18,6 @@ import {
   HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
   isCompactionCheckpointTranscriptFileName,
-  isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
   isIncognitoOpenClawAgentSqlitePath,

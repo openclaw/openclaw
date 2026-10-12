@@ -29,6 +29,8 @@ export const RESPONSE_FAILED_NO_DETAILS_MESSAGE = "Unknown error (no error detai
 export const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 export const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 export const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
+// Projection-only provenance: symbols survive option/object spreads but never enter provider JSON.
+export const RESPONSES_RETAINED_USER = Symbol("responsesRetainedUser");
 export const OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
 export const OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE =
   "openai-responses-retained-compaction";

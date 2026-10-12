@@ -18,6 +18,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
@@ -191,7 +192,7 @@ export function createGatewayHttpServer(opts: {
     markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
     void runGatewayHttpRequest(req, res, opts.httpRequestLifetime, () =>
       runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-        handleRequest(req, res, expectation),
+        runWithMainThreadTask("gateway:http", () => handleRequest(req, res, expectation)),
       ),
     ).catch((error: unknown) => {
       console.error("[gateway-http] failed to finalize request:", error);

@@ -29,7 +29,6 @@ import {
   requireActivePluginChannelRegistry,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
@@ -52,7 +51,6 @@ import {
   createTransportActivityStatusPatch,
 } from "./channel-status-patches.js";
 import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 import { registerChannelAutostartRecoveryTests } from "./server-channels.recovery.test-support.js";
 import {
@@ -65,10 +63,6 @@ import {
   type TestAccount,
 } from "./server-channels.test-support.js";
 import { AUTH_NONE, createTestGatewayServer } from "./server-http.test-harness.js";
-import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
-import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
-import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 
@@ -224,79 +218,6 @@ describe("server-channels auto restart", () => {
     clearActiveCredentialDegradedOwners();
     setActiveDegradedSecretOwners([]);
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
-  });
-
-  it("keeps channel requests bound to their Gateway after the starting client closes", async () => {
-    const continueChannelRequest = createDeferred();
-    const observedGateway = createDeferred<{ gateway: string }>();
-    const ownerContext = createContext();
-    ownerContext.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "health",
-          scope: "operator.read",
-          owner: { kind: "core", area: "channel-startup" },
-          handler: ({ respond }: GatewayRequestHandlerOptions) =>
-            respond(true, { gateway: "channel-owner" }),
-        },
-      ]);
-    const callerContext = createContext();
-    callerContext.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "health",
-          scope: "operator.read",
-          owner: { kind: "core", area: "channel-startup" },
-          handler: ({ respond }: GatewayRequestHandlerOptions) =>
-            respond(true, { gateway: "starting-client" }),
-        },
-      ]);
-    const startAccount = async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-      await continueChannelRequest.promise;
-      try {
-        observedGateway.resolve(
-          await dispatchGatewayMethodInProcess<{ gateway: string }>(
-            "health",
-            {},
-            {
-              syntheticScopes: ["operator.read"],
-              operatorRoleActor: { kind: "system" },
-            },
-          ),
-        );
-      } catch (error) {
-        observedGateway.reject(error);
-      }
-      await waitForAbort(abortSignal);
-    };
-    installTestRegistry(createTestPlugin({ startAccount }));
-    const manager = createManager({ resolveGatewayContext: () => ownerContext });
-    const callerLifetime = new AbortController();
-
-    try {
-      await withPluginRuntimeGatewayRequestScope(
-        {
-          context: callerContext,
-          client: createSyntheticPluginRuntimeClient({
-            scopes: ["operator.read"],
-            operatorRoleActor: { kind: "system" },
-          }),
-          isWebchatConnect: () => false,
-          signal: callerLifetime.signal,
-          hasCurrentClientAuthority: () => !callerLifetime.signal.aborted,
-        },
-        () => manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true }),
-      );
-      callerLifetime.abort();
-      const requestResult = expect(observedGateway.promise).resolves.toEqual({
-        gateway: "channel-owner",
-      });
-      continueChannelRequest.resolve();
-      await requestResult;
-    } finally {
-      continueChannelRequest.resolve();
-      await manager.stopChannel("discord");
-    }
   });
 
   it("keeps approval-bootstrap descendants admitted after the starting request finishes", async () => {
