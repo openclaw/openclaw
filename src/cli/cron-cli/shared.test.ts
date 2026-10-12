@@ -176,6 +176,67 @@ describe("printCronList", () => {
     expectLogsToInclude(show.logs, "last delivery error: offline");
   });
 
+  it.each(["failed", "unknown"] as const)(
+    "does not report a one-shot as complete when required delivery is %s",
+    (lastCompletionStatus) => {
+      const job = createBaseJob({
+        enabled: false,
+        state: {
+          lastRunStatus: "ok",
+          lastCompletionStatus,
+          lastDeliveryStatus: lastCompletionStatus === "failed" ? "not-delivered" : "unknown",
+        },
+      });
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({
+        status: "disabled",
+        state: { lastCompletionStatus },
+      });
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+      expect(show.logs.join("\n")).toContain(
+        lastCompletionStatus === "failed"
+          ? "disabled (delivery failed)"
+          : "disabled (delivery unknown)",
+      );
+    },
+  );
+
+  it.each(["failed", "unknown"] as const)(
+    "shows an active run before the previous %s delivery outcome",
+    (lastCompletionStatus) => {
+      const job = createBaseJob({
+        state: {
+          runningAtMs: Date.now(),
+          lastRunStatus: "ok",
+          lastCompletionStatus,
+          lastDeliveryStatus: lastCompletionStatus === "failed" ? "not-delivered" : "unknown",
+        },
+      });
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: "running" });
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expect(list.logs.join("\n")).toContain("running");
+      expect(list.logs.join("\n")).not.toContain("delivery failed");
+      expect(list.logs.join("\n")).not.toContain("delivery unknown");
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+      expect(show.logs.join("\n")).toContain("status: running");
+    },
+  );
+
+  it.each(["error", "skipped"] as const)(
+    "preserves %s execution status when completion also failed",
+    (lastRunStatus) => {
+      const job = createBaseJob({
+        state: { lastRunStatus, lastCompletionStatus: "failed" },
+      });
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: lastRunStatus });
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expect(list.logs.join("\n")).toContain(lastRunStatus);
+    },
+  );
+
   it("sanitizes every stored cron show value at the terminal boundary", () => {
     const control = "\u001B]0;cron-show-injection\u0007";
     const injected = (value: string) => `${control}${value}\r\nforged-row\tfield`;

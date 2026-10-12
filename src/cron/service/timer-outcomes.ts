@@ -166,6 +166,7 @@ export function applyJobResult(
       deliveryState.status,
       deliveryState.deliverySuppressionReason,
     );
+  job.state.lastCompletionStatus = completionStatus;
 
   // Track consecutive errors for backoff / auto-disable; skipped runs use a
   // separate counter so skip alerts do not affect retry behavior.

@@ -57,6 +57,7 @@ export function markInterruptedStartupRun(params: {
   delete job.state.runningScheduleChangeId;
   job.state.lastRunAtMs = runningAtMs;
   job.state.lastRunStatus = "error";
+  job.state.lastCompletionStatus = "failed";
   job.state.lastStatus = "error";
   job.state.lastError = STARTUP_INTERRUPTED_ERROR;
   job.state.lastErrorReason = undefined;

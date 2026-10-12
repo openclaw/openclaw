@@ -268,6 +268,10 @@ function decorateStatusWithFailures(status: string, consecutiveErrors: number | 
 function formatCronStatusForDisplay(job: CronJob) {
   const state = job.state ?? {};
   const status = computeStatus(job);
+  const incompleteDelivery =
+    status !== "running" &&
+    state.lastRunStatus === "ok" &&
+    (state.lastCompletionStatus === "failed" || state.lastCompletionStatus === "unknown");
   const streamDisabled =
     job.enabled && job.schedule?.kind === "stream" && state.streamStatus === "disabled";
   const undelivered = status === "ok" && state.lastDeliveryStatus === "not-delivered";
@@ -278,7 +282,10 @@ function formatCronStatusForDisplay(job: CronJob) {
   const color =
     status === "error"
       ? theme.error
-      : status === "running" || deliveryUnknown || (undelivered && !suppressed)
+      : status === "running" ||
+          incompleteDelivery ||
+          deliveryUnknown ||
+          (undelivered && !suppressed)
         ? theme.warn
         : status === "ok"
           ? theme.success
@@ -291,6 +298,10 @@ function formatCronStatusForDisplay(job: CronJob) {
       state.autoDisabled.reason === "schedule-errors"
         ? "disabled (schedule)"
         : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
+  } else if (incompleteDelivery) {
+    const detail =
+      state.lastCompletionStatus === "unknown" ? "delivery unknown" : "delivery failed";
+    label = status === "disabled" ? `disabled (${detail})` : detail;
   } else if (undelivered) {
     label = suppressed ? "ok (suppressed)" : "ok (not delivered)";
   } else if (deliveryUnknown) {
