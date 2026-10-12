@@ -1,10 +1,35 @@
 /* @vitest-environment jsdom */
 
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, expect, it, vi } from "vitest";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import "./chat-detail-panel.tsx";
+
+async function listenOnLoopback(server: Server): Promise<string> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function closeServer(server: Server): Promise<void> {
+  if (!server.listening) {
+    return;
+  }
+  const closed = new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  server.closeAllConnections();
+  await closed;
+}
 
 async function mountAttachment(
   overrides: Partial<Extract<SidebarContent, { kind: "attachment" }>> = {},
@@ -456,3 +481,63 @@ it.each([
     });
   },
 );
+
+it("does not hang the attachment preview when a real HTTP 403 body cancel stays pending", async () => {
+  let requestCount = 0;
+  let retainedUnread: Response | undefined;
+  let cancelCalled = false;
+  let cancelSettled = false;
+  const server = createServer((_request, response) => {
+    requestCount += 1;
+    // Keep the error body open; an unread clone() tee branch makes cancel()
+    // stay pending until that branch also cancels or the remote ends.
+    response.writeHead(403, {
+      "content-type": "text/plain; charset=utf-8",
+      "content-length": "1048576",
+    });
+    response.write("denied-preview-body");
+  });
+  const baseUrl = await listenOnLoopback(server);
+  const nativeFetch = globalThis.fetch.bind(globalThis);
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl =
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const response = await nativeFetch(new URL(requestUrl, baseUrl), init);
+    // Native fetch settles cancel immediately for an un-cloned response; retain
+    // an unread tee branch so the production cancel stays genuinely pending.
+    retainedUnread = response.clone();
+    const body = response.body;
+    if (body) {
+      const nativeCancel = body.cancel.bind(body);
+      body.cancel = (reason?: unknown) => {
+        cancelCalled = true;
+        const pending = nativeCancel(reason);
+        void Promise.resolve(pending)
+          .catch(() => undefined)
+          .finally(() => {
+            cancelSettled = true;
+          });
+        return pending;
+      };
+    }
+    return response;
+  });
+  try {
+    const panel = await mountAttachment();
+    await vi.waitFor(
+      () => expect(panel.textContent).toContain("Download it to read the full file"),
+      { timeout: 2_000 },
+    );
+    expect(panel.querySelector("pre")).toBeNull();
+    expect(requestCount).toBe(1);
+    expect(cancelCalled).toBe(true);
+    expect(cancelSettled).toBe(false);
+    expect(retainedUnread?.body).toBeTruthy();
+    console.log(
+      `[attachment 403 cancel hang proof] transport=node:http+fetch request_count=${requestCount} cancel_called=true cancel_settled=false fallback_before_cancel_settled=true hung=false fallback=true`,
+    );
+  } finally {
+    await retainedUnread?.body?.cancel().catch(() => undefined);
+    await closeServer(server);
+  }
+});
