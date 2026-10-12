@@ -636,6 +636,38 @@ For `claude-cli`, the installed Claude Code process uses its current native
 login. OpenClaw uses a non-secret route marker and never reads, persists,
 refreshes, selects, or forwards the native tokens.
 Set `CLAUDE_CONFIG_DIR` on the Gateway process to use a separate Claude configuration directory.
+To give OpenClaw runs their own Claude settings, `CLAUDE.md`, skills, and
+transcripts while keeping the host's existing Claude login on Linux and
+Windows, where Claude Code keeps the login in a `.credentials.json` file, also
+set `CLAUDE_SECURESTORAGE_CONFIG_DIR` to the directory that holds that file
+(usually `~/.claude`). Claude Code then reads, refreshes, and locks the one
+credentials file there instead of keeping a second login:
+
+```json5
+{
+  env: {
+    vars: {
+      CLAUDE_CONFIG_DIR: "/home/me/.openclaw/claude-home",
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/me/.claude",
+    },
+  },
+}
+```
+
+Claude Code refuses a symlinked `.credentials.json`, so do not link the file
+into the new directory. Transcripts for these runs are written under
+`$CLAUDE_CONFIG_DIR/projects/`. Restart the Gateway after changing either value.
+
+On macOS, Claude Code keeps the login in the Keychain, not in a file. A
+non-empty `CLAUDE_SECURESTORAGE_CONFIG_DIR`, or `CLAUDE_CONFIG_DIR` on its own,
+selects a separate Keychain entry, so this recipe does not reuse the default
+login there. Set only `CLAUDE_CONFIG_DIR` and log in once for that directory,
+as the same user that runs the Gateway:
+
+```bash
+CLAUDE_CONFIG_DIR="$HOME/.openclaw/claude-home" claude auth login
+```
+
 Explicit OpenClaw-managed API-key and token profiles continue to use the
 protected, per-invocation credential-forwarding CLI path.
 
