@@ -57,7 +57,7 @@ Follow [proof policy](../../openclaw-testing/SKILL.md#proof-policy); never edit 
 checkout while its Vitest run is active. Run owner/sibling tests. For removed
 source greps or plan assertions, exercise the owning executable/dry-run. Run
 targeted format, `git diff --check`, and classify the changed gate with
-`node scripts/check-changed.mjs --dry-run -- <paths>` before running it.
+`node scripts/check-changed.mjs --dry-run -- <changed-paths>` before running it.
 Inspect `git diff --numstat` and get final autoreview.
 
 Report causes, removed categories/seams, retained false positives, proof and

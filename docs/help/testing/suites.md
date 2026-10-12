@@ -35,6 +35,13 @@ comparison bases and shrink-only maintenance.
 
 Think of the suites as "increasing realism" (and increasing flakiness/cost).
 
+The maintainer-tooling family uses `RELEASE_ONLY_TOOLING_SHARDS` and matching
+maintainer leaves in mixed fast configs: product-only PRs and main omit it,
+tooling-owner PRs select their affected files (with full-family fallback for unresolved owners), and manual CI and Full Release Validation
+retain it. Keep tests in their assigned configs, with their process and timer
+policies, so new files inherit the same owner routing. Dedicated product E2E
+and live tests remain outside this tier. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
+
 ### Unit / integration (default)
 
 - Command: `pnpm test`

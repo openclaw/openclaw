@@ -130,15 +130,19 @@ does not exercise watching.
 
 ## Compiled subprocesses and timeout helpers
 
-- Load compiled-subprocess declarations at collection, not within a test/hook
-  deadline. Import the subject statically. Per-test reimport suites in core preload
-  `src/test-utils/prepare-compiled-subprocesses.ts`; extensions use
-  `import "openclaw/plugin-sdk/compiled-subprocess-testing";`.
-  Add this preload only when the suite already reaches a declaration in
-  `scripts/lib/vitest-worker-declarations.mts`.
+- Load compiled-subprocess declarations (`scripts/lib/vitest-worker-declarations.mts`)
+  at collection. The first such load in a Vitest invocation prepares the whole
+  compiled worker generation (tens of seconds warm, minutes cold), so an
+  `await import()` in a test or hook whose graph reaches a declaration spends
+  that preparation inside the test or hook deadline. Import the subject
+  statically; suites that re-import it per test add a side-effect import of
+  `src/test-utils/prepare-compiled-subprocesses.ts` in core. Extension tests use
+  `import "openclaw/plugin-sdk/compiled-subprocess-testing";` instead. Add the
+  preload only to suites that already load a declaration.
 
 Replace grandfathered `withTestTimeout`/`raceWithTimeoutResult` races with
 `awaitGateBeforeSettlement(gate, operation, message)` or `withinTest(work, signal)`
-from `test/helpers/promise.ts`, or fake timers through the owner's injected clock.
+from `test/helpers/promise.ts`, or use `vi.useFakeTimers()` through the owner's
+injected clock.
 After removals run `pnpm check:test-timeout-race-ratchet --prune`; the per-file
 baseline in `config/test-timeout-race-baseline.txt` only shrinks.

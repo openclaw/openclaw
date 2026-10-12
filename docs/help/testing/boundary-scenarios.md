@@ -47,3 +47,19 @@ and [proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills
 Use synthetic content; keep credentials out of captures. Select failure cases
 from the changed contract. Many private controls suggest fragmented ownership,
 not a need for more test-only exports.
+
+## SecretRef registry regression contract
+
+When extending SecretRef registry coverage, preserve this authoring requirement:
+
+- `src/secrets/exec-secret-ref-id-parity.test.ts` should derive one sampled target
+  per SecretRef class from registry metadata (`listSecretTargetRegistryEntries()`),
+  then assert traversal-segment exec ids are rejected.
+- If you add a new `includeInPlan` SecretRef target family in
+  `src/secrets/target-registry-data.ts`, update `classifyTargetClass` in that test.
+  The guardrail must fail on unclassified target ids so new classes cannot be
+  skipped silently.
+
+The current parity test covers shared exec-id vectors but no longer contains the
+registry sampler or `classifyTargetClass`; restore that coverage when extending
+registry families rather than assuming the vector checks cover registry traversal.

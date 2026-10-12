@@ -23,6 +23,19 @@ per reader job. Open the page that matches your task.
 | [Test runner internals](/reference/test/runner-internals)      | Shared build locks, isolated test state and homes, and JSON report merging.        |
 | [Remote test proof](/reference/test/remote-proof)              | When agents use Crabbox or Testbox, and the wrapper, lease, and trust rules.       |
 
+## Local command guidance
+
+For ordinary local tests, start at `docs/reference/test.md#routine-local-order`
+([routine local order](/reference/test/local#routine-local-order)) and
+`#core-commands`; read [CI](/ci) when scope or runner behavior matters.
+Follow the touched subtree's `AGENTS.md`.
+
+`pnpm verify` runs the full `check` and then `test` when that scope is justified.
+For worker-sensitive failures, `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path>`
+provides a focused serial probe; do not make a forced environment the repair.
+Inspect changed checks with `node scripts/check-changed.mjs --dry-run -- <paths...>`
+before running the selected plan.
+
 ## Where each section moved
 
 Every section heading from the previous single-page version keeps its anchor

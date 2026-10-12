@@ -57,6 +57,9 @@ built output. Remove temporary probe config and verify cleanup.
 
 ## Docker And Live Lanes
 
+For new or changed Docker lanes, use
+[`$openclaw-docker-e2e-authoring`](../../openclaw-docker-e2e-authoring/SKILL.md).
+
 Prefer the prepared GitHub workflow for Docker/release proof. Select
 `docker_lanes` in `openclaw-live-and-e2e-checks-reusable.yml` and disable unrelated
 live, repository E2E, and release-path suites where the selected lane permits.
