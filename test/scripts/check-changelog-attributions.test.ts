@@ -1,14 +1,17 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   findForbiddenChangelogThanks,
   isForbiddenChangelogThanksHandle,
   requiresExplicitHumanChangelogThanks,
 } from "../../scripts/check-changelog-attributions.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const changelogScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "changelog.sh");
 const commonScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "common.sh");
 const gatesScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "gates.sh");
@@ -106,6 +109,40 @@ prepare_gates 123
 }
 
 describe("check-changelog-attributions", () => {
+  it.each([
+    { file: "2026.9.4.md", mirror: true, handle: "steipete", status: 0 },
+    { file: "2026.9.4.md", mirror: false, handle: "steipete", status: 1 },
+    { file: "records/2026.9.4.md", mirror: true, handle: "steipete", status: 1 },
+    { file: "2026.9.4.md", mirror: true, handle: "dependabot[bot]", status: 1 },
+  ])(
+    "scans $file (mirror=$mirror, credit=$handle) under the existing policy",
+    ({ file, mirror, handle, status }) => {
+      const root = tempDirs.make("openclaw-changelog-scan-");
+      writeFileSync(path.join(root, "CHANGELOG.md"), "# Changelog\n");
+      const artifact = path.join(root, "CHANGELOG", file);
+      mkdirSync(path.dirname(artifact), { recursive: true });
+      writeFileSync(
+        artifact,
+        `${mirror ? "<!-- openclaw-docs-mirror-v1 -->\n" : ""}# Release\n\n- Repair. Thanks @${handle}.\n`,
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          pathToFileURL(path.join(process.cwd(), "scripts/tsx.mjs")).href,
+          path.join(process.cwd(), "scripts/check-changelog-attributions.mts"),
+        ],
+        { cwd: root, encoding: "utf8" },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(status);
+      if (status === 1) {
+        expect(result.stderr).toContain(`CHANGELOG/${file}:`);
+        expect(result.stderr).toContain(`uses Thanks @${handle}`);
+      }
+    },
+  );
+
   it("flags forbidden bot, org, and maintainer thanks attributions", () => {
     const content = [
       "- Internal cleanup. Thanks @codex.",

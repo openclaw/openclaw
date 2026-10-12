@@ -83,7 +83,7 @@ export async function main(argv = process.argv.slice(2)) {
   const artifacts = path.join(root, "CHANGELOG");
   if (path.basename(absolutePath) === "CHANGELOG.md" && fs.existsSync(artifacts)) {
     for (const entry of fs.readdirSync(artifacts, { recursive: true, encoding: "utf8" })) {
-      const relative = `CHANGELOG/${entry}`;
+      const relative = `CHANGELOG/${entry.split(path.sep).join("/")}`;
       if (isReleaseChangelogPath(relative)) {
         paths.push(path.join(root, relative));
       }
@@ -92,7 +92,7 @@ export async function main(argv = process.argv.slice(2)) {
   let failed = false;
   for (const file of paths) {
     const content = fs.readFileSync(file, "utf8");
-    const relativePath = path.relative(process.cwd(), file);
+    const relativePath = path.relative(process.cwd(), file).split(path.sep).join("/");
     const docsMirror =
       /^CHANGELOG\/[^/]+\.md$/u.test(relativePath) &&
       isReleaseChangelogPath(relativePath) &&

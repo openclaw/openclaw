@@ -2631,8 +2631,8 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
           ...roots,
         ]
       : [
-          "-l",
-          "--null",
+          "-l0",
+          "--path-separator=/", // Match Git paths for exclusions and reviewed classifications.
           "-g",
           "*.{ts,tsx,js,mjs,mts,cts,cjs}",
           pattern,
