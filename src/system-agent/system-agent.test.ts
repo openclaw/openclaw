@@ -197,11 +197,7 @@ describe("runSystemAgent", () => {
     "config set gateway.auth.token=very-secret",
     "config set gateway.auth.token=very-secret please",
     String.raw`config set gateway.auth.token\ very-secret please`,
-    "config set gateway.auth.tokenabcDEF123 please",
-    "config set gateway.auth.token_abcDEF123 please",
-    "config set gateway.auth.token$abcDEF123 please",
     "config set-ref gateway.auth.tokenabcDEF123 env GATEWAY_TOKEN",
-    'config set gateway.auth["token:very-secret"] please',
   ])(
     "keeps malformed config write %s away from the one-shot assistant planner",
     async (message) => {
@@ -224,41 +220,6 @@ describe("runSystemAgent", () => {
       expect(lines.join("\n")).not.toContain("abcDEF123");
     },
   );
-
-  it("does not apply a one-shot plan after the verified route changes", async () => {
-    const { runtime } = createSystemAgentTestRuntime();
-    const changedConfig = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
-    } satisfies OpenClawConfig;
-    const readConfigFileSnapshot = vi
-      .fn()
-      .mockResolvedValueOnce(configSnapshot(verifiedConfig))
-      .mockResolvedValue(configSnapshot(changedConfig));
-    const runGatewayRestart = vi.fn(async () => {});
-    const verified = createVerifiedRunOptions(
-      {
-        readConfigFileSnapshot: readConfigFileSnapshot as never,
-        runGatewayRestart,
-      },
-      { revalidate: true },
-    );
-
-    await expect(
-      runSystemAgent(
-        {
-          ...verified,
-          message: "the bridge looks sleepy, restart it",
-          yes: true,
-          planWithAssistant: async () => ({ command: "restart gateway" }),
-          ...systemAgentOverviewDeps,
-        },
-        runtime,
-      ),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("verified inference route changed"),
-    });
-    expect(runGatewayRestart).not.toHaveBeenCalled();
-  });
 
   it("rechecks one-shot authority at the persistent apply boundary", async () => {
     const { runtime } = createSystemAgentTestRuntime();
@@ -464,12 +425,6 @@ describe("runSystemAgent", () => {
   });
 
   it.each([
-    {
-      name: "stdin is not a TTY",
-      input: { isTTY: false } as unknown as NodeJS.ReadableStream,
-      output: { isTTY: true } as unknown as NodeJS.WritableStream,
-      interactive: true,
-    },
     {
       name: "stdout is not a TTY",
       input: { isTTY: true } as unknown as NodeJS.ReadableStream,

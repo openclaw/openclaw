@@ -12,6 +12,10 @@ import {
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   encodeSessionArchiveContent,
   materializeSessionArchiveForRead,
 } from "../config/sessions/archive-compression.js";
@@ -72,11 +76,13 @@ async function withUsageWorkerPreload(
   await closeOpenClawAgentDatabasesAsync();
   await closeStateDatabaseForTest();
   await withEnvAsync({ OPENCLAW_STATE_DIR: root, ...sqliteWorkerPreloadEnv(preload) }, async () => {
+    setRuntimeConfigSnapshot({});
     try {
       await operation();
     } finally {
       await closeOpenClawAgentDatabasesAsync();
       await closeStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
     }
   });
 }
@@ -582,6 +588,7 @@ if (!isMainThread) {
 
 it("keeps model addition order when integer timestamp totals hide fractional model costs", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = {};
     const agentId = "usage-model-rounding";
     const sessionFile = state.path("usage-model-rounding.jsonl");
     const records = [
@@ -603,8 +610,9 @@ it("keeps model addition order when integer timestamp totals hide fractional mod
       ),
     );
     await fs.writeFile(sessionFile, records.join("\n") + "\n");
-    await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
     const request = {
+      config,
       agentId,
       sessions: [{ sessionFile }],
       requestRefresh: false,
@@ -627,6 +635,7 @@ it("keeps model addition order when integer timestamp totals hide fractional mod
 
 it("replaces every monthly partition after cache damage and filters within and across months", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = {};
     const agentId = "usage-missing-partition";
     const sessionFile = state.path("usage-missing-partition.jsonl");
     const record = (day: number) =>
@@ -641,7 +650,7 @@ it("replaces every monthly partition after cache damage and filters within and a
         },
       }) + "\n";
     await fs.writeFile(sessionFile, record(18) + record(19) + record(31));
-    await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
     runOpenClawAgentWriteTransaction(
       ({ db }) =>
         db
@@ -652,7 +661,7 @@ it("replaces every monthly partition after cache damage and filters within and a
       { agentId },
     );
     await fs.appendFile(sessionFile, record(20));
-    await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
     const stored = runOpenClawAgentWriteTransaction(
       ({ db }) =>
         db
@@ -679,6 +688,7 @@ it("replaces every monthly partition after cache damage and filters within and a
     ]) {
       expect(
         await loadSessionCostSummariesFromCache({
+          config,
           agentId,
           sessions: [{ sessionFile }],
           projection: "overview",

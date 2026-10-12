@@ -10,6 +10,10 @@ import {
 import { createOpenAIResponsesTransportStreamFn } from "../../../../packages/ai/src/transports/openai-responses-client.js";
 import { resolveResponsesContinuationRequest } from "../../../../packages/ai/src/transports/openai-responses-continuation.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import type { Model, UserMessage } from "../../../llm/types.js";
@@ -144,7 +148,10 @@ describe("prompt-cache boundary regressions", () => {
     env = captureEnv(["OPENCLAW_PROMPT_CACHE_ASSERT"]);
     setTestEnvValue("OPENCLAW_PROMPT_CACHE_ASSERT", "1");
   });
-  afterEach(() => env.restore());
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+    env.restore();
+  });
 
   describe("in-history prompt updates", () => {
     registerParityHostLifecycle();
@@ -270,6 +277,7 @@ describe("prompt-cache boundary regressions", () => {
 
   it("keeps every sent fingerprint stable and appends one late-media turn", async () => {
     const dir = sessionDirs.make();
+    setRuntimeConfigSnapshot({});
     const target = {
       agentId: "main",
       cwd: dir,

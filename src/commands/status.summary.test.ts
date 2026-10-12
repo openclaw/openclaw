@@ -97,11 +97,13 @@ vi.mock("../agents/embedded-agent-runner/model.static-catalog.js", () => ({
   ),
 }));
 
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   loadConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../config/config.js", () => ({
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
   getRuntimeConfig: vi.fn(() => ({})),
   captureRuntimeConfigAsyncReader: vi.fn(() =>
     Object.assign(async () => ({}), { assertCurrent() {} }),

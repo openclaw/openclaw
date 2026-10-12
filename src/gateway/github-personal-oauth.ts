@@ -20,7 +20,9 @@ import {
 import { hasErrnoCode } from "../infra/errno.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { observeUserGitHubConnectionAuthority } from "../state/user-github-connection-events.js";
 import {
   cancelUserGitHubAuthorizationSync,
   disconnectUserGitHubConnectionSync,
@@ -117,6 +119,12 @@ export function createPersonalGitHubOAuthLifecycle() {
   const cleanups = new Map<string, Promise<void>>();
   let stopped = false;
   let inspectedProfiles = false;
+  let connectionScan: { databasePath: string; current: boolean; empty: boolean } | undefined;
+  const unobserveConnections = observeUserGitHubConnectionAuthority(({ databasePath }) => {
+    if (connectionScan?.databasePath === databasePath) {
+      connectionScan.current = false;
+    }
+  });
   const profileIsReferenced = async (id: string) =>
     (await listUserGitHubConnectionsAsync()).some(
       ({ connection }) =>
@@ -471,7 +479,20 @@ export function createPersonalGitHubOAuthLifecycle() {
     for (const id of retirements) {
       await retire(id);
     }
-    for (const { owner, connection } of await listUserGitHubConnectionsAsync()) {
+    const databasePath = resolveOpenClawStateSqlitePath();
+    if (
+      connectionScan?.databasePath === databasePath &&
+      connectionScan.current &&
+      connectionScan.empty
+    ) {
+      return;
+    }
+    const scan = { databasePath, current: true, empty: false };
+    connectionScan = scan;
+    const connections = await listUserGitHubConnectionsAsync();
+    // Existing connection receipts also invalidate a scan while its read is in flight.
+    scan.empty = connections.length === 0;
+    for (const { owner, connection } of connections) {
       if (stopped) {
         break;
       }
@@ -598,6 +619,7 @@ export function createPersonalGitHubOAuthLifecycle() {
       stopped = true;
       abort.abort();
       unobserve();
+      unobserveConnections();
       await Promise.allSettled([
         ...(maintenance ? [maintenance] : []),
         ...writes,

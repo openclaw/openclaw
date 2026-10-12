@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   readRuntimeConfig: vi.fn(),
 }));
 
-vi.mock("../config/io.runtime.js", () => ({
+vi.mock("../config/io.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.runtime.js")>()),
   captureRuntimeConfigAsyncReader: () =>
     Object.assign(mocks.readRuntimeConfig, { assertCurrent() {} }),
 }));

@@ -103,6 +103,8 @@ function createGuardedStopFixture() {
     await registerSubagentRun({
       runId,
       childSessionKey: scope.sessionKey,
+      childAgentId: "ops",
+      sessionEntry: loadSessionEntryReadOnly(scope),
       requesterSessionKey,
       requesterAgentId: "ops",
       requesterDisplayKey: requesterSessionKey,
@@ -283,6 +285,38 @@ it("typed Stop cannot acquire a replacement collector after projection readiness
   }
 });
 
+it("typed Stop preserves ownership errors when the requested leaf is still active", async () => {
+  const test = createGuardedStopFixture();
+  const collector = await test.child("collector");
+  const before = await getSubagentRunByChildSessionKey(collector.sessionKey);
+  replaceSessionEntrySync(collector, {
+    sessionId: collector.sessionId,
+    lifecycleRevision: "successor",
+    updatedAt: Date.now(),
+  });
+  const sessionBefore = loadSessionEntryReadOnly(collector);
+  try {
+    const respond = await test.send(collector.sessionKey, {
+      expectedLeafEntryId: null,
+      sessionId: collector.sessionId,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("Subagent original session incarnation"),
+      }),
+    );
+    expect(await getSubagentRunByChildSessionKey(collector.sessionKey)).toEqual(before);
+    expect(loadSessionEntryReadOnly(collector)).toEqual(sessionBefore);
+    expect(collector.start).not.toHaveBeenCalled();
+  } finally {
+    releaseSwarmRun("collector-capacity");
+    releaseSwarmRun("collector");
+  }
+});
+
 it.each([
   { kind: "owned", requestSessionKey: "main" },
   { kind: "orphan", requestSessionKey: "agent:main:main" },
@@ -313,6 +347,8 @@ it.each([
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId: "main",
+        sessionEntry: loadSessionEntryReadOnly({ storePath, sessionKey: childSessionKey }),
         requesterSessionKey: sessionKey,
         requesterAgentId: "main",
         requesterDisplayKey: sessionKey,

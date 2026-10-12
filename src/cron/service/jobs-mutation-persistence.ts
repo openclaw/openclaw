@@ -17,7 +17,7 @@ import {
   cronJobMessageActionAuthorityInputsEqual,
   cronJobMessageToolAuthorityInputsEqual,
 } from "./jobs-tool-policy.js";
-import { publishCronRunReceiptMutation, type CronRunReceiptOwnerMutation } from "./run-receipts.js";
+import { publishCronRunReceiptMutation } from "./run-receipts.js";
 import { emit, type CronServiceState } from "./state.js";
 import { persistCronJobMutation, type captureCronJobMutationSource } from "./store.js";
 
@@ -27,7 +27,6 @@ export async function persistUpdatedJob(params: {
   nextJob: CronJob;
   source: ReturnType<typeof captureCronJobMutationSource>;
   mutationMethod: "cron.add" | "cron.update";
-  ownerMutation?: CronRunReceiptOwnerMutation;
   commitGuard?: () => void;
   agentId?: string;
   preconditionJob?: CronJob;
@@ -65,7 +64,6 @@ export async function persistUpdatedJob(params: {
     method: params.mutationMethod,
     assertCurrent: () => {
       params.commitGuard?.();
-      params.ownerMutation?.assertCurrent();
       const currentDefaultAgentId = state.deps.resolveDefaultAgentId
         ? state.deps.resolveDefaultAgentId()
         : state.deps.defaultAgentId;
@@ -80,7 +78,6 @@ export async function persistUpdatedJob(params: {
     suppressScheduledJobId: nextJob.id,
     receiptMutation: {
       jobId: nextJob.id,
-      owner: params.ownerMutation?.prepared,
       triggerStateChanged,
       scheduleChanged,
     },

@@ -37,6 +37,7 @@ it("projects committed usage after startup preparation without borrowing its exp
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: timestamp });
     const append = (tokens: number) =>
       persistSessionTranscriptTurn(target, {
+        config,
         messages: [
           {
             message: {

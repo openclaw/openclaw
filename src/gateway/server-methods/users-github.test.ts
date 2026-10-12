@@ -41,8 +41,8 @@ import { observeUserGitHubConnectionAuthority } from "../../state/user-github-co
 import {
   observeUserGitHubProfileRetirement,
   readUserGitHubConnectionAsync,
-  resolvePersonalGitHubOwner,
 } from "../../state/user-github-connections.js";
+import { resolvePersonalGitHubOwnerInDatabase } from "../../state/user-github-connections.kernel.js";
 import {
   expireUserGitHubAccessToken,
   expireUserGitHubAuthorization,
@@ -672,7 +672,11 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       const response = await pending;
       expect(response.mock.calls[0]?.[1]).not.toMatchObject({ status: "success" });
       expect(
-        (await readUserGitHubConnectionAsync(resolvePersonalGitHubOwner(owner())!))?.selection.kind,
+        (
+          await readUserGitHubConnectionAsync(
+            resolvePersonalGitHubOwnerInDatabase(owner(), openOpenClawStateDatabase().db)!,
+          )
+        )?.selection.kind,
       ).toBe("disconnected");
       expect(network.command.mock.calls.some(([argv]) => argv[1] === "auth")).toBe(false);
     },
@@ -680,9 +684,19 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
 
   it("does not let an older start overwrite a newer start or disconnected generation", async () => {
     const old = createDeferredCore<Awaited<ReturnType<typeof network.start>>>();
-    network.start.mockReturnValueOnce(old.promise);
+    const entered = createDeferredCore<void>();
+    network.start.mockImplementationOnce(() => {
+      entered.resolve();
+      return old.promise;
+    });
     const pending = rpc(alice, "users.github.authorize.start");
-    await vi.waitFor(() => expect(network.start).toHaveBeenCalledOnce());
+    expect(
+      await Promise.race([
+        entered.promise.then(() => ({ started: true })),
+        pending.then((response) => ({ response: response.mock.calls })),
+      ]),
+    ).toEqual({ started: true });
+    expect(network.start).toHaveBeenCalledOnce();
     await rpc(alice, "users.github.disconnect");
     const newer = await start();
     old.resolve({
@@ -745,12 +759,16 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       const authoritySeenAtRetirement: number[] = [];
       const publications: UserGitHubConnectionCommit[] = [];
       const unobserveAuthority = observeUserGitHubConnectionAuthority((publication) => {
-        authorityOwners.push(resolvePersonalGitHubOwner(owner()));
+        authorityOwners.push(
+          resolvePersonalGitHubOwnerInDatabase(owner(), openOpenClawStateDatabase().db),
+        );
         publications.push(publication);
       });
       const unobserve = observeUserGitHubProfileRetirement((ids) => {
         authoritySeenAtRetirement.push(publications.length);
-        observedOwners.push(resolvePersonalGitHubOwner(owner()));
+        observedOwners.push(
+          resolvePersonalGitHubOwnerInDatabase(owner(), openOpenClawStateDatabase().db),
+        );
         retired.push(...ids);
       });
       try {
@@ -799,7 +817,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         ).run("{invalid-personal-json", owner(client));
       }
       expect(() => linkEmail("alice@example.test", owner(bob))).not.toThrow();
-      expect(resolvePersonalGitHubOwner(owner())).toBe(owner(bob));
+      expect(resolvePersonalGitHubOwnerInDatabase(owner(), db)).toBe(owner(bob));
       const merged = await readUserGitHubConnectionAsync(owner(bob));
       expect(merged?.selection).toEqual(
         corrupt === "source" ? target!.selection : { kind: "disconnected" },
@@ -819,7 +837,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       "synthetic merge storage failure",
     );
     db.exec("DROP TRIGGER reject_personal_merge");
-    expect(resolvePersonalGitHubOwner(owner())).toBe(owner());
+    expect(resolvePersonalGitHubOwnerInDatabase(owner(), db)).toBe(owner());
     expect(await readUserGitHubConnectionAsync(owner())).toEqual(before);
     expect(await readUserGitHubConnectionAsync(owner(bob))).toBeUndefined();
   });

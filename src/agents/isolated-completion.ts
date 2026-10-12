@@ -130,7 +130,7 @@ type AgentHarnessIsolatedCompletionParams = Parameters<
 >[0];
 
 function resolveIsolatedStreamParams(
-  { answerTokenBudget, streamParams }: RunIsolatedCompletionParams,
+  { answerTokenBudget, streamParams, thinkLevel }: RunIsolatedCompletionParams,
   model?: Model,
 ): RunIsolatedCompletionParams["streamParams"] {
   let maxTokens = answerTokenBudget ?? streamParams?.maxTokens;
@@ -138,7 +138,7 @@ function resolveIsolatedStreamParams(
     return streamParams;
   }
   const modelMaxTokens = model?.maxTokens ?? Number.POSITIVE_INFINITY;
-  if (answerTokenBudget !== undefined && model?.reasoning) {
+  if (answerTokenBudget !== undefined && model?.reasoning && thinkLevel !== "off") {
     maxTokens = adjustMaxTokensForThinking(answerTokenBudget, modelMaxTokens, "medium").maxTokens;
   }
   return {

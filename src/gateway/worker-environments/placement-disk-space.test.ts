@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SpawnResult } from "../../process/exec.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
@@ -74,19 +73,10 @@ function createHarness(
   const warn = vi.fn();
   const monitor = createWorkerPlacementDiskSpaceMonitor({
     placements: {
-      get: () => placement,
-      readChangeSnapshot: async () => {
-        const { sessionId, sessionKey, agentId, state, generation, updatedAtMs } = placement;
-        return [{ sessionId, sessionKey, agentId, state, generation, updatedAtMs }];
-      },
-      readProjection: async () => ({
-        placements: new Map([[placement.sessionId, placement]]),
-        moves: new Map(),
-        pendingResults: new Map(),
-        workspaceJournalOwnerSessionIds: new Set(),
-        workspaceResultReconcilingSessionIds: new Set(),
-        workspaceRecoveryPendingSessionIds: new Set(),
-        environments: new Map(),
+      prepareMaintenancePlacements: async () => ({
+        placements: [placement],
+        assertCurrent() {},
+        release() {},
       }),
     },
     environments: { startTunnel },
@@ -216,24 +206,6 @@ describe("active worker placement disk-space monitoring", () => {
     await harness.monitor.sweep();
 
     expect(harness.monitor.read(harness.placement)?.status).toBe(sample.status);
-  });
-
-  it("rejects a sample when the placement owner changes while the probe is awaited", async () => {
-    const commandStarted = createDeferredCore();
-    const releaseCommand = createDeferredCore<SpawnResult>();
-    const harness = createHarness(async () => {
-      commandStarted.resolve();
-      return await releaseCommand.promise;
-    });
-
-    const sweep = harness.monitor.sweep();
-    await commandStarted.promise;
-    harness.setPlacement(activePlacement({ generation: 4, activeOwnerEpoch: 8 }));
-    releaseCommand.resolve(result(50 * MIB, 10 * GIB));
-    await sweep;
-
-    expect(harness.monitor.read(harness.placement)).toBeUndefined();
-    expect(harness.monitor.version()).toBe(0);
   });
 
   it("advances the projection fence when an observation loses its active placement", async () => {

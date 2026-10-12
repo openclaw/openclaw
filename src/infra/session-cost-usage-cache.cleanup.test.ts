@@ -108,12 +108,13 @@ function usageLine(id: string): string {
 
 it("preserves the host failure and retries a failed native lock DELETE before physical retirement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = {};
     const agentId = "usage-host-failure";
     const sessionFile = state.path("host-failure.jsonl");
     await fs.writeFile(sessionFile, usageLine("before-failure"));
-    expect(await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] })).toBe(
-      "refreshed",
-    );
+    expect(
+      await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] }),
+    ).toBe("refreshed");
     await fs.appendFile(sessionFile, usageLine("rejected-write"));
     const database = openOpenClawAgentDatabase({ agentId, env: state.env });
     const primary = Object.assign(new SqliteWorkerError("host write failed", "outcome-unknown"), {
@@ -148,6 +149,7 @@ it("preserves the host failure and retries a failed native lock DELETE before ph
       });
     try {
       const failure = await refreshCostUsageCacheForAgent({
+        config,
         agentId,
         sessionFiles: [sessionFile],
       }).then(

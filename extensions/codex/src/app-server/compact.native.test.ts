@@ -229,6 +229,7 @@ it(
       params.permissionMode = "full";
       setCodexTestModelSupportsTools(params, true);
       setAgentWorkspaceForTest(params, native.cwd);
+      assert(params.config);
       setRuntimeConfigSnapshot(params.config);
       closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
       const pluginConfig = { appServer: { homeScope: "user", args: ["app-server"] } };

@@ -23,6 +23,7 @@ import { readChannelContextGatewayContextResolver } from "../../channels/message
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
@@ -604,6 +605,12 @@ async function executeAgentTurnOutcome(
           evidence: executionParams.followupRun.channelAdmissionEvidence,
           gatewayLocalUserIngress: executionParams.followupRun.gatewayLocalUserIngress,
           assertSourceCurrent: composeSessionSourceAssertion([
+            captureOwnedTranscriptWriteAssertion({
+              agentId: executionParams.followupRun.run.agentId,
+              sessionId: executionParams.followupRun.run.sessionId,
+              sessionKey: executionParams.sessionKey ?? executionParams.followupRun.run.sessionKey,
+              storePath: executionParams.storePath,
+            }),
             executionParams.followupRun.run.senderIsOwner === true
               ? captureCommandOwnerAssertion(executionParams.followupRun.run)
               : undefined,

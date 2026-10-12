@@ -390,6 +390,7 @@ describe("Gateway creation preparation", () => {
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const client = roleClient("view", "creation-caller");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         client.connect.scopes = ["operator.sessions.write"];
         const profileId = client.authenticatedUserProfile!.profileId;
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };

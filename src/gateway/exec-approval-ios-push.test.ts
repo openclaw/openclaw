@@ -153,7 +153,8 @@ function mockPairedIosOperator(scopes: string[]) {
   mockPairedIosOperators(pairedIosOperator({ scopes }));
 }
 
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: () => ({ gateway: {} }),
 }));
 

@@ -215,11 +215,10 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         });
         expect(res.status, res.status === "error" ? res.error : undefined).toBe("ok");
         expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-        for (const key of ["agent:main:cron:job-1", res.sessionKey!]) {
-          const entry = await readCronSessionEntry(storePath, key);
-          expect(entry).toMatchObject({ createdActor });
-          expect(entry?.sandbox).toBe("required");
-        }
+        const entry = await readCronSessionEntry(storePath, "agent:main:cron:job-1");
+        expect(entry).toMatchObject({ createdActor });
+        expect(entry?.sandbox).toBe("required");
+        await expect(readCronSessionEntry(storePath, res.sessionKey!)).resolves.toBeUndefined();
       });
     },
   );

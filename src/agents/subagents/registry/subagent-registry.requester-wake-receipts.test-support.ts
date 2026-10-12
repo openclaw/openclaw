@@ -19,6 +19,7 @@ import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixtur
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import type { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
+import type { PrepareRequesterWakeChildSession } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -200,6 +201,7 @@ async function driftCompletionCleanup(entry: SubagentRunRecord): Promise<void> {
 
 export function registerRequesterWakeReceiptBoundaryTests({
   requesterSessionKey,
+  prepareChildSession,
   spawnVisibleChild,
   emitCompleted,
   flushOwnedWork,
@@ -215,6 +217,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
   onReceiptsHeld,
 }: {
   requesterSessionKey: string;
+  prepareChildSession: PrepareRequesterWakeChildSession;
   spawnVisibleChild: (params: {
     runId: string;
     childSessionKey: string;
@@ -543,10 +546,12 @@ export function registerRequesterWakeReceiptBoundaryTests({
       const runId = "quiet-delete-wake";
       const childSessionKey = "agent:main:subagent:quiet-delete-wake";
       const gateway = createGatewayContext();
+      const sessionEntry = await prepareChildSession(childSessionKey, "sess-quiet-delete-wake");
       await registry.registerSubagentRun(
         createSubagentRunParams({
           runId,
           childSessionKey,
+          sessionEntry,
           requesterAgentId: "main",
           cleanup: "delete",
           expectsCompletionMessage: false,

@@ -167,14 +167,17 @@ describe("HTTP historical model disclosure", () => {
   });
 
   afterAll(async () => {
-    server?.closeAllConnections();
-    if (server) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+    try {
+      server?.closeAllConnections();
+      if (server) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    } finally {
+      releaseProfileCatalog?.();
+      await state?.cleanup();
     }
-    releaseProfileCatalog?.();
-    await state?.cleanup();
   });
 
   async function requestHistory(

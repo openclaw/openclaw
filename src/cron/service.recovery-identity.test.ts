@@ -10,10 +10,7 @@ import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { waitForActiveCronTaskRuns } from "./service/active-run-cancellation.js";
 import { findCronRunRecoveryInDatabase } from "./service/run-history-recovery.js";
-import {
-  observeCronRecoveryForTest,
-  recoverCronRunForTest,
-} from "./service/run-recovery.test-support.js";
+import { createCronRunHandle, finishCronRun } from "./service/run-history.js";
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
@@ -30,7 +27,7 @@ function pendingPayload() {
 
 function rejectSchedulerWrite(jobId: string) {
   const db = openOpenClawStateDatabase().db;
-  // Run history commits independently of the scheduler's outcome write.
+  // Leave the run active so a recorded legacy result can exercise startup recovery.
   db.exec(`
     CREATE TRIGGER reject_identity_scheduler_write
     BEFORE UPDATE ON cron_jobs
@@ -42,11 +39,10 @@ function rejectSchedulerWrite(jobId: string) {
 
 describe("cron recovery run identity", () => {
   it.each([
-    { name: "retired predecessor", edit: "predecessor", staleProposal: false },
-    { name: "retired pending run", edit: "pending", staleProposal: false },
-    { name: "edit after receipt closure", edit: "late", staleProposal: false },
-    { name: "stale predecessor proposal", edit: "none", staleProposal: true },
-  ] as const)("recovers the pending run with $name", async ({ edit, staleProposal }) => {
+    { name: "retired predecessor", edit: "predecessor" },
+    { name: "retired pending run", edit: "pending" },
+    { name: "edit after completion", edit: "late" },
+  ] as const)("recovers the pending legacy result with $name", async ({ edit }) => {
     const { storePath } = await makeStorePath();
     const storeKey = cronStoreKey(storePath);
     const firstStartedAt = Date.now();
@@ -111,12 +107,6 @@ describe("cron recovery run identity", () => {
       if (!first) {
         throw new Error("predecessor was not admitted");
       }
-      const predecessorProposal = await observeCronRecoveryForTest(
-        recoveryState,
-        job.id,
-        undefined,
-        firstStartedAt,
-      );
       if (edit === "predecessor") {
         await cron.update(job.id, { state: { triggerState: { owner: "predecessor edit" } } });
       }
@@ -151,6 +141,28 @@ describe("cron recovery run identity", () => {
       run = undefined;
       await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({ drained: true, active: 0 });
       expect((await readJob()).state.runningAtMs).toBe(pendingStartedAt);
+      // Released schedulers could persist history before their separate job write.
+      await finishCronRun(recoveryState, {
+        taskRunId: createCronRunHandle({
+          state: recoveryState,
+          job,
+          startedAt: pendingStartedAt,
+          runReceipt: pending,
+        }).runId,
+        job,
+        event: {
+          jobId: job.id,
+          action: "finished",
+          status: "ok",
+          completionStatus: "succeeded",
+          summary: "pending completed",
+          triggerFired: true,
+          runAtMs: pendingStartedAt,
+          durationMs: 0,
+          deliveryStatus: "not-requested",
+        },
+        triggerEval: { fired: true, stateChanged: true, state: { owner: "evaluation-2" } },
+      });
       runOpenClawStateWriteTransaction(({ db }) => {
         // Worker-generated history IDs cannot be controlled by a host UUID spy.
         // Make the predecessor win timestamp ties so only exact receipt recovery is correct.
@@ -170,7 +182,6 @@ describe("cron recovery run identity", () => {
 
       cron.stop();
       await cron.update(job.id, { agentId: "beta" });
-      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
       if (edit === "late") {
         await cron.update(job.id, { state: { triggerState: { owner: "replacement" } } });
       }
@@ -184,13 +195,6 @@ describe("cron recovery run identity", () => {
       );
       expect(fallback.receiptId).toBe(first.receiptId);
 
-      if (staleProposal) {
-        const before = await readJob();
-        expect(await recoverCronRunForTest(recoveryState, predecessorProposal, "startup")).toEqual({
-          kind: "superseded",
-        });
-        expect(await readJob()).toEqual(before);
-      }
       restarted = new CronService(deps);
       await restarted.start();
       restarted.pauseScheduling();

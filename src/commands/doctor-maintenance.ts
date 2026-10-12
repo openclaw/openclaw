@@ -454,7 +454,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
             assertUpdateAdmissionReadCurrent = () => assertAuthority(admitted.assertCurrent);
             const checkAndRecord = () => assertAuthority(admitted.recordContinuation);
             assertUpdateAdmissionCurrent = () =>
-              state.owner ? state.owner.run(checkAndRecord) : checkAndRecord();
+              state.resources ? state.run(checkAndRecord) : checkAndRecord();
           });
         }
         if (inspection.serviceUpdateVerdict?.kind === "owned" && inspection.serviceEnv) {
