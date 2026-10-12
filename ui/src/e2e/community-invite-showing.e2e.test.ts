@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
   createControlUiMockBootstrapConfig,
+  createControlUiMockSameOriginGatewayScript,
   controlUiSessionUrl,
   installMockGateway,
   startControlUiE2eServer,
@@ -535,7 +536,7 @@ suite.define(() => {
     }
   });
 
-  it("dismisses for this page and reports when the preference cannot be saved", async () => {
+  it("keeps a failed-save dismissal through remounts, server updates, and recovery reloads", async () => {
     const viewport = { height: 900, width: 1280 };
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -544,16 +545,22 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const mountedInvites = await traceInviteMounts(page);
+    await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
     await page.addInitScript((key) => {
-      const setItem = Storage.prototype.setItem.bind(localStorage);
+      // oxlint-disable-next-line typescript/unbound-method -- Each call below supplies its actual storage receiver.
+      const setItem = Storage.prototype.setItem;
       Storage.prototype.setItem = function (storageKey, value) {
-        if (storageKey === key) {
+        if (this === localStorage && storageKey === key) {
           throw new DOMException("full", "QuotaExceededError");
         }
-        setItem(storageKey, value);
+        setItem.call(this, storageKey, value);
       };
     }, STORAGE_KEY);
-    await installMockGateway(page, { communityInviteDismissed: false });
+    const gateway = await installMockGateway(page, {
+      communityInviteDismissed: false,
+      // Broken boot must reach recovery without waiting for the roster.
+      awaitInitialRoster: false,
+    });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat/main`);
@@ -565,6 +572,7 @@ suite.define(() => {
         .getByText("Invitation dismissed, but your preference couldn't be saved.")
         .waitFor();
       expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
+
       expect(await mountedInvites()).toBe(1);
 
       await page.keyboard.press("Control+Shift+,");
@@ -574,6 +582,69 @@ suite.define(() => {
       await settleSidebarIdleWork(page);
       expect(await card.count()).toBe(0);
       expect(await mountedInvites()).toBe(1);
+      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
+
+      // Hold automatic recovery so the operator's stale-UI refresh action owns navigation.
+      await page.evaluate(() => {
+        sessionStorage.setItem("openclaw.controlUi.staleChunkReloadBuildId", "replacement-build");
+      });
+      await gateway.setOnline(false);
+      await gateway.deferNext("connect");
+      const previousConnections = (await gateway.getRequests("connect")).length;
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("connect", { after: previousConnections });
+      await gateway.rejectDeferred("connect", {
+        code: "UNAVAILABLE",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
+        details: {
+          code: "PROTOCOL_MISMATCH",
+          gatewayBuildId: "replacement-build",
+          reloadRequired: true,
+        },
+        retryable: false,
+      });
+      const updatedDocument = page.waitForEvent("domcontentloaded");
+      await page.getByRole("button", { name: /Server updated/u }).click();
+      await updatedDocument;
+      await waitForInvitePolicy(page, true);
+      await page.locator(".sidebar-shell__footer").waitFor();
+      await settleSidebarIdleWork(page);
+      expect(new URL(page.url()).origin).toBe(new URL(suite.server.baseUrl).origin);
+      expect(await card.count()).toBe(0);
+      expect(await mountedInvites()).toBe(0);
+      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
+
+      let failModule = true;
+      let failedModuleRequests = 0;
+      await page.route(`${new URL(suite.server.baseUrl).origin}/**`, async (route) => {
+        const request = route.request();
+        if (request.resourceType() === "document" && failModule) {
+          const response = await route.fetch();
+          const body = (await response.text()).replace(
+            'data-openclaw-mount-timeout-ms="12000"',
+            'data-openclaw-mount-timeout-ms="250"',
+          );
+          await route.fulfill({ response, body });
+          return;
+        }
+        if (new URL(request.url()).pathname === "/src/main.ts" && failModule) {
+          failedModuleRequests += 1;
+          await route.fulfill({ body: "gateway restarting", status: 503 });
+          return;
+        }
+        await route.fallback();
+      });
+      await page.reload({ waitUntil: "domcontentloaded" });
+      // Let automatic recovery exhaust its fresh-document attempt before the manual retry.
+      await expect.poll(() => failedModuleRequests).toBe(2);
+      await page.getByRole("button", { name: "Try again", exact: true }).waitFor();
+      failModule = false;
+      await page.getByRole("button", { name: "Try again", exact: true }).click();
+      await waitForInvitePolicy(page, true);
+      await page.locator(".sidebar-shell__footer").waitFor();
+      await settleSidebarIdleWork(page);
+      expect(await card.count()).toBe(0);
+      expect(await mountedInvites()).toBe(0);
       expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
     } finally {
       await suite.closeBrowserContext(context);
