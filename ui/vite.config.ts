@@ -657,10 +657,17 @@ export default function controlUiViteConfig(
     if (context.hostType !== "js") {
       return pending;
     }
-    // The executing importer has already loaded its direct static JS imports.
+    // The executing importer has already loaded its whole static JS graph.
     // Keep the lazy target, its other dependencies, and Vite's CSS preloads.
-    const loaded = staticImports.get(context.hostId);
-    return loaded ? pending.filter((dep) => !loaded.includes(dep)) : pending;
+    const loaded = new Set<string>();
+    const imports = [...(staticImports.get(context.hostId) ?? [])];
+    for (const dependency of imports) {
+      if (!loaded.has(dependency)) {
+        loaded.add(dependency);
+        imports.push(...(staticImports.get(dependency) ?? []));
+      }
+    }
+    return pending.filter((dep) => !loaded.has(dep));
   };
   return {
     base,
