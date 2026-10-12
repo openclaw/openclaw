@@ -388,17 +388,16 @@ function findNotificationSeq(params: {
   requiredBlockText?: string;
 }): number | undefined {
   const anchor = `session_key: ${params.childSessionKey}`;
+  const matchesBlock = (blockText: string) =>
+    blockText.includes(`disposition: ${params.disposition}`) &&
+    (!params.requiredBlockText || blockText.includes(params.requiredBlockText));
   for (const request of params.requests) {
     if (!request.body.includes(`session=${params.requesterSessionKey}`)) {
       continue;
     }
     let index = request.body.indexOf(anchor);
     while (index >= 0) {
-      const blockText = request.body.slice(index, index + NOTIFICATION_BLOCK_SCAN_CHARS);
-      if (
-        blockText.includes(`disposition: ${params.disposition}`) &&
-        (!params.requiredBlockText || blockText.includes(params.requiredBlockText))
-      ) {
+      if (matchesBlock(request.body.slice(index, index + NOTIFICATION_BLOCK_SCAN_CHARS))) {
         return request.seq;
       }
       index = request.body.indexOf(anchor, index + 1);
