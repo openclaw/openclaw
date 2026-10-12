@@ -39,6 +39,8 @@ export function AgentMemoryView(props: { state: AgentMemoryState }) {
             <span class="muted">
               {model().header.configuredDreaming.engineOff ? (
                 t("dreaming.header.engineOff")
+              ) : model().header.ownerDreamsHint ? (
+                model().header.ownerDreamsHint
               ) : (
                 <SettingsDefaultDescription
                   value={t("common.enabled")}
@@ -51,8 +53,10 @@ export function AgentMemoryView(props: { state: AgentMemoryState }) {
               disabled={
                 !model().header.canUpdateConfig ||
                 model().header.loading ||
-                model().header.configuredDreaming.engineOff
+                model().header.configuredDreaming.engineOff ||
+                model().header.ownerLocksToggle
               }
+              title={model().header.ownerDreamsHint}
               onClick={() => props.state.setEnabled(!model().header.dreamingOn)}
             >
               <span class="dreams__phase-toggle-dot"></span>

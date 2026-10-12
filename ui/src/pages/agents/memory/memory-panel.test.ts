@@ -35,6 +35,7 @@ type TestMemoryPanel = {
   viewState: DreamingViewState;
   toggleConfirmLoading: boolean;
   pendingEnabled: boolean | null;
+  confirmToggle: () => Promise<void>;
   applyAgentId: () => void;
   applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
   loadResources: () => Promise<void>;
@@ -586,6 +587,405 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
         (phase) => phase.textContent?.trim() === "—",
       ),
     ).toBe(true);
+  });
+
+  function mountPanelView(page: TestMemoryPanel, container = document.createElement("div")) {
+    mountSolid(() => AgentMemoryView({ state: page as unknown as AgentMemoryState }), {
+      container,
+    });
+    return container;
+  }
+
+  async function refreshPanelView(page: TestMemoryPanel) {
+    page.requestUpdate();
+    await page.updateComplete;
+    flush();
+  }
+
+  it("binds the toggle to configuration while a slot owner reports its own dreaming", () => {
+    const context = contextWithGateway({} as GatewayBrowserClient, true, {
+      plugins: {
+        slots: { memory: "memory-core" },
+        entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
+      },
+    });
+    const page = createMemoryState();
+    page.context = context;
+    page.agentId = "main";
+    page.dreaming.dreamingStatus = {
+      enabled: false,
+      reportedEnabled: true,
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+
+    const container = mountPanelView(page);
+
+    // The switch shows what it writes; the scene shows what actually runs.
+    const toggle = container.querySelector<HTMLButtonElement>(".dreams__phase-toggle");
+    expect(toggle?.textContent).toContain("Off");
+    expect(toggle?.classList.contains("dreams__phase-toggle--on")).toBe(false);
+    expect(container.querySelector(".dreams__status-label")?.textContent).toContain("Dreaming");
+    // The owner runs its own dreaming, so the host switch is locked and says why.
+    expect(toggle?.disabled).toBe(true);
+    expect(toggle?.title).toContain("memory-core runs its own dreaming");
+    expect(container.querySelector(".dreaming-header-controls")?.textContent).toContain(
+      "runs its own dreaming",
+    );
+  });
+
+  it("closes the confirmation without writing when the owner's report arrives meanwhile", async () => {
+    const request = vi.fn(async () => ({}));
+    const page = createMemoryState();
+    page.context = contextWithGateway({ request } as unknown as GatewayBrowserClient, true, {
+      plugins: { slots: { memory: "memory-core" } },
+    });
+    page.agentId = "main";
+    page.pendingEnabled = true;
+    page.dreaming.dreamingStatus = {
+      enabled: false,
+      reportedEnabled: true,
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+
+    await page.confirmToggle();
+
+    expect(request).not.toHaveBeenCalled();
+    expect(page.toggleConfirmLoading).toBe(false);
+    expect(page.pendingEnabled).toBeNull();
+  });
+
+  it("does not write when the owner's report arrives during the schema lookup", async () => {
+    const context = contextWithGateway({} as GatewayBrowserClient, true, {
+      plugins: { slots: { memory: "memory-core" } },
+    });
+    const page = createPage(context);
+    const runtimeConfig = context.runtimeConfig as unknown as {
+      state: Record<string, unknown>;
+      lookupSchemaPath: ReturnType<typeof vi.fn>;
+      patch: ReturnType<typeof vi.fn>;
+    };
+    runtimeConfig.state.client = {};
+    runtimeConfig.state.connected = true;
+    runtimeConfig.state.configSnapshot = {
+      hash: "hash-1",
+      config: { plugins: { slots: { memory: "memory-core" } } },
+    };
+    // The status refresh lands while the write awaits the schema lookup.
+    runtimeConfig.lookupSchemaPath = vi.fn(async () => {
+      page.dreaming.dreamingStatus = {
+        enabled: false,
+        reportedEnabled: true,
+      } as NonNullable<DreamingState["dreamingStatus"]>;
+      return {};
+    });
+    page.connect();
+    await page.updateComplete;
+    page.pendingEnabled = true;
+
+    await page.confirmToggle();
+
+    expect(runtimeConfig.lookupSchemaPath).toHaveBeenCalled();
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
+    expect(page.toggleConfirmLoading).toBe(false);
+    // Declined, not failed: the dialog closes without an error.
+    expect(page.pendingEnabled).toBeNull();
+    expect(page.dreaming.dreamingStatusError).toBeNull();
+  });
+
+  function mountWritablePanel(configSnapshotConfig: Record<string, unknown>) {
+    const context = contextWithGateway({} as GatewayBrowserClient, true, configSnapshotConfig);
+    const page = createPage(context);
+    const runtimeConfig = context.runtimeConfig as unknown as {
+      state: Record<string, unknown>;
+      lookupSchemaPath: ReturnType<typeof vi.fn>;
+      patch: ReturnType<typeof vi.fn>;
+    };
+    runtimeConfig.state.client = {};
+    runtimeConfig.state.connected = true;
+    runtimeConfig.state.configSnapshot = { hash: "hash-1", config: configSnapshotConfig };
+    runtimeConfig.lookupSchemaPath = vi.fn(async () => ({}));
+    return { page, runtimeConfig };
+  }
+
+  it("clears the failure when a queued patch is declined by the owner lock", async () => {
+    const { page, runtimeConfig } = mountWritablePanel({
+      plugins: { slots: { memory: "memory-core" } },
+    });
+    // The report lands while config.patch waits in its queue; the queue then
+    // declines the write through canDispatch and returns false.
+    runtimeConfig.patch = vi.fn(async ({ canDispatch }: { canDispatch: () => boolean }) => {
+      page.dreaming.dreamingStatus = {
+        enabled: false,
+        reportedEnabled: true,
+      } as NonNullable<DreamingState["dreamingStatus"]>;
+      return canDispatch();
+    });
+    page.connect();
+    await page.updateComplete;
+    page.pendingEnabled = true;
+
+    await page.confirmToggle();
+
+    expect(runtimeConfig.patch).toHaveBeenCalledTimes(1);
+    expect(page.dreaming.dreamingStatusError).toBeNull();
+    expect(page.pendingEnabled).toBeNull();
+  });
+
+  it("lets an already running host sweep be turned off beside a reporting owner", async () => {
+    const config = {
+      plugins: {
+        slots: { memory: "memory-core" },
+        entries: { "memory-core": { config: { dreaming: { enabled: true } } } },
+      },
+    };
+    const { page, runtimeConfig } = mountWritablePanel(config);
+    page.connect();
+    await page.updateComplete;
+    page.dreaming.dreamingStatus = {
+      enabled: true,
+      reportedEnabled: true,
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+
+    page.pendingEnabled = false;
+    await page.confirmToggle();
+
+    expect(runtimeConfig.patch).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(runtimeConfig.patch.mock.calls[0]?.[0]?.raw)).toContain(
+      '"enabled":false',
+    );
+  });
+
+  it("offers turning a running host sweep off beside a reporting owner", async () => {
+    const context = contextWithGateway({} as GatewayBrowserClient, true, {
+      plugins: {
+        slots: { memory: "memory-core" },
+        entries: { "memory-core": { config: { dreaming: { enabled: true } } } },
+      },
+    });
+    const page = createPage(context);
+    page.connect();
+    await page.updateComplete;
+    page.dreaming.dreamingStatus = {
+      enabled: true,
+      reportedEnabled: true,
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+    const container = mountPanelView(page);
+
+    const toggle = container.querySelector<HTMLButtonElement>(".dreams__phase-toggle");
+    expect(toggle?.textContent).toContain("On");
+    expect(toggle?.disabled).toBe(false);
+    expect(toggle?.title).toContain("memory-core's sweep is on as well");
+
+    // The opposite direction stays locked.
+    page.dreaming.dreamingStatus = {
+      enabled: false,
+      reportedEnabled: true,
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+    await refreshPanelView(page);
+    expect(container.querySelector<HTMLButtonElement>(".dreams__phase-toggle")?.disabled).toBe(
+      true,
+    );
+  });
+
+  it("opens the owner-aware Off confirmation beside a reporting owner", async () => {
+    const context = contextWithGateway({} as GatewayBrowserClient, true, {
+      plugins: {
+        slots: { memory: "memory-lancedb-namespaced" },
+        entries: { "memory-lancedb-namespaced": { config: { dreaming: { enabled: true } } } },
+      },
+    });
+    const page = createPage(context);
+    page.connect();
+    await page.updateComplete;
+    page.dreaming.dreamingStatus = {
+      enabled: true,
+      reportedEnabled: true,
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+    const container = mountPanelView(page);
+
+    container.querySelector<HTMLButtonElement>(".dreams__phase-toggle")?.click();
+    await refreshPanelView(page);
+
+    const dialog = container.querySelector("openclaw-modal-dialog");
+    expect(dialog?.textContent).toContain("Turn Off Dreaming");
+    expect(dialog?.textContent).toContain(
+      "memory-lancedb-namespaced keeps running its own dreaming",
+    );
+    expect(dialog?.textContent).toContain("stays in the cron list and keeps running");
+    expect(dialog?.textContent).not.toContain("sweep will stop");
+
+    // Without an owner report the same pending Off opens the generic dialog.
+    page.dreaming.dreamingStatus = {
+      enabled: true,
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+    await refreshPanelView(page);
+    const genericDialog = container.querySelector("openclaw-modal-dialog");
+    expect(genericDialog?.textContent).toContain("sweep will stop");
+    expect(genericDialog?.textContent).not.toContain("stays in the cron list");
+  });
+
+  it("locks turning on for a phases-only report and declines the write", async () => {
+    const request = vi.fn(async () => ({}));
+    const page = createMemoryState();
+    page.context = contextWithGateway({ request } as unknown as GatewayBrowserClient, true, {
+      plugins: {
+        slots: { memory: "memory-core" },
+        entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
+      },
+    });
+    page.agentId = "main";
+    // The owner reported phases but no `enabled`: still its sweep, still locked.
+    page.dreaming.dreamingStatus = {
+      enabled: false,
+      reportedByProvider: true,
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+
+    const container = mountPanelView(page);
+
+    const toggle = container.querySelector<HTMLButtonElement>(".dreams__phase-toggle");
+    expect(toggle?.disabled).toBe(true);
+    expect(toggle?.textContent).toContain("Off");
+
+    page.pendingEnabled = true;
+    await page.confirmToggle();
+
+    expect(request).not.toHaveBeenCalled();
+    expect(page.pendingEnabled).toBeNull();
+  });
+
+  function renderOwnerReport(status: Record<string, unknown>) {
+    const context = contextWithGateway({} as GatewayBrowserClient, true, {
+      plugins: {
+        slots: { memory: "memory-core" },
+        entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
+      },
+    });
+    const page = createMemoryState();
+    page.context = context;
+    page.agentId = "main";
+    page.dreaming.dreamingStatus = {
+      enabled: false,
+      reportedByProvider: true,
+      ...status,
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+    const container = mountPanelView(page);
+    return container.querySelector(".dreams__status-label")?.textContent ?? "";
+  }
+
+  it("lights the scene for a phases-only owner report with a running phase while the host switch is off", () => {
+    const label = renderOwnerReport({
+      phases: {
+        light: { enabled: false, cron: "", managedCronPresent: false },
+        rem: { enabled: true, cron: "15 1 * * *", managedCronPresent: true },
+      },
+    });
+    expect(label).toMatch(/active/i);
+  });
+
+  it("keeps the scene idle for a counters-only owner report", () => {
+    // Presence still locks the toggle, but nothing reports as running.
+    expect(renderOwnerReport({ reportedStats: { promotedToday: 3 } })).toMatch(/idle/i);
+  });
+
+  it("keeps the scene lit while a host phase still runs beside an owner that reports off", () => {
+    // The next-sweep time below the label comes from that phase, so "Idle"
+    // next to a next run would contradict itself.
+    const label = renderOwnerReport({
+      reportedEnabled: false,
+      phases: {
+        light: { enabled: true, cron: "0 3 * * *", managedCronPresent: true, nextRunAtMs: 1 },
+      },
+    });
+    expect(label).toMatch(/active/i);
+  });
+
+  it("keeps the scene idle when every reported phase is disabled", () => {
+    const label = renderOwnerReport({
+      phases: {
+        light: { enabled: false, cron: "", managedCronPresent: false },
+        rem: { enabled: false, cron: "15 1 * * *", managedCronPresent: true },
+        deep: { enabled: true, cron: "0 4 * * *", managedCronPresent: false },
+      },
+    });
+    expect(label).toMatch(/idle/i);
+  });
+
+  it("shows the owner's promoted count on the scene and memory-core's in Advanced", async () => {
+    const context = contextWithGateway({} as GatewayBrowserClient, true, {
+      plugins: {
+        slots: { memory: "memory-lancedb-namespaced" },
+        entries: { "memory-lancedb-namespaced": { config: { dreaming: { enabled: false } } } },
+      },
+    });
+    const page = createMemoryState();
+    page.context = context;
+    page.agentId = "main";
+    page.dreaming.dreamingStatus = {
+      enabled: false,
+      reportedEnabled: true,
+      reportedStats: { promotedToday: 4, shortTermCount: 9 },
+      shortTermCount: 1,
+      promotedToday: 2,
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+    const container = mountPanelView(page);
+    expect(container.querySelector(".dreams__status-detail")?.textContent).toContain("4 promoted");
+
+    page.viewState.activeSubTab = "advanced";
+    await refreshPanelView(page);
+    const advanced = container.querySelector(".dreams-advanced");
+    expect(advanced?.querySelector(".dreams-advanced__summary")?.textContent).toContain(
+      "1 waiting · 2 promoted today",
+    );
+    expect(advanced?.textContent).toContain(
+      "belong to memory-core; memory-lancedb-namespaced reports its own counters",
+    );
+
+    // An owner that reports no count leaves the scene without one instead of
+    // borrowing memory-core's.
+    page.dreaming.dreamingStatus = {
+      enabled: false,
+      reportedEnabled: true,
+      shortTermCount: 1,
+      promotedToday: 2,
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+    page.viewState.activeSubTab = "scene";
+    await refreshPanelView(page);
+    expect(container.querySelector(".dreams__status-detail")?.textContent).not.toContain(
+      "promoted",
+    );
+
+    // Without an owner report the scene uses memory-core's count and the
+    // Advanced description stays generic.
+    page.dreaming.dreamingStatus = {
+      enabled: true,
+      shortTermCount: 1,
+      promotedToday: 2,
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+    page.viewState.activeSubTab = "advanced";
+    await refreshPanelView(page);
+    expect(container.textContent).not.toContain("reports its own counters");
+    page.viewState.activeSubTab = "scene";
+    await refreshPanelView(page);
+    expect(container.querySelector(".dreams__status-detail")?.textContent).toContain("2 promoted");
+  });
+
+  it("keeps the toggle usable when the slot owner reports nothing", () => {
+    const context = contextWithGateway({} as GatewayBrowserClient, true, {
+      plugins: {
+        slots: { memory: "memory-core" },
+        entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
+      },
+    });
+    const page = createMemoryState();
+    page.context = context;
+    page.agentId = "main";
+    page.dreaming.dreamingStatus = {
+      enabled: false,
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+
+    const container = mountPanelView(page);
+
+    const toggle = container.querySelector<HTMLButtonElement>(".dreams__phase-toggle");
+    expect(toggle?.hasAttribute("title")).toBe(false);
+    expect(container.textContent).not.toContain("runs its own dreaming");
   });
 
   it("omits default provenance when engine Off has no latent override", () => {

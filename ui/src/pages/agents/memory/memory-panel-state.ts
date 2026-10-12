@@ -53,6 +53,15 @@ function resolveDreamingNextCycle(status: DreamingState["dreamingStatus"]): stri
   return formatTimeMs(nextRunAtMs, { hour: "numeric", minute: "2-digit" }, "") || null;
 }
 
+/**
+ * Whether the memory slot owner reports its own dreaming. Any report counts —
+ * a provider may omit `enabled` and report only phases or counters — so the
+ * host switch is locked on presence, not on the optional enablement flag.
+ */
+function ownerReportsDreaming(status: DreamingState["dreamingStatus"] | null): boolean {
+  return status?.reportedByProvider === true || typeof status?.reportedEnabled === "boolean";
+}
+
 export class AgentMemoryState extends ControllerHost {
   context!: ApplicationContext;
 
@@ -243,6 +252,7 @@ export class AgentMemoryState extends ControllerHost {
 
   setEnabled(enabled: boolean) {
     if (
+      this.ownerBlocks(enabled) ||
       !canCallDreamingMethod(this.dreaming, "config.patch", "operator.admin") ||
       this.dreaming.dreamingModeSaving ||
       this.toggleConfirmLoading ||
@@ -262,7 +272,26 @@ export class AgentMemoryState extends ControllerHost {
     this.dreaming.dreamingStatusError = null;
   }
 
+  /** A slot owner that reports its own dreaming controls it. */
+  private ownerRunsDreaming(): boolean {
+    return ownerReportsDreaming(this.dreaming.dreamingStatus);
+  }
+
+  /**
+   * Turning the host sweep on beside such an owner would dream twice, so that
+   * direction is locked. Turning it off stays possible: an installation that
+   * adopts a reporting owner while the host sweep is on needs a way to stop it.
+   */
+  private ownerBlocks(enabled: boolean | null): boolean {
+    return enabled === true && this.ownerRunsDreaming();
+  }
+
   async confirmToggle() {
+    // The owner's report can arrive while the confirmation is already open.
+    if (this.ownerBlocks(this.pendingEnabled)) {
+      this.pendingEnabled = null;
+      return;
+    }
     const enabled = this.pendingEnabled;
     if (
       enabled == null ||
@@ -280,9 +309,12 @@ export class AgentMemoryState extends ControllerHost {
       return;
     }
     try {
+      // Rechecked before each write step: the owner's report can also land
+      // while the write awaits the schema lookup.
       const canDispatch = () =>
         this.isTaskScopeCurrent(scope) &&
         this.context.runtimeConfig === runtimeConfig &&
+        !this.ownerBlocks(enabled) &&
         canCallDreamingMethod(scope.state, "config.patch", "operator.admin");
       const updated = await this.runDreamingTask(
         (dreamingState) =>
@@ -293,6 +325,13 @@ export class AgentMemoryState extends ControllerHost {
         return;
       }
       if (!updated) {
+        // Declined by the owner lock, not failed: close like the early guard
+        // does, and drop the failure a declined queued patch leaves behind.
+        if (this.ownerBlocks(enabled)) {
+          this.pendingEnabled = null;
+          this.dreaming.dreamingStatusError = null;
+          return;
+        }
         this.dreaming.dreamingStatusError ??= t("dreaming.toggleConfirmation.failed");
         return;
       }
@@ -360,6 +399,32 @@ export class AgentMemoryState extends ControllerHost {
     // cached payload for a future refresh, but never present it as current runtime state.
     const dreamingStatus = configuredDreaming.engineOff ? null : dreaming.dreamingStatus;
     const dreamingOn = dreamingStatus?.enabled ?? configuredDreaming.enabled;
+    // The toggle stays bound to the configuration it writes; a slot owner that
+    // dreams on its own only lights the scene.
+    // While a slot owner reports, the scene lights when the owner says it runs
+    // or when a phase actually runs — the same per-phase truth the Settings
+    // schedule and the next-sweep time below are built from. A counters-only
+    // report or one with every phase disabled reads as idle, and an owner that
+    // reports `enabled: false` cannot hide a host phase that is still scheduled
+    // and would show its next run beside "Idle".
+    const phaseRunning = Object.values(dreamingStatus?.phases ?? {}).some(
+      (phase) => phase.enabled && phase.managedCronPresent,
+    );
+    const dreamingActive =
+      dreamingStatus?.reportedByProvider === true
+        ? dreamingStatus.reportedEnabled === true || phaseRunning
+        : dreamingOn;
+    // A slot owner that reports its own dreaming runs it itself. The toggle
+    // writes the host setting, which such an owner does not follow and which
+    // starts memory-core's own sweep beside it, so turning it on is locked.
+    // Turning an already running host sweep off stays possible.
+    const ownerDreams = ownerReportsDreaming(dreamingStatus);
+    const ownerLocksToggle = ownerDreams && !dreamingOn;
+    const ownerDreamsHint = ownerDreams
+      ? t(dreamingOn ? "dreaming.header.ownerManagedHostOn" : "dreaming.header.ownerManaged", {
+          plugin: configuredDreaming.pluginId,
+        })
+      : undefined;
     const loading = dreaming.dreamingStatusLoading || dreaming.dreamingModeSaving;
     const canUpdateConfig = canCallDreamingMethod(dreaming, "config.patch", "operator.admin");
     const canRunAction = (method: DreamDiaryActionMethod) =>
@@ -368,7 +433,15 @@ export class AgentMemoryState extends ControllerHost {
     const selectedAgentId = dreaming.selectedAgentId ?? "";
 
     return {
-      header: { configuredDreaming, dreamingOn, loading, canUpdateConfig, refreshLoading },
+      header: {
+        configuredDreaming,
+        dreamingOn,
+        loading,
+        canUpdateConfig,
+        refreshLoading,
+        ownerLocksToggle,
+        ownerDreamsHint,
+      },
       dreaming: {
         access: {
           canOpenConfig: canCallDreamingMethod(dreaming, "config.openFile", "operator.admin", {
@@ -381,10 +454,14 @@ export class AgentMemoryState extends ControllerHost {
           canRepairDreamingArtifacts: canRunAction("doctor.memory.repairDreamingArtifacts"),
         },
         viewState: this.viewState,
-        active: dreamingOn,
+        active: dreamingActive,
         selectedAgentId,
         shortTermCount: dreamingStatus?.shortTermCount ?? 0,
         promotedCount: dreamingStatus?.promotedToday ?? 0,
+        scenePromotedCount: ownerDreams
+          ? (dreamingStatus?.reportedStats?.promotedToday ?? null)
+          : (dreamingStatus?.promotedToday ?? 0),
+        ownerPluginId: ownerDreams ? configuredDreaming.pluginId : undefined,
         phases: dreamingStatus?.phases ?? undefined,
         shortTermEntries: dreamingStatus?.shortTermEntries ?? [],
         promotedEntries: dreamingStatus?.promotedEntries ?? [],
@@ -438,6 +515,7 @@ export class AgentMemoryState extends ControllerHost {
       toggle: {
         open: this.pendingEnabled !== null,
         enabling: this.pendingEnabled === true,
+        ownerPluginId: ownerDreams ? configuredDreaming.pluginId : undefined,
         loading: this.toggleConfirmLoading,
         onConfirm: () => void this.confirmToggle(),
         onCancel: () => this.cancelToggle(),

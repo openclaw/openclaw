@@ -13,7 +13,6 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryRemDreamingConfig,
-  type ShortTermDreamingStats,
   type ShortTermDreamingStatsEntry,
 } from "../../memory-host-sdk/dreaming.js";
 import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
@@ -22,7 +21,15 @@ import {
   getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
 } from "../../plugins/memory-runtime.js";
+import { resolveActiveMemoryDreamingStatus } from "../../plugins/memory-state.js";
 import { sortAndLimitBy } from "../../shared/sort-and-limit.js";
+import {
+  composeDreamingPayload,
+  EMPTY_DREAMING_STORE_STATS,
+  type DoctorMemoryDreamingPayload,
+  type DreamingStoreStats,
+  type ManagedDreamingCronStatus,
+} from "./doctor-dreaming-status.js";
 import {
   listWorkspaceDailyFiles,
   readDreamDiary,
@@ -51,14 +58,6 @@ type DoctorMemoryCoreRuntime = Pick<
   | "repairDreamingArtifacts"
   | "writeBackfillDiaryEntries"
 >;
-
-type DreamingStoreStats = Omit<ShortTermDreamingStats, "storePath" | "phaseSignalPath"> & {
-  storePath?: string;
-  phaseSignalPath?: string;
-  storeError?: string;
-};
-
-type DoctorMemoryDreamingPayload = ReturnType<typeof resolveDreamingConfig> & DreamingStoreStats;
 
 export type DoctorMemoryStatusPayload = {
   agentId: string;
@@ -289,11 +288,6 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
   };
 }
 
-type ManagedDreamingCronStatus = {
-  managedCronPresent: boolean;
-  nextRunAtMs?: number;
-};
-
 function isManagedDreamingJob(job: CronJob): boolean {
   const description = normalizeOptionalString(job.description);
   if (description?.includes(MANAGED_MEMORY_DREAMING_CRON_TAG)) {
@@ -372,6 +366,10 @@ export const createDoctorHandlers = (
       purpose: "status",
     });
     if (!manager) {
+      // A slot owner may report dreaming without registering search. Its
+      // report is the only dreaming data on this path; without one the
+      // response stays exactly as it was.
+      const reportedDreaming = await resolveActiveMemoryDreamingStatus({ cfg, agentId });
       const payload: DoctorMemoryStatusPayload = {
         agentId,
         searchRuntimeRegistered,
@@ -379,6 +377,15 @@ export const createDoctorHandlers = (
           ok: false,
           error: error ?? "memory search unavailable",
         },
+        ...(reportedDreaming
+          ? {
+              dreaming: composeDreamingPayload(
+                { ...resolveDreamingConfig(cfg), ...EMPTY_DREAMING_STORE_STATS },
+                await resolveManagedDreamingCronStatus(context),
+                reportedDreaming,
+              ),
+            }
+          : {}),
       };
       respond(true, payload, undefined);
       return;
@@ -398,6 +405,7 @@ export const createDoctorHandlers = (
       }
       const nowMs = Date.now();
       const dreamingConfig = resolveDreamingConfig(cfg);
+      const reportedDreaming = await resolveActiveMemoryDreamingStatus({ cfg, agentId });
       const workspaceDir = normalizeOptionalString(
         (status as Record<string, unknown>).workspaceDir,
       );
@@ -424,9 +432,6 @@ export const createDoctorHandlers = (
             ),
       );
       const cronStatus = await resolveManagedDreamingCronStatus(context);
-      for (const phase of Object.values(dreamingConfig.phases)) {
-        Object.assign(phase, cronStatus);
-      }
       const payload: DoctorMemoryStatusPayload = {
         agentId,
         provider: status.provider,
@@ -437,10 +442,11 @@ export const createDoctorHandlers = (
             ? (runtime as DoctorMemoryEmbeddingRuntimePayload)
             : undefined;
         })(),
-        dreaming: {
-          ...dreamingConfig,
-          ...storeStats,
-        },
+        dreaming: composeDreamingPayload(
+          { ...dreamingConfig, ...storeStats },
+          cronStatus,
+          reportedDreaming,
+        ),
       };
       respond(true, payload, undefined);
     } catch (err) {

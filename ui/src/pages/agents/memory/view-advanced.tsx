@@ -113,7 +113,10 @@ export function renderAdvancedSection(props: DreamingProps) {
         : compareWaitingEntryByRecency,
     ),
   );
-  const description = () => t("dreaming.advanced.description");
+  const description = () =>
+    props.ownerPluginId
+      ? t("dreaming.advanced.descriptionOwner", { plugin: props.ownerPluginId })
+      : t("dreaming.advanced.description");
   const summary = () =>
     [
       `${groundedEntries().length} ${t("dreaming.advanced.summaryFromDailyLog")}`,

@@ -1,15 +1,10 @@
+import type { DreamingPhaseInfo } from "./dreaming-phase-run.ts";
 import type {
   DreamingEntry,
   WikiImportInsights,
   WikiOverview,
   WikiPagePreview,
 } from "./dreaming.ts";
-
-type DreamingPhaseInfo = {
-  enabled: boolean;
-  cron: string;
-  nextRunAtMs?: number;
-};
 
 export type DreamingProps = {
   access: {
@@ -25,6 +20,13 @@ export type DreamingProps = {
   selectedAgentId: string;
   shortTermCount: number;
   promotedCount: number;
+  // The scene's promoted count. It follows whoever the scene shows as
+  // dreaming: the slot owner's reported count while one reports (null when it
+  // reports none, and the line is left out), memory-core's otherwise. The
+  // Advanced tab keeps memory-core's figures, which belong to the entry lists
+  // and actions rendered there.
+  scenePromotedCount?: number | null;
+  ownerPluginId?: string;
   phases?: {
     light: DreamingPhaseInfo;
     deep: DreamingPhaseInfo;

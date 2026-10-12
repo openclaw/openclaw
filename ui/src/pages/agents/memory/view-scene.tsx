@@ -3,6 +3,7 @@ import { lobsterPetSeed } from "../../../components/lobster-pet-contract.ts";
 import { createLobsterPetLook, renderLobsterSvg } from "../../../components/lobster-pet-look.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent } from "../../../lit/solid-bridge.ts";
+import { formatPhaseRun } from "./dreaming-phase-run.ts";
 import type { DreamingProps } from "./view-types.ts";
 
 const DREAM_PHASES = ["light", "deep", "rem"] as const;
@@ -31,6 +32,17 @@ const STARS: {
 export function renderScene(props: DreamingProps, dreamText: () => string) {
   // Keep the sleeper's seeded identity consistent with this agent's sidebar pet.
   const look = createMemo(() => createLobsterPetLook(lobsterPetSeed(props.selectedAgentId)));
+  const statusDetail = () => {
+    const promotedCount =
+      props.scenePromotedCount === undefined ? props.promotedCount : props.scenePromotedCount;
+    return [
+      promotedCount === null ? null : `${promotedCount} ${t("dreaming.status.promotedSuffix")}`,
+      props.nextCycle ? `${t("dreaming.status.nextSweepPrefix")} ${props.nextCycle}` : null,
+      props.timezone,
+    ]
+      .filter((segment) => segment)
+      .join(" · ");
+  };
   const style = () => `--lob-shell:${look().palette.shell};--lob-claw:${look().palette.claw}`;
   return (
     <section class={`dreams ${!props.active ? "dreams--idle" : ""}`}>
@@ -82,16 +94,7 @@ export function renderScene(props: DreamingProps, dreamText: () => string) {
         </span>
         <div class="dreams__status-detail">
           <div class="dreams__status-dot" />
-          <span>
-            {props.promotedCount} {t("dreaming.status.promotedSuffix")}
-            {props.nextCycle ? (
-              <>
-                {" "}
-                · {t("dreaming.status.nextSweepPrefix")} {props.nextCycle}{" "}
-              </>
-            ) : undefined}
-            {props.timezone ? <> · {props.timezone} </> : undefined}
-          </span>
+          <span>{statusDetail()}</span>
         </div>
       </div>
 
@@ -108,12 +111,7 @@ export function renderScene(props: DreamingProps, dreamText: () => string) {
               if (!current.enabled) {
                 return t("dreaming.phase.off");
               }
-              return current.nextRunAtMs
-                ? new Date(current.nextRunAtMs).toLocaleTimeString([], {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  })
-                : "—";
+              return formatPhaseRun(current);
             };
             return (
               <div

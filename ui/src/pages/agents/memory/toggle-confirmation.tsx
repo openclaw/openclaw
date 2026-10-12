@@ -10,6 +10,11 @@ export type DreamingToggleConfirmationProps = {
   // Direction of the pending write. Copy differs because turning dreaming off
   // stops the sweep for every agent, not just the one this panel is showing.
   enabling: boolean;
+  // Set while the memory slot owner reports its own dreaming. Turning the host
+  // switch off then unloads memory-core's dreaming without stopping the owner,
+  // and a promotion job memory-core already scheduled survives the unload, so
+  // the Off copy must not promise that the sweep stops.
+  ownerPluginId?: string;
   loading: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -22,7 +27,10 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
   const action = createMemo(() => (props.enabling ? "enable" : "disable"));
   const title = () => t(`dreaming.toggleConfirmation.${action()}Title`);
   const description = () => t("dreaming.toggleConfirmation.subtitle");
-  const detail = () => t(`dreaming.toggleConfirmation.${action()}Detail`);
+  const detail = () =>
+    !props.enabling && props.ownerPluginId
+      ? t("dreaming.toggleConfirmation.disableDetailOwner", { plugin: props.ownerPluginId })
+      : t(`dreaming.toggleConfirmation.${action()}Detail`);
   const confirmLabel = () => t(`dreaming.toggleConfirmation.${action()}Confirm`);
   const handleCancel = () => {
     if (!props.loading) {

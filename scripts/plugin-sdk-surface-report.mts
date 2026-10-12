@@ -239,7 +239,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: approved async session, command-menu, model-override, TTS-path, and list replacements.
       // +1: preview adapters strip only normalization-owned response decoration.
       // +1: shared stale-read cache replaces board, preview, search, and credential cache policies.
-      3696,
+      // +3: type-only MemoryPluginDreaming{Provider,Status,PhaseStatus} for slot owners reporting dreaming status (#155860, pending Plugin SDK owner approval).
+      3699,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
