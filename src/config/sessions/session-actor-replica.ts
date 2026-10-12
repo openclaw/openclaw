@@ -86,6 +86,32 @@ function ensureReplicaSubscription(): void {
   pool.unsubscribe = sessionChanges.subscribeFacts((change) => {
     // Receipt installation reorders the LRU map, so visit the original cells once.
     const cellsBeforePublication = [...pool.cells.values()];
+    const publishedKey =
+      !("all" in change) && !change.factsInvalidated ? change.sessionKey : undefined;
+    const created = publishedKey ? readPreparedSessionEntryChange(change, publishedKey) : undefined;
+    if (publishedKey && created?.fullEntry && typeof created.source.identity === "string") {
+      const target: FileTarget = {
+        sessionKey: publishedKey,
+        database: {
+          kind: "file",
+          physicalIdentity: created.source.identity,
+          birthtime: created.source.birthtime,
+          nativeLocation: created.source.canonicalPath ?? created.source.filename,
+        },
+      };
+      if (
+        !pool.cells.has(targetKey(target)) &&
+        created.source.writeToken ===
+          readSqliteDatabaseWriteTokenForPath(target.database.nativeLocation)
+      ) {
+        // Creation already owns the complete entry; its first reader need not fetch it again.
+        retainSessionActorEntryFacts(
+          target,
+          { entry: created.fullEntry, snapshots: "full", projection: created.projection },
+          created.source.incarnation,
+        );
+      }
+    }
     for (const cell of cellsBeforePublication) {
       const { database, sessionKey } = cell.target;
       if (

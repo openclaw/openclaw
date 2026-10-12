@@ -21,11 +21,12 @@ import {
   beginRestartRecoveryTerminalDelivery,
   completeRestartRecoveryTerminalDelivery,
 } from "./restart-recovery-receipt.js";
+import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
 import {
   deleteSessionEntryRows,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryMaintenance } from "./session-accessor.sqlite-maintenance.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -138,6 +139,33 @@ function hydrate({ replica, load }: Fixture, epoch = "first", sequence = 0) {
   expect(selected.install(snapshot)).toBe(true);
   return snapshot;
 }
+
+it("retains a new session's committed entry before its first reader and invalidates later writes", async () => {
+  await withReplica(async ({ scope, load, database }) => {
+    const sessionKey = "agent:main:first-reader";
+    const target = { ...load().target, sessionKey };
+    if (target.database.kind !== "file") {
+      throw new Error("Expected durable session target");
+    }
+    const durableTarget = { ...target, database: target.database };
+    const createdScope = { ...scope, sessionKey };
+    expect(readSessionActorEntryFacts(durableTarget)).toBeUndefined();
+    const created = await createSessionEntryWithTranscript(createdScope, () => ({
+      ok: true,
+      entry: { sessionId: "first-reader-session", updatedAt: 1, label: "created" },
+    }));
+    expect(created.ok).toBe(true);
+    expect(readSessionActorEntryFacts(durableTarget)?.entry).toMatchObject({ label: "created" });
+    await patchSessionEntryCore(createdScope, () => ({ updatedAt: 2, label: "updated" }));
+    expect(readSessionActorEntryFacts(durableTarget)?.entry).toMatchObject({ label: "updated" });
+    runOpenClawAgentWriteTransaction((current) => deleteSessionEntryRows(current, sessionKey), {
+      agentId: scope.agentId,
+      path: database.path,
+      env: scope.env,
+    });
+    expect(readSessionActorEntryFacts(durableTarget)).toBeUndefined();
+  });
+});
 
 function command(snapshot: SessionActorHotState, commandId: string) {
   return {
