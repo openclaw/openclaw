@@ -358,6 +358,116 @@ describe("createCliJsonlStreamingParser framing", () => {
     expect(parser.getErrorText()).toBeNull();
   });
 
+  it("omits the whole-file contents Claude echoes for Edit and Write results", () => {
+    const results: CliToolResultDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onToolResult: (result) => results.push(result),
+    });
+    // Shapes captured from Claude Code 2.1.281 stream-json output.
+    const originalFile = 'line "quoted"\n'.repeat(40_000);
+    const fileLine = (index: number) => {
+      const editResult = {
+        filePath: "/repo/big.js",
+        oldString: "line 5",
+        newString: "line five",
+        originalFile,
+        structuredPatch: [
+          { oldStart: 3, oldLines: 1, newStart: 3, newLines: 1, lines: ["-line 5", "+line five"] },
+        ],
+        userModified: false,
+        replaceAll: false,
+      };
+      const writeResult = {
+        type: "update",
+        filePath: "/repo/big.js",
+        content: "short\n",
+        structuredPatch: [
+          {
+            oldStart: 1,
+            oldLines: 40_000,
+            newStart: 1,
+            newLines: 1,
+            lines: originalFile.split("\n").map((line) => `-${line}`),
+          },
+        ],
+        originalFile,
+        userModified: false,
+      };
+      return `${JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: `edit-${index}`,
+              content: "The file /repo/big.js has been updated successfully.",
+            },
+          ],
+        },
+        tool_use_result: index % 2 === 0 ? editResult : writeResult,
+      })}\n`;
+    };
+
+    // Each line carries at least 600k echoed characters; 20 of them exceed the turn budget.
+    for (let index = 0; index < 20; index += 1) {
+      parser.push(fileLine(index));
+    }
+
+    expect(parser.getErrorText()).toBeNull();
+    expect(results).toHaveLength(20);
+    expect(results[0]?.result).toBe("The file /repo/big.js has been updated successfully.");
+  });
+
+  it("keeps charging tool_use_result content that is not an Edit or Write file echo", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+    const content = "x".repeat(600_000);
+    // No `originalFile` key: a Read-like echo keeps full accounting.
+    const readLine = `${JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [] },
+      tool_use_result: { filePath: "/repo/big.js", content },
+    })}\n`;
+
+    for (let index = 0; index < 20; index += 1) {
+      parser.push(readLine);
+    }
+
+    expect(parser.getErrorText()).toBe(
+      "CLI JSONL output exceeded 8388608 characters; refusing to parse output.",
+    );
+  });
+
+  it("still applies the raw line limit to an oversized file echo", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+    parser.push(
+      `${JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [] },
+        tool_use_result: {
+          filePath: "/repo/huge.js",
+          originalFile: "x".repeat(8 * 1024 * 1024),
+          structuredPatch: [],
+        },
+      })}\n`,
+    );
+
+    expect(parser.getErrorText()).toBe(
+      "CLI JSONL line exceeded 8388608 characters; refusing to parse output.",
+    );
+  });
+
   it.each([
     {
       name: "image",
