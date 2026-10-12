@@ -102,6 +102,7 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
     }),
   }),
 );
+// mock-isolation: these cases assert announce-flow decisions, so the real delivery module must not run.
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: async (params: {
     targetRequesterSessionKey: string;

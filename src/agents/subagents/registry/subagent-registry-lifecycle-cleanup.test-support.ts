@@ -623,3 +623,51 @@ export function registerDeliveryRetryOwnerTests({
     }
   });
 }
+
+export function registerDeliveredCleanupEndedHookTest({
+  createRunEntry,
+  createLifecycleController,
+  completeAndJoinCleanup,
+}: Pick<
+  Parameters<typeof registerDirectSessionCleanupAuthorityTests>[0],
+  "createRunEntry" | "createLifecycleController" | "completeAndJoinCleanup"
+>) {
+  it("emits ended hook while retrying cleanup after completion was already delivered", async () => {
+    const entry = createRunEntry({
+      delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+    });
+    const emitSubagentEndedHookForRun = vi.fn(async () => {});
+
+    const controller = createLifecycleController({
+      entry,
+      shouldEmitEndedHookForRun: () => true,
+      emitSubagentEndedHookForRun,
+    });
+
+    await expect(
+      completeAndJoinCleanup(controller, entry, {
+        triggerCleanup: true,
+        terminalReply: { disposition: "visible", text: "final completion reply" },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(emitSubagentEndedHookForRun).toHaveBeenCalledTimes(1);
+    // Completion publishes a new row, so the hook carries the published owner
+    // rather than the preimage this fixture holds; identity is asserted on the
+    // run and its delivery receipt.
+    expect(emitSubagentEndedHookForRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          runId: entry.runId,
+          childSessionKey: entry.childSessionKey,
+          delivery: expect.objectContaining({ status: "delivered", deliveredAt: 3_500 }),
+        }),
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        sendFarewell: true,
+        isCurrent: expect.any(Function),
+      }),
+    );
+  });
+}

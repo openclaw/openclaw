@@ -500,7 +500,18 @@ it("keeps a clock-only wait expiry nonterminal so no successor can replace a liv
       }),
     ).toBe(false);
     expect(subagentRuns.get("clock-only-successor")).toBeUndefined();
-    expect(subagentRuns.get(live.runId)).toBe(live);
+    // The wait-expiry observation commits through the admitted registry writer,
+    // which REPLACES the row, so reference identity with the preimage is no
+    // longer the right proxy for "the predecessor kept its execution". Assert
+    // the surviving owner is still the same run and still live.
+    const survivor = subagentRuns.get(live.runId);
+    expect(survivor).toMatchObject({
+      runId: live.runId,
+      childSessionKey: live.childSessionKey,
+      requesterSessionKey: live.requesterSessionKey,
+    });
+    expect(survivor?.execution.endedAt).toBeUndefined();
+    expect(survivor?.execution.outcome).toBeUndefined();
   } finally {
     clock.mockRestore();
   }

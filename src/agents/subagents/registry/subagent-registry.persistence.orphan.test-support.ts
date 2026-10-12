@@ -52,7 +52,9 @@ export function registerSubagentOrphanTaskCases({
       const hasWait = () =>
         vi.mocked(callGateway).mock.calls.some(([request]) => request.method === "agent.wait");
       try {
-        restartRegistry();
+        // Deliberately not awaited: the restart must run concurrently with the
+        // observation below, which is what makes the race observable at all.
+        void restartRegistry();
         // Reach either the legitimate re-wait or the erroneous terminal path;
         // do not use a sleep to infer absence of asynchronous completion.
         await waitForRegistryWork(

@@ -9,7 +9,7 @@ import type { AgentRunDisposition } from "../internal-event-contract.js";
  * stored run deadline). No stop was observed, so the child may still be
  * running and the outcome describes the end of the WAIT, not of the run.
  */
-export type SubagentTimeoutDisposition = "child-stopped" | "child-unconfirmed";
+type SubagentTimeoutDisposition = "child-stopped" | "child-unconfirmed";
 
 export type SubagentRunOutcome = {
   status: "ok" | "error" | "timeout" | "unknown";

@@ -125,7 +125,7 @@ describe("updateSubagentArchiveAtMs", () => {
       },
     });
 
-    expect(updateSwarmCollectorCompletion(entry, cfg)).toBe(true);
+    expect(updateSwarmCollectorCompletion(entry, cfg, { entry: undefined })).toBe(true);
     expect(entry.collectorCompletion).toBeUndefined();
     expect(entry.archiveAtMs).toBeUndefined();
   });

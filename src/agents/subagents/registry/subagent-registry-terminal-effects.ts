@@ -1,7 +1,6 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
-import { recordSubagentTerminalState } from "../../../sessions/subagent-terminal-state.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -126,61 +125,14 @@ export async function completeTerminalEffects(
   if (!isCurrentTerminalCallback()) {
     return;
   }
-  // Record only the current, non-superseded callback with a committed outcome; the
-  // run-terminal dedupe key is first-write-wins, so a provisional/stale status here
-  // would permanently mislabel the signal-log terminal kind. A `child-unconfirmed`
-  // timeout is provisional in exactly that sense: no stop was ever observed, so
-  // publishing "child run timed out" would tell every signal-log observer
-  // (sessions.status) that a possibly-live child died, and first-write-wins means
-  // a later authoritative promotion could not replace it. Promotion re-enters this
-  // path with an observed disposition, which is where the true terminal state
-  // is published from.
-  const terminalOutcome = entry.execution.outcome;
-  const outcomeStatus = terminalOutcome?.status;
-  if (
-    !suppressSessionEffects &&
-    entry.killReconciliation === undefined &&
-    !deferForUnconfirmedChild &&
-    outcomeStatus &&
-    outcomeStatus !== "unknown"
-  ) {
-    const signal = {
-      childSessionKey: entry.childSessionKey,
-      runId: entry.runId,
-      requesterSessionKey: entry.requesterSessionKey,
-      outcomeStatus,
-      sessionEntryCurrent: context.getSessionEffects(entry)?.nativeCheck,
-    };
-    const terminalEndedAt = entry.execution.endedAt;
-    const hasCurrentTerminalOutcome = () =>
-      entry.killReconciliation === undefined &&
-      entry.execution.status === "terminal" &&
-      entry.execution.outcome === terminalOutcome &&
-      entry.execution.outcome?.status === outcomeStatus &&
-      entry.execution.endedAt === terminalEndedAt &&
-      entry.runId === signal.runId &&
-      entry.childSessionKey === signal.childSessionKey &&
-      entry.requesterSessionKey === signal.requesterSessionKey;
-    await recordSubagentTerminalState(signal, () => {
-      if (!isCurrentSessionEffectsOwner() || !hasCurrentTerminalOutcome()) {
-        throw new Error("Subagent terminal signal owner changed before commit");
-      }
-    });
-    if (!isCurrentTerminalCallback()) {
-      return;
-    }
-    await refreshSessionEffectsSuppression();
-    if (!isCurrentTerminalCallback()) {
-      return;
-    }
-    if (context.newerGenerationOwnsSession(entry)) {
-      await retireSupersededSession(entry);
-      return;
-    }
-    if (!hasCurrentTerminalOutcome()) {
-      return;
-    }
-  }
+  // The durable terminal signal is NOT published here. Terminal completion
+  // already commits it atomically with the registry's own terminal row
+  // (`prepareSubagentTerminalState` inside the admitted mutation in
+  // `subagent-registry-lifecycle-completion.ts`), carrying the recorded child
+  // agent id. A second writer in this callback would publish the same
+  // first-write-wins `run-terminal:<runId>` key through a different authority,
+  // outside that transaction and without the agent id — so the
+  // `child-unconfirmed` exclusion belongs in that owner, where it is applied.
   const isProvisionalKill = entry.killReconciliation !== undefined;
 
   // This write stamps the registry's own derived status (`timeout`) and end

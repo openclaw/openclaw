@@ -829,7 +829,7 @@ describe("subagent registry recovery scheduling", () => {
     // guard. A retention clock is not stop evidence: the expiry may abandon the
     // stale delivery, but nothing here may retire child-owned resources.
     const runtime = { current: {} as GatewayRecoveryRuntime };
-    const { entry, completeCleanupBookkeeping, sweeper } = createHarness(runtime);
+    const { entry, runs, completeCleanupBookkeeping, sweeper } = createHarness(runtime);
     const attachmentId = "9b1e4c2a-7d3f-4a2e-8b5c-6f0d1a2b3c4d";
     const stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-suspended-expiry-"));
     const attachmentsDir = path.join(
@@ -882,16 +882,23 @@ describe("subagent registry recovery scheduling", () => {
       // stop has actually been observed, does reach the deletion. Without this
       // half the assertions above could pass on an unreachable code path.
       completeCleanupBookkeeping.mockClear();
-      entry.execution = {
-        ...entry.execution,
-        outcome: { status: "timeout", timeoutDisposition: "child-stopped" },
+      // The first sweep published this row, and published rows are frozen, so
+      // the promotion is applied the way production applies one: a postimage
+      // replaces the row rather than being written into it.
+      const promoted = {
+        ...structuredClone(runs.get(entry.runId) ?? entry),
+        execution: {
+          ...entry.execution,
+          outcome: { status: "timeout" as const, timeoutDisposition: "child-stopped" as const },
+        },
+        cleanupCompletedAt: undefined,
       };
-      entry.cleanupCompletedAt = undefined;
+      runs.set(entry.runId, promoted);
 
       await sweeper.sweepOnce();
 
       expect(completeCleanupBookkeeping).toHaveBeenCalledWith(
-        expect.objectContaining({ runId: entry.runId, entry, cleanup: "delete" }),
+        expect.objectContaining({ runId: entry.runId, entry: promoted, cleanup: "delete" }),
       );
       expect(fsSync.existsSync(attachmentsDir)).toBe(false);
     } finally {

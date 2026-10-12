@@ -45,15 +45,13 @@ describe("parent runtime facts from retained completion obligations", () => {
   beforeEach(() => vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1"));
   afterEach(() => vi.unstubAllEnvs());
 
-  // Skipped: the read-only assertion below observes an extra agent-database
-  // write from an unrelated agent_database_leases release racing this test's
-  // shared afterEach teardown. Confirmed pre-existing to neither side of the
-  // merge alone (passes on the branch's own pre-sync tip and on pure fresh
-  // origin/main in isolation) -- only the combination triggers it, and full
-  // stack tracing showed the write comes from generic lease-lifecycle
-  // housekeeping, not the runtime-facts read path itself. Tracked as
-  // openclaw-96lf.
-  it.skip.each(["pending", "delivered"] as const)(
+  // The `total_changes()` assertions at the end of this case are a read-only
+  // claim about the whole connection, so any lease-lifecycle write landing on it
+  // would break them. Nothing can: this file's project runs `pool: "forks"`
+  // (`test/vitest/vitest.agents-support.config.ts`) precisely because retired
+  // agent leases reopen shared-state workers through the host broker, so each
+  // file owns its own process and no other file's teardown shares these handles.
+  it.each(["pending", "delivered"] as const)(
     "reads a cold private envelope without changing delivery or processing receipts: %s",
     async (status) => {
       setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });

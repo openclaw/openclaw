@@ -731,7 +731,10 @@ describe("subagent registry sqlite store", () => {
       });
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
       closeOpenClawStateDatabaseForTest();
-      const pending = loadSubagentSessionListRunsFromSqlite().get(run.runId);
+      const pending = loadSubagentSessionListRunsFromSqlite(
+        undefined,
+        openOpenClawStateDatabase(),
+      ).get(run.runId);
       expect(pending?.waitExpiryObservedAt).toBe(250);
       expect(isSubagentChildStopUnconfirmed(pending)).toBe(true);
       expect(pending && resolveSubagentDisplayStatus(pending)).toContain("child stop unconfirmed");
@@ -744,7 +747,10 @@ describe("subagent registry sqlite store", () => {
       };
       saveSubagentRegistryChangesToSqlite(new Map([[run.runId, run]]), [run.runId]);
       closeOpenClawStateDatabaseForTest();
-      const completed = loadSubagentSessionListRunsFromSqlite().get(run.runId);
+      const completed = loadSubagentSessionListRunsFromSqlite(
+        undefined,
+        openOpenClawStateDatabase(),
+      ).get(run.runId);
       expect(completed?.waitExpiryObservedAt).toBe(250);
       expect(completed?.execution.outcome?.disposition).toBe("exited");
       expect(isSubagentChildStopUnconfirmed(completed)).toBe(false);

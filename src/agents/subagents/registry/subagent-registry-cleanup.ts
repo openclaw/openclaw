@@ -60,27 +60,30 @@ export function shouldDeferTerminalCleanupForUnconfirmedChild(entry: SubagentRun
 }
 
 /**
- * Drop collector state a `child-unconfirmed` row must not carry.
+ * Whether a `child-unconfirmed` row still carries collector state it must not.
  *
  * Older persisted rows may already have frozen a collector result and armed
  * group retention before this disposition existed. Neither is valid without
  * observed stop evidence, and either one lets a member nominate its whole group
  * for destructive archival, so both are cleared before the sweeper reads them.
+ *
+ * Read and write are split because the row the sweeper holds is a published,
+ * recursively frozen postimage — deleting a field off it throws. This predicate
+ * selects; `dropUnconfirmedCollectorRetention` edits the draft inside the
+ * admitted registry mutation that publishes the cleared row.
  */
-export function clearUnconfirmedCollectorRetention(entry: SubagentRunRecord): boolean {
-  if (entry.collect !== true || !shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
-    return false;
-  }
-  let mutated = false;
-  if (entry.collectorCompletion !== undefined) {
-    delete entry.collectorCompletion;
-    mutated = true;
-  }
-  if (entry.archiveAtMs !== undefined) {
-    delete entry.archiveAtMs;
-    mutated = true;
-  }
-  return mutated;
+export function hasUnconfirmedCollectorRetention(entry: SubagentRunRecord): boolean {
+  return (
+    entry.collect === true &&
+    shouldDeferTerminalCleanupForUnconfirmedChild(entry) &&
+    (entry.collectorCompletion !== undefined || entry.archiveAtMs !== undefined)
+  );
+}
+
+/** Mutation half of {@link hasUnconfirmedCollectorRetention}; drafts only. */
+export function dropUnconfirmedCollectorRetention(draft: SubagentRunRecord): void {
+  delete draft.collectorCompletion;
+  delete draft.archiveAtMs;
 }
 
 /**

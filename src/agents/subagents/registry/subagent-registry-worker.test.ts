@@ -539,6 +539,9 @@ it("settles a requester cohort while many children finish, wake, and one is kill
     notifyContextEngineSubagentEnded: async () => {},
     completeCleanupBookkeeping: async () => {},
     completeSubagentRun: async () => {},
+    // This fixture settles children through explicit terminal writes; no wait
+    // expires, so the reporter is present only to satisfy the manager contract.
+    reportSubagentWaitExpiry: async () => {},
   });
   const context = captureOpenClawStateWorkerContext();
   const completions = children.map((child) =>

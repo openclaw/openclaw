@@ -47,14 +47,7 @@ function createWaitManager(params: {
   const options = {
     runs,
     getRunsForChildSession: () => runs.values(),
-    resumedRuns: new Set<string>(),
-    persist: vi.fn(),
-    persistOrThrow: vi.fn(),
-    persistAsyncOrThrow: async (_context, publication) => {
-      publication.assertCurrent();
-      await Promise.resolve();
-      publication.onCommitted?.();
-    },
+    resumedRuns: new Set<object>(),
     acquireTerminalCompletionLock: async () => () => {},
     callGateway: (async (_opts: CallGatewayOptions) => {
       waitCalls += 1;
@@ -87,7 +80,12 @@ function createWaitManager(params: {
         waitExpiries.push(request);
       }),
   } satisfies SubagentManagerOptions;
-  return { manager: new SubagentWaitManager(options), completions, waitExpiries };
+  // `SubagentWaitManager` is abstract; these cases exercise only the wait path, so
+  // the one abstract member is stubbed to the "no paused predecessor" answer.
+  class TestWaitManager extends SubagentWaitManager {
+    protected readonly adoptPausedSubagentRunIntoSuccessor = async () => false;
+  }
+  return { manager: new TestWaitManager(options), completions, waitExpiries };
 }
 
 describe("subagent run wait disposition", () => {
@@ -101,7 +99,7 @@ describe("subagent run wait disposition", () => {
       wait: { status: "timeout" },
     });
 
-    await manager.waitForSubagentCompletion(RUN_ID, 50, entry);
+    await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
 
     expect(completions).toHaveLength(0);
     expect(waitExpiries).toHaveLength(1);
@@ -121,7 +119,7 @@ describe("subagent run wait disposition", () => {
       wait: { status: "ok", startedAt, endedAt },
     });
 
-    await manager.waitForSubagentCompletion(RUN_ID, 50, entry);
+    await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
 
     expect(completions).toHaveLength(1);
     expect(completions[0]).toMatchObject({ endedAt, outcome: { status: "ok" } });
@@ -135,7 +133,7 @@ describe("subagent run wait disposition", () => {
       wait: { status: "timeout", endedAt: startedAt + 500 },
     });
 
-    await manager.waitForSubagentCompletion(RUN_ID, 50, entry);
+    await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
 
     expect(completions).toHaveLength(1);
     expect(completions[0]?.outcome).toEqual({ status: "timeout", disposition: "exited" });
@@ -156,7 +154,7 @@ describe("subagent run wait disposition", () => {
       reportSubagentWaitExpiry,
     });
 
-    await manager.waitForSubagentCompletion(RUN_ID, 50, entry);
+    await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
     await expect.poll(() => reportSubagentWaitExpiry.mock.calls.length).toBe(2);
   });
 
@@ -204,7 +202,7 @@ describe("subagent run wait disposition", () => {
       resolveSubagentSessionStartedAt: async () => entry.execution.startedAt,
     });
 
-    await manager.waitForSubagentCompletion(RUN_ID, 50, entry);
+    await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
     await expect.poll(() => reportSubagentWaitExpiry.mock.calls.length).toBe(2);
     await expect.poll(() => accepted).toEqual([createdAt + RUN_TIMEOUT_SECONDS * 1_000]);
     expect(entry.waitExpiryObservedAt).toBe(createdAt + RUN_TIMEOUT_SECONDS * 1_000);
@@ -219,7 +217,7 @@ describe("subagent run wait disposition", () => {
       wait: { status: "timeout", stopReason: "timeout" },
     });
 
-    await manager.waitForSubagentCompletion(RUN_ID, 50, entry);
+    await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
 
     expect(completions[0]?.outcome).toMatchObject({ disposition: "exited" });
   });

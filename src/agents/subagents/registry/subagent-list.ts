@@ -53,8 +53,8 @@ const SHARED_CWD_PATH_MAX_CHARS = 72;
 
 /**
  * Advisory marker for sibling runs without confirmed stop sharing one working directory.
- * Present only when the spawner passed an explicit `cwd`; inherited workspaces
- * are shared by design and are never reported.
+ * Present only when the child recorded a `spawnedCwd`; a run that merely inherited
+ * the target agent workspace records none, so that case is never reported.
  */
 type SubagentSharedCwdGroup = {
   /** Stable within one list response; rows refer to this id. */
@@ -248,14 +248,15 @@ function capSharedCwdPath(value: string) {
 }
 
 /**
- * Index live runs by the explicit working directory they were spawned into.
+ * Index live runs by the working directory they were spawned into.
  *
  * Reads `spawnedCwd` off the already-cached session entry, so grouping costs no
- * new session I/O; the only filesystem work is one canonicalization per
- * distinct explicit directory (see `canonicalCwdIdentity`). Runs without an
- * explicit `spawnedCwd`
- * inherited the parent workspace — the default for `collect` swarms — and are
- * skipped so the advisory stays silent on normal usage.
+ * new session I/O; the only filesystem work is one canonicalization per distinct
+ * directory (see `canonicalCwdIdentity`). `spawnedCwd` is the child's *effective*
+ * task directory and is authoritative spawn metadata — the advisory reads it and
+ * never redefines it. A run that simply inherited the target agent workspace
+ * records no `spawnedCwd` at all (the default for `collect` swarms), so those are
+ * absent here and the advisory stays silent on normal usage.
  */
 function buildSharedCwdIndex(params: {
   runs: SubagentRunRecord[];
@@ -269,7 +270,10 @@ function buildSharedCwdIndex(params: {
     if (!isRetainedUnendedSubagentRun(run, params.now) && !isSubagentChildStopUnconfirmed(run)) {
       continue;
     }
-    const spawnedCwd = params.sessionEntries.get(run.childSessionKey)?.spawnedCwd?.trim();
+    // Keyed by run id, matching `readSubagentListSessionEntries`: raw session
+    // keys repeat across agents, so the builder deliberately stores one entry
+    // per run rather than per child session key.
+    const spawnedCwd = params.sessionEntries.get(run.runId)?.spawnedCwd?.trim();
     if (!spawnedCwd) {
       continue;
     }

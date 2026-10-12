@@ -15,12 +15,13 @@ import {
 } from "../completion/subagent-completion-admission.store.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
-import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import {
-  clearUnconfirmedCollectorRetention,
+  dropUnconfirmedCollectorRetention,
+  hasUnconfirmedCollectorRetention,
   settleSubagentRunFromSessionStore,
   shouldDeferTerminalCleanupForUnconfirmedChild,
 } from "./subagent-registry-cleanup.js";
+import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleController,
@@ -357,8 +358,20 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
-          if (clearUnconfirmedCollectorRetention(entry)) {
-            mutatedRunIds.add(runId);
+          if (hasUnconfirmedCollectorRetention(entry)) {
+            // The row the sweep holds is a frozen published postimage, so the
+            // clearing is planned and published through the admitted mutation
+            // owner; rebind so the settlement below reads the published row.
+            // A declined mutation is not a reason to skip the settlement — the
+            // in-place predecessor also returned false and carried on — so keep
+            // the row we have and continue into it.
+            entry =
+              (await mutateCleanup(
+                runs,
+                entry,
+                hasUnconfirmedCollectorRetention,
+                dropUnconfirmedCollectorRetention,
+              )) ?? entry;
           }
           // Restart evidence above keeps its existing owner. In the absence of
           // that evidence, neither missing local context nor retention expiry
@@ -442,8 +455,16 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
 
-        if (clearUnconfirmedCollectorRetention(entry)) {
-          mutatedRunIds.add(runId);
+        if (hasUnconfirmedCollectorRetention(entry)) {
+          // Same contract as above: publish the cleared row, rebind, and never
+          // let a declined mutation skip the branches below.
+          entry =
+            (await mutateCleanup(
+              runs,
+              entry,
+              hasUnconfirmedCollectorRetention,
+              dropUnconfirmedCollectorRetention,
+            )) ?? entry;
         }
         if (
           entry.collect &&

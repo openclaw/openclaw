@@ -76,12 +76,13 @@ import {
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
-import { resolveSubagentKillTargetState } from "./subagent-control-kill-runtime.js";
+import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
 import { registerRequesterDatabaseAdmissionTests } from "./subagent-registry-lifecycle-admission.test-support.js";
 import {
   registerDetachedCleanupAuthorityTest,
+  registerDeliveredCleanupEndedHookTest,
   registerDeliveryRetryOwnerTests,
   registerDirectSessionCleanupAuthorityTests,
 } from "./subagent-registry-lifecycle-cleanup.test-support.js";
@@ -548,7 +549,7 @@ describe("subagent registry lifecycle hardening", () => {
       triggerCleanup: true,
     });
 
-    expect(unconfirmed.execution.outcome).toMatchObject({
+    expect(readLifecycleRun(unconfirmed).execution.outcome).toMatchObject({
       status: "timeout",
       disposition: "still-running",
     });
@@ -666,8 +667,8 @@ describe("subagent registry lifecycle hardening", () => {
       },
     );
 
-    expect(entry.completion?.resultText).toBe("PARTIAL output at wait expiry");
-    const provisionalCapturedAt = entry.completion?.capturedAt;
+    expect(readLifecycleRun(entry).completion?.resultText).toBe("PARTIAL output at wait expiry");
+    const provisionalCapturedAt = readLifecycleRun(entry).completion?.capturedAt;
     expect(typeof provisionalCapturedAt).toBe("number");
 
     const promotionCapture = vi.fn(async () => "FINAL output after the child actually finished");
@@ -678,7 +679,9 @@ describe("subagent registry lifecycle hardening", () => {
     );
 
     expect(promotionCapture).toHaveBeenCalled();
-    expect(entry.completion?.resultText).toBe("FINAL output after the child actually finished");
+    expect(readLifecycleRun(entry).completion?.resultText).toBe(
+      "FINAL output after the child actually finished",
+    );
   });
 
   it.each(["observation", "legacy"] as const)(
@@ -699,9 +702,10 @@ describe("subagent registry lifecycle hardening", () => {
         endedAt: 6_000,
         outcome: { status: "ok" },
       });
-      expect(entry.execution.outcome).toMatchObject({ status: "ok", endedAt: 6_000 });
-      expect(entry.execution.endedAt).toBe(6_000);
-      expect(shouldDeferTerminalCleanupForUnconfirmedChild(entry)).toBe(false);
+      const published = readLifecycleRun(entry);
+      expect(published.execution.outcome).toMatchObject({ status: "ok", endedAt: 6_000 });
+      expect(published.execution.endedAt).toBe(6_000);
+      expect(shouldDeferTerminalCleanupForUnconfirmedChild(published)).toBe(false);
     },
   );
 
@@ -716,9 +720,10 @@ describe("subagent registry lifecycle hardening", () => {
       endedAt: 6_000,
       outcome: { status: "timeout", disposition: "exited" },
     });
-    expect(entry.execution.outcome).toMatchObject({ status: "timeout", disposition: "exited" });
-    expect(entry.execution.endedAt).toBe(5_000);
-    expect(shouldDeferTerminalCleanupForUnconfirmedChild(entry)).toBe(false);
+    const published = readLifecycleRun(entry);
+    expect(published.execution.outcome).toMatchObject({ status: "timeout", disposition: "exited" });
+    expect(published.execution.endedAt).toBe(5_000);
+    expect(shouldDeferTerminalCleanupForUnconfirmedChild(published)).toBe(false);
   });
 
   it("accepts a delayed cancellation recorded at the deadline as stop evidence", async () => {
@@ -749,9 +754,10 @@ describe("subagent registry lifecycle hardening", () => {
       triggerCleanup: true,
     });
 
-    expect(entry.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
-    expect(shouldDeferTerminalCleanupForUnconfirmedChild(entry)).toBe(false);
-    expect(entry.cleanupCompletedAt).not.toBe(deadlineMs);
+    const published = readLifecycleRun(entry);
+    expect(published.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
+    expect(shouldDeferTerminalCleanupForUnconfirmedChild(published)).toBe(false);
+    expect(published.cleanupCompletedAt).not.toBe(deadlineMs);
   });
 
   it.each([
@@ -1901,9 +1907,12 @@ describe("subagent registry lifecycle hardening", () => {
 
     await controller.completeSubagentRun(makeKilledSubagentCompletion(entry, { outcome }));
 
-    expect(entry.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
-    expect(entry.execution.outcome).toMatchObject({ ...outcome, disposition: "killed" });
-    expect(resolveSubagentRunDisposition(entry.execution.outcome)).toBe("killed");
+    // Completion publishes a new row rather than mutating `entry` in place, so
+    // the assertions read the published owner.
+    const published = readLifecycleRun(entry);
+    expect(published.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
+    expect(published.execution.outcome).toMatchObject({ ...outcome, disposition: "killed" });
+    expect(resolveSubagentRunDisposition(published.execution.outcome)).toBe("killed");
   });
 
   it("replaces a provisional still-running disposition on a cancellation completion", async () => {
@@ -1919,7 +1928,7 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     );
 
-    expect(resolveSubagentRunDisposition(entry.execution.outcome)).toBe("killed");
+    expect(resolveSubagentRunDisposition(readLifecycleRun(entry).execution.outcome)).toBe("killed");
   });
 
   it.each([undefined, "steer-restart"] as const)(
@@ -3644,7 +3653,9 @@ describe("subagent registry lifecycle hardening", () => {
     const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
     const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
 
-    await completeRun(controller, entry, {
+    // The re-announce runs on the detached cleanup tail, so join it before
+    // asserting; `completeRun` alone returns once the terminal row is published.
+    await completeAndJoinCleanup(controller, entry, {
       endedAt: 6_500,
       outcome: { status: "ok" },
       triggerCleanup: true,
@@ -3653,7 +3664,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(runSubagentAnnounceFlow).toHaveBeenCalled();
     // The superseding publication carries no still-running marker, so the event
     // reads as an ended child.
-    expect(entry.execution.outcome?.disposition).toBeUndefined();
+    expect(readLifecycleRun(entry).execution.outcome?.disposition).toBeUndefined();
   });
 
   it("does not re-announce when a second wait also expires on the same live child", async () => {
@@ -4419,16 +4430,26 @@ describe("subagent registry lifecycle hardening", () => {
       const original = structuredClone(entry);
       const successorBefore = structuredClone(successor);
       const runs = new Map([[entry.runId, entry]]);
-      const persist = vi.fn();
-      const persistOrThrow = vi.fn();
+      // `persist`/`persistOrThrow` are no longer lifecycle options; the fixture's
+      // single `beforeWrite` observer now sees every registry write, which is what
+      // the non-current ownership branches below assert never happens. It is also
+      // how the `current` branch reads the settled row: this run is
+      // `cleanup: "delete"`, so the published postimage is the last durable view
+      // of it and `runs` may no longer hold it by assertion time.
+      let settledPostimage: SubagentRunRecord | undefined;
+      const beforeWrite = vi.fn(({ postimages }: LifecycleFixtureWrite) => {
+        const published = postimages.get(entry.runId);
+        if (published) {
+          settledPostimage = published;
+        }
+      });
       const notifyContextEngineSubagentEnded = vi.fn(async () => {});
       const resumeSubagentRun = vi.fn();
       const warn = vi.fn();
       const controller = createLifecycleController({
         entry,
         runs,
-        persist,
-        persistOrThrow,
+        beforeWrite,
         notifyContextEngineSubagentEnded,
         resumeSubagentRun,
         warn,
@@ -4483,17 +4504,19 @@ describe("subagent registry lifecycle hardening", () => {
         unlock();
         await completion;
         if (ownership === "current") {
-          await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
-          expect(entry.execution.status).toBe("terminal");
-          expect(entry.execution.outcome?.status).toBe("error");
+          await waitForLifecycleState(() =>
+            expect(settledPostimage?.cleanupCompletedAt).toBeTypeOf("number"),
+          );
+          const settled = settledPostimage;
+          expect(settled?.execution.status).toBe("terminal");
+          expect(settled?.execution.outcome?.status).toBe("error");
           expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
           expect(controller.options.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
         } else {
           expect(runs.get(entry.runId)).toBe(ownership === "replaced" ? successor : undefined);
           expect(entry).toEqual(original);
           expect(successor).toEqual(successorBefore);
-          expect(persistOrThrow).not.toHaveBeenCalled();
-          expect(persist).not.toHaveBeenCalled();
+          expect(beforeWrite).not.toHaveBeenCalled();
           expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
           expect(lifecycleEventMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
           expect(controller.options.runSubagentAnnounceFlow).not.toHaveBeenCalled();

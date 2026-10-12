@@ -57,6 +57,7 @@ vi.mock("../subagents/registry/subagent-registry-publication.js", async (importO
     }) satisfies typeof actual.subscribeSubagentRunChanges,
   };
 });
+// mock-isolation: the tool surface is under test, so list rows come from this fixture, not the real registry.
 vi.mock("../subagents/registry/subagent-list.js", () => ({
   readSubagentListSessionEntries: () => new Map(),
   buildSubagentList: () => ({

@@ -396,8 +396,8 @@ function findNotificationSeq(params: {
     while (index >= 0) {
       const blockText = request.body.slice(index, index + NOTIFICATION_BLOCK_SCAN_CHARS);
       if (
-        blockText.indexOf(`disposition: ${params.disposition}`) >= 0 &&
-        (!params.requiredBlockText || blockText.indexOf(params.requiredBlockText) >= 0)
+        blockText.includes(`disposition: ${params.disposition}`) &&
+        (!params.requiredBlockText || blockText.includes(params.requiredBlockText))
       ) {
         return request.seq;
       }

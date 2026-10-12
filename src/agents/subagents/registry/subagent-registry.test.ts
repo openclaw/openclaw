@@ -30,6 +30,8 @@ import {
   createSessionStore,
   createSubagentRegistryHarness,
   createSubagentRunRecord,
+  expectRecordFields,
+  mockCallArg as getMockCallArg,
   mockGatewayMethods,
   waitForFast,
 } from "../../subagent-test-fixtures.test-helpers.js";
@@ -41,7 +43,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { resolveFinalizedSubagentTaskState } from "./subagent-registry-completion.js";
+import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
 import { mockRegistryRequesterWakeMutation } from "./subagent-registry-lifecycle-completion.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -56,10 +58,12 @@ import {
   observeRootWork,
   registerBrowserCleanupBoundaryTests,
 } from "./subagent-registry.browser-cleanup.test-support.js";
+import { findRecordCallArg } from "./subagent-registry.mock-call.test-support.js";
 import {
   registerForcedCollectorCompletionSettlementTests,
   registerQueuedCollectorLaunchSettlementTest,
   registerRestartDrainCompletionSettlementTest,
+  registerRestoredRunDeadlineSettlementTests,
 } from "./subagent-registry.native-settlement.test-support.js";
 import { registerSupersededNativeTimingTest } from "./subagent-registry.native-termination.test-support.js";
 import { registerSubagentRegistrationPersistenceTests } from "./subagent-registry.persistence.test-support.js";
@@ -231,9 +235,9 @@ describe("subagent registry seam flow", () => {
   // Read the child's signal log the way sessions.status does: its whole
   // `stateChanges` block comes from listSessionStateEventsSince, so this is the
   // observer-visible projection rather than a spy on the producer call.
-  const observerTerminalSignals = (runId: string) =>
-    listSessionStateEventsSince("agent:main:subagent:child", "main", 0, 200)
-      .events.filter(
+  const observerTerminalSignals = async (runId: string) =>
+    (await listSessionStateEventsSince("agent:main:subagent:child", "main", 0, 200)).events
+      .filter(
         (event) =>
           event.runId === runId && (event.kind === "run_failed" || event.kind === "run_completed"),
       )
@@ -406,16 +410,22 @@ describe("subagent registry seam flow", () => {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
       session: { mainKey: "main", scope: "per-sender", store: mocks.resolveStorePath() },
     });
+    // These child-session fixtures deliberately carry NO `status`. A persisted
+    // entry cannot record a live run — `PersistedSessionRunStatus` excludes
+    // `running` and `queued` (`src/config/sessions/types.ts`) — and absence is
+    // exactly how `resolveCompletionFromSessionEntry` reads "not terminal": it
+    // returns null for any status other than `done` without an `endedAt`. Do
+    // not "restore" a `status: "running"` here; it is a type error, not a
+    // stronger fixture.
     mocks.entries = createSessionStore(
       {
         lifecycleRevision: "revision-unconfirmed-collector",
         sessionId: "session-unconfirmed-collector",
-        status: "running",
         updatedAt: now,
       },
       "agent:main:subagent:collector-unconfirmed",
     );
-    mod.addSubagentRunForTests(
+    await mod.addSubagentRunForTests(
       makeCompletedCollectorRun({
         runId: "run-collector-confirmed",
         childSessionKey: "agent:main:subagent:collector-confirmed",
@@ -426,7 +436,7 @@ describe("subagent registry seam flow", () => {
         groupId: "swarm:unconfirmed-member",
       }),
     );
-    mod.addSubagentRunForTests(
+    await mod.addSubagentRunForTests(
       makeCompletedCollectorRun({
         runId: "run-collector-unconfirmed",
         childSessionKey: "agent:main:subagent:collector-unconfirmed",
@@ -1197,7 +1207,6 @@ describe("subagent registry seam flow", () => {
     mocks.entries = {
       "agent:main:subagent:child": createSessionEntry({
         updatedAt: startedAt,
-        status: "running",
       }),
     };
 
@@ -1240,7 +1249,6 @@ describe("subagent registry seam flow", () => {
     });
     mocks.entries = createSessionStore({
       updatedAt: startedAt,
-      status: "running",
       sessionId: "sess-unconfirmed",
       lifecycleRevision: "rev-unconfirmed",
     });
@@ -1340,7 +1348,6 @@ describe("subagent registry seam flow", () => {
     });
     mocks.entries = createSessionStore({
       updatedAt: startedAt,
-      status: "running",
     });
 
     await mod.registerSubagentRun({
@@ -1389,7 +1396,6 @@ describe("subagent registry seam flow", () => {
     });
     mocks.entries = createSessionStore({
       updatedAt: startedAt,
-      status: "running",
       sessionId: "sess-no-tails",
       lifecycleRevision: "rev-no-tails",
     });
@@ -1453,7 +1459,6 @@ describe("subagent registry seam flow", () => {
     });
     mocks.entries = createSessionStore({
       updatedAt: startedAt,
-      status: "running",
       sessionId: "sess-terminal-signal",
       lifecycleRevision: "rev-terminal-signal",
     });
@@ -1475,7 +1480,7 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => {
       expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     });
-    expect(observerTerminalSignals("run-unconfirmed-terminal-signal")).toEqual([]);
+    expect(await observerTerminalSignals("run-unconfirmed-terminal-signal")).toEqual([]);
 
     // The child records its own stop. That is authoritative evidence, so
     // promotion re-drives the withheld terminal effects — including this
@@ -1493,8 +1498,8 @@ describe("subagent registry seam flow", () => {
     // This half is also the anti-vacuity control: it proves the signal log is
     // live and readable in this harness, so the empty assertion above is a real
     // absence rather than an unreachable database.
-    await waitForFast(() => {
-      expect(observerTerminalSignals("run-unconfirmed-terminal-signal")).toEqual([
+    await waitForFast(async () => {
+      expect(await observerTerminalSignals("run-unconfirmed-terminal-signal")).toEqual([
         { kind: "run_completed", summary: "child run completed", outcome: undefined },
       ]);
     });
@@ -1533,7 +1538,6 @@ describe("subagent registry seam flow", () => {
     });
     mocks.entries = createSessionStore({
       updatedAt: startedAt,
-      status: "running",
       sessionId: "sess-terminal-hooks",
       lifecycleRevision: "rev-terminal-hooks",
     });
@@ -1605,7 +1609,6 @@ describe("subagent registry seam flow", () => {
     });
     mocks.entries = createSessionStore({
       updatedAt: startedAt,
-      status: "running",
       sessionId: "sess-terminal-state",
       lifecycleRevision: "rev-terminal-state",
     });
@@ -1632,7 +1635,7 @@ describe("subagent registry seam flow", () => {
     expect(provisional?.execution.endedAt).toBeUndefined();
     expect(provisional?.execution.outcome).toBeUndefined();
     expect(resolveSubagentSessionStatus(provisional)).toBe("running");
-    expect(provisional && resolveFinalizedSubagentTaskState(provisional)).toBeUndefined();
+    expect(provisional && resolveSubagentKillTargetState(provisional)).toBeUndefined();
 
     // The child's own record turns out to say it finished *successfully*,
     // 100ms before the deadline the wait expired on. The deadline was a clock
@@ -1678,7 +1681,6 @@ describe("subagent registry seam flow", () => {
     });
     mocks.entries = createSessionStore({
       updatedAt: startedAt,
-      status: "running",
       sessionId: "sess-absent",
       lifecycleRevision: "rev-absent",
     });
@@ -1733,7 +1735,6 @@ describe("subagent registry seam flow", () => {
     const sessionStore = () =>
       createSessionStore({
         updatedAt: Date.now(),
-        status: "running",
         sessionId: "sess-silent",
         lifecycleRevision: "rev-silent",
       });
@@ -1804,7 +1805,7 @@ describe("subagent registry seam flow", () => {
       }
       return {};
     });
-    mocks.entries = createSessionStore({ status: "running" });
+    mocks.entries = createSessionStore({});
 
     await mod.registerSubagentRun({
       runId: "run-observed-timeout",
@@ -1822,75 +1823,17 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("keeps published timeout stable when pre-deadline success arrives late", async () => {
-    const runId = "run-timeout-late-lifecycle-predeadline-ok";
-    const startedAt = Date.now();
-    mockAgentWait({ status: "timeout" });
-    mocks.entries = {
-      "agent:main:subagent:child": createSessionEntry({
-        updatedAt: startedAt,
-        status: undefined,
-      }),
-    };
-    const settleRootWork = observeRootWork();
-    await mod.registerSubagentRun({
-      runId,
-      task: "published timeout should stay stable",
-      runTimeoutSeconds: 1,
-    });
-
-    await waitForFast(() =>
-      expect(mocks.callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({ method: "agent.wait" }),
-      ),
-    );
-    const activeRun = findRequesterRun(runId);
-    expect(activeRun?.execution.endedAt).toBeUndefined();
-    expect(activeRun?.execution.outcome).toBeUndefined();
-
-    await vi.advanceTimersByTimeAsync(5_000);
-    await waitForFast(() => {
-      expect(findRequesterRun(runId)).toMatchObject({
-        execution: {
-          status: "terminal",
-          endedAt: startedAt + 1_000,
-          outcome: {
-            status: "timeout",
-            startedAt,
-            endedAt: startedAt + 1_000,
-            elapsedMs: 1_000,
-          },
-        },
-      });
-    });
-    await settleRootWork();
-    expect(
-      mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent.wait").length,
-    ).toBeGreaterThanOrEqual(2);
-    getLifecycleHandler()({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        startedAt: startedAt + 10,
-        endedAt: startedAt + 500,
-      },
-    });
-    await waitForFast(() => {
-      const run = findRequesterRun(runId);
-      expect(run?.execution.endedAt).toBe(startedAt + 1_000);
-      expect(run?.execution.outcome).toEqual(
-        expect.objectContaining({
-          status: "timeout",
-          startedAt,
-          endedAt: startedAt + 1_000,
-          elapsedMs: 1_000,
-        }),
-      );
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    });
-    expect(mocks.captureSubagentCompletionReply).toHaveBeenCalledTimes(1);
-  });
+  // NOTE: upstream's "keeps published timeout stable when pre-deadline success
+  // arrives late" case lived here and was removed on this branch, together with
+  // the two "caps ... wait timeouts to the explicit deadline" rows below. All
+  // three assert that a NON-terminal `agent.wait` timeout is capped into a
+  // terminal completion at the stored deadline — the exact behavior this PR
+  // exists to remove, because reaching our own budget is not evidence the child
+  // stopped. The 2026-10-08 `origin/main` merge resurrected them. Their
+  // replacements under the new contract are the
+  // "does not terminally time out plain agent.wait timeouts before the observed
+  // run deadline" / "uses running session-store start time for plain agent.wait
+  // timeouts" rows further down.
 
   it("refreshes unpublished timeout delivery payloads after lifecycle correction", async () => {
     const createdAt = Date.parse("2026-03-24T11:59:00Z");
@@ -1960,18 +1903,6 @@ describe("subagent registry seam flow", () => {
       name: "caps lifecycle timeouts to the explicit deadline",
       source: "lifecycle",
       duration: 1_000,
-    },
-    {
-      name: "caps boundary wait timeouts to the explicit deadline",
-      source: "boundary wait",
-      duration: 1_000,
-      waitNow: 999,
-    },
-    {
-      name: "caps restored wait timeouts to the explicit deadline",
-      source: "restored wait",
-      now: 59_000,
-      waitNow: 60_000,
     },
     {
       name: "prefers explicit run timeout over late restored agent.wait success",
@@ -2098,7 +2029,6 @@ describe("subagent registry seam flow", () => {
     mocks.entries = {
       "agent:main:subagent:child": createSessionEntry({
         updatedAt: startedAt,
-        status: "running",
       }),
     };
 
@@ -2116,7 +2046,7 @@ describe("subagent registry seam flow", () => {
       expect(completedRun?.waitExpiryObservedAt).toBe(startedAt + 1_000);
     });
     // Round 3: while unconfirmed, no durable terminal signal reaches an observer.
-    expect(observerTerminalSignals("run-timeout-late-lifecycle-timeout")).toEqual([]);
+    expect(await observerTerminalSignals("run-timeout-late-lifecycle-timeout")).toEqual([]);
 
     const lifecycleHandler = getLifecycleHandler();
 
@@ -2139,7 +2069,7 @@ describe("subagent registry seam flow", () => {
     // able to settle the row. The outcome stays a deadline-clamped timeout —
     // recomputed against the observed start the event reports — but the
     // disposition promotes, which is what re-arms terminal cleanup.
-    await waitForFast(() => {
+    await waitForFast(async () => {
       const run = findRequesterRun("run-timeout-late-lifecycle-timeout");
       expectRecordFields(
         run?.execution.outcome,
@@ -2155,7 +2085,7 @@ describe("subagent registry seam flow", () => {
       // Round 3: promotion is also what publishes the terminal signal. This is
       // the push route (a late lifecycle event); the sweeper pull route is
       // covered separately, and both must land the claim exactly once.
-      expect(observerTerminalSignals("run-timeout-late-lifecycle-timeout")).toEqual([
+      expect(await observerTerminalSignals("run-timeout-late-lifecycle-timeout")).toEqual([
         { kind: "run_failed", summary: "child run timed out", outcome: "timeout" },
       ]);
     });
@@ -2179,7 +2109,6 @@ describe("subagent registry seam flow", () => {
     mocks.entries = {
       "agent:main:subagent:child": createSessionEntry({
         updatedAt: startedAt,
-        status: "running",
       }),
     };
 
@@ -2259,63 +2188,12 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("uses running session-store start time for plain wait timeouts", async () => {
-    const runId = "run-plain-timeout-session-store-start";
-    const createdAt = Date.parse("2026-03-24T11:59:00Z");
-    const observedStartedAt = createdAt + 10_000;
-    vi.setSystemTime(createdAt);
-    let waitAttempts = 0;
-    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
-      if (request.method !== "agent.wait") {
-        return {};
-      }
-      waitAttempts += 1;
-      if (waitAttempts === 1) {
-        vi.setSystemTime(createdAt + 61_000);
-      }
-      return { status: "timeout" };
-    });
-    mocks.entries = {
-      "agent:main:subagent:child": createSessionEntry({
-        status: undefined,
-        updatedAt: createdAt + 61_000,
-        startedAt: observedStartedAt,
-      }),
-    };
-
-    const settleRootWork = observeRootWork();
-    await mod.registerSubagentRun({
-      runId,
-      task: "honor observed session start deadline",
-      runTimeoutSeconds: 60,
-    });
-
-    await waitForFast(() => {
-      const run = findRequesterRun(runId);
-      expect(waitAttempts).toBeGreaterThanOrEqual(1);
-      expect(run?.execution.endedAt).toBeUndefined();
-      expect(run?.execution.outcome).toBeUndefined();
-      expect(run?.execution.startedAt).toBe(observedStartedAt);
-    });
-
-    vi.setSystemTime(observedStartedAt + 60_000);
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    await waitForFast(() => {
-      const run = findRequesterRun(runId);
-      expect(run?.execution.endedAt).toBe(observedStartedAt + 60_000);
-      expect(run?.execution.outcome).toEqual(
-        expect.objectContaining({
-          status: "timeout",
-          startedAt: observedStartedAt,
-          endedAt: observedStartedAt + 60_000,
-          elapsedMs: 60_000,
-        }),
-      );
-    });
-    await settleRootWork();
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-  });
+  // NOTE: upstream's "uses running session-store start time for plain wait
+  // timeouts" case lived here. It asserts the same capped terminal completion
+  // the rows above did, and the 2026-10-08 merge resurrected it; this branch
+  // replaced it with the "uses running session-store start time for plain
+  // agent.wait timeouts" row below, which asserts the observed start time is
+  // honored WITHOUT terminalizing a child nothing observed to stop.
 
   it.each(["grace", "delivery", "rejected-delivery"] as const)(
     "does not publish retired wait-expiry state after lifecycle rotation during %s",
@@ -2341,7 +2219,7 @@ describe("subagent registry seam flow", () => {
       expect(mocks.callGateway).toHaveBeenCalled();
       const beforeRotation = findRequesterRun("run-expiry-retired-lifecycle");
       expect(beforeRotation?.waitExpiryObservedAt).toBe(startedAt + 1_000);
-      const persistedBeforeRotation = mocks.persistSubagentRunsToDiskOrThrow.mock.calls.length;
+      const persistedBeforeRotation = mocks.persistRegistryRows.mock.calls.length;
       if (rotationPhase === "grace") {
         mocks.lifecycleGeneration = "rotated-generation";
       }
@@ -2351,9 +2229,7 @@ describe("subagent registry seam flow", () => {
       expect(run?.execution.endedAt).toBeUndefined();
       if (rotationPhase === "grace") {
         expect(run?.waitExpiryObservedAt).toBe(startedAt + 1_000);
-        expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(
-          persistedBeforeRotation,
-        );
+        expect(mocks.persistRegistryRows).toHaveBeenCalledTimes(persistedBeforeRotation);
         expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
       } else {
         expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
@@ -2371,7 +2247,7 @@ describe("subagent registry seam flow", () => {
       vi.setSystemTime(startedAt + 1_000);
       return { status: "timeout", startedAt };
     });
-    mocks.entries = createSessionStore({ updatedAt: startedAt, status: "running" });
+    mocks.entries = createSessionStore({ updatedAt: startedAt });
     await mod.registerSubagentRun({
       runId: "run-expiry-grace-sweep",
       task: "preserve uncertainty before the provisional announcement",
@@ -2392,7 +2268,8 @@ describe("subagent registry seam flow", () => {
       data: { phase: "end", startedAt, endedAt: startedAt + 1_000 },
     });
     await vi.advanceTimersByTimeAsync(500);
-    expect(run?.execution.status).toBe("terminal");
+    // Re-read: completion publishes a new row, so `run` above is the preimage.
+    expect(findRequesterRun("run-expiry-grace-sweep")?.execution.status).toBe("terminal");
     // Completion commits the task through the real async task store before it
     // announces; that takes real time, not fake time.
     await vi.waitFor(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce(), {
@@ -2456,7 +2333,7 @@ describe("subagent registry seam flow", () => {
       expect(run?.completion?.resultText).toBeUndefined();
       expect(mocks.cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
       expect(mocks.onSubagentEnded).not.toHaveBeenCalled();
-      expect(observerTerminalSignals(runId)).toEqual([]);
+      expect(await observerTerminalSignals(runId)).toEqual([]);
 
       // Notification settlement must not suppress the child's later real result.
       getLifecycleHandler()({
@@ -2470,8 +2347,10 @@ describe("subagent registry seam flow", () => {
         },
       });
       await waitForFast(() => {
-        expect(run?.execution.status).toBe("terminal");
-        expect(run?.completion?.resultText).toBe("FINAL after notification settlement");
+        // Re-read each poll: the settling completion publishes a new row.
+        const settled = findRequesterRun(runId);
+        expect(settled?.execution.status).toBe("terminal");
+        expect(settled?.completion?.resultText).toBe("FINAL after notification settlement");
         expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
         expect(mocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledOnce();
       });
@@ -2565,7 +2444,6 @@ describe("subagent registry seam flow", () => {
       });
       mocks.entries = {
         "agent:main:subagent:child": createSessionEntry({
-          status: "running",
           updatedAt: createdAt + sessionUpdatedAfterMs,
           ...(sessionStartedAfterMs === undefined
             ? {}
@@ -2775,7 +2653,6 @@ describe("subagent registry seam flow", () => {
       mocks.entries = {
         "agent:main:subagent:child": createSessionEntry({
           updatedAt: createdAt + sessionUpdatedAfterMs,
-          status: "running",
         }),
       };
 
@@ -3192,8 +3069,12 @@ describe("subagent registry seam flow", () => {
     if (!provisionalRun) {
       throw new Error("expected provisional run");
     }
-    provisionalRun.waitExpiryObservedAt = persistedStartedAt + 60_000;
-    provisionalRun.waitExpiryAnnouncedAt = persistedStartedAt + 60_001;
+    // Published rows are frozen, so stage the provisional observation the way
+    // the registry does: publish a postimage rather than writing into the row.
+    await updateFixtureRun(provisionalRun.runId, (draft) => {
+      draft.waitExpiryObservedAt = persistedStartedAt + 60_000;
+      draft.waitExpiryAnnouncedAt = persistedStartedAt + 60_001;
+    });
 
     vi.setSystemTime(new Date("2026-03-24T12:02:00Z"));
     await mod.testing.sweepOnceForTests();
@@ -3227,7 +3108,10 @@ describe("subagent registry seam flow", () => {
       },
       "stale terminal run outcome",
     );
-    await waitForFast(() => expect(run?.cleanupCompletedAt).toBeTypeOf("number"));
+    // Re-read each poll: cleanup publishes a new row, so `run` is the preimage.
+    await waitForFast(() =>
+      expect(findRequesterRun("run-stale-terminal")?.cleanupCompletedAt).toBeTypeOf("number"),
+    );
   });
 
   it.each(["late completion", "earlier deadline"] as const)(

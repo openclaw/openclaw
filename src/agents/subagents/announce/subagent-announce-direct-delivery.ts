@@ -27,10 +27,6 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   resolveEmbeddedRunAbandonment,
 } from "../../embedded-agent-runner/runs.js";
-import {
-  hasFailedSubagentNoOutputCompletion,
-  hasVisibleCompletionResult,
-} from "../../internal-event-contract.js";
 import { buildAgentInternalEventContext, type AgentInternalEvent } from "../../internal-events.js";
 import {
   RUNTIME_EVENT_USER_PROMPT,

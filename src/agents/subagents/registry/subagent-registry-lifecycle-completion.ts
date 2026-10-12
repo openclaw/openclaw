@@ -15,7 +15,6 @@ import {
   resolveSubagentRunDisposition,
   withSubagentOutcomeTiming,
 } from "../announce/subagent-announce-output.js";
-import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   clearPublishedSwarmCollectorOutput,
   updateSwarmCollectorCompletion,
@@ -158,6 +157,26 @@ function resolveTerminalRequest(
     };
     completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
   }
+  if (
+    completionOutcome.disposition !== "killed" &&
+    completionReason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.suppressAnnounceReason !== "steer-restart"
+  ) {
+    // Cancellation producers supply the killed reason without a disposition, so
+    // the reader defaults the outcome to `exited` and an `agent.wait` result
+    // carrying `stopReason: "aborted"` is announced as an ordinary exit. A
+    // provisional `still-running` is worse than absent: it describes the waiter,
+    // and carrying it onto a cancellation tells the parent a killed child is
+    // still live and harvestable. Normalize both once here, at the lifecycle
+    // boundary every cancellation passes through, and ahead of the
+    // required-reply rewrite and every downstream projection below.
+    //
+    // This reads the reason AFTER the deadline clamp above, because that clamp
+    // is what reclassifies an overdue abort with no kill tombstone into a plain
+    // run timeout. Normalizing before it would stamp `killed` onto a row whose
+    // published reason is `subagent-complete`.
+    completionOutcome = { ...completionOutcome, disposition: "killed" };
+  }
   // Reply evidence follows producer order; duplicate receipts may still drain cleanup.
   const terminalReply = mergeAgentRunTerminalReplySnapshot(
     entry.completion?.terminalReply,
@@ -294,6 +313,14 @@ export async function completeSubagentRunAttempt(
               !planned.suppressSessionEffects &&
               !planned.sessionSuperseded &&
               entry.killReconciliation === undefined &&
+              // The `run-terminal:<runId>` dedupe key is first-write-wins, so a
+              // provisional status published here could never be replaced by the
+              // truthful one. A `child-unconfirmed` row is provisional in exactly
+              // that sense: nothing observed the child stop, so "child run timed
+              // out" would tell every signal-log observer that a possibly-live
+              // child died. Promotion re-enters this owner with an observed
+              // disposition and publishes the signal then.
+              !shouldDeferTerminalCleanupForUnconfirmedChild(entry) &&
               outcomeStatus &&
               outcomeStatus !== "unknown"
                 ? [

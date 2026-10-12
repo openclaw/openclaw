@@ -4,7 +4,7 @@ import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   SUBAGENT_KILL_TASK_ERROR,
-  type SubagentTerminalState,
+  type SubagentKillTargetState,
 } from "./subagent-control.types.js";
 import {
   SUBAGENT_ENDED_OUTCOME_ERROR,
@@ -22,48 +22,65 @@ import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
 /**
- * Returns terminal execution facts only after completion capture has settled
- * and the child's stop has actually been observed.
+ * Cancellation target state for a run, in the contract its kill callers expect:
+ * `undefined` (no target state yet), `{ state: "finalizing" }` (the run ended but
+ * completion capture has not settled), or `{ state: "terminal", task }`.
+ *
+ * The only addition over the long-standing behavior is the unconfirmed-child
+ * guard below: a wait that expired without observed stop evidence must not
+ * resolve to a terminal task, or a possibly-live child is reported stopped.
  */
-export function resolveFinalizedSubagentTaskState(
+export function resolveSubagentKillTargetState(
   entry: SubagentRunRecord,
-): SubagentTerminalState | undefined {
+): SubagentKillTargetState | undefined {
+  if (
+    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.suppressAnnounceReason !== "steer-restart"
+  ) {
+    const taskEndedAt = resolveKilledSubagentTaskEndedAt(entry);
+    return typeof taskEndedAt === "number"
+      ? {
+          state: "terminal",
+          task: {
+            status: "cancelled",
+            endedAt: taskEndedAt,
+            error: SUBAGENT_KILL_TASK_ERROR,
+          },
+        }
+      : undefined;
+  }
   const endedAt = entry.execution.endedAt;
   const outcome = entry.execution.outcome;
   const completion = entry.completion;
-  if (
-    typeof endedAt !== "number" ||
-    !outcome ||
-    entry.pauseReason === "sessions_yield" ||
-    (completion?.resultText === undefined && typeof completion?.capturedAt !== "number")
-  ) {
+  if (typeof endedAt !== "number" || entry.pauseReason === "sessions_yield") {
     return undefined;
   }
   if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
     // A deadline-only expiry observed nothing about the child, so it must not
-    // read as a terminal fact: a still-running child would otherwise be
-    // reported stopped. Stay nonterminal; promotion resolves through this same
-    // function with an observed outcome.
+    // read as a terminal fact — nor as `finalizing`, which already asserts the
+    // run ended. Legacy rows reach here carrying a provisional timeout outcome
+    // and an `endedAt` that belongs to the parent's wait, not the child's run.
+    // Promotion resolves through this same function once a stop is observed.
     return undefined;
   }
-  const status =
-    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-    entry.suppressAnnounceReason !== "steer-restart"
-      ? "cancelled"
-      : outcome.status === "ok"
-        ? "succeeded"
-        : outcome.status === "timeout"
-          ? "timed_out"
-          : "failed";
+  if (
+    !outcome ||
+    (completion?.resultText === undefined && typeof completion?.capturedAt !== "number")
+  ) {
+    return { state: "finalizing" };
+  }
   return {
-    status,
-    endedAt,
-    error:
-      status === "cancelled"
-        ? SUBAGENT_KILL_TASK_ERROR
-        : outcome.status === "error"
-          ? outcome.error
-          : undefined,
+    state: "terminal",
+    task: {
+      status:
+        outcome.status === "ok"
+          ? "succeeded"
+          : outcome.status === "timeout"
+            ? "timed_out"
+            : "failed",
+      endedAt,
+      error: outcome.status === "error" ? outcome.error : undefined,
+    },
   };
 }
 
