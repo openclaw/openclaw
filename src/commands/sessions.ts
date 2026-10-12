@@ -11,7 +11,7 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
@@ -319,7 +319,7 @@ export async function sessionsCommand(
       return { acpSessionKey, agentId, entry, row };
     },
   );
-  const acpSessionMetaByEntry = readAcpSessionMetaBatch({
+  const acpSessionMetadata = await readAcpSessionMetaForEntries({
     cfg,
     entries: sessionEntries.map(({ acpSessionKey, agentId, entry }) => ({
       sessionKey: acpSessionKey,
@@ -347,8 +347,8 @@ export async function sessionsCommand(
         })
       : undefined;
   const rows = await Promise.all(
-    sessionEntries.map(async ({ acpSessionKey, agentId, entry, row }) => {
-      const acpMeta = acpSessionMetaByEntry.get(entry);
+    sessionEntries.map(async ({ acpSessionKey, agentId, entry, row }, index) => {
+      const acpMeta = acpSessionMetadata[index];
       const acpRuntime = acpMeta != null;
       // ACP rows need stored-key metadata before model/runtime resolution so
       // bridge sessions and true ACP runtime sessions display differently.

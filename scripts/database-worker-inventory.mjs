@@ -21,6 +21,22 @@ const excluded =
   /(?:^|\/)(?:__tests__|__fixtures__|test|tests|test-utils|test-helpers|test-support|test-fixtures|test-harness|fixtures|e2e)(?:\/|$)|(?:^|[/.-])(?:test|spec|e2e|test-support|test-helpers|test-fixtures|test-harness|test-runtime)(?:[.-])/;
 const reviewed = new Map([
   [
+    "src/agents/github-oauth-records.native.ts",
+    {
+      priority: 99,
+      evidence:
+        "Deprecated Gateway SDK cancelAuthorization/retireProfile methods only; bundled callers await the Async replacements. Native completion is preserved until the next Plugin SDK major.",
+    },
+  ],
+  [
+    "src/secrets/store/secret-store-hidden-github.kernel.ts",
+    {
+      priority: 99,
+      evidence:
+        "Shared SQL kernel for worker-owned GitHub records and deprecated synchronous managed/personal Gateway SDK methods. Native compatibility calls remain explicit T1 debt.",
+    },
+  ],
+  [
     "src/gateway/mention-inbox-store.ts",
     {
       priority: 3,
@@ -229,6 +245,17 @@ const reviewed = new Map([
 
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
+  [
+    "src/secrets/store/secret-store-hidden-github.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["listHiddenGitHubSecretsInDatabase"],
+        evidence:
+          "Only githubSecrets.list in secret-store-github-handoff.worker.ts selects hidden record listings; native SDK compatibility uses exact read/delete operations only.",
+      },
+    ],
+  ],
   [
     "src/config/io.health-state.kernel.ts",
     [

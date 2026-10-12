@@ -280,8 +280,8 @@ reuses the database owner's admitted table and index facts.
 Durable Board writes with ordinary request callbacks use the existing worker.
 Cross-store source authority and native incognito retain their explicit native
 adapter. Board reads inside a transaction reuse its snapshot without a nested
-savepoint. Ambient-watch preparation uses the existing read worker; its unused
-synchronous reader is removed.
+savepoint. Ambient-watch preparation uses the existing read worker; the released
+synchronous prompt adapter remains deprecated with a runtime warning.
 
 Plugin metadata reads, including retained artifact snapshots, use the shared read
 worker. Opening a database no longer reloads Claw provenance: explicit config

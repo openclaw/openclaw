@@ -7,6 +7,7 @@ import {
   type PreparedSessionWatcherStorePaths,
 } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import {
@@ -14,9 +15,13 @@ import {
   prepareSystemEventStorePath,
 } from "../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { buildAgentMainSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  type OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db.js";
 import {
   captureOpenClawStateReadWorkerContext,
   captureOpenClawStateWorkerContext,
@@ -33,6 +38,7 @@ import type { InputProvenance } from "./input-provenance.js";
 import type { SessionStateActorType } from "./session-state-event-kinds.js";
 import { beginAmbientWatchPrune } from "./session-state-events.ambient-read.js";
 import {
+  getSessionStateKysely,
   isNotifiableWatcherKey,
   rowToSessionStateEvent,
   type SessionStateEventInput,
@@ -359,6 +365,34 @@ export async function recordSessionGoalChanged(params: {
     summary: params.summary,
     ...(watcherSessionKey ? { watcherSessionKeys: [watcherSessionKey] } : {}),
   });
+}
+
+/** @deprecated Retained for prepareWatchedSessionsPrompt; use its async replacement. */
+export function listAmbientGroupWatchTargets(
+  watcherSessionKey: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Set<string> {
+  warnPluginSdkDeprecation({
+    family: "watched-sessions-prompt",
+    method: "prepareWatchedSessionsPrompt",
+    replacement: "prepareWatchedSessionsPromptAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
+  try {
+    const { db } = openOpenClawStateDatabase(options);
+    const rows = executeSqliteQuerySync(
+      db,
+      getSessionStateKysely(db)
+        .selectFrom("session_watch_cursors")
+        .select("target_session_key")
+        .where("watcher_session_key", "=", watcherSessionKey)
+        .where("provenance", "=", SESSION_WATCH_PROVENANCE_AMBIENT_GROUP),
+    ).rows;
+    return new Set(rows.map((row) => row.target_session_key));
+  } catch (error) {
+    log.warn(`failed to list ambient group watch targets: ${String(error)}`);
+    return new Set();
+  }
 }
 
 async function registerWatch(

@@ -108,10 +108,6 @@ import type {
   PluginBlobReadCommand,
   PluginBlobReadReply,
 } from "../plugin-state/plugin-blob-worker-contract.js";
-import type {
-  PluginMetadataStateKey,
-  PluginMetadataStateRow,
-} from "../plugins/installed-plugin-index-row.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
 import type {
@@ -232,7 +228,10 @@ export type OpenClawStateReadCommand =
   | { type: "cron.quarantine"; storeKey: string }
   | { type: "subagents.forChildSession"; childSessionKey: string }
   | { type: "exec-approvals.read" }
-  | { type: "plugins.metadata.read"; input: { stateKeys: readonly PluginMetadataStateKey[] } }
+  | {
+      type: "plugins.metadata.read";
+      input: { stateKeys: readonly ("plugins.installedIndex" | "plugins.bundledDiscovery")[] };
+    }
   | SqliteWorkerCommand<SkillLibraryReadOnlyOperations>
   | { type: "agentDatabaseRegistry.read" }
   | { type: "agentDatabaseDeletion.snapshot"; purpose: AgentDeletionJournalPurpose }
@@ -390,7 +389,7 @@ export type OpenClawStateReadResult =
       blob: string | null;
     }
   | { type: "subagents.forChildSession"; runs: SubagentRunRecord[] }
-  | { type: "plugins.metadata.read"; rows: PluginMetadataStateRow[] }
+  | { type: "plugins.metadata.read"; rows: Array<{ state_key: string; value_json: string }> }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {
         type: Kind;

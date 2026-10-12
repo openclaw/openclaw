@@ -14,12 +14,11 @@ import {
 } from "../state/github-publication-requester.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import type { PersonalGitHubAction } from "./github-personal-oauth.js";
+import { createRepositoryPersonalPublicationStatus } from "./github-personal-publication-status.js";
 import {
   assertPersonalGitHubPublicationReplay,
   bindPersonalGitHubPublicationSelection,
   preparePersonalRepositoryPublicationStatus as preparePersonalStatus,
-  presentPersonalGitHubPublicationStatus,
-  presentPersonalGitHubPublicationStatusAsync,
   preparePersonalGitHubPublicationSelection,
   type PersonalGitHubSessionAction,
   type PersonalGitHubSessionActionV2,
@@ -71,7 +70,6 @@ import {
   terminalRepositoryGitHubPublication,
 } from "./github-repository-publication-store.js";
 import { prepareRepositoryOwner } from "./github-repository-publication-workspace.js";
-import type { RepositoryGitHubPublicationStatusRow } from "./github-repository-publication.kernel.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { resolvePlacementTurnEnvironment } from "./worker-environments/placement-record.js";
 import type {
@@ -103,34 +101,10 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
   const active = new Map<string, string>();
   const requestByKey = (sessionId: string, key: string, owner: string | null) =>
     listRepositoryGitHubPublications({ sessionId, idempotencyKey: key, ownerProfileId: owner })[0];
-  const personalStatus = (
-    row: RepositoryGitHubPublicationStatusRow,
-    action: PersonalGitHubAction,
-    session: SessionIdentity,
-    prepared: PreparedRepositoryPublicationStatus | undefined,
-  ) =>
-    presentPersonalGitHubPublicationStatus(
-      { kind: "repository", row, prepared },
-      action,
-      session,
-      row.execution_id !== null &&
-        row.gateway_instance_id === instanceId &&
-        active.get(row.request_id) === row.execution_id,
-    );
-  const personalStatusAsync = async (
-    row: RepositoryGitHubPublicationStatusRow,
-    action: PersonalGitHubAction,
-    session: SessionIdentity,
-    prepared: PreparedRepositoryPublicationStatus | undefined,
-  ) =>
-    presentPersonalGitHubPublicationStatusAsync(
-      { kind: "repository", row, prepared },
-      action,
-      session,
-      row.execution_id !== null &&
-        row.gateway_instance_id === instanceId &&
-        active.get(row.request_id) === row.execution_id,
-    );
+  const { personalStatus, personalStatusAsync } = createRepositoryPersonalPublicationStatus(
+    instanceId,
+    active,
+  );
   const execute = createRepositoryGitHubPublicationExecution({
     instanceId,
     active,

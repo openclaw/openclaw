@@ -15,7 +15,7 @@ import {
   GITHUB_DEVICE_STORE_MAX_AGE_MS,
   hiddenGitHubStoreKindFromPrefix,
   type HiddenGitHubStorePrefix,
-} from "./secret-store-hidden-github.js";
+} from "./secret-store-github-names.js";
 import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import { assertSecretStoreValueLength } from "./secret-store-value.js";
