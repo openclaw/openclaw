@@ -8,7 +8,15 @@ function projectSchemaTier(params: {
   hints: ConfigUiHints;
 }): JsonSchema | null {
   const { schema, path, advanced, hints } = params;
-  if (Array.isArray(schema.items) || schema.additionalProperties === true) {
+  // Pure typed maps edit whole entries; partial schemas reject cross-tier fields.
+  // Mixed objects still project their named properties independently.
+  if (
+    Array.isArray(schema.items) ||
+    schema.additionalProperties === true ||
+    (typeof schema.additionalProperties === "object" &&
+      schema.additionalProperties !== null &&
+      Object.keys(schema.properties ?? {}).length === 0)
+  ) {
     return (hintForPath(path, hints)?.advanced ?? true) === advanced ? schema : null;
   }
   const properties: Record<string, JsonSchema> = {};
