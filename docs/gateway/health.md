@@ -91,6 +91,9 @@ The HTTP listener opens before the initial session projection is complete. Durin
 that build, `/healthz` can return `200`, while `/startupz` and `/readyz` remain
 pending. Other HTTP requests and WebSocket upgrades wait for the complete
 projection before authentication and routing; they never see a partial roster.
+Discovery and remote-skill setup run alongside projection preparation. Readiness
+also waits for the reply and WebSocket connection modules to load, so immediate
+connections and first turns reuse the prepared runtime.
 Update verification still waits for startup completion before checking readiness.
 
 These probe paths stay at the server root even when `gateway.controlUi.basePath`

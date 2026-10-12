@@ -37,7 +37,7 @@ function createStartupState(label: string) {
   });
 }
 
-it("retains projection startup when an early probe-prefixed UI request disconnects", async ({
+it("overlaps early services with retained projection startup and waits for both before ready", async ({
   signal,
 }) => {
   const basePath = "/health";
@@ -48,6 +48,8 @@ it("retains projection startup when an early probe-prefixed UI request disconnec
   const releaseProjection = createDeferred();
   const listenerBound = createDeferred();
   const releaseListening = createDeferred();
+  const earlyRuntimeEntered = createDeferred();
+  const releaseEarlyRuntime = createDeferred();
   const entryReceived = createDeferred<ServerResponse>();
   const secondEntryReceived = createDeferred<ServerResponse>();
   const entryClosed = createDeferred();
@@ -96,6 +98,13 @@ it("retains projection startup when an early probe-prefixed UI request disconnec
           await releaseListening.promise;
         },
       };
+    });
+    const earlyModule = await import("./server-startup-early.js");
+    const startEarlyRuntime = earlyModule.startGatewayEarlyRuntime;
+    vi.spyOn(earlyModule, "startGatewayEarlyRuntime").mockImplementation(async (...args) => {
+      earlyRuntimeEntered.resolve();
+      await releaseEarlyRuntime.promise;
+      return startEarlyRuntime(...args);
     });
     const { startGatewayServerCore } = await import("./server-start.js");
     startup = startGatewayServerCore(port, {
@@ -160,9 +169,24 @@ it("retains projection startup when an early probe-prefixed UI request disconnec
       signal,
     );
     expect(secondEntryResponse.writableEnded).toBe(false);
-    releaseProjection.resolve();
     releaseListening.resolve();
+    await withinTest(
+      awaitGateBeforeSettlement(
+        earlyRuntimeEntered.promise,
+        startup,
+        "Gateway startup completed without starting its early services",
+      ),
+      signal,
+    );
+    expect(secondEntryResponse.writableEnded).toBe(false);
+    releaseProjection.resolve();
     expect((await entryRequest).status).toBe(204);
+    const waitingForEarlyRuntime = await fetch(`http://127.0.0.1:${port}/ready`, {
+      signal: requestSignal,
+    });
+    expect(waitingForEarlyRuntime.status).toBe(503);
+    expect(await waitingForEarlyRuntime.json()).toMatchObject({ ready: false });
+    releaseEarlyRuntime.resolve();
     const server = await startup;
     await server.startupSettled;
     const unauthorized = await fetch(`http://127.0.0.1:${port}${entryPath}`, {
@@ -173,6 +197,7 @@ it("retains projection startup when an early probe-prefixed UI request disconnec
   } finally {
     releaseProjection.resolve();
     releaseListening.resolve();
+    releaseEarlyRuntime.resolve();
     requests.abort();
     try {
       const server = await startup?.catch(() => undefined);
