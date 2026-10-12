@@ -169,75 +169,71 @@ export async function sweepCronRunSessions(params: {
       continuationKeys.length > 0
         ? await prepareCronDescendantDeletion(continuationKeys)
         : undefined;
-    try {
-      assertCurrent();
-      for (const { sessionKey, entry } of expiredEntries) {
-        if (entry.cronRunContinuation) {
-          // Build one unordered snapshot only when an expired continuation needs it.
-          // Fresh rows and stores without continuations never read media operation state.
-          pendingMediaSessionKeys ??= buildPendingGeneratedMediaSessionKeySet();
-          if (pendingMediaSessionKeys.has(sessionKey) || descendants?.hasUnsettled(sessionKey)) {
-            continue;
-          }
-        }
-        // Skip known-busy rows so one active generation cannot abort idle sibling cleanup.
-        // The shared deletion guard still closes the race between selection and commit.
-        if (
-          entry.sessionId &&
-          isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, entry.sessionId])
-        ) {
+    assertCurrent();
+    for (const { sessionKey, entry } of expiredEntries) {
+      if (entry.cronRunContinuation) {
+        // Build one unordered snapshot only when an expired continuation needs it.
+        // Fresh rows and stores without continuations never read media operation state.
+        pendingMediaSessionKeys ??= buildPendingGeneratedMediaSessionKeySet();
+        if (pendingMediaSessionKeys.has(sessionKey) || descendants?.hasUnsettled(sessionKey)) {
           continue;
         }
-        removals.push({
-          sessionKey,
-          expectedEntry: entry,
-          ...(entry.sessionId ? { expectedSessionId: entry.sessionId } : {}),
-          expectedUpdatedAt: entry.updatedAt,
-          archiveRemovedTranscript: true,
-        });
       }
-      if (removals.length > 0) {
-        // Archive-age cleanup follows the session maintenance retention knob:
-        // the reaper's cron retention decides which rows die, but archived
-        // transcript files are conversation history owned by the archive
-        // retention policy (null = keep until the disk budget evicts).
-        const archiveRetentionMs = resolveMaintenanceConfig().resetArchiveRetentionMs;
-        const result = await applySessionEntryLifecycleMutation({
-          agentId: params.agentId,
-          env: context.environment,
-          storePath,
-          removals,
-          descendantRunBasis: descendants?.basis,
-          commitGuard: () => {
-            assertCurrent();
-            // Descendants can acquire the continuation while deletion preparation awaits.
-            for (const removal of removals) {
-              if (
-                removal.expectedEntry?.cronRunContinuation &&
-                (descendants?.hasUnsettled(removal.sessionKey) ||
-                  hasPendingGeneratedMediaTaskForSessionKey(removal.sessionKey))
-              ) {
-                throw new Error(
-                  `Cannot prune cron run continuation while subagents await settlement for ${removal.sessionKey}`,
-                );
-              }
+      // Skip known-busy rows so one active generation cannot abort idle sibling cleanup.
+      // The shared deletion guard still closes the race between selection and commit.
+      if (
+        entry.sessionId &&
+        isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, entry.sessionId])
+      ) {
+        continue;
+      }
+      removals.push({
+        sessionKey,
+        expectedEntry: entry,
+        ...(entry.sessionId ? { expectedSessionId: entry.sessionId } : {}),
+        expectedUpdatedAt: entry.updatedAt,
+        archiveRemovedTranscript: true,
+      });
+    }
+    if (removals.length > 0) {
+      // Archive-age cleanup follows the session maintenance retention knob:
+      // the reaper's cron retention decides which rows die, but archived
+      // transcript files are conversation history owned by the archive
+      // retention policy (null = keep until the disk budget evicts).
+      const archiveRetentionMs = resolveMaintenanceConfig().resetArchiveRetentionMs;
+      const result = await applySessionEntryLifecycleMutation({
+        agentId: params.agentId,
+        env: context.environment,
+        storePath,
+        removals,
+        descendantRunBasis: descendants?.basis,
+        commitGuard: () => {
+          assertCurrent();
+          // Descendants can acquire the continuation while deletion preparation awaits.
+          for (const removal of removals) {
+            if (
+              removal.expectedEntry?.cronRunContinuation &&
+              (descendants?.hasUnsettled(removal.sessionKey) ||
+                hasPendingGeneratedMediaTaskForSessionKey(removal.sessionKey))
+            ) {
+              throw new Error(
+                `Cannot prune cron run continuation while subagents await settlement for ${removal.sessionKey}`,
+              );
             }
-          },
-          ...(archiveRetentionMs == null
-            ? {}
-            : {
-                cleanupArchivedTranscripts: {
-                  rules: [{ reason: "deleted", olderThanMs: archiveRetentionMs }],
-                  nowMs: now,
-                },
-              }),
-          captureArtifactCleanupError: true,
-        });
-        pruned = result.removedEntries;
-        transcriptCleanupError = result.artifactCleanupError;
-      }
-    } finally {
-      descendants?.dispose();
+          }
+        },
+        ...(archiveRetentionMs == null
+          ? {}
+          : {
+              cleanupArchivedTranscripts: {
+                rules: [{ reason: "deleted", olderThanMs: archiveRetentionMs }],
+                nowMs: now,
+              },
+            }),
+        captureArtifactCleanupError: true,
+      });
+      pruned = result.removedEntries;
+      transcriptCleanupError = result.artifactCleanupError;
     }
   } catch (err) {
     params.log.warn({ err: String(err) }, "cron-reaper: failed to sweep session store");

@@ -204,8 +204,6 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
 
 export type PreparedSubagentSessionsRead = PreparedSubagentRunsRead & {
   readonly basis: SubagentRunsDurableBasis;
-  // The protected cron deletion adapter still calls this resource-shaped API.
-  dispose(): void;
 };
 
 /** The durable basis is fresh worker evidence; live liveness remains parent-owned. */
@@ -253,7 +251,6 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
   });
   return {
     basis,
-    dispose() {},
     consume(consume) {
       signal?.throwIfAborted();
       assertSubagentReadContext(context);

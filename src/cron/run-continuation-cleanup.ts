@@ -96,45 +96,41 @@ export async function removeCronRunContinuationSessionIfIdle(
         return;
       }
       const descendants = await prepareCronDescendantDeletion([sessionKey]);
-      try {
-        assertCurrent();
-        if (descendants.hasUnsettled(sessionKey)) {
-          return;
-        }
-        const entry = await readEntry();
-        if (
-          !entry ||
-          entry.sessionId !== original.sessionId ||
-          entry.lifecycleRevision !== original.lifecycleRevision ||
-          !canRemoveCronRunContinuation(entry.cronRunContinuation)
-        ) {
-          return;
-        }
-        await deleteSessionEntryLifecycle({
-          descendantRunBasis: descendants.basis,
-          agentId,
-          commitGuard: () => {
-            assertCurrent();
-            if (
-              descendants.hasUnsettled(sessionKey) ||
-              hasPendingGeneratedMediaTaskForSessionKey(sessionKey)
-            ) {
-              throw new Error("cron run continuation still has unsettled background work");
-            }
-          },
-          // Exact rows alias the stable cron transcript; the stable row owns archival.
-          archiveTranscript: false,
-          expectedEntry: entry,
-          expectedLifecycleRevision: entry.lifecycleRevision,
-          expectedSessionId: entry.sessionId,
-          expectedUpdatedAt: entry.updatedAt,
-          requireWriteSuccess: true,
-          storePath,
-          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-        });
-      } finally {
-        descendants.dispose();
+      assertCurrent();
+      if (descendants.hasUnsettled(sessionKey)) {
+        return;
       }
+      const entry = await readEntry();
+      if (
+        !entry ||
+        entry.sessionId !== original.sessionId ||
+        entry.lifecycleRevision !== original.lifecycleRevision ||
+        !canRemoveCronRunContinuation(entry.cronRunContinuation)
+      ) {
+        return;
+      }
+      await deleteSessionEntryLifecycle({
+        descendantRunBasis: descendants.basis,
+        agentId,
+        commitGuard: () => {
+          assertCurrent();
+          if (
+            descendants.hasUnsettled(sessionKey) ||
+            hasPendingGeneratedMediaTaskForSessionKey(sessionKey)
+          ) {
+            throw new Error("cron run continuation still has unsettled background work");
+          }
+        },
+        // Exact rows alias the stable cron transcript; the stable row owns archival.
+        archiveTranscript: false,
+        expectedEntry: entry,
+        expectedLifecycleRevision: entry.lifecycleRevision,
+        expectedSessionId: entry.sessionId,
+        expectedUpdatedAt: entry.updatedAt,
+        requireWriteSuccess: true,
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      });
     },
   });
 }
