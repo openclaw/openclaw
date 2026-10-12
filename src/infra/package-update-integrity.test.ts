@@ -1,3 +1,4 @@
+import type { BigIntStats } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -44,7 +45,7 @@ async function createPackageFixture(entries = 4): Promise<string> {
 
 /** Stat entries the way the walk records them, without touching the reader. */
 async function observe(root: string) {
-  const observed: Array<{ file: string; stat: Awaited<ReturnType<typeof fs.lstat>> }> = [];
+  const observed: Array<{ file: string; stat: BigIntStats }> = [];
   const walk = async (directory: string) => {
     for (const child of await fs.readdir(directory)) {
       const file = path.join(directory, child);
