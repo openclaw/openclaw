@@ -75,6 +75,10 @@ import {
   createExecToolExecutionTimeoutResolver,
   resolveExecDefaultTimeoutSec,
 } from "./exec-tool-timeout.js";
+import {
+  commandInvokesGitHubCli,
+  unavailableGitHubExecProfileDir,
+} from "./github-invalid-selection.js";
 import { resolveStoredSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
@@ -509,9 +513,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         }
 
         const githubProfileDir =
-          host === "gateway" && preparedRunEnvironment.managedLocalIdentity
-            ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
-            : undefined;
+          host === "gateway" &&
+          preparedRunEnvironment.invalidGitHubSelection &&
+          commandInvokesGitHubCli(params.command)
+            ? unavailableGitHubExecProfileDir()
+            : host === "gateway" && preparedRunEnvironment.managedLocalIdentity
+              ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
+              : undefined;
 
         if (host === "gateway" && !bypassApprovals) {
           gatewayApproval = await processGatewayAllowlist({

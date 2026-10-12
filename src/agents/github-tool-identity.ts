@@ -29,6 +29,14 @@ import {
   withGitHubToken,
 } from "./github-host-runtime.js";
 import { resolveConfiguredGitHubApiBaseUrl } from "./github-host.js";
+import {
+  INVALID_GITHUB_PROFILE_SELECTION_MESSAGE,
+  isConfiguredGitHubToolIdentity,
+  isInvalidGitHubToolIdentity,
+  unavailableGitHubIdentityFacts,
+  type ResolvedGitHubToolIdentity,
+  type ScopedGitHubToolIdentity,
+} from "./github-invalid-selection.js";
 import { verifyGitHubCredential } from "./github-oauth-client.js";
 import { inspectGitHubOAuthRecord } from "./github-oauth-records.js";
 import {
@@ -105,15 +113,16 @@ export function resolveConfiguredGitHubToolIdentity(params: {
 
 function resolveSystemGitHubToolIdentity(
   params: Pick<GitHubIdentityPreparation, "config" | "env">,
-) {
+): ResolvedGitHubToolIdentity {
   return (
     resolveScopedGitHubToolIdentity({ ...params, agentId: "", scope: "system" }) ?? {
-      source: "system-detected" as const,
+      source: "system-detected",
     }
   );
 }
 
-function resolveGitHubToolIdentity(params: GitHubIdentityPreparation) {
+function resolveGitHubToolIdentity(params: GitHubIdentityPreparation): ResolvedGitHubToolIdentity {
+  // An explicit invalid agent selection must not inherit the shared profile.
   return (
     resolveScopedGitHubToolIdentity({ ...params, scope: "agent" }) ??
     resolveSystemGitHubToolIdentity(params)
@@ -125,26 +134,29 @@ function resolveScopedGitHubToolIdentity(params: {
   agentId: string;
   scope: "system" | "agent";
   env?: NodeJS.ProcessEnv;
-}) {
+}): ScopedGitHubToolIdentity | undefined {
   const config = resolveConfiguredGitHubToolIdentity(params);
-  // A leftover PAT-shaped id is not a managed profile. Treat it like no binding
-  // so gateway exec falls through to native GitHub detection instead of throwing.
-  return config && isManagedGitHubProfileId(config.profileId)
-    ? {
-        source:
-          params.scope === "agent" ? ("agent-override" as const) : ("system-configured" as const),
-        config,
-        profileDir: resolveManagedGitHubProfileDir({
-          agentId: params.agentId,
-          env: params.env,
-          scope: params.scope,
-          profileId: config.profileId,
-        }),
-      }
-    : undefined;
+  if (!config) {
+    return undefined;
+  }
+  const source =
+    params.scope === "agent" ? ("agent-override" as const) : ("system-configured" as const);
+  // A leftover or malformed id is still an explicit selection. Returning undefined
+  // would inherit a shared managed profile or native authentication.
+  if (!isManagedGitHubProfileId(config.profileId)) {
+    return { source, config, invalidSelection: true };
+  }
+  return {
+    source,
+    config,
+    profileDir: resolveManagedGitHubProfileDir({
+      agentId: params.agentId,
+      env: params.env,
+      scope: params.scope,
+      profileId: config.profileId,
+    }),
+  };
 }
-
-type ResolvedGitHubToolIdentity = ReturnType<typeof resolveGitHubToolIdentity>;
 
 /** Prepares the non-secret child overlay and store exclusions once per agent run. */
 export function prepareGitHubToolEnvironment(
@@ -157,6 +169,8 @@ function prepareGitHubToolEnvironmentForIdentity(
   params: Pick<GitHubIdentityPreparation, "config" | "sourceConfig">,
   identity: ResolvedGitHubToolIdentity,
 ): PreparedGitHubToolEnvironment {
+  const invalidSelection = isInvalidGitHubToolIdentity(identity);
+  // Invalid explicit ids stay selected so native tokens are not restored.
   const managedLocalIdentity = identity.source !== "system-detected";
   const previewToken =
     params.sourceConfig?.gateway?.controlUi?.github?.token ??
@@ -176,7 +190,7 @@ function prepareGitHubToolEnvironmentForIdentity(
   return Object.freeze({
     credentialScrubEnv: Object.freeze(credentialScrubEnv),
     localIdentityEnv: Object.freeze(
-      managedLocalIdentity
+      isConfiguredGitHubToolIdentity(identity)
         ? managedGitHubIdentityEnvironment({
             profileDir: identity.profileDir,
             gitAuthor: identity.config.gitAuthor,
@@ -187,6 +201,7 @@ function prepareGitHubToolEnvironmentForIdentity(
     localGitConfigParameters: AGENT_GIT_CONFIG_PARAMETERS,
     excludedStoreNames: Object.freeze(excludedStoreNames),
     managedLocalIdentity,
+    ...(invalidSelection ? { invalidGitHubSelection: true as const } : {}),
   });
 }
 
@@ -353,8 +368,15 @@ async function resolveGitHubIdentityFacts(
     identity: ResolvedGitHubToolIdentity;
   },
 ): Promise<GitHubIdentityFacts> {
+  if (isInvalidGitHubToolIdentity(params.identity)) {
+    // Report the saved selection as unavailable without probing another account.
+    return unavailableGitHubIdentityFacts(
+      params.identity,
+      await readGitAuthor(githubIdentityProbeEnvironment(params, params.identity), params.cwd),
+    );
+  }
   const identity = params.identity;
-  const managed = identity.source !== "system-detected";
+  const managed = isConfiguredGitHubToolIdentity(identity);
   const probeEnv = githubIdentityProbeEnvironment(params, identity);
   const host = resolveGitHubHost();
   const apiBaseUrl = resolveGitHubApiBaseUrl();
@@ -490,7 +512,12 @@ async function prepareSharedGitHubIdentity(
   apiBaseUrl = resolveGitHubApiBaseUrl(),
 ) {
   const identity = resolveGitHubToolIdentity(params);
-  const managed = identity.source !== "system-detected";
+  if (isInvalidGitHubToolIdentity(identity)) {
+    const error = new GitHubIdentityError("unavailable");
+    error.message = INVALID_GITHUB_PROFILE_SELECTION_MESSAGE;
+    throw error;
+  }
+  const managed = isConfiguredGitHubToolIdentity(identity);
   const currentEnvironment = (): NodeJS.ProcessEnv => ({
     ...githubIdentityProbeEnvironment(params, identity),
     GH_PROMPT_DISABLED: "1",

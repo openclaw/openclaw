@@ -10,6 +10,7 @@ import { gitNullConfigPath } from "../infra/git-exec.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { INVALID_GITHUB_SELECTION_EXEC_TOKEN } from "./github-invalid-selection.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 
 const storeMocks = vi.hoisted(() => ({ readSecretStoreExecEnvironment: vi.fn() }));
@@ -258,7 +259,8 @@ describe("exec GitHub identity", () => {
         agentId: "main",
         env: { OPENCLAW_STATE_DIR: profileRoot },
       });
-      expect(preparedRunEnvironment.managedLocalIdentity).toBe(false);
+      expect(preparedRunEnvironment.invalidGitHubSelection).toBe(true);
+      expect(preparedRunEnvironment.managedLocalIdentity).toBe(true);
       expect(preparedRunEnvironment.localIdentityEnv).not.toHaveProperty("GH_CONFIG_DIR");
       const tool = createExecTool({
         host: "gateway",
@@ -281,6 +283,116 @@ describe("exec GitHub identity", () => {
       expect(result.details.aggregated).not.toContain(
         "GitHub Identity credential is unavailable or insecure",
       );
+    } finally {
+      await fs.rm(profileRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not use a shared profile or native token for an invalid agent selection", async () => {
+    setTestEnvValue("GH_TOKEN", "native-should-not-be-used");
+    setTestEnvValue("GITHUB_TOKEN", "native-fallback-should-not-be-used");
+    storeMocks.readSecretStoreExecEnvironment.mockReturnValue({ env: {} });
+    const profileRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "exec-github-invalid-agent-")),
+    );
+    try {
+      const systemProfileId = "ghp_11111111111111111111111111111111";
+      const config = {
+        tools: { github: { profileId: systemProfileId, kind: "oauth" as const } },
+        agents: {
+          entries: {
+            main: {
+              tools: {
+                github: { profileId: `ghp_${"Z".repeat(36)}`, kind: "oauth" as const },
+              },
+            },
+          },
+        },
+      };
+      const prepared = prepareGitHubToolEnvironment({
+        config,
+        agentId: "main",
+        env: { OPENCLAW_STATE_DIR: profileRoot },
+      });
+      const resolved = resolvePreparedExecEnvironment({
+        execParams: { command: "echo hello-legacy" },
+        host: "gateway",
+        defaultPathPrepend: [],
+        ...prepared,
+        warnings: [],
+      });
+      expect(resolved.env.GH_CONFIG_DIR).toBeUndefined();
+      expect(resolved.env.GH_TOKEN).toBe(INVALID_GITHUB_SELECTION_EXEC_TOKEN);
+      expect(resolved.env.GITHUB_TOKEN).toBe(INVALID_GITHUB_SELECTION_EXEC_TOKEN);
+      expect(JSON.stringify(resolved.env)).not.toContain(systemProfileId);
+      expect(JSON.stringify(resolved.env)).not.toContain("native-should-not-be-used");
+      expect(JSON.stringify(resolved.env)).not.toContain("native-fallback-should-not-be-used");
+
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        allowBackground: false,
+        config,
+        agentId: "main",
+        preparedRunEnvironment: prepared,
+      });
+      const echo = await tool.execute("invalid-agent-echo", { command: "echo hello-legacy" });
+      expect(echo.details.status).toBe("completed");
+      if (echo.details.status !== "completed") {
+        throw new Error("expected completed exec result");
+      }
+      expect(echo.details.exitCode).toBe(0);
+      expect(echo.details.aggregated).toContain("hello-legacy");
+
+      const gh = await tool.execute("invalid-agent-gh", { command: "gh api user" });
+      expect(gh.details.status).toBe("completed");
+      if (gh.details.status !== "completed") {
+        throw new Error("expected completed exec result");
+      }
+      expect(gh.details.exitCode).toBe(1);
+      expect(gh.details.aggregated).toContain(
+        "GitHub Identity credential is unavailable or insecure",
+      );
+      expect(gh.details.aggregated).not.toContain("native-should-not-be-used");
+      expect(gh.details.aggregated).not.toContain(systemProfileId);
+    } finally {
+      await fs.rm(profileRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not turn an invalid shared profile into native GitHub exec", async () => {
+    setTestEnvValue("GH_TOKEN", "native-should-not-be-used");
+    storeMocks.readSecretStoreExecEnvironment.mockReturnValue({ env: {} });
+    const profileRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "exec-github-invalid-shared-")),
+    );
+    try {
+      const config = {
+        tools: { github: { profileId: `ghp_${"A".repeat(36)}`, kind: "oauth" as const } },
+      };
+      const prepared = prepareGitHubToolEnvironment({
+        config,
+        agentId: "main",
+        env: { OPENCLAW_STATE_DIR: profileRoot },
+      });
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        allowBackground: false,
+        config,
+        agentId: "main",
+        preparedRunEnvironment: prepared,
+      });
+      const gh = await tool.execute("invalid-shared-gh", { command: "gh api user" });
+      expect(gh.details.status).toBe("completed");
+      if (gh.details.status !== "completed") {
+        throw new Error("expected completed exec result");
+      }
+      expect(gh.details.exitCode).toBe(1);
+      expect(gh.details.aggregated).toContain("Reconnect or change GitHub Identity, then retry.");
+      expect(gh.details.aggregated).not.toContain("native-should-not-be-used");
     } finally {
       await fs.rm(profileRoot, { recursive: true, force: true });
     }

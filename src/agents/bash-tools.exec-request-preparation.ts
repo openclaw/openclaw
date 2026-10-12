@@ -33,6 +33,7 @@ import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { type ExecWorkdirResolution, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { INVALID_GITHUB_SELECTION_EXEC_TOKEN } from "./github-invalid-selection.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
 import { isSubagentEnvelopeSession } from "./subagents/spawn/subagent-capabilities.js";
@@ -393,6 +394,7 @@ export function resolvePreparedExecEnvironment(params: {
   localIdentityEnv?: Readonly<Record<string, string>>;
   localGitConfigParameters?: string;
   managedLocalIdentity?: boolean;
+  invalidGitHubSelection?: boolean;
   localProcessEnv?: Readonly<Record<string, string>>;
   warnings: string[];
 }): {
@@ -551,6 +553,16 @@ export function resolvePreparedExecEnvironment(params: {
     ...params.localProcessEnv,
     ...params.credentialScrubEnv,
     ...(params.host === "gateway" ? params.localIdentityEnv : undefined),
+    // A non-empty token stops GitHub CLI from ignoring an empty scrub and using
+    // the OS keyring. It is not a credential and cannot select another account.
+    ...(params.host === "gateway" && params.invalidGitHubSelection
+      ? {
+          GH_ENTERPRISE_TOKEN: INVALID_GITHUB_SELECTION_EXEC_TOKEN,
+          GH_TOKEN: INVALID_GITHUB_SELECTION_EXEC_TOKEN,
+          GITHUB_ENTERPRISE_TOKEN: INVALID_GITHUB_SELECTION_EXEC_TOKEN,
+          GITHUB_TOKEN: INVALID_GITHUB_SELECTION_EXEC_TOKEN,
+        }
+      : {}),
   };
   // Inherited Git parameters can contain credentials; keep them out of request overrides.
   const gitPolicyEnv =

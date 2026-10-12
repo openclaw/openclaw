@@ -6,4 +6,9 @@ export type PreparedGitHubToolEnvironment = Readonly<{
   excludedStoreNames: readonly string[];
   /** A local process must retain the host-selected profile and author identity. */
   managedLocalIdentity: boolean;
+  /**
+   * The saved profile id is explicit but not a managed id. Keep it unavailable:
+   * do not inherit a shared profile or native credentials for authenticated GitHub work.
+   */
+  invalidGitHubSelection?: boolean;
 }>;
