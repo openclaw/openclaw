@@ -343,7 +343,7 @@ it.each(["current", { personId: null, time: "all", query: "" }] as const)(
 
 it.each([{ hasMore: false, limitApplied: 100, isDock: true, admit: false }])(
   "admits certified active membership only into a complete window with space (%j)",
-  async ({ hasMore, limitApplied, isDock = false, admit }) => {
+  async ({ hasMore, limitApplied, isDock, admit }) => {
     vi.useFakeTimers();
     const { client, request, controller } = setup();
     request.mockResolvedValue({ ...listing([active]), hasMore, limitApplied });
