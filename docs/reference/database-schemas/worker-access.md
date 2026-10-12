@@ -51,6 +51,14 @@ call them. A worker caller does not make the shared kernel worker-only. The
 inventory retains those calls as migration debt; raw-row removal guarded by
 Doctor's `expectedRawEntryJson` variant is an offline repair exception.
 
+Status presentation prepares bounded usage and terminal-model facts through the
+existing history worker before rendering. Goal mutations with ordinary host
+authority callbacks use the existing writer grant; an opaque native or cross-store
+authority still retains its current effect boundary. Transcript rewrites compare
+the loaded generation, sequence, and mutation timestamp once in their write
+transaction. Compaction uses its append receipt instead of rereading the appended
+rows or version. These paths preserve stored bytes, permissions, and update behavior.
+
 Node-host configuration writes and one-use GitHub setup handoffs use the existing
 shared-state writer. Handoff consumption deletes and returns the matching live
 row in one statement, so concurrent consumers cannot reuse it. Configuration

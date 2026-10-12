@@ -14,7 +14,7 @@ import { communicationEntryBinding } from "../../sessions/communication-admissio
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
-import { retainLegacyAcpMigrationSourcesForEntry } from "./session-accessor.sqlite-acp-provenance.js";
+import { prepareLegacyAcpMigrationSourcesForEntryWrite } from "./session-accessor.sqlite-acp-provenance.js";
 import {
   linkSessionConversation,
   prepareConversationIdentities,
@@ -504,12 +504,22 @@ export function writeSessionEntry(
   const persisted = splitSessionEntrySnapshots(canonicalEntry, {
     previousEntry: canonicalPreviousEntry,
   });
-  const sessionNode = bindSessionNode({
-    entry: canonicalEntry,
-    entryJson: persisted.entryJson,
+  const legacySources = prepareLegacyAcpMigrationSourcesForEntryWrite(
+    database,
     sessionKey,
-    updatedAt,
-  });
+    normalizedEntry,
+    canonicalPreviousEntry,
+    canonicalPreviousRow,
+  );
+  const sessionNode = {
+    ...bindSessionNode({
+      entry: canonicalEntry,
+      entryJson: persisted.entryJson,
+      sessionKey,
+      updatedAt,
+    }),
+    ...legacySources,
+  };
   const previousColumns = new Map(Object.entries(canonicalPreviousRow ?? {}));
   const nodeChanged =
     options.allowStoredAliases === true ||
@@ -585,7 +595,11 @@ export function writeSessionEntry(
         nodeChanged || persisted.snapshotsChanged
           ? trackSessionEntryCacheWrite(database, () => {
               if (nodeChanged) {
-                queries.node(sessionNode);
+                const writeNode =
+                  "legacy_acp_migration_json" in legacySources
+                    ? queries.nodeWithLegacySources
+                    : queries.node;
+                writeNode(sessionNode);
               }
               if (persisted.snapshotsChanged) {
                 writeSessionEntrySnapshots(database, sessionKey, persisted.snapshots);
@@ -598,13 +612,6 @@ export function writeSessionEntry(
           entry: normalizedEntry,
           previousEntry: canonicalPreviousEntry,
         });
-      }
-      if (
-        canonicalPreviousEntry &&
-        (canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId ||
-          canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision)
-      ) {
-        retainLegacyAcpMigrationSourcesForEntry(database.db, sessionKey, normalizedEntry);
       }
       if (window.changed) {
         const writeWindow = retainWindowOwner ? queries.retainWindow : queries.claimWindow;

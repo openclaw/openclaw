@@ -108,16 +108,50 @@ export function recordLegacyAcpMigrationSources(
   writeSources(database, sessionKey, [...merged.values()]);
 }
 
-export function retainLegacyAcpMigrationSourcesForEntry(
-  database: DatabaseSync,
-  sessionKey: string,
+/** The entry writer persists this projection together with its new lifecycle. */
+export function retainLegacyAcpMigrationSourcesJson(
+  value: string | null | undefined,
   entry: SessionEntry | undefined,
-): void {
-  const sources = readSources(database, sessionKey);
-  const retained = sources.filter((source) => legacyAcpMigrationBindingMatches(source, entry));
-  if (retained.length !== sources.length) {
-    writeSources(database, sessionKey, retained);
+): string | null {
+  if (!value) {
+    return null;
   }
+  const sources = sourcesSchema.parse(JSON.parse(value));
+  const retained = sources.filter((source) => legacyAcpMigrationBindingMatches(source, entry));
+  return retained.length === sources.length
+    ? value
+    : retained.length
+      ? JSON.stringify(retained)
+      : null;
+}
+
+export function prepareLegacyAcpMigrationSourcesForEntryWrite(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  entry: SessionEntry,
+  previousEntry: SessionEntry | undefined,
+  previousRow: { legacy_acp_migration_json?: string | null } | undefined,
+): { legacy_acp_migration_json?: string | null } {
+  if (
+    !previousEntry ||
+    (previousEntry.sessionId === entry.sessionId &&
+      previousEntry.lifecycleRevision === entry.lifecycleRevision) ||
+    !hasLegacyAcpMigrationProvenanceColumn(database.db)
+  ) {
+    return {};
+  }
+  // Full snapshots carry provenance; partial legacy snapshots need one column read.
+  const value =
+    previousRow && "legacy_acp_migration_json" in previousRow
+      ? previousRow.legacy_acp_migration_json
+      : executeSqliteQueryTakeFirstSync(
+          database.db,
+          getSessionKysely(database.db)
+            .selectFrom("session_nodes")
+            .select("legacy_acp_migration_json")
+            .where("session_key", "=", sessionKey),
+        )?.legacy_acp_migration_json;
+  return { legacy_acp_migration_json: retainLegacyAcpMigrationSourcesJson(value, entry) };
 }
 
 export function copyLegacyAcpMigrationSourcesForRepair(
