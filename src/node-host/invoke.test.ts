@@ -924,6 +924,7 @@ describe("node host invoke", () => {
     const state = await createOpenClawTestState({ label: "node-permission-result" });
     try {
       await state.writeConfig({});
+      (await import("../config/runtime-snapshot.js")).setRuntimeConfigSnapshot({});
       saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
       const client = Object.assign(new TestGatewayClient({ deviceIdentity: null }), {
         serverCapabilities: new Set([GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS]),
