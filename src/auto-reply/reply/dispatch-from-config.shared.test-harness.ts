@@ -383,6 +383,16 @@ vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
 vi.mock("../../config/sessions/session-actor-scope.js", () => ({
   withSessionActor: async () => undefined,
 }));
+// The worker-backed reader has its own storage integration test; dispatch owns delivery policy.
+vi.mock("./session-verbose-level.js", async () => {
+  const { normalizeVerboseLevel } = await import("../thinking.js");
+  return {
+    prepareSessionVerboseLevelReader: async () => () => {
+      const level = sessionStoreMocks.currentEntry?.verboseLevel;
+      return typeof level === "string" ? normalizeVerboseLevel(level) : undefined;
+    },
+  };
+});
 vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
   readSessionEntryReadOnlyInWorker: async (
