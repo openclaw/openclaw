@@ -22,10 +22,12 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
 import {
   initializeSessionReadContext,
@@ -47,7 +49,9 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
     const count = benchmark ? 5_000 : 8;
     const context = requestContext(rolePolicyConfig());
     const client = roleClient("view", "sidebar-reader");
-    const profiles = Array.from({ length: 4 }, (_, index) =>
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const profiles = Array.from({ length: 4 }, (_value, index) =>
       ensureProfileForEmail(`sidebar-${index}@example.test`),
     );
     for (let index = 0; index < count; index++) {
@@ -104,7 +108,7 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
         owner: { actor: { id: profiles[(count - 1) % profiles.length]!.id } },
         participants: expect.arrayContaining(
           profiles
-            .filter((_, index) => index !== (count - 1) % profiles.length)
+            .filter((_value, index) => index !== (count - 1) % profiles.length)
             .map((profile) =>
               expect.objectContaining({ identity: { type: "profile", id: profile.id } }),
             ),
@@ -178,6 +182,8 @@ it("projects dashboard cards without sending session execution details", async (
     const count = benchmark ? 200 : 2;
     const context = requestContext(rolePolicyConfig());
     const client = roleClient("view", "gallery-reader");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
     ensureBoardSchema(openOpenClawAgentDatabase({ agentId: "main" }));
     for (let index = 0; index < count; index++) {
       const sessionKey = `agent:main:dashboard-${index}`;
@@ -304,6 +310,9 @@ it("coalesces cold sidebar selection across row slices only for the same princip
     const context = requestContext(cfg);
     const alice = roleClient("view", "cold-alice");
     const bob = roleClient("view", "cold-bob");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(alice);
+    prepareGatewayRecipientProfile(bob);
     const rows = 130;
     for (let index = 0; index < rows; index++) {
       replaceSessionEntrySync(
@@ -335,7 +344,9 @@ it("coalesces cold sidebar selection across row slices only for the same princip
             request: { limit, rowMode: "compact" },
           });
         const results = await Promise.all(
-          Array.from({ length: 6 }, (_, index) => read({ ...alice, connId: `reconnect-${index}` })),
+          Array.from({ length: 6 }, (_value, index) =>
+            read({ ...alice, connId: `reconnect-${index}` }),
+          ),
         );
         expect(results[0]!.sessions).toHaveLength(100);
         expect(results[0]!.totalCount).toBe(rows);
@@ -367,6 +378,10 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     const context = requestContext(cfg);
     const client = roleClient("view", "first-list");
     const clients = [client, { ...client }, roleClient("view", "second-identity")];
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    for (const recipient of clients) {
+      prepareGatewayRecipientProfile(recipient);
+    }
     const scope = { agentId: "main", sessionKey: "agent:main:serialized" };
     const entry = {
       sessionId: "serialized",
@@ -601,6 +616,8 @@ it("refreshes shared socket selection when the same viewer changes roles", async
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const client = roleClient("view", "selection-viewer");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
     const profileId = client.authenticatedUserProfile!.profileId;
     for (const [suffix, creator] of [
       ["owned", profileId],
@@ -635,6 +652,10 @@ it("retains each embedded reader's identity when their shared row presentation i
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const clients = [roleClient("view", "reader-a"), roleClient("view", "reader-b")];
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    for (const recipient of clients) {
+      prepareGatewayRecipientProfile(recipient);
+    }
     const scope = { agentId: "main", sessionKey: "agent:main:private-list" };
     replaceSessionEntrySync(scope, {
       sessionId: "private-list",

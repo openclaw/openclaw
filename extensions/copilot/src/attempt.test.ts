@@ -344,6 +344,7 @@ function makeParams(
     agentId: "agent-1",
     auth: { useLoggedInUser: true, ...(overrides as { auth?: object }).auth },
     authProfileStore: { version: 1, profiles: {} },
+    config: {},
     disableTools: true,
     hostCapabilities: createCopilotTestHostCapabilities(),
     initialReplayState: undefined,

@@ -325,9 +325,12 @@ suite.define(() => {
               const composerDisabled = await page
                 .locator(".agent-chat__composer-combobox textarea")
                 .isDisabled();
-              await pollLocatorText(pane.locator(".agent-chat__composer-status-band")).toContain(
-                "Finishing connection recovery.",
-              );
+              const send = pane.locator(".chat-send-btn--send");
+              await expect
+                .poll(() => send.getAttribute("aria-label"))
+                .toBe("Finishing connection recovery. Try sending again when it is ready.");
+              expect(await send.isDisabled()).toBe(true);
+              expect(await pane.locator(".agent-chat__composer-status-band").count()).toBe(0);
               await pane.getByRole("status", { name: "Loading chat", exact: true }).waitFor();
               expect(await pane.locator(".agent-chat__welcome").count()).toBe(0);
               expect(await pane.locator(".chat-topbar-notices .chat-error").count()).toBe(0);

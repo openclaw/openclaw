@@ -166,6 +166,23 @@ for the retirement contract.
 
 ## Complete-pair adoption
 
+Release preparation fetches only the frozen commit from the already verified
+official mirror. Each candidate keeps its own shallow Git object database, with
+no alternates or dependency on the mirror after publication. Ancestry checks
+continue to use the full mirror before preparation.
+
+The build account retains pnpm's content-addressed store under
+`OPENCLAW_TEAM_BUILD_HOME/cache/store` across candidates. The frozen lockfile and
+pnpm's integrity checks select package contents; `clone-or-copy` imports keep
+candidate files independent of writable store inodes. pnpm owns store format,
+invalidation, and pruning. Operators can reclaim unused packages with
+`pnpm store prune --store-dir <build-home>/cache/store` as the build account when
+the deployment owner is idle. Candidate cleanup removes only the work and
+staging trees. Staging uses reflinks where supported and ordinary copies
+otherwise; sealing, filesystem ownership, manifest validation, and directory
+sync remain unchanged. Build artifacts and validation results are never reused
+across commits.
+
 Release publication now prewarms Node's release-scoped compile cache before
 cutover, including reuse of an already published release. The bounded import
 runs as `openclaw`, with the selected Gateway runtime, after publication at its

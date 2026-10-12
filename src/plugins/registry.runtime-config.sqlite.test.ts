@@ -1,5 +1,9 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempHome } from "../plugin-sdk/test-env.js";
@@ -11,6 +15,13 @@ import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 describe("plugin registry SQLite session ownership", () => {
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+  });
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
   it("resolves unscoped worker keys through the configured default agent", async () => {
     await withTempHome(async () => {
       const config: OpenClawConfig = {
