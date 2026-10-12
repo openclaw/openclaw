@@ -554,7 +554,7 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
   options: { legacyTextStorage?: boolean } = {},
 ): string | undefined {
   if (rows.length === 0) {
-    return;
+    return undefined;
   }
   const rewrites = rows.map((row) => {
     const eventJson = JSON.stringify(canonicalizeTranscriptEventMedia(row.event));

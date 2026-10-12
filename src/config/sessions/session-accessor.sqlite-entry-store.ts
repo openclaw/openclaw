@@ -710,7 +710,7 @@ export function writeSessionEntry(
   }
   if (options.postimages && persistedEntry && row && canonicalPreviousSideTables) {
     const stagedTranscript = readStagedSessionTranscriptAuthority(database)
-      ?.flatMap((receipt) => [...receipt.facts.values()])
+      ?.flatMap((receipt) => Array.from(receipt.facts.values()))
       .find(
         (fact) => fact.kind === "postimage" && fact.value.sessionId === persistedEntry.sessionId,
       );
