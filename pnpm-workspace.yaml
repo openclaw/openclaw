@@ -13,18 +13,9 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - "@openai/codex"
   - "@openai/codex-*"
-  # Peter-approved one-time exception: Solid 2.0.0-rc.14; remove after 2026-10-15T02:13:16Z.
-  - "solid-js@2.0.0-rc.14"
-  - "@solidjs/signals@2.0.0-rc.14"
-  - "@solidjs/web@2.0.0-rc.14"
-  - "@solidjs/compiler@2.0.0-rc.14"
-  - "@solidjs/compiler-darwin-arm64@2.0.0-rc.14"
-  - "@solidjs/compiler-darwin-x64@2.0.0-rc.14"
-  - "@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.14"
-  - "@solidjs/compiler-linux-x64-gnu@2.0.0-rc.14"
-  - "@solidjs/compiler-wasm32-wasi@2.0.0-rc.14"
-  - "@solidjs/compiler-win32-x64-msvc@2.0.0-rc.14"
-  - "@solidjs/babel-plugin@2.0.0-rc.14"
+  # Solid itself is exempt from the release-age gate (Peter, 2026-10-11).
+  - "solid-js"
+  - "@solidjs/*"
   # Reviewed fs-safe 0.26.0 release and native helpers; remove after 2026-10-17T20:00:18.006Z.
   - "@openclaw/fs-safe@0.26.0"
   - "@openclaw/fs-safe-darwin-arm64@0.26.0"
@@ -59,7 +50,6 @@ verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:
-  "@solidjs/vite-plugin@3.0.0-next.47>@solidjs/babel-plugin": 2.0.0-rc.14
   # Memory LanceDB supplies vectors; WhatsApp prepares thumbnails with Rastermill.
   "@lancedb/lancedb>@huggingface/transformers": "-"
   "baileys>sharp": "-"

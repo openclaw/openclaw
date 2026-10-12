@@ -167,7 +167,7 @@ suite.define(() => {
         .poll(() =>
           page.evaluate((key) => {
             const stored = JSON.parse(localStorage.getItem(key) ?? "{}");
-            return stored.sidebarEntries;
+            return stored.railShortcuts;
           }, controlUiBundledSettingsStorageKey(suite.server.baseUrl)),
         )
         .toContain("plugin:workboard/board-ops");

@@ -145,19 +145,6 @@ async function deleteMemoryEntryOrigins(
   if (params.entryKeys.length === 0 || params.sessionIds?.length === 0) {
     return 0;
   }
-  assertOriginal();
-  const target = captureMemoryAgentReadTarget(options);
-  const filters = {
-    entryKeys: [...params.entryKeys],
-    ...(params.sessionIds ? { sessionIds: [...params.sessionIds] } : {}),
-  };
-  const { runMemoryOriginRead } = await loadMemoryCpuWorkerRuntime();
-  assertOriginal();
-  const { exists } = await runMemoryOriginRead({ ...target, ...filters, kind: "origin-exists" });
-  assertOriginal();
-  if (!exists) {
-    return 0;
-  }
   return (
     (await executeOriginCommand(options, { type: "delete", input: params }, assertOriginal)) ?? 0
   );

@@ -285,7 +285,7 @@ suite.define(() => {
             page.evaluate(
               (key) =>
                 JSON.parse(localStorage.getItem(key) ?? "{}").navigationByProfile?.["scope-reader"]
-                  ?.sidebarEntries,
+                  ?.railShortcuts,
               controlUiBundledSettingsStorageKey(suite.server.baseUrl),
             ),
           )
