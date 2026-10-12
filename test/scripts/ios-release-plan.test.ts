@@ -224,12 +224,12 @@ describe("resolveIosReleasePlan", () => {
     [
       "explicit revision mismatch",
       { explicitRevision: 4 },
-      "does not match the deterministic revision 0",
+      "does not match the planned revision 0",
     ],
     [
       "explicit build mismatch",
       { explicitBuildNumber: "4" },
-      "does not match the deterministic next build 1",
+      "does not match the planned next build 1",
     ],
     ...[
       { version: null, build: null },

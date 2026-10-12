@@ -182,7 +182,7 @@ echo '{}'`,
     ]);
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain(
-      `Canonical OpenClaw iOS Team ID '${CANONICAL_TEAM_ID}' is not available`,
+      `Official OpenClaw iOS Team ID '${CANONICAL_TEAM_ID}' is not available`,
     );
   });
 
@@ -191,6 +191,6 @@ echo '{}'`,
       "--require-canonical",
     ]);
     expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("is not the canonical OpenClaw iOS team");
+    expect(result.stderr).toContain("is not the official OpenClaw iOS team");
   });
 });

@@ -755,7 +755,7 @@ puts JSON.generate(rows)
     expect(planner).toContain("app_store_build_upload_state(upload)");
     expect(uploadState).toContain('detail["state"]');
     expect(uploadState).toContain("expected a StateDetail object");
-    expect(planner).toContain("does not match canonical root version");
+    expect(planner).toContain("does not match the root package version");
     expect(planner).toContain('File.join(repo_root, "scripts", "ios-release-plan.ts")');
     expect(planLane).toContain("resolve_ios_release_plan!");
     expect(planLane).toContain("JSON.pretty_generate(plan)");

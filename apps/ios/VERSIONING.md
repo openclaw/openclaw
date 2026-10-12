@@ -9,7 +9,7 @@ the active release identity from the repository and App Store Connect.
 - keep the associated gateway version recognizable
 - support multiple public iOS releases per gateway version
 - support multiple candidate builds per App Store version
-- make every release identity deterministic and inspectable before upload
+- calculate every release identity from the current release state and make it inspectable before upload
 - keep Apple bundle fields valid for App Store Connect
 - generate version-specific App Store release notes from changes since the last public build
 
@@ -207,7 +207,7 @@ Before screenshot or archive work, the App Store destination checks App Store Co
 - an unreleased revision present only in build-upload history is retried
 - a distributed version requires the next revision
 - multiple active versions, a different active gateway, and unknown upload
-  states fail closed for human resolution
+  states block the upload until a person resolves them
 
 Only one iOS release uploader may run at a time. The pipeline rechecks the
 exact plan after local archive and Transporter validation, immediately before
@@ -269,10 +269,10 @@ Generated or derived files:
 - `testflight-result.json` for TestFlight outcomes, including skips and pending review
 - temporary Fastlane metadata for screenshots and the App Review attachment
 
-The canonical implementation is split across:
+The implementation is split across:
 
 - `scripts/lib/ios-version.ts`: version validation, encoding, and historical changelog rendering
-- `scripts/lib/ios-release-plan.ts`: deterministic revision/build selection and
+- `scripts/lib/ios-release-plan.ts`: repeatable revision/build selection and
   changelog cutting
 - `scripts/ios-version.ts`: JSON, shell, and single-field queries
 - `scripts/ios-release-plan.ts`: pure planner CLI used by the Fastlane adapter
