@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   asOptionalObjectRecord as readObjectRecord,
   asOptionalRecord as readRecord,
@@ -189,6 +190,68 @@ type ChatCanvasPreview = {
 
 export type ChatCanvasBlock = ChatCanvasPreview & { type: "canvas" };
 
+/**
+ * Read a canvas preview out of an AgentToolResult-shaped record: its details
+ * first, then the canvas JSON riding in its content text. Tool Search results
+ * and nested tool activity carry previews this way instead of row details.
+ */
+function extractCanvasPreviewFromResultRecord(record: unknown): ChatCanvasPreview | undefined {
+  const target = readRecord(record);
+  if (!target) {
+    return undefined;
+  }
+  const detailsPreview = extractCanvasFromDetails(target.details);
+  if (detailsPreview) {
+    return { preview: detailsPreview, rawText: null };
+  }
+  const text = extractChatHistoryBlockText(target);
+  const preview = extractCanvasFromText(text);
+  return preview ? { preview, rawText: text ?? null } : undefined;
+}
+
+/**
+ * show_widget reached through Tool Search: unwrap the `{tool, result}` envelope
+ * from the row's details while they survive. Sanitization deletes the outer
+ * tool_search row's details, so post-sanitize history restores only by parsing
+ * the envelope JSON text.
+ */
+function extractToolSearchEnvelopePreview(
+  entry: Record<string, unknown>,
+): ChatCanvasPreview | undefined {
+  const details = readRecord(entry.details);
+  if (details) {
+    return extractCanvasPreviewFromResultRecord(details.result);
+  }
+  const envelope = safeParseJsonRecord(extractChatHistoryBlockText(entry) ?? "");
+  if (!envelope || !readRecord(envelope.tool)) {
+    return undefined;
+  }
+  return extractCanvasPreviewFromResultRecord(envelope.result);
+}
+
+/**
+ * Nested tool activity projects toolResult blocks whose preview rides in the
+ * block's own details or content text, not in the row-level text.
+ */
+function extractNestedToolResultBlockPreview(
+  entry: Record<string, unknown>,
+): ChatCanvasPreview | undefined {
+  if (!Array.isArray(entry.content)) {
+    return undefined;
+  }
+  for (const block of entry.content) {
+    const typed = readObjectRecord(block);
+    if (!isToolResultHistoryBlockType(typed?.type)) {
+      continue;
+    }
+    const preview = extractCanvasPreviewFromResultRecord(typed);
+    if (preview) {
+      return preview;
+    }
+  }
+  return undefined;
+}
+
 export function extractChatToolResultCanvasPreview(
   message: unknown,
 ): ChatCanvasPreview | undefined {
@@ -199,7 +262,10 @@ export function extractChatToolResultCanvasPreview(
   const detailsPreview = extractChatHistoryCanvasPreview(entry);
   const text = detailsPreview ? undefined : extractChatHistoryBlockText(entry);
   const preview = detailsPreview ?? extractCanvasFromText(text);
-  return preview ? { preview, rawText: detailsPreview ? null : (text ?? null) } : undefined;
+  if (preview) {
+    return { preview, rawText: detailsPreview ? null : (text ?? null) };
+  }
+  return extractToolSearchEnvelopePreview(entry) ?? extractNestedToolResultBlockPreview(entry);
 }
 
 export function appendChatCanvasBlocks<T>(
