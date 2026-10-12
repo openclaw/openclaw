@@ -1,0 +1,584 @@
+/**
+ * Terminal-completion planning for subagent runs.
+ *
+ * Extracted from subagent-registry-lifecycle-completion.ts so that file stays
+ * under its line cap; the attempt driver lives there and the pure planning of
+ * the terminal record lives here.
+ */
+import { isDeepStrictEqual } from "node:util";
+import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import { mergeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import {
+  isSubagentRunStillRunning,
+  resolveSubagentRunDisposition,
+  withSubagentOutcomeTiming,
+} from "../announce/subagent-announce-output.js";
+import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
+import { type SubagentKillSession } from "./subagent-control-session.js";
+import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
+import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
+import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
+import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
+import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
+import { captureSubagentRunResult } from "./subagent-registry-lifecycle-delivery.js";
+import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
+import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  resolveSubagentRunDeadlineMs,
+  resolveSubagentRunEffectiveEndedAt,
+} from "./subagent-run-timeout.js";
+const MISSING_REQUIRED_FINAL_REPLY_ERROR = "subagent run ended before producing a final reply";
+
+function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
+  if (
+    entry.execution.outcome?.status !== "timeout" ||
+    typeof entry.execution.endedAt !== "number" ||
+    // A wait-expiry publication describes the waiter, not the run. Fencing the
+    // run behind it would discard the child's own terminal callback and leave
+    // the parent's last word "timed out" for a child that went on to finish.
+    isSubagentRunStillRunning(entry.execution.outcome)
+  ) {
+    return false;
+  }
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    // A published `child-unconfirmed` timeout records that nothing was ever
+    // observed to stop the child. It is provisional by construction, so a later
+    // lifecycle callback carrying real stop evidence must be able to settle it;
+    // preserving it here is what would leave the row permanently unpromotable.
+    return false;
+  }
+  const deadlineMs = resolveSubagentRunDeadlineMs(entry);
+  if (deadlineMs === undefined || entry.execution.endedAt < deadlineMs) {
+    return false;
+  }
+  return (
+    entry.cleanupHandled === true ||
+    typeof entry.cleanupCompletedAt === "number" ||
+    typeof entry.endedHookEmittedAt === "number" ||
+    entry.delivery?.status === "delivered" ||
+    typeof entry.delivery?.announcedAt === "number"
+  );
+}
+
+export function resolveTerminalRequest(
+  entry: SubagentRunRecord,
+  completeParams: SubagentCompletionRequest,
+  now: number,
+  liveStructuredOutput: SubagentRunRecord["structuredOutput"],
+) {
+  const recoveryRequested = completeParams.recoverInterrupted === true;
+  let completionReason = completeParams.reason;
+  let requestedEndedAt = completeParams.endedAt ?? now;
+  const existingEndedAt = entry.execution.endedAt;
+  const previousOutcome = entry.execution.outcome;
+  const olderEquivalent =
+    typeof existingEndedAt === "number" &&
+    requestedEndedAt < existingEndedAt &&
+    entry.endedReason === completeParams.reason &&
+    previousOutcome?.status === completeParams.outcome.status &&
+    (previousOutcome.status !== "error" || previousOutcome.error === completeParams.outcome.error);
+  // Preserve the newer canonical timing while allowing this duplicate
+  // caller to rescue a stalled cleanup and delivery tail.
+  const drainedEndedAt =
+    typeof existingEndedAt === "number" && (recoveryRequested || olderEquivalent)
+      ? existingEndedAt
+      : undefined;
+  const shouldDrainExistingTerminal = drainedEndedAt !== undefined;
+  if (drainedEndedAt !== undefined) {
+    requestedEndedAt = drainedEndedAt;
+    completionReason = entry.endedReason ?? completeParams.reason;
+  }
+  let endedAt = requestedEndedAt;
+  let completionOutcome =
+    shouldDrainExistingTerminal && entry.execution.outcome
+      ? entry.execution.outcome
+      : completeParams.outcome;
+  if (
+    liveStructuredOutput?.structured !== undefined &&
+    completionOutcome.status === "error" &&
+    completionOutcome.error === "completed"
+  ) {
+    // Tool-only collector turns use this runner sentinel after the result is
+    // durably recorded. Normalize before every task/session/hook projection.
+    completionOutcome = { status: "ok" };
+    completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
+  }
+  const observedStartedAt =
+    !shouldDrainExistingTerminal &&
+    typeof completeParams.startedAt === "number" &&
+    Number.isFinite(completeParams.startedAt)
+      ? completeParams.startedAt
+      : undefined;
+  // Once only the wait expired, the later child result is authoritative.
+  // Reapplying that clock here would turn a real success into a terminal
+  // timeout after we deliberately kept the run open for its actual result.
+  // Abort/error/timeout outcomes retain their existing deadline attribution.
+  const preserveObservedResult =
+    shouldDeferTerminalCleanupForUnconfirmedChild(entry) && completionOutcome.status === "ok";
+  const effectiveEndedAt =
+    recoveryRequested || preserveObservedResult
+      ? endedAt
+      : resolveSubagentRunEffectiveEndedAt(entry, endedAt, observedStartedAt);
+  if (effectiveEndedAt < endedAt) {
+    endedAt = effectiveEndedAt;
+    // Clamping the reported end to the deadline does not re-observe the run,
+    // so the caller's disposition is the only liveness evidence there is.
+    completionOutcome = {
+      status: "timeout",
+      ...(completionOutcome.disposition || completionOutcome.timeoutDisposition
+        ? { disposition: resolveSubagentRunDisposition(completionOutcome) }
+        : {}),
+    };
+    completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
+  }
+  if (
+    completionOutcome.disposition !== "killed" &&
+    completionReason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.suppressAnnounceReason !== "steer-restart"
+  ) {
+    // Cancellation producers supply the killed reason without a disposition, so
+    // the reader defaults the outcome to `exited` and an `agent.wait` result
+    // carrying `stopReason: "aborted"` is announced as an ordinary exit. A
+    // provisional `still-running` is worse than absent: it describes the waiter,
+    // and carrying it onto a cancellation tells the parent a killed child is
+    // still live and harvestable. Normalize both once here, at the lifecycle
+    // boundary every cancellation passes through, and ahead of the
+    // required-reply rewrite and every downstream projection below.
+    //
+    // This reads the reason AFTER the deadline clamp above, because that clamp
+    // is what reclassifies an overdue abort with no kill tombstone into a plain
+    // run timeout. Normalizing before it would stamp `killed` onto a row whose
+    // published reason is `subagent-complete`.
+    completionOutcome = { ...completionOutcome, disposition: "killed" };
+  }
+  // Reply evidence follows producer order; duplicate receipts may still drain cleanup.
+  const terminalReply = mergeAgentRunTerminalReplySnapshot(
+    entry.completion?.terminalReply,
+    entry.completion?.terminalReply &&
+      typeof existingEndedAt === "number" &&
+      (completeParams.endedAt ?? now) <= existingEndedAt
+      ? undefined
+      : completeParams.terminalReply,
+  );
+  return {
+    requestedEndedAt,
+    endedAt,
+    completionOutcome,
+    completionReason,
+    observedStartedAt,
+    terminalReply,
+    missingRequiredReply: entry.expectsCompletionMessage === true && !terminalReply,
+  };
+}
+export function planTerminalCompletion(
+  context: SubagentLifecycleCompletionContext,
+  completeParams: SubagentCompletionRequest,
+  currentEntry: SubagentRunRecord,
+  prepared: {
+    now: number;
+    suppressSessionEffects: boolean;
+    structuredOutput: SubagentRunRecord["structuredOutput"];
+    capture: Awaited<ReturnType<typeof captureSubagentRunResult>>;
+    collectorSession?: SubagentKillSession;
+  },
+) {
+  const params = context.options;
+  if (
+    currentEntry.pauseReason === "sessions_yield" &&
+    completeParams.reason !== SUBAGENT_ENDED_REASON_KILLED
+  ) {
+    return undefined;
+  }
+  const entry = structuredClone(currentEntry);
+  let suppressSessionEffects =
+    prepared.suppressSessionEffects || entry.execution.suppressSessionEffects === true;
+  let replacedProvisionalKill = false;
+  const recoveryRequested = completeParams.recoverInterrupted === true;
+  if (
+    !recoveryRequested &&
+    (entry.terminalOwner === "interrupted-recovery" ||
+      entry.execution.suppressSessionEffects === true) &&
+    entry.killIntent === undefined
+  ) {
+    // Restart recovery already persisted the terminal winner for this exact
+    // run. Its sticky fence survives cleanup of the transient owner marker.
+    return undefined;
+  }
+  if (recoveryRequested && entry.terminalOwner !== "interrupted-recovery") {
+    // Mismatched partial terminal evidence is an existing winner and must
+    // not be overwritten. Exact normalized evidence may be the same recovery
+    // request deferred by restart admission, so drain it.
+    const hasTerminalEvidence =
+      entry.execution.status === "terminal" ||
+      entry.endedReason !== undefined ||
+      typeof entry.cleanupCompletedAt === "number";
+    const expectedElapsedMs =
+      typeof currentEntry.execution.startedAt === "number" &&
+      typeof completeParams.endedAt === "number"
+        ? Math.max(0, completeParams.endedAt - currentEntry.execution.startedAt)
+        : undefined;
+    const outcome = entry.execution.outcome;
+    const matchesRequestedInterruptedTerminal =
+      typeof completeParams.endedAt === "number" &&
+      entry.execution.endedAt === completeParams.endedAt &&
+      completeParams.outcome.status === "error" &&
+      outcome?.status === "error" &&
+      outcome.error === completeParams.outcome.error &&
+      (outcome.startedAt === undefined || outcome.startedAt === currentEntry.execution.startedAt) &&
+      (outcome.endedAt === undefined || outcome.endedAt === completeParams.endedAt) &&
+      (outcome.elapsedMs === undefined || outcome.elapsedMs === expectedElapsedMs) &&
+      entry.endedReason === SUBAGENT_ENDED_REASON_ERROR;
+    if (
+      entry.killReconciliation !== undefined ||
+      entry.endedReason === SUBAGENT_ENDED_REASON_KILLED ||
+      entry.pauseReason === "sessions_yield" ||
+      typeof entry.cleanupCompletedAt === "number" ||
+      (hasTerminalEvidence && !matchesRequestedInterruptedTerminal)
+    ) {
+      return undefined;
+    }
+    const endedAt = completeParams.endedAt ?? prepared.now;
+    const interruptedOutcome = withSubagentOutcomeTiming(
+      { status: "error", error: completeParams.outcome.error },
+      { startedAt: entry.execution.startedAt, endedAt },
+    );
+    entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
+    entry.pauseReason = undefined;
+    entry.execution = {
+      ...entry.execution,
+      status: "terminal",
+      endedAt,
+      outcome: interruptedOutcome,
+      interruptedAt: undefined,
+      interruptionReason: "gateway-restart",
+      suppressSessionEffects: suppressSessionEffects ? true : undefined,
+    };
+    entry.completion = {
+      ...ensureCompletionState(entry),
+      resultText: null,
+      capturedAt: endedAt,
+    };
+    entry.cleanupHandled = false;
+    entry.terminalOwner = "interrupted-recovery";
+  }
+  const sessionSuperseded = context.newerGenerationOwnsSession(currentEntry);
+  if (
+    completeParams.reason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.killIntent === undefined &&
+    entry.endedReason !== undefined &&
+    entry.execution.outcome !== undefined &&
+    !shouldDeferTerminalCleanupForUnconfirmedChild(entry) &&
+    (entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
+      (entry.execution.status === "terminal" &&
+        entry.killReconciliation === undefined &&
+        entry.pauseReason === undefined &&
+        typeof entry.execution.endedAt === "number" &&
+        Number.isFinite(entry.execution.endedAt) &&
+        typeof entry.cleanupCompletedAt === "number" &&
+        Number.isFinite(entry.cleanupCompletedAt) &&
+        entry.cleanupCompletedAt >= entry.execution.endedAt))
+  ) {
+    // A delayed abort must not replace a finalized result or reopen a cleaned
+    // cancellation. An unconfirmed wait expiry is not final: the kill supplies
+    // the missing stop evidence.
+    return undefined;
+  }
+  if (shouldPreservePublishedExplicitRunTimeout(entry)) {
+    return undefined;
+  }
+  const liveStructuredOutput = entry.collect
+    ? (entry.structuredOutput ?? prepared.structuredOutput)
+    : undefined;
+  if (!entry.structuredOutput && liveStructuredOutput) {
+    entry.structuredOutput = liveStructuredOutput;
+  }
+  const {
+    requestedEndedAt,
+    endedAt,
+    observedStartedAt,
+    terminalReply,
+    missingRequiredReply,
+    ...terminal
+  } = resolveTerminalRequest(entry, completeParams, prepared.now, liveStructuredOutput);
+  let { completionOutcome, completionReason } = terminal;
+  if (
+    shouldDeferTerminalCleanupForUnconfirmedChild(entry) &&
+    !isSubagentRunStillRunning(completionOutcome)
+  ) {
+    // Authoritative stop evidence promotes this row out of the deferred,
+    // non-terminal cleanup state. Reopen cleanup so the terminal effects that
+    // were withheld while the child might still have been running can run now.
+    entry.cleanupHandled = false;
+    entry.cleanupCompletedAt = undefined;
+    clearDeliveryState(entry);
+    // The provisional completion capture goes with it. `freezeRunResultAtCompletion`
+    // is first-write-wins on `resultText`, so whatever partial text (or `null`)
+    // was captured when the WAIT expired would survive this promotion and be
+    // published as the finished run's result — a successful run exposing
+    // pre-expiry output. Clearing it here is what lets the ordinary capture
+    // below run again against the child's settled transcript. Producer-owned
+    // evidence is untouched: `terminalReply`, and any `completionSnapshot` or
+    // `terminalReply` carried by this promotion, are applied after this point
+    // and outrank the recapture.
+    const provisionalCompletion = entry.completion;
+    if (
+      provisionalCompletion &&
+      (provisionalCompletion.resultText !== undefined ||
+        provisionalCompletion.capturedAt !== undefined)
+    ) {
+      provisionalCompletion.resultText = undefined;
+      provisionalCompletion.capturedAt = undefined;
+    }
+  }
+  const killIntent = entry.killIntent;
+  if (killIntent) {
+    if (completionReason !== SUBAGENT_ENDED_REASON_KILLED && endedAt < killIntent.requestedAt) {
+      entry.killIntent = undefined;
+    } else {
+      const killOwnsCurrentLifecycle =
+        killIntent.lifecycleGeneration !== undefined &&
+        isAgentEventLifecycleGenerationCurrent(killIntent.lifecycleGeneration);
+      completionReason = SUBAGENT_ENDED_REASON_KILLED;
+      completionOutcome = { status: "error", error: killIntent.reason };
+      entry.killIntent = undefined;
+      if (killOwnsCurrentLifecycle && entry.execution.suppressSessionEffects !== true) {
+        suppressSessionEffects = false;
+        entry.execution = {
+          ...entry.execution,
+          lifecycleGeneration: killIntent.lifecycleGeneration,
+          restartRecovery: undefined,
+          suppressSessionEffects: undefined,
+        };
+      }
+      entry.killReconciliation = {
+        killedAt: killIntent.requestedAt,
+        taskCancellationAccepted: killOwnsCurrentLifecycle ? true : undefined,
+        suppressTaskDelivery: killIntent.suppressTaskDelivery === true ? true : undefined,
+      };
+    }
+  }
+  if (
+    completionReason !== SUBAGENT_ENDED_REASON_KILLED &&
+    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.killReconciliation === undefined
+  ) {
+    // Only current-version provisional kills carry reconciliation state.
+    // Legacy or already-stabilized killed rows are terminal cancellation.
+    return undefined;
+  }
+  const isSteerRestartKill =
+    completeParams.reason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.suppressAnnounceReason === "steer-restart";
+  if (completionReason === SUBAGENT_ENDED_REASON_KILLED && !isSteerRestartKill) {
+    entry.suppressAnnounceReason = "killed";
+    entry.killReconciliation ??= {
+      killedAt: requestedEndedAt,
+    };
+  }
+
+  if (
+    completionReason !== SUBAGENT_ENDED_REASON_KILLED &&
+    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.killReconciliation !== undefined
+  ) {
+    const killReconciliation = entry.killReconciliation;
+    const stableTaskCancellation = killReconciliation.taskCancellationAccepted === true;
+    const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(entry);
+    const completionPredatesCancellation =
+      typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
+    if (stableTaskCancellation && !completionPredatesCancellation) {
+      // Native cancellation promotes the provisional marker to durable operator
+      // intent. Only an already-durable earlier completion may reopen it.
+      return undefined;
+    }
+    if (isSubagentRunStillRunning(completionOutcome)) {
+      // A completion that observed nothing about the child (deadline-only wait
+      // expiry) cannot arbitrate the kill tombstone either, so leave the kill
+      // tail live for an owner that has real stop evidence.
+      return undefined;
+    }
+    replacedProvisionalKill = true;
+    entry.suppressCompletionDelivery =
+      killReconciliation.suppressTaskDelivery === true ? true : undefined;
+    entry.suppressAnnounceReason = undefined;
+    entry.killReconciliation = undefined;
+    entry.cleanupHandled = false;
+    entry.cleanupCompletedAt = undefined;
+    clearDeliveryState(entry);
+  }
+
+  if (observedStartedAt !== undefined && entry.execution.startedAt !== observedStartedAt) {
+    entry.execution = { ...entry.execution, startedAt: observedStartedAt };
+    if (typeof entry.sessionStartedAt !== "number") {
+      entry.sessionStartedAt = observedStartedAt;
+    }
+  }
+
+  if (
+    completionReason === SUBAGENT_ENDED_REASON_COMPLETE &&
+    completionOutcome.status !== "error" &&
+    replacedProvisionalKill
+  ) {
+    // A killed lifecycle may freeze an empty result before the canonical end
+    // wins. Preserve any reply already captured by an earlier successful callback.
+    const completion = ensureCompletionState(entry);
+    const hasCapturedReply =
+      typeof completion.resultText === "string" && completion.resultText.trim().length > 0;
+    if (
+      !hasCapturedReply &&
+      (completion.resultText !== undefined || completion.capturedAt !== undefined)
+    ) {
+      completion.resultText = undefined;
+      completion.capturedAt = undefined;
+    }
+  }
+  // Lifecycle events and agent.wait both settle here. A required success
+  // needs producer evidence before any transcript fallback can freeze it.
+  if (missingRequiredReply && completionOutcome.status === "ok") {
+    // An unproven success cannot replace the cancellation already owned by this run.
+    if (replacedProvisionalKill) {
+      return undefined;
+    }
+    completionOutcome = { status: "error", error: MISSING_REQUIRED_FINAL_REPLY_ERROR };
+    completionReason = SUBAGENT_ENDED_REASON_ERROR;
+  }
+  const outcome =
+    recoveryRequested && entry.execution.outcome
+      ? entry.execution.outcome
+      : withSubagentOutcomeTiming(completionOutcome, {
+          startedAt: entry.execution.startedAt,
+          endedAt,
+        });
+  // Lifecycle events and agent.wait may report the same terminal facts. Keep
+  // their authority stable while a prepared announcement waits for admission.
+  const executionOutcome =
+    (recoveryRequested || isDeepStrictEqual(entry.execution.outcome, outcome)) &&
+    entry.execution.outcome
+      ? entry.execution.outcome
+      : outcome;
+  const retainedRestartRecovery = suppressSessionEffects
+    ? entry.execution.restartRecovery
+    : undefined;
+  const interruptionReason = recoveryRequested ? "gateway-restart" : undefined;
+  if (
+    entry.execution.status !== "terminal" ||
+    entry.execution.endedAt !== endedAt ||
+    entry.execution.outcome !== executionOutcome ||
+    entry.execution.interruptionReason !== interruptionReason ||
+    entry.execution.restartRecovery !== retainedRestartRecovery ||
+    entry.execution.suppressSessionEffects !== (suppressSessionEffects ? true : undefined)
+  ) {
+    entry.execution = {
+      ...entry.execution,
+      status: "terminal",
+      endedAt,
+      outcome: executionOutcome,
+      interruptedAt: undefined,
+      interruptionReason,
+      restartRecovery: retainedRestartRecovery,
+      suppressSessionEffects: suppressSessionEffects ? true : undefined,
+    };
+  }
+  entry.endedReason = completionReason;
+  if (completionReason === SUBAGENT_ENDED_REASON_KILLED && entry.terminalOwner !== undefined) {
+    entry.terminalOwner = undefined;
+  }
+  if (entry.pauseReason !== undefined) {
+    entry.pauseReason = undefined;
+  }
+
+  const completion = ensureCompletionState(entry);
+  if (completeParams.completionSnapshot) {
+    completion.resultText = completeParams.completionSnapshot.resultText;
+    completion.capturedAt = completeParams.completionSnapshot.capturedAt;
+  }
+
+  if (
+    terminalReply &&
+    (JSON.stringify(terminalReply) !== JSON.stringify(completion.terminalReply) ||
+      completion.resultText === undefined)
+  ) {
+    completion.terminalReply = terminalReply;
+    completion.resultText =
+      terminalReply.disposition === "visible"
+        ? terminalReply.text
+        : terminalReply.disposition === "silent"
+          ? SILENT_REPLY_TOKEN
+          : null;
+    completion.capturedAt = endedAt;
+  }
+
+  const closesAsIntentionalNonDelivery =
+    entry.expectsCompletionMessage === true &&
+    executionOutcome.status === "ok" &&
+    terminalReply?.disposition === "empty" &&
+    terminalReply.code !== "message-tool-not-called" &&
+    entry.requesterTurnYielded !== true &&
+    entry.requesterSettleWake === undefined &&
+    entry.delivery?.disposition !== "intentional_non_delivery";
+  if (closesAsIntentionalNonDelivery) {
+    // Producer-owned empty success is a terminal fact, not a failed send.
+    // Close it before terminal persistence so no requester delivery can start.
+    entry.delivery = {
+      status: "not_required",
+      disposition: "intentional_non_delivery",
+    };
+    entry.suppressCompletionDelivery = true;
+  }
+
+  if (completion.resultText === undefined) {
+    if (recoveryRequested || sessionSuperseded || executionOutcome.status === "error") {
+      completion.resultText = null;
+      completion.capturedAt = prepared.now;
+    } else {
+      const capture = prepared.capture;
+      if (
+        !capture ||
+        !isDeepStrictEqual(entry.execution.transcriptTarget, capture.transcriptTarget) ||
+        !isDeepStrictEqual(executionOutcome, capture.outcome)
+      ) {
+        throw new SubagentRegistryMutationRejectedError(
+          "Subagent completion requires fresh result capture",
+        );
+      }
+      completion.resultText = capture.resultText;
+      completion.capturedAt = capture.capturedAt;
+    }
+  }
+  if (entry.collect) {
+    updateSwarmCollectorCompletion(entry, params.getRuntimeConfig(), {
+      entry: prepared.collectorSession?.entry,
+    });
+  } else {
+    updateSubagentArchiveAtMs(entry, params.getRuntimeConfig());
+  }
+  const delivery = entry.delivery;
+  if (
+    delivery?.payload &&
+    delivery.status !== "delivered" &&
+    typeof delivery.announcedAt !== "number"
+  ) {
+    delivery.payload = {
+      ...delivery.payload,
+      startedAt: entry.execution.startedAt,
+      endedAt: entry.execution.endedAt,
+      outcome: entry.execution.outcome,
+      terminalReply: entry.completion?.terminalReply,
+    };
+  }
+  const mutated = !isDeepStrictEqual(currentEntry, entry);
+  return {
+    entry: mutated ? entry : currentEntry,
+    completionReason,
+    mutated,
+    sessionSuperseded,
+    suppressSessionEffects,
+    replacedProvisionalKill,
+  };
+}

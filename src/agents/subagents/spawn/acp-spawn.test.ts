@@ -4,7 +4,6 @@ import path from "node:path";
 /** Tests ACP spawn planning, policy gates, bindings, cleanup, and parent stream setup. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { markAcpTurnActive } from "../../../acp/control-plane/active-turns.js";
 import type { AcpInitializeSessionInput } from "../../../acp/control-plane/manager.types.js";
 import { testing as acpRuntimeRegistryTesting } from "../../../acp/runtime/registry.js";
@@ -34,9 +33,9 @@ import {
 } from "../../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
-import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { expectRecordFields } from "../../subagent-test-fixtures.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import { registerAcpSpawnCapacityTests } from "./acp-spawn-capacity.test-support.js";
 import { registerAcpSpawnOwnerTests } from "./acp-spawn-owner.test-support.js";
 import { registerAcpSpawnPolicyTests } from "./acp-spawn-policy.test-support.js";
 import { createAcpSpawnSessionBinding as createSessionBinding } from "./acp-spawn-store.test-support.js";
@@ -487,6 +486,21 @@ describe("spawnAcpDirect", () => {
     upsertSessionEntryMock: hoisted.upsertSessionEntryMock,
     callGatewayMock: hoisted.callGatewayMock,
   });
+  registerAcpSpawnCapacityTests({
+    spawn,
+    requesterContext,
+    configureSubagentDefaults,
+    trackActiveAcpTurn,
+    expectAcceptedSpawn,
+    expectFailedSpawn,
+    mocks: {
+      callGateway: hoisted.callGatewayMock,
+      cleanupFailedAcpSpawn: hoisted.cleanupFailedAcpSpawnMock,
+      countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
+      getSubagentRun: hoisted.getSubagentRunMock,
+      registerSubagentRun: hoisted.registerSubagentRunMock,
+    },
+  });
   registerAcpSpawnOwnerTests({
     spawn,
     state: hoisted.state,
@@ -897,133 +911,6 @@ describe("spawnAcpDirect", () => {
         source: { type: "base64", media_type: "image/png", data: imageBase64 },
       },
     ]);
-  });
-
-  it("rejects ACP spawns that exceed subagent max depth", async () => {
-    const result = await spawn(
-      { mode: "run" },
-      {
-        ...requesterContext,
-        agentSessionKey: "agent:main:subagent:parent:subagent:leaf",
-      },
-    );
-
-    const failed = expectFailedSpawn(result, "forbidden");
-    expect(failed.errorCode).toBe("subagent_policy");
-    expect(failed.error).toContain("current depth: 2, max: 2");
-  });
-
-  it.each([1, 2])("counts a pending dispatch exactly once against cap %s", async (cap) => {
-    configureSubagentDefaults({ maxChildrenPerAgent: cap });
-    hoisted.countActiveRunsForSessionMock.mockImplementation(
-      () => hoisted.registerSubagentRunMock.mock.calls.length,
-    );
-    if (cap === 2) {
-      hoisted.getSubagentRunMock.mockImplementation((childSessionKey: string) =>
-        hoisted.registerSubagentRunMock.mock.calls.some(
-          ([run]) => run.childSessionKey === childSessionKey,
-        )
-          ? { childSessionKey, execution: { status: "running" } }
-          : null,
-      );
-    }
-    const entered = createDeferred();
-    const release = createDeferred();
-    const context = {
-      ...requesterContext,
-      agentSessionKey: "agent:main:subagent:parent",
-      ...(cap === 1 ? { completionOwnerKey: "agent:main:main" } : {}),
-    };
-    let dispatchedRuns = 0;
-    hoisted.callGatewayMock.mockImplementation(
-      async (request: { method?: string; params?: { sessionKey?: string } }) => {
-        if (request.method !== "agent") {
-          return {};
-        }
-        const runNumber = ++dispatchedRuns;
-        if (cap === 2) {
-          trackActiveAcpTurn(
-            expectDefined(request.params?.sessionKey, "dispatched child"),
-            context.agentSessionKey,
-          );
-        }
-        if (runNumber === 1) {
-          entered.resolve();
-          await release.promise;
-        }
-        return { runId: `acp-run-${runNumber}` };
-      },
-    );
-    const first = spawn({ mode: "run" }, context);
-    try {
-      await entered.promise;
-      const second = await spawn({ mode: "run" }, context);
-      if (cap === 1) {
-        expect(expectFailedSpawn(second, "forbidden")).toMatchObject({
-          errorCode: "subagent_policy",
-          error: expect.stringContaining("max active children for this session (1/1"),
-        });
-      } else {
-        expectAcceptedSpawn(second);
-      }
-    } finally {
-      release.resolve();
-    }
-    expectAcceptedSpawn(await first);
-    expect(dispatchedRuns).toBe(cap);
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(cap);
-  });
-
-  it("counts unrelated active ACP turns separately from anonymous child reservations", async () => {
-    configureSubagentDefaults({ maxChildrenPerAgent: 2 });
-    trackActiveAcpTurn("agent:codex:acp:independent-task", "agent:main:subagent:parent");
-    const controllerSessionKey = "agent:main:subagent:parent";
-    const pendingNativeChild = reserveChildAdmissionSlot({
-      controllerSessionKey,
-      resolveAdmission: () => ({ ok: true as const }),
-    });
-    if (!pendingNativeChild.ok) {
-      throw new Error("Expected native child reservation");
-    }
-
-    try {
-      const rejected = await spawn(
-        { mode: "run" },
-        {
-          ...requesterContext,
-          agentSessionKey: controllerSessionKey,
-        },
-      );
-
-      expect(expectFailedSpawn(rejected, "forbidden")).toMatchObject({
-        errorCode: "subagent_policy",
-        error: expect.stringContaining("max active children for this session (2/2"),
-      });
-      expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
-    } finally {
-      pendingNativeChild.release();
-    }
-  });
-
-  it("returns ACP child capacity after run registration fails", async () => {
-    configureSubagentDefaults({ maxChildrenPerAgent: 1 });
-    hoisted.registerSubagentRunMock.mockRejectedValueOnce(new Error("registry unavailable"));
-    const context = {
-      ...requesterContext,
-      agentSessionKey: "agent:main:subagent:parent",
-    };
-
-    const failed = await spawn({ mode: "run" }, context);
-    const replacement = await spawn({ mode: "run" }, context);
-
-    expect(expectFailedSpawn(failed, "error")).toMatchObject({
-      errorCode: "spawn_failed",
-      error: expect.stringContaining("registry unavailable"),
-    });
-    expect(failed).toHaveProperty("runId", "run-1");
-    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledTimes(1);
-    expectAcceptedSpawn(replacement);
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(2);
   });
 
   it.each([true, false])(
