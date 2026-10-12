@@ -22,7 +22,7 @@ import {
 } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { captureSessionEntryCurrentCheck } from "./session-binding-runtime.js";
+import { captureSessionEntryCurrentCheckAsync } from "./session-binding-runtime.js";
 import {
   patchSessionEntry,
   cleanupSessionLifecycleArtifacts,
@@ -351,9 +351,9 @@ it("keeps unbound incognito host-owned and distinguishes selected absence from a
     { kind: "absent", agentId: "main", env: absentEnv, authority },
     async () => {
       await expect(getSessionEntryAsync({ ...scope, env: absentEnv })).resolves.toBeUndefined();
-      const absent = await captureSessionEntryCurrentCheck({ ...scope, env: absentEnv });
+      const absent = await captureSessionEntryCurrentCheckAsync({ ...scope, env: absentEnv });
       expect(absent.entry).toBeUndefined();
-      expect(absent.isCurrent()).toBe(true);
+      await expect(absent.isCurrent()).resolves.toBe(true);
       await expect(
         getSessionEntryByIdAsync({ agentId: "main", sessionId: "missing" }),
       ).resolves.toBeUndefined();
@@ -408,24 +408,24 @@ it("keeps exact actor policy guards current without treating unrelated metadata 
     await withIncognitoSessionActor(actor, async () => {
       const sql = observeHostDataSql();
       try {
-        const prepared = await captureSessionEntryCurrentCheck({
+        const prepared = await captureSessionEntryCurrentCheckAsync({
           ...target,
           fields: ["execHost", "execNode"],
         });
-        expect(prepared.isCurrent()).toBe(true);
+        await expect(prepared.isCurrent()).resolves.toBe(true);
         expect(prepared.entry).toMatchObject({ execHost: "node", execNode: "original-node" });
         expect(prepared.entry).not.toHaveProperty("cliHistoryBoundary");
         expect(prepared.entry).not.toHaveProperty("pendingProjectGitUrl");
         // Returned metadata is caller-owned, not the retained authorization predicate.
         prepared.entry!.execNode = "edited-return-value";
-        expect(prepared.isCurrent()).toBe(true);
+        await expect(prepared.isCurrent()).resolves.toBe(true);
         await patchSessionEntry({ ...target, update: () => ({ displayName: "unrelated" }) });
-        expect(prepared.isCurrent()).toBe(true);
+        await expect(prepared.isCurrent()).resolves.toBe(true);
         await patchSessionEntry({ ...target, update: () => ({ execNode: "replacement-node" }) });
-        expect(prepared.isCurrent()).toBe(false);
-        expect(prepared.assertCurrent).toThrow("selected session changed");
+        await expect(prepared.isCurrent()).resolves.toBe(false);
+        await expect(prepared.assertCurrent()).rejects.toThrow("selected session changed");
         await expect(
-          captureSessionEntryCurrentCheck({
+          captureSessionEntryCurrentCheckAsync({
             ...target,
             fields: ["execNode"],
             expected: { sessionId: "selected", execNode: "original-node" },

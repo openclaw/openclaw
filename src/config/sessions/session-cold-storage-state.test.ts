@@ -58,15 +58,19 @@ function fixture() {
   return { db, peer, read, archive };
 }
 
-it("reuses the hot fact across read pages and invalidates it after owner writes and rollback", () => {
+it("reuses hot facts only within a snapshot and invalidates them after writes and rollback", () => {
   const { db, peer, read, archive } = fixture();
   const observed = trackSqliteStatementExecutions(db, ["cold"], (sql) =>
     /^select\b.*\bfrom "session_transcript_cold_archives"/iu.test(sql) ? "cold" : null,
   );
   try {
+    runSqliteDeferredTransactionSync(db, () => {
+      expect(read()).toEqual({ updated_at: 1 });
+      expect(read()).toEqual({ updated_at: 1 });
+      expect(observed.counts.cold).toBe(1);
+    });
     expect(read()).toEqual({ updated_at: 1 });
-    expect(read()).toEqual({ updated_at: 1 });
-    expect(observed.counts.cold).toBe(1);
+    expect(observed.counts.cold).toBe(2);
 
     expect(() =>
       runSqliteImmediateTransactionSync(db, () => {

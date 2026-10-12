@@ -208,9 +208,10 @@ it("separates deprecated-only calls and rejects bundled callers even without T1 
       cwd: root,
       stdio: "pipe",
     });
-  const relative = "src/plugin-sdk/sqlite-runtime-legacy.ts";
+  const relative = "extensions/matrix/auth-presence.ts";
   const file = path.join(root, relative);
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.mkdirSync(path.join(root, "src/plugin-sdk"), { recursive: true });
   fs.writeFileSync(path.join(root, "src/runtime.ts"), "executeSqliteQuerySync(query);\n");
   git("init");
   git("add", ".");
@@ -218,12 +219,9 @@ it("separates deprecated-only calls and rejects bundled callers even without T1 
   const wrappers = `
 import * as queries from "../infra/kysely-sync.js";
 /** @deprecated Use the worker backend. */
-function executeSqliteQueryTakeFirstSyncLegacy(database, query) {
+export function hasAnyMatrixAuth(database, query) {
   return queries.executeSqliteQueryTakeFirstSync(database, query);
 }
-export {
-  executeSqliteQueryTakeFirstSyncLegacy as executeSqliteQueryTakeFirstSync,
-};
 `;
   fs.writeFileSync(file, wrappers);
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -235,7 +233,7 @@ export {
   expect(main(root, ["--base", "HEAD"])).toBe(0);
   fs.writeFileSync(
     path.join(root, "src/plugin-sdk/sqlite-runtime.ts"),
-    'export { executeSqliteQueryTakeFirstSync as legacyQuery } from "./sqlite-runtime-legacy.js";\n',
+    'export { hasAnyMatrixAuth as legacyQuery } from "../../extensions/matrix/auth-presence.js";\n',
   );
   fs.writeFileSync(
     path.join(root, "src/runtime.ts"),

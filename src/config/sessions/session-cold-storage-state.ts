@@ -12,7 +12,6 @@ import {
 } from "../../infra/sqlite-database-admission.js";
 import {
   getSqliteReadScopeRevision,
-  hasUncommittedSqliteWrites,
   runSqliteReadOperationSync,
   type SqliteReadScopeRevision,
 } from "../../infra/sqlite-schema-facts.js";
@@ -145,7 +144,7 @@ export function assertSessionTranscriptHot(db: DatabaseSync, sessionId: string):
   }
 }
 
-/** The snapshot owner carries committed cold facts between read-only pages. */
+/** The cold marker and transcript rows must belong to the same native snapshot. */
 export function readHotSessionTranscriptSnapshot<T>(
   database: { db: DatabaseSync },
   sessionId: string,
@@ -172,28 +171,12 @@ export function readHotSessionTranscriptSnapshot<T>(
     assertTransactionUsable(db);
     return result;
   }
-  const token = hasUncommittedSqliteWrites(db)
-    ? undefined
-    : readSqliteDatabaseScopedWriteToken(db, [sqliteSessionIdWriteScope(sessionId)]);
-  const retained = getColdTranscriptQueries(db).facts.get(sessionId);
-  const result = runSqliteDeferredTransactionSync(
+  return runSqliteDeferredTransactionSync(
     db,
     () => {
-      if (token !== undefined && retained?.token === token) {
-        if (retained.cold) {
-          throw new SessionTranscriptColdError(sessionId);
-        }
-      } else {
-        assertSessionTranscriptHot(db, sessionId);
-      }
+      assertSessionTranscriptHot(db, sessionId);
       return read();
     },
     { operationLabel: `session transcript ${purpose} read` },
   );
-  // Keep the pre-BEGIN receipt: a concurrent archive retires it even if this
-  // snapshot still read hot rows. Existing caller-owned snapshots never promote.
-  if (token !== undefined) {
-    retainColdFact(db, sessionId, { cold: false, token });
-  }
-  return result;
 }

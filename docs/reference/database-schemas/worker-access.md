@@ -94,8 +94,10 @@ ownership; ordinary readers do not poll for foreign commits.
 
 Transcript readers retain bounded hot/cold facts under the existing session write
 receipts. Archive, restore, session deletion, and native writes invalidate those
-facts; an unknown receipt falls back to the durable marker. Consecutive read pages
-reuse the fact, while an already-open snapshot keeps its own local result.
+facts; an unknown receipt falls back to the durable marker. Each new transcript
+read snapshot selects the indexed cold marker before consuming transcript rows.
+Repeated reads inside that snapshot reuse its local fact; a committed-write receipt
+captured before the snapshot cannot replace that initial marker read.
 Participant projections carry an autocommit read into the metadata CAS owner's
 unchanged immediate write transaction. Ordinary readers establish their own native
 snapshot. Concurrent participant updates remain independent of metadata CAS. These
@@ -409,10 +411,9 @@ grant. Entry-only binding mutations carry `entryCurrent` through existing writer
 admission. Host callbacks check live channel/run facts among those matches, so a
 finishing publisher can yield to a recorded parent without losing a valid title
 update. `source.assertScopeCurrent()` checks only host lifetime and physical source
-custody; it does not replace an awaited effect check. The deprecated
-`captureSessionEntryCurrentCheck` keeps its released synchronous callbacks, warns
-on use, and is scheduled for removal at the next Plugin SDK major. Incognito uses
-its existing native callback route.
+custody; it does not replace an awaited effect check. The never-stable
+`captureSessionEntryCurrentCheck` facade and its synchronous callback preparation
+path are removed. Incognito uses its existing native callback route.
 
 History readers can borrow existing physical and canonical admission without an
 open host reader. The receiving scope checks its actual file and the live receipt;

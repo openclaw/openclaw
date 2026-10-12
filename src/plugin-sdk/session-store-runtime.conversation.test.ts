@@ -22,7 +22,6 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import {
-  captureSessionEntryCurrentCheck,
   captureSessionEntryCurrentCheckAsync,
   composeSessionEntryCommitGuards,
 } from "./session-binding-runtime.js";
@@ -187,15 +186,15 @@ describe("current conversation session binding", () => {
       entry: { sessionId: "original", updatedAt: 100 },
     });
     for (const sessionKey of [" main ", " AGENT:MAIN:main "]) {
-      const current = await captureSessionEntryCurrentCheck({ ...scope, sessionKey });
-      expect(current.isCurrent()).toBe(true);
+      const current = await captureSessionEntryCurrentCheckAsync({ ...scope, sessionKey });
+      await expect(current.isCurrent()).resolves.toBe(true);
       const hostSql = observeHostDataSql();
       try {
         await patchSessionEntry({
           ...scope,
           sessionKey,
           skipMaintenance: true,
-          assertCommitAllowed: current.assertCurrent,
+          assertCommitAllowed: current.source,
           update: () => ({ displayName: sessionKey }),
         });
       } finally {
@@ -244,16 +243,16 @@ describe("current conversation session binding", () => {
     }
     const linkType = process.platform === "win32" ? "junction" : "dir";
     fs.symlinkSync(firstDirectory, aliasDirectory, linkType);
-    const current = await captureSessionEntryCurrentCheck({
+    const current = await captureSessionEntryCurrentCheckAsync({
       ...scope,
       alternatives: [{ conversations: [{ ...address, sessionKey: conversationKey }] }],
       errorMessage: "Conversation source changed before title commit",
     });
-    expect(current.isCurrent()).toBe(true);
+    await expect(current.isCurrent()).resolves.toBe(true);
     await patchSessionEntry({
       ...scope,
       skipMaintenance: true,
-      assertCommitAllowed: current.assertCurrent,
+      assertCommitAllowed: current.source,
       update: () => ({ displayName: "Accepted title" }),
     });
     expect(getSessionEntry(scope)?.displayName).toBe("Accepted title");
@@ -268,7 +267,7 @@ describe("current conversation session binding", () => {
       patchSessionEntry({
         ...scope,
         skipMaintenance: true,
-        assertCommitAllowed: current.assertCurrent,
+        assertCommitAllowed: current.source,
         update: () => ({ displayName: "Rejected title" }),
       }),
     ).rejects.toThrow("Conversation source changed before title commit");
@@ -323,7 +322,7 @@ describe("current conversation session binding", () => {
       });
       const current =
         guardKind !== "opaque"
-          ? await captureSessionEntryCurrentCheck({
+          ? await captureSessionEntryCurrentCheckAsync({
               ...scope,
               matchGeneration: false,
               alternatives: [{ conversations: [{ ...address, sessionKey: scope.sessionKey }] }],
@@ -333,8 +332,8 @@ describe("current conversation session binding", () => {
       const assertCurrent =
         current &&
         (guardKind === "composed"
-          ? composeSessionEntryCommitGuards([current.assertCurrent])
-          : current.assertCurrent);
+          ? composeSessionEntryCommitGuards([current.source])
+          : current.source);
       if (current) {
         const hostSql = observeHostDataSql();
         try {
