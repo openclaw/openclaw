@@ -10,12 +10,13 @@ import type {
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
-import { buildGroupDisplayName, type SessionEntry } from "../config/sessions.js";
+import { buildGroupDisplayName } from "../config/sessions/group-display.js";
 import {
   MAX_SESSION_PARTICIPANTS,
   sessionCreatorProfileId,
 } from "../config/sessions/session-entry-provenance.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";

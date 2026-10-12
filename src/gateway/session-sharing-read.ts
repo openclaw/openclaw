@@ -209,7 +209,7 @@ export type PreparedMutationSharing = {
   assertCurrent: () => void;
 };
 
-/** Prepared policy and source facts are borrowed only by one synchronous authority consumer. */
+/** Consume live authority or borrow prepared source facts in one synchronous frame. */
 export function createSessionSharingConsumption(params: {
   client: GatewayClient | null;
   sharing: PreparedMutationSharing | undefined;
@@ -229,7 +229,7 @@ export function createSessionSharingConsumption(params: {
           })
         : undefined,
     consume: <T>(
-      prepared: PreparedMutationSharing,
+      prepared: PreparedMutationSharing | undefined,
       consume: () => T,
       profiles: PreparedSessionSharingProfiles | undefined = params.getProfiles(),
     ): T => {
@@ -237,7 +237,7 @@ export function createSessionSharingConsumption(params: {
       Object.assign(current, { sharing: prepared, profiles });
       try {
         profiles?.readCurrent();
-        prepared.assertCurrent();
+        prepared?.assertCurrent();
         const result = consume();
         if (isPromiseLike(result)) {
           throw new Error("Sharing authorization consumers must remain synchronous");
