@@ -47,7 +47,10 @@ export const pluginCredentialHandlers: GatewayRequestHandlers = {
           return;
         }
         const metadata = resolveManagedPluginMetadata(context.getRuntimeConfig(), process.env);
-        const manifest = metadata.byPluginId.get(params.pluginId);
+        // Match management-skill-read / plugins.inspect: padded or aliased ids must
+        // resolve to the installed manifest key before the exact Map lookup.
+        const pluginId = metadata.normalizePluginId(params.pluginId);
+        const manifest = metadata.byPluginId.get(pluginId);
         const descriptor =
           manifest &&
           resolvePluginCredentialDescriptors(manifest).find(

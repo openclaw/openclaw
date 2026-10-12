@@ -37,7 +37,10 @@ beforeEach(() => {
       plugins: { entries: { example: { config: { key: ref, other: "never-return-this" } } } },
     },
   });
-  mocks.metadata.mockReturnValue({ byPluginId: new Map([["example", { id: "example" }]]) });
+  mocks.metadata.mockReturnValue({
+    byPluginId: new Map([["example", { id: "example" }]]),
+    normalizePluginId: (pluginId: string) => pluginId.trim().toLowerCase(),
+  });
   mocks.descriptors.mockReturnValue([{ path, label: "Key", envVars: [] }]);
 });
 describe("plugin credential inspection authorization", () => {
