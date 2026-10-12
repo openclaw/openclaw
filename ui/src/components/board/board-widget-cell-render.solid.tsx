@@ -32,7 +32,7 @@ export function BoardWidgetMenu(props: {
   );
 }
 
-function BoardWidgetMenuItems(props: {
+export function BoardWidgetMenuItems(props: {
   widget: BoardWidget;
   tabs: readonly BoardTab[];
   disabled: boolean;
