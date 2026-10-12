@@ -887,10 +887,23 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/clawrouter:
+    dependencies:
+      '@solidjs/web':
+        specifier: 2.0.0-rc.13
+        version: 2.0.0-rc.13(solid-js@2.0.0-rc.13)
+      solid-js:
+        specifier: 2.0.0-rc.13
+        version: 2.0.0-rc.13
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@solidjs/compiler':
+        specifier: 2.0.0-rc.13
+        version: 2.0.0-rc.13
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   extensions/clickclack:
     dependencies:

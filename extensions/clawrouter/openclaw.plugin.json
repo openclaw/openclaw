@@ -1,19 +1,30 @@
 {
   "id": "clawrouter",
-  "categories": ["models"],
+  "categories": [
+    "models"
+  ],
   "activation": {
-    "onStartup": false
+    "onStartup": false,
+    "onConfigPaths": [
+      "models.providers.clawrouter"
+    ]
   },
   "enabledByDefault": true,
-  "providers": ["clawrouter"],
+  "providers": [
+    "clawrouter"
+  ],
   "contracts": {
-    "usageProviders": ["clawrouter"]
+    "usageProviders": [
+      "clawrouter"
+    ]
   },
   "setup": {
     "providers": [
       {
         "id": "clawrouter",
-        "envVars": ["CLAWROUTER_API_KEY"]
+        "envVars": [
+          "CLAWROUTER_API_KEY"
+        ]
       }
     ]
   },
@@ -37,5 +48,15 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "uiCapabilities": [
+    "page",
+    "navigation"
+  ],
+  "controlUi": {
+    "entry": "dist/control-ui/cc6b03cbdfd9262c7192e3b0342a1fc51eb969d2f70424e9d73130c79a6fa967/index.js",
+    "styles": [
+      "dist/control-ui/cc6b03cbdfd9262c7192e3b0342a1fc51eb969d2f70424e9d73130c79a6fa967/index.css"
+    ]
   }
 }
