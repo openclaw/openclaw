@@ -473,7 +473,7 @@ describe("workspace attachment preparation", () => {
       }),
     ).rejects.toThrow(
       host === "empty-note" || host === "blank-note"
-        ? "Workspace attachment 1 could not be prepared; ensure every attachment is available to the registered attachment provider before retrying"
+        ? "Workspace attachment 1 could not be prepared; check that every attachment is available to the registered attachment provider before retrying"
         : "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
     );
   });
