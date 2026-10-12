@@ -8,8 +8,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=openclaw-sandbox-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
-  apt-get update \
-  && apt-get install -y --no-install-recommends \
+  set -eu; \
+  for attempt in 1 2 3; do \
+    if apt-get -o Acquire::Retries=5 update --error-on=any; then break; fi; \
+    echo "apt-get update failed (attempt ${attempt})" >&2; \
+    if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
+    sleep 5; \
+  done; \
+  apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     bash \
     ca-certificates \
     chromium \
