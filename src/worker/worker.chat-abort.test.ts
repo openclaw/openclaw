@@ -132,6 +132,7 @@ describe("worker chat.abort settlement", () => {
       registration.markExecutionStarted();
       const ownerInput = {
         placements: harness.placementStore,
+        isReplyDelivered: () => false,
         claim: claim!,
         sessionKey: SESSION_KEY,
         turn: {

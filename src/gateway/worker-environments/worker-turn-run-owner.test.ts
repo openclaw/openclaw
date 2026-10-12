@@ -305,6 +305,7 @@ describe("cloud worker run ownership", () => {
             placements,
             claim: firstClaim,
             turn: turn(runId),
+            isReplyDelivered: () => false,
             sessionKey: SESSION_KEY,
           }),
       );
@@ -348,6 +349,7 @@ describe("cloud worker run ownership", () => {
             placements,
             claim: firstClaim,
             turn: turn(runId),
+            isReplyDelivered: () => false,
             sessionKey: SESSION_KEY,
           });
           expect(captureWorkerTurnLiveEventOwner(identity)).not.toBe(eventOwner);
@@ -365,6 +367,7 @@ describe("cloud worker run ownership", () => {
               placements,
               claim: nextClaim,
               turn: turn(runId),
+              isReplyDelivered: () => false,
               sessionKey: SESSION_KEY,
             });
             expect(captureWorkerTurnLiveEventOwner(identity)).toBeUndefined();
@@ -412,6 +415,7 @@ describe("cloud worker run ownership", () => {
         placements,
         claim,
         turn: turn(runId),
+        isReplyDelivered: () => false,
         sessionKey: SESSION_KEY,
       });
       const previous = resolveActiveEmbeddedRunOwner(SESSION_ID);
@@ -436,6 +440,7 @@ describe("cloud worker run ownership", () => {
         placements,
         claim: requested,
         turn: { ...turn(runId), abortSignal: controller.signal },
+        isReplyDelivered: () => false,
         sessionKey: SESSION_KEY,
         assertCurrent: () => {
           if (!callerCurrent) {

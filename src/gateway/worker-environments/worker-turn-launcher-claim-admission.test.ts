@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -463,6 +464,7 @@ describe("worker turn launcher claim admission", () => {
       await expect(replacement).resolves.toMatchObject({
         payloads: [{ text: "Recovered after cancellation" }],
       });
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
       expect(stopTunnel).not.toHaveBeenCalled();
       expect(destroy).not.toHaveBeenCalled();
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
@@ -636,6 +638,7 @@ describe("worker turn launcher claim admission", () => {
             termination: "exit",
           });
           await expect(first).resolves.toMatchObject({ payloads: [{ text: "Only worker reply" }] });
+          await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
           const completedPlacement = placements.get(SESSION_ID);
           if (completedPlacement?.state !== "active") {
             throw new Error("expected active placement after worker completion");
@@ -761,6 +764,7 @@ describe("worker turn launcher claim admission", () => {
         async () => ({ meta: { durationMs: 1 } }),
       ),
     ).resolves.toMatchObject({ payloads: [{ text: "Recovered worker reply" }] });
+    await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
     expect(turnIds).toHaveLength(2);
     expect(turnIds[0]).not.toBe(turnIds[1]);
     expect(stopTunnel).not.toHaveBeenCalled();

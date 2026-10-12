@@ -42,7 +42,6 @@ describe("worker final reply before workspace settlement", () => {
       const followupInput = turn("after-early-final");
       const reconcileEntered = createDeferred();
       const reconcileRelease = createDeferred();
-      const followupWaiting = createDeferred();
       const workspaceFile = path.join(root, "accepted.txt");
       await writeFile(workspaceFile, "before reconciliation");
       let firstClaim: WorkerSessionTurnClaim | undefined;
@@ -135,18 +134,12 @@ describe("worker final reply before workspace settlement", () => {
         });
         expect(before.getLeafId()).toBe(terminalId);
         if (outcome === "accepted") {
-          const waitForRelease = placements.waitForTurnClaimRelease.bind(placements);
-          vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((...args) => {
-            followupWaiting.resolve();
-            return waitForRelease(...args);
-          });
           followup = provider.executeTurn(
             { ...sessionTarget, runId: followupInput.runId },
             followupInput,
             runLocal,
           );
           void followup.catch(() => {});
-          await withinTest(followupWaiting.promise, signal);
           expect(launchCount).toBe(1);
           expect(await readFile(workspaceFile, "utf8")).toBe("before reconciliation");
         }
