@@ -52,6 +52,11 @@ export {
   waitProviderOperationPollInterval,
 } from "../media-understanding/shared.js";
 export { openProviderWebSocket } from "../infra/net/provider-websocket.js";
+export {
+  runHttpTlsPreflight,
+  type HttpTlsPreflightOptions,
+  type HttpTlsPreflightResult,
+} from "../infra/http-tls-preflight.js";
 export type {
   ProviderOperationDeadline,
   ProviderOperationTimeoutMs,

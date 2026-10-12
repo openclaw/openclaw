@@ -6,13 +6,9 @@ import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createSessionCatalogFamily,
-  importSessionCatalogHistory,
-  listAdoptedSessionCatalogSessions,
-  sessionCatalogAdoptedSessionKey,
-  type SessionCatalogEntrySnapshot,
   type SessionCatalogSession,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createAcpSessionCatalogAdoption } from "openclaw/plugin-sdk/session-catalog-runtime";
 import {
   PI_LOCAL_SESSION_HOST_ID,
   PI_SESSIONS_LIST_COMMAND,
@@ -70,73 +66,6 @@ function resolvePiContinuationAvailability(
   return executable ? { available: true } : { available: false, message: "Pi CLI is unavailable" };
 }
 
-function listAdoptedPiSessions(
-  api: OpenClawPluginApi,
-  agentId?: string,
-  sessionEntries?: SessionCatalogEntrySnapshot,
-): Map<string, string> {
-  return listAdoptedSessionCatalogSessions({
-    ...(agentId ? { agentId } : {}),
-    config: currentPiCatalogConfig(api),
-    pluginId: api.id,
-    runtime: api.runtime,
-    sessionEntries,
-    sourceFromEntry: (entry) => {
-      const acpx = isRecord(entry.pluginExtensions?.acpx) ? entry.pluginExtensions.acpx : undefined;
-      const marker = acpx && isRecord(acpx.piSessionCatalog) ? acpx.piSessionCatalog : undefined;
-      return marker && typeof marker.sourceThreadId === "string"
-        ? { hostId: PI_LOCAL_SESSION_HOST_ID, threadId: marker.sourceThreadId }
-        : undefined;
-    },
-  });
-}
-
-async function createAdoptedPiSession(params: {
-  api: OpenClawPluginApi;
-  agentId: string;
-  hostId: string;
-  threadId: string;
-  session: SessionCatalogSession;
-}): Promise<{ sessionKey: string }> {
-  const config = currentPiCatalogConfig(params.api);
-  const marker = { sourceThreadId: params.threadId };
-  const created = await params.api.runtime.agent.session.createSessionEntry({
-    cfg: config,
-    key: sessionCatalogAdoptedSessionKey(PI_ADOPTED_SESSION_KEY_PREFIX, params.threadId),
-    agentId: params.agentId,
-    recoverMatchingInitialEntry: true,
-    ...(params.session.name ? { displayName: params.session.name } : {}),
-    ...(params.session.cwd ? { spawnedCwd: params.session.cwd } : {}),
-    initialEntry: {
-      acpBackendId: ACPX_BACKEND_ID,
-      acpSessionBinding: {
-        acpAgentId: PI_ACP_AGENT_ID,
-        agentSessionId: params.threadId,
-      },
-      pluginExtensions: { acpx: { piSessionCatalog: marker } },
-    },
-    afterCreate: async (entry) => {
-      await importSessionCatalogHistory({
-        catalogId: "pi",
-        threadId: params.threadId,
-        read: async ({ cursor, limit }) =>
-          await readLocalPiTranscriptPage({
-            threadId: params.threadId,
-            limit,
-            ...(cursor ? { cursor } : {}),
-          }),
-        sessionId: entry.sessionId,
-        sessionKey: entry.key,
-        agentId: entry.agentId,
-        ...(params.session.cwd ? { cwd: params.session.cwd } : {}),
-        config,
-      });
-      return { pluginExtensions: { acpx: { piSessionCatalog: marker } } };
-    },
-  });
-  return { sessionKey: created.key };
-}
-
 function assertPiLocalAccess(hostId: string, allowProcessHomeFallback?: boolean): void {
   if (
     hostId === PI_LOCAL_SESSION_HOST_ID &&
@@ -153,6 +82,16 @@ export {
 } from "./pi-session-catalog.js";
 
 export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
+  const adoption = createAcpSessionCatalogAdoption({
+    api,
+    config: () => currentPiCatalogConfig(api),
+    catalogId: PI_ACP_AGENT_ID,
+    hostId: PI_LOCAL_SESSION_HOST_ID,
+    keyPrefix: PI_ADOPTED_SESSION_KEY_PREFIX,
+    markerPluginId: "acpx",
+    markerKey: "piSessionCatalog",
+    read: readLocalPiTranscriptPage,
+  });
   return createSessionCatalogFamily(
     {
       runtime: api.runtime,
@@ -227,15 +166,14 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
         resolveAgentId: (agentId) =>
           resolveSessionAgentIdsStrict({ config: api.config, agentId }).sessionAgentId,
         availability: () => resolvePiContinuationAvailability(api),
-        listAdopted: (agentId, sessionEntries) =>
-          listAdoptedPiSessions(api, agentId, sessionEntries),
+        listAdopted: (agentId, sessionEntries) => adoption.listAdopted(agentId, sessionEntries),
         loadSession: requireLocalPiSession,
         validateSession: (session) => {
           if (!session.canContinue) {
             throw new Error("Pi session is outside the session store supported by pi-acp");
           }
         },
-        create: async (params) => await createAdoptedPiSession({ api, ...params }),
+        create: (params) => adoption.create(params),
         complete: async (continued, threadId) =>
           await linkContinuedPiSession(continued.sessionKey, threadId),
         nodeReadOnlyMessage: "paired-node Pi session rows are view-only",
