@@ -125,6 +125,7 @@ async function runDoctorHealthFlowWithResult(
     prepareDoctorHealthFlow,
     prepareDoctorInteractiveMaintenance,
     prepareDoctorMaintenanceArchives,
+    prepareDoctorMaintenanceState,
   } = await import("./doctor-health-startup.js");
   const { effectiveRuntime, repairRuntime, stateDirExistedAtStart, root } =
     await prepareDoctorHealthFlow(runtime, options, showDoctorIntro);
@@ -330,20 +331,13 @@ async function runDoctorHealthFlowWithResult(
         }
       }
 
-      const { repairDoctorAgentDeletionJournal } =
-        await import("../commands/doctor-agent-deletion-journal.js");
-      const deletionJournal = await repairDoctorAgentDeletionJournal({
-        preflight: schemas,
+      const preparedState = await prepareDoctorMaintenanceState({
+        schemas,
         shouldRepair: prompter.shouldRepair,
-        env: process.env,
+        runtime: effectiveRuntime,
       });
-      for (const message of [...deletionJournal.changes, ...deletionJournal.warnings]) {
-        effectiveRuntime.log(message);
-      }
-      if (deletionJournal.changes.length > 0) {
-        // Quarantine can turn previously active targets into held stores.
-        schemas = await prepareDoctorDatabasePreflight();
-      }
+      schemas = preparedState.schemas;
+      const { deletionJournal, stateSchemaPreparation } = preparedState;
       const { inspectDoctorSqliteNoCow } = await import("../commands/doctor-sqlite-nocow.js");
       const { resolveOpenClawStateSqlitePath } =
         await import("../state/openclaw-state-db.paths.js");
@@ -379,6 +373,7 @@ async function runDoctorHealthFlowWithResult(
         loadAndMaybeMigrateDoctorConfig({
           options,
           retiredStateAdmitted: true,
+          stateSchemaPreparation,
           agentDatabaseMigrationDiscovery: schemas.agentDatabaseMigrationDiscovery,
           confirm: (p) => prompter.confirm(p),
           runtime: doctorRuntime,

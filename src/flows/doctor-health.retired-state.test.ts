@@ -1,4 +1,3 @@
-import "./doctor-health.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";

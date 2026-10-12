@@ -1,4 +1,3 @@
-import "./doctor-maintenance.settlement.test-support.js";
 import { expect, it } from "vitest";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import { begin, boundary } from "./doctor-maintenance.settlement.test-support.js";

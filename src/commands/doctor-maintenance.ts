@@ -328,11 +328,12 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     }
   };
   const finish = async (
-    cfg: OpenClawConfig | undefined,
+    initialConfig: OpenClawConfig | undefined,
     assertCustody?: () => void,
     writeConfig?: DoctorConfigWriter,
     assertRestoreAdmission?: () => void,
   ) => {
+    let cfg = initialConfig;
     // Config recovery must not encounter Doctor's own offline-maintenance lease.
     const settledFailure = await releaseAndRestoreAutoStart(assertCustody);
     if (!cfg && !stopped?.stopped) {
