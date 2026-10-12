@@ -569,3 +569,27 @@ export async function installSkillDependencies(
     ? { ...installResult, skipReason: "go" as const }
     : installResult;
 }
+
+/**
+ * Installs a validated metadata recipe without tying it to a skill entry.
+ * Plugin installation uses this for manifest-declared MCP launchers; callers
+ * remain responsible for their own consent and source-policy boundary.
+ */
+export async function installDeclaredTool(params: {
+  spec: SkillInstallSpec;
+  timeoutMs?: number;
+  config?: OpenClawConfig;
+}): Promise<SkillInstallResult> {
+  const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
+  if (params.spec.kind === "download") {
+    return createInstallFailure({ message: "download recipes require a skill installation context" });
+  }
+  const prefs = resolveSkillsInstallPreferences(params.config);
+  return await installSkillDependencies({
+    skillKey: "",
+    spec: params.spec,
+    preferences: prefs,
+    timeoutMs,
+  });
+}
+

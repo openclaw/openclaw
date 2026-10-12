@@ -60,7 +60,9 @@ import {
 import {
   attachPluginInstallTransaction,
   resolvePluginInstallTransactionRequest,
+  type PluginInstallTransaction,
 } from "./install-transaction.js";
+import { installPluginMcpDependencies } from "./install-mcp-dependencies.js";
 import type {
   InstallPluginResult,
   PackageInstallCommonParams,
@@ -648,8 +650,49 @@ export async function installPluginFromManagedNpmRoot(
   const transaction = resolvePackageDirInstallTransaction(published)!;
   const result = { ...staged.result, targetDir: targetPackageDir };
   if (transactionRequest) {
-    return attachPluginInstallTransaction(result, transaction);
+    const wrappedTransaction: PluginInstallTransaction = {
+      commit: async () => {
+        if (!params.dryRun && result.mcpServers) {
+          params.signal?.throwIfAborted();
+          transactionRequest.assertOwned?.();
+          const dependencyResult = await installPluginMcpDependencies({
+            pluginId: result.pluginId,
+            mcpServers: result.mcpServers,
+            config: params.config,
+            timeoutMs,
+            signal: params.signal,
+            assertOwned: transactionRequest.assertOwned,
+            logger,
+          });
+          if (!dependencyResult.ok) {
+            await transaction.rollback();
+            throw new Error(dependencyResult.error);
+          }
+        }
+        transactionRequest.assertOwned?.();
+        params.signal?.throwIfAborted();
+        await transaction.commit();
+      },
+      rollback: () => transaction.rollback(),
+    };
+    return attachPluginInstallTransaction(result, wrappedTransaction);
   }
+  if (!params.dryRun && result.mcpServers) {
+    params.signal?.throwIfAborted();
+    const dependencyResult = await installPluginMcpDependencies({
+      pluginId: result.pluginId,
+      mcpServers: result.mcpServers,
+      config: params.config,
+      timeoutMs,
+      signal: params.signal,
+      logger,
+    });
+    if (!dependencyResult.ok) {
+      await transaction.rollback();
+      return dependencyResult;
+    }
+  }
+  params.signal?.throwIfAborted();
   await transaction.commit();
   return result;
 }

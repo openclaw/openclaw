@@ -10,6 +10,7 @@ import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import type { SkillInstallSpec } from "../skills/types.js";
 
 /** UI hint metadata for plugin config schema fields. */
 export type PluginConfigUiHint = Pick<
@@ -318,7 +319,10 @@ export type PluginManifestControlUi = {
   styles?: string[];
 };
 
-export type PluginManifestMcpServer = Record<string, unknown>;
+/** A static MCP server plus optional host-tool recipes required to launch it. */
+export type PluginManifestMcpServer = Record<string, unknown> & {
+  install?: SkillInstallSpec[];
+};
 
 export type PluginManifestConfigLiteral = string | number | boolean | null;
 

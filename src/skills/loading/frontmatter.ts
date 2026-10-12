@@ -73,7 +73,7 @@ function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
     : undefined;
 }
 
-function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
+export function parseOpenClawInstallSpec(input: unknown): SkillInstallSpec | undefined {
   const parsed = parseOpenClawManifestInstallBase(input, ["brew", "node", "go", "uv", "download"]);
   if (!parsed) {
     return undefined;
@@ -137,7 +137,7 @@ export function resolveSkillManifestMetadata(
     return undefined;
   }
   const requires = resolveOpenClawManifestRequires(metadataObj);
-  const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
+  const install = resolveOpenClawManifestInstall(metadataObj, parseOpenClawInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,

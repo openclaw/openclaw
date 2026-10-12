@@ -135,6 +135,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
           transport: "stdio",
           command: "node",
           args: ["./mcp-server.js"],
+          install: { kind: "uv", package: "example-mcp==1.2.3" },
         },
         invalid: "./not-a-server.json",
       },
@@ -149,6 +150,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
           transport: "stdio",
           command: "node",
           args: ["./mcp-server.js"],
+          install: [{ kind: "uv", package: "example-mcp==1.2.3" }],
         },
       });
     }
