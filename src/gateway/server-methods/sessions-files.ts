@@ -321,14 +321,9 @@ export function withSessionFileRoot<T>(
 ): Promise<T> {
   const metadata = captureSessionEntryMetadataRead(params);
   if (!metadata) {
-    return consume(
-      loadSessionFileRoot(
-        loadGatewaySessionEntryReadOnly(params.sessionKey, {
-          agentId: params.agentId,
-          projection: params.projection,
-        }),
-      ),
-      () => {},
+    return withGatewaySessionEntryReadOnly(
+      { cfg, key: params.sessionKey, agentId: params.agentId, projection: params.projection },
+      (loaded, assertCurrent) => consume(loadSessionFileRoot(loaded), assertCurrent),
     );
   }
   return withGatewaySessionEntryReadOnly(

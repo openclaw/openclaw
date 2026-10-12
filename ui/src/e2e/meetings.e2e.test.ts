@@ -126,6 +126,7 @@ suite.define(() => {
           nextCursor: null,
         };
         const gateway = await installMockGateway(page, {
+          heldMethods: ["transcripts.summarize"],
           methodResponses: {
             "transcripts.list": { sessions: [activeMeeting, meeting], nextCursor: null },
             "transcripts.get": initial,
@@ -241,6 +242,9 @@ suite.define(() => {
           sessions: [interim.session, meeting],
           nextCursor: null,
         });
+        await gateway.waitForRequest("transcripts.summarize");
+        await gateway.setMethodResponse("transcripts.summarize", interim);
+        await gateway.resolveDeferred("transcripts.summarize", interim);
         await reader.getByText(interim.summary!.overview, { exact: true }).waitFor();
         await expect.poll(() => row.textContent()).toContain(interim.summary!.overview);
         expect(await reader.getByText(/Summary so far/).isVisible()).toBe(true);

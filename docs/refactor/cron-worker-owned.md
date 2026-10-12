@@ -7,7 +7,7 @@ title: "Worker-owned cron"
 
 # Worker-owned cron
 
-**Proposal, not implemented.** Put scheduling and reservation decisions in one
+**Staged redesign.** Put scheduling and reservation decisions in one
 cron worker. Commit a run request, release the writer, then launch the task.
 Target approximately **26,000 production lines**, down from **43,960**: about
 **18,000 lines (41%) removed**, without moving the same machinery elsewhere.
@@ -239,6 +239,12 @@ are intentional accepted changes; all other observable contracts above stay gree
    in place. **2b** starts the worker actor, retires host
    timers/reservations, uses idempotent request rows, and wires timer/manual/event
    sources to the single launcher using the custody-free interfaces from 2a.
+   Split **2b** at the queue boundary: **2b-i** gives the worker idempotent
+   receipt requests, capacity, and activation, with one host launcher for every
+   source; the host remains the schedule/wake producer. **2b-ii** moves schedule
+   computation, timer, catch-up, and config snapshots into the long-lived worker.
+   Each step removes its superseded owner. In 2b-i the queued marker preserves
+   the natural deadline until the existing outcome owner advances it.
    Proof: duplicate slot, capacity queue, disable/edit, manual
    force, consumed exit event, stream batch, catch-up, retry and clock-jump flows;
    crash at request/active boundaries and recover a copied old-format database.
