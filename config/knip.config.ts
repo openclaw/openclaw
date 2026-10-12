@@ -838,6 +838,9 @@ const config = {
         "@solidjs/compiler",
         "playwright-core",
         "partial-json",
+        // Bun-only WebSocket proxy is loaded through a variable-specifier import
+        // so browser builds do not resolve it; the root owns its Docker copy.
+        "proxy-from-env",
         // The native Canvas bundle falls back without optional Markdown support.
         "@a2ui/markdown-it",
         "sqlite-vec",
@@ -908,6 +911,9 @@ const config = {
       project: ["src/**/*.{ts,tsx}!"],
     },
     "packages/ai": {
+      // Bun-only WebSocket proxy uses a variable-specifier import to preserve
+      // the browser build boundary, which Knip cannot resolve statically.
+      ignoreDependencies: ["proxy-from-env"],
       // Mirror the published export map so knip sees every dist entry point.
       entry: [
         "src/index.ts!",
