@@ -9,13 +9,14 @@ import {
   readOpenClawAgentDatabaseIdentity,
 } from "./openclaw-agent-db-identity.js";
 import { releaseOpenClawAgentDatabaseLease } from "./openclaw-agent-db-lease.js";
-import type { agentDatabaseLifecycle } from "./openclaw-agent-db-lifecycle.js";
 import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 
 /** Native handle close uses the lifecycle owner's existing leases and validation. */
-export function createAgentDatabaseHandleCloser(
-  cache: Pick<typeof agentDatabaseLifecycle, "leases" | "failures" | "idleTimers">,
-) {
+export function createAgentDatabaseHandleCloser(cache: {
+  leases: Map<string, { leaseId: string; env: NodeJS.ProcessEnv }>;
+  failures: ReadonlyMap<string, unknown>;
+  idleTimers: WeakMap<OpenClawAgentDatabase["db"], Disposable>;
+}) {
   return function closeCachedOpenClawAgentDatabase(
     database: OpenClawAgentDatabase,
     options: { eviction?: boolean } = {},
