@@ -20,7 +20,10 @@ import {
   readSessionEntryCacheValidityToken,
   readSessionNodesGeneration,
 } from "./session-accessor.sqlite-entry-revision.js";
-import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
+import {
+  participantRecordsBySessionKey,
+  withSessionParticipantWriteSnapshot,
+} from "./session-accessor.sqlite-participant-projection.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
@@ -45,7 +48,7 @@ function fixture(filename = ":memory:") {
 }
 
 describe("session entry revision facts", () => {
-  it("carries participant facts into an unchanged transaction and invalidates them on writes", () => {
+  it("carries participant facts into an unchanged entry CAS and invalidates them on writes", () => {
     const filename = path.join(tempDirs.make("participant-revision-"), "agent.sqlite");
     const { db } = fixture(filename);
     const sessionKey = "agent:main:revision";
@@ -64,19 +67,19 @@ describe("session entry revision facts", () => {
     try {
       expect(read()).toBe(1);
       runSqliteImmediateTransactionSync(db, () => {
-        expect(read()).toBe(1);
+        expect(withSessionParticipantWriteSnapshot(db, read)).toBe(1);
         expect(sql.counts.participants).toBe(1);
       });
 
       peer.exec("UPDATE session_participants SET contribution_count = 2");
       runSqliteImmediateTransactionSync(db, () => {
-        expect(read()).toBe(2);
+        expect(withSessionParticipantWriteSnapshot(db, read)).toBe(2);
       });
       expect(read()).toBe(2);
       expect(() =>
         runSqliteImmediateTransactionSync(db, () => {
           db.exec("UPDATE session_participants SET contribution_count = 3");
-          expect(read()).toBe(3);
+          expect(withSessionParticipantWriteSnapshot(db, read)).toBe(3);
           throw new Error("rollback participant change");
         }),
       ).toThrow("rollback participant change");

@@ -43,7 +43,20 @@ function selectParticipantRows(database: DatabaseSync) {
     .orderBy("identity_namespace");
 }
 
-// Carry an autocommit read into an unchanged transaction; never carry snapshot rows out.
+let participantWriteSnapshot: DatabaseSync | undefined;
+
+/** The entry CAS owns an immediate transaction before borrowing its unchanged preparation. */
+export function withSessionParticipantWriteSnapshot<T>(database: DatabaseSync, read: () => T): T {
+  const previous = participantWriteSnapshot;
+  participantWriteSnapshot = database;
+  try {
+    return read();
+  } finally {
+    participantWriteSnapshot = previous;
+  }
+}
+
+// Deferred readers must execute their first SELECT to establish the native snapshot.
 const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
   const query = prepareSqliteQuerySync<string, SessionParticipantRow>(database, (parameter) =>
     selectParticipantRows(database).where(
@@ -62,11 +75,13 @@ const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
         revision &&
         last?.key === key &&
         (last.revision === revision ||
-          (last.revision.snapshot === undefined &&
+          (participantWriteSnapshot === database &&
+            last.revision.snapshot === undefined &&
             last.revision.schema === revision.schema &&
             last.revision.mutationRevision === revision.mutationRevision &&
             last.revision.writeRevision === readSqliteDatabaseWriteRevision(database)))
       ) {
+        last.revision = revision;
         return last.rows;
       }
       const rows = query(key).rows;
