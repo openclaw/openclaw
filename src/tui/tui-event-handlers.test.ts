@@ -1179,7 +1179,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   it.each([
     {
       name: "non-auth",
+      provider: undefined,
       error: "fixture provider failed",
+      expected: "run error: fixture provider failed",
     },
     {
       name: "auth",
@@ -1194,8 +1196,6 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       provider: "xai",
       error:
         '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
-      expected:
-        "run error: HTTP 403: Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit.",
     },
   ])(
     "renders local $name errors without losing the backend diagnostic",
