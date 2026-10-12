@@ -1,4 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import path from "node:path";
+import {
+  resolveSessionTranscriptsDirForAgent,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -32,6 +36,7 @@ export async function seedMemoryForgetSession(
   const entry = { sessionId, updatedAt: 1_000 };
   await patchSessionEntry({
     agentId: "main",
+    storePath: path.join(resolveSessionTranscriptsDirForAgent("main"), "sessions.json"),
     sessionKey,
     update: () => entry,
     fallbackEntry: entry,

@@ -673,6 +673,7 @@ export function resetSessionAccessorMocks() {
       options: {
         fallbackEntry?: Record<string, unknown>;
         replaceEntry?: boolean;
+        onCommitted?: (entry: Record<string, unknown>) => void;
       } = {},
     ) =>
       await mocks.updateSessionStore(
@@ -698,6 +699,7 @@ export function resetSessionAccessorMocks() {
             delete store[key];
           }
           store[scope.target.canonicalKey] = next;
+          options.onCommitted?.(structuredClone(next));
           return next;
         },
         options,

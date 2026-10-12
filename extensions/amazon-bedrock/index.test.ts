@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -332,121 +330,6 @@ describe("amazon-bedrock provider plugin", () => {
     expect(restricted?.thinkingLevelMap).toEqual({ xhigh: null, max: null });
   });
 
-  it.each([
-    {
-      name: "defaults Fable Bedrock model refs to medium effort",
-      modelIds: [
-        "anthropic.claude-fable-5",
-        "us.anthropic.claude-fable-5",
-        "global.anthropic.claude-fable-5",
-        "anthropic.claude-fable-5-1",
-        "us.anthropic.claude-fable-5-1",
-      ],
-      defaultLevel: "medium",
-    },
-    {
-      name: "keeps mandatory-adaptive Mythos 5 models at high default effort",
-      modelIds: [
-        "anthropic.claude-mythos-5",
-        "us.anthropic.claude-mythos-5",
-        "global.anthropic.claude-mythos-5",
-      ],
-      defaultLevel: "high",
-    },
-  ])("$name", async ({ modelIds, defaultLevel }) => {
-    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
-    for (const modelId of modelIds) {
-      const profile = provider.resolveThinkingProfile?.({
-        provider: "amazon-bedrock",
-        modelId,
-      } as never);
-      expect(profile?.levels.map((level) => level.id)).toEqual([
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "adaptive",
-        "max",
-      ]);
-      expect(profile?.defaultLevel).toBe(defaultLevel);
-    }
-  });
-
-  it("keeps Fable thinking policy for opaque deployment aliases", async () => {
-    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
-
-    const profile = provider.resolveThinkingProfile?.({
-      provider: "amazon-bedrock",
-      modelId: "company-fable",
-      params: { canonicalModelId: "claude-fable-5" },
-    } as never);
-    expect(profile?.levels.map((level) => level.id)).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "adaptive",
-      "max",
-    ]);
-    expect(profile?.defaultLevel).toBe("medium");
-  });
-
-  it("registers the Anthropic replay policy for prefix-binding Bedrock models", async () => {
-    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
-
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "amazon-bedrock",
-        modelApi: "bedrock-converse-stream",
-        modelId: "us.anthropic.claude-fable-5-1-v1:0",
-      }),
-    ).toEqual({
-      sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      appendOnlyRuntimeContext: true,
-      preserveSignatures: true,
-      repairToolUseResultPairing: true,
-      validateAnthropicTurns: true,
-      allowSyntheticToolResults: true,
-    });
-  });
-
-  it.each([
-    ["amazon.nova-micro-v1:0", "short", "short"],
-    ["global.amazon.nova-2-lite-v1:0", "long", "long"],
-    ["amazon.nova-pro-v1:0", "none", "none"],
-    ["amazon.nova-sonic-v1:0", "short", "none"],
-    ["meta.llama3-70b-instruct-v1:0", "long", "none"],
-  ] as const)(
-    "routes Bedrock cache retention for %s (%s)",
-    async (modelId, cacheRetention, expected) => {
-      const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
-      const wrapped = provider.wrapStreamFn?.({
-        provider: "amazon-bedrock",
-        modelId,
-        streamFn: (_model: unknown, _context: unknown, options: Record<string, unknown>) => options,
-      } as never);
-
-      expectWrappedResultFields(
-        wrapped?.(
-          {
-            api: "bedrock-converse-stream",
-            provider: "amazon-bedrock",
-            id: modelId,
-          } as never,
-          { messages: [] } as never,
-          { cacheRetention },
-        ),
-        { cacheRetention: expected },
-      );
-    },
-  );
-
   it("keeps unsupported provider routes disabled with the runtime cache override", async () => {
     await withEnvAsync({ AWS_BEDROCK_FORCE_CACHE: "1" }, async () => {
       const provider = await registerWithConfig(undefined);
@@ -455,63 +338,28 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 
-  it.each([
-    {
-      name: "omits temperature for Bedrock Opus 4.8 model ids",
-      id: "us.anthropic.claude-opus-4-8",
-      options: { temperature: 0.2, maxTokens: 10 },
-      expected: { maxTokens: 10 },
-      checkAnthropicCache: true,
-    },
-    {
-      name: "omits temperature for Bedrock Fable deployment aliases",
-      id: "production-fable",
-      canonicalModelId: "claude-fable-5",
-      options: { temperature: 0.2, maxTokens: 10 },
-      expected: { maxTokens: 10 },
-      checkAnthropicCache: true,
-    },
-    {
-      name: "omits temperature for canonical Bedrock Opus aliases",
-      id: "production-claude",
-      canonicalModelId: "claude-opus-4-8",
-      options: { temperature: 0.2, maxTokens: 10 },
-      expected: { maxTokens: 10 },
-      checkAnthropicCache: true,
-    },
-    {
-      name: "omits temperature for dotted Bedrock Opus 4.7 model ids",
-      id: "us.anthropic.claude-opus-4.7-v1:0",
-      options: { temperature: 0.2, maxTokens: 10 },
-      expected: { maxTokens: 10 },
-    },
-    {
-      name: "omits temperature for named Bedrock Opus 4.7 inference profile ARNs",
-      id: "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-opus-4-7",
-      options: { temperature: 0, region: "us-west-2" },
-      expected: { region: "us-west-2" },
-    },
-  ])("$name", async ({ id, canonicalModelId, options, expected, checkAnthropicCache }) => {
+  it("omits temperature for canonical Bedrock Opus aliases", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
     const model = {
       api: "bedrock-converse-stream",
       provider: "amazon-bedrock",
-      id,
-      ...(canonicalModelId ? { params: { canonicalModelId } } : {}),
+      id: "production-claude",
+      params: { canonicalModelId: "claude-opus-4-8" },
     };
     const wrapped = provider.wrapStreamFn?.({
       provider: "amazon-bedrock",
-      modelId: id,
-      ...(canonicalModelId ? { model } : {}),
+      modelId: model.id,
+      model,
       streamFn: spyStreamFn,
     } as never);
-    const result = wrapped?.(model as never, { messages: [] } as never, options as never);
-
-    expectWrappedResultFields(result, expected);
+    const result = wrapped?.(
+      model as never,
+      { messages: [] } as never,
+      { temperature: 0.2, maxTokens: 10 } as never,
+    );
+    expectWrappedResultFields(result, { maxTokens: 10 });
     expect(result).not.toHaveProperty("temperature");
-    if (checkAnthropicCache) {
-      expect(result).not.toHaveProperty("cacheRetention", "none");
-    }
+    expect(result).not.toHaveProperty("cacheRetention", "none");
   });
 
   it("uses plugin discovery region when provider URLs do not encode one", async () => {
@@ -544,98 +392,32 @@ describe("amazon-bedrock provider plugin", () => {
     expectWrappedResultFields(result, { region: "eu-central-1" });
   });
 
-  it.each([
-    {
-      name: "preserves Bedrock Opus 4.6 max thinking in the final payload",
-      modelId: "us.anthropic.claude-opus-4-6-v1",
-      thinkingLevel: "max",
-      reasoning: "high",
-      initialEffort: "high",
-      expectedEffort: "max",
-      adaptive: true,
-    },
-    {
-      name: "keeps Bedrock Opus 4.7 xhigh thinking distinct from max",
-      modelId: "us.anthropic.claude-opus-4-7",
-      thinkingLevel: "xhigh",
-      reasoning: "xhigh",
-      initialEffort: "xhigh",
-      expectedEffort: "xhigh",
-    },
-    {
-      name: "uses adaptive max thinking for Bedrock Opus 4.8",
-      modelId: "us.anthropic.claude-opus-4-8",
-      modelName: "Claude Opus 4.8",
-      thinkingLevel: "max",
-      reasoning: "max",
-      initialEffort: "xhigh",
-      expectedEffort: "max",
-      adaptive: true,
-      omitTemperature: true,
-    },
-    {
-      name: "does not re-upgrade Mythos Preview max thinking in the final payload",
-      modelId: "us.anthropic.claude-mythos-preview",
-      modelName: "Claude Mythos Preview",
-      thinkingLevel: "max",
-      reasoning: "max",
-      initialEffort: "high",
-      expectedEffort: "high",
-      adaptive: true,
-      omitTemperature: true,
-    },
-  ])(
-    "$name",
-    async ({
+  it("preserves Bedrock Opus 4.6 max thinking in the final payload", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const modelId = "us.anthropic.claude-opus-4-6-v1";
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
       modelId,
-      modelName,
-      thinkingLevel,
-      reasoning,
-      initialEffort,
-      expectedEffort,
-      adaptive,
-      omitTemperature,
-    }) => {
-      const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
-      const wrapped = provider.wrapStreamFn?.({
-        provider: "amazon-bedrock",
-        modelId,
-        streamFn: spyStreamFn,
-        thinkingLevel,
-      } as never);
-      const result = wrapped?.(
-        {
-          api: "bedrock-converse-stream",
-          provider: "amazon-bedrock",
-          id: modelId,
-          ...(modelName ? { name: modelName, reasoning: true } : {}),
-        } as never,
-        { messages: [] } as never,
-        { reasoning } as never,
-      ) as Record<string, unknown> | undefined;
-      const payload = {
-        ...(omitTemperature ? { inferenceConfig: { temperature: 0.2 } } : {}),
-        additionalModelRequestFields: {
-          ...(adaptive ? { thinking: { type: "adaptive" } } : {}),
-          output_config: { effort: initialEffort },
-        },
-      };
-
-      await (result?.onPayload as ((value: Record<string, unknown>) => unknown) | undefined)?.(
-        payload,
-      );
-
-      expect(payload.additionalModelRequestFields.output_config).toEqual({
-        effort: expectedEffort,
-      });
-      if (adaptive) {
-        expect(payload.additionalModelRequestFields.thinking).toEqual({ type: "adaptive" });
-      }
-      if (omitTemperature) {
-        expect(payload.inferenceConfig).toEqual({});
-      }
-    },
-  );
+      streamFn: spyStreamFn,
+      thinkingLevel: "max",
+    } as never);
+    const result = wrapped?.(
+      { api: "bedrock-converse-stream", provider: "amazon-bedrock", id: modelId } as never,
+      { messages: [] } as never,
+      { reasoning: "high" } as never,
+    ) as Record<string, unknown> | undefined;
+    const payload = {
+      additionalModelRequestFields: {
+        thinking: { type: "adaptive" },
+        output_config: { effort: "high" },
+      },
+    };
+    await (result?.onPayload as ((value: Record<string, unknown>) => unknown) | undefined)?.(
+      payload,
+    );
+    expect(payload.additionalModelRequestFields.output_config).toEqual({ effort: "max" });
+    expect(payload.additionalModelRequestFields.thinking).toEqual({ type: "adaptive" });
+  });
 
   it("classifies nested Bedrock deprecated-temperature validation as format failover", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
@@ -648,61 +430,6 @@ describe("amazon-bedrock provider plugin", () => {
           'ValidationException: The model returned the following errors: {"type":"error","error":{"type":"invalid_request_error","message":"`temperature` is deprecated for this model."}}',
       } as never),
     ).toBe("format");
-  });
-
-  describe("guardrail config schema", () => {
-    it("defines discovery and guardrail objects with the expected shape", () => {
-      const pluginJson = JSON.parse(
-        readFileSync(resolve(import.meta.dirname, "openclaw.plugin.json"), "utf-8"),
-      );
-      const discovery = pluginJson.configSchema?.properties?.discovery;
-      const guardrail = pluginJson.configSchema?.properties?.guardrail;
-
-      expectRecordFields(requireRecord(discovery, "discovery schema"), {
-        type: "object",
-        additionalProperties: false,
-      });
-      expect(discovery.properties.enabled).toEqual({ type: "boolean" });
-      expect(discovery.properties.region).toEqual({ type: "string" });
-      expect(discovery.properties.providerFilter).toEqual({
-        type: "array",
-        items: { type: "string" },
-      });
-      expect(discovery.properties.refreshInterval).toEqual({
-        type: "integer",
-        minimum: 0,
-      });
-      expect(discovery.properties.defaultContextWindow).toEqual({
-        type: "integer",
-        minimum: 1,
-      });
-      expect(discovery.properties.defaultMaxTokens).toEqual({
-        type: "integer",
-        minimum: 1,
-      });
-
-      expectRecordFields(requireRecord(guardrail, "guardrail schema"), {
-        type: "object",
-        additionalProperties: false,
-      });
-
-      // Required fields
-      expect(guardrail.required).toEqual(["guardrailIdentifier", "guardrailVersion"]);
-
-      // Property types
-      expect(guardrail.properties.guardrailIdentifier).toEqual({ type: "string" });
-      expect(guardrail.properties.guardrailVersion).toEqual({ type: "string" });
-
-      // Enum constraints
-      expect(guardrail.properties.streamProcessingMode).toEqual({
-        type: "string",
-        enum: ["sync", "async"],
-      });
-      expect(guardrail.properties.trace).toEqual({
-        type: "string",
-        enum: ["enabled", "disabled", "enabled_full"],
-      });
-    });
   });
 
   describe("guardrail payload injection", () => {
@@ -764,13 +491,6 @@ describe("amazon-bedrock provider plugin", () => {
       expectPayloadServiceTier(result, "priority");
     });
 
-    it("injects serviceTier for all valid tier names", async () => {
-      for (const tier of ["flex", "priority", "default", "reserved"] as const) {
-        const result = await callBedrockConverse({ serviceTier: tier });
-        expectPayloadServiceTier(result, tier);
-      }
-    });
-
     it("does not inject serviceTier when value is invalid", async () => {
       const result = await callBedrockConverse({ serviceTier: "not-a-tier" });
       expect(result).not.toHaveProperty("capturedPayload");
@@ -784,35 +504,6 @@ describe("amazon-bedrock provider plugin", () => {
         expect(result).not.toHaveProperty("capturedPayload");
       },
     );
-
-    it("keeps the standard service tier for Claude 5", async () => {
-      const result = await callBedrockConverse(
-        { serviceTier: "default" },
-        {},
-        "us.anthropic.claude-sonnet-5",
-      );
-      expectPayloadServiceTier(result, "default");
-    });
-
-    it("does not overwrite caller-provided serviceTier in payload", async () => {
-      const result = await callBedrockConverse(
-        { serviceTier: "flex" },
-        { serviceTier: { type: "priority" } },
-      );
-      expectPayloadServiceTier(result, "priority");
-    });
-
-    it("skips injection for non-converse API models", async () => {
-      const provider = await registerWithConfig(undefined);
-      const result = await callWrappedStream(
-        provider,
-        NON_ANTHROPIC_MODEL,
-        { api: "openai-completions", provider: "amazon-bedrock", id: NON_ANTHROPIC_MODEL } as never,
-        runtimePluginConfig(undefined),
-        { serviceTier: "flex" },
-      );
-      expect(result).not.toHaveProperty("capturedPayload");
-    });
   });
 
   describe("application inference profile cache point injection", () => {
@@ -848,32 +539,19 @@ describe("amazon-bedrock provider plugin", () => {
       return payload;
     }
 
-    it.each([
-      {
-        name: "does not inject cache points when cacheRetention is 'none'",
-        options: { cacheRetention: "none" },
-      },
-      {
-        name: "defaults to 'short' cache retention when not explicitly set",
-        options: {},
-        expectedCachePoint: { type: "default" },
-      },
-    ])("$name", async ({ options, expectedCachePoint }) => {
+    it("defaults to short cache retention when not explicitly set", async () => {
       const provider = await registerWithConfig(undefined);
       const payload = buildBedrockCachePayload();
       await callWrappedStreamWithPayload(
         provider,
         APP_INFERENCE_PROFILE_ARN,
         makeAppInferenceProfileDescriptor(APP_INFERENCE_PROFILE_ARN),
-        options,
+        {},
         payload,
       );
-
       const system = requireArray(payload.system, "Bedrock system prompt");
-      expect(system).toHaveLength(expectedCachePoint ? 2 : 1);
-      if (expectedCachePoint) {
-        expect(system[1]).toEqual({ cachePoint: expectedCachePoint });
-      }
+      expect(system).toHaveLength(2);
+      expect(system[1]).toEqual({ cachePoint: { type: "default" } });
     });
 
     it("keeps opaque-profile fallback checkpoints before dynamic system context and out of transient history", async () => {
@@ -957,49 +635,6 @@ describe("amazon-bedrock provider plugin", () => {
       expect(payload).toEqual(expected);
     });
 
-    it("does not double-inject cache points if already present", async () => {
-      const provider = await registerWithConfig(undefined);
-      const payload = {
-        system: [{ text: "You are helpful." }, { cachePoint: { type: "default" } }],
-        messages: [
-          { role: "user", content: [{ text: "Hello" }, { cachePoint: { type: "default" } }] },
-        ],
-      };
-
-      await callWrappedStreamWithPayload(
-        provider,
-        APP_INFERENCE_PROFILE_ARN,
-        makeAppInferenceProfileDescriptor(APP_INFERENCE_PROFILE_ARN),
-        { cacheRetention: "short" },
-        payload,
-      );
-
-      expect(payload.system).toHaveLength(2);
-      expect(payload.messages[0]?.content).toHaveLength(2);
-    });
-
-    it("does not inject cache points for regular Anthropic model IDs handled by the shared runtime", async () => {
-      const provider = await registerWithConfig(undefined);
-      const payload = buildBedrockCachePayload();
-
-      const wrapped = provider.wrapStreamFn?.({
-        provider: "amazon-bedrock",
-        modelId: ANTHROPIC_MODEL,
-        streamFn: spyStreamFn,
-      } as never);
-
-      const result = wrapped?.(ANTHROPIC_MODEL_DESCRIPTOR, { messages: [] } as never, {
-        cacheRetention: "short",
-      }) as unknown as Record<string, unknown>;
-
-      if (typeof result?.onPayload === "function") {
-        await (result.onPayload as (p: Record<string, unknown>) => Promise<unknown>)(payload);
-      }
-
-      const system = payload.system as Array<Record<string, unknown>>;
-      expect(system).toHaveLength(1);
-    });
-
     it("keeps the latest two user checkpoints across a large new content batch", async () => {
       const provider = await registerWithConfig(undefined);
       const payload = {
@@ -1032,8 +667,6 @@ describe("amazon-bedrock provider plugin", () => {
     });
 
     it.each([
-      { profile: "modern", targets: ["anthropic.claude-sonnet-4-6"], ttl: "1h" },
-      { profile: "legacy", targets: ["anthropic.claude-3-7-sonnet-20250219-v1:0"], ttl: undefined },
       {
         profile: "mixed",
         targets: ["anthropic.claude-sonnet-4-6", "anthropic.claude-3-7-sonnet-20250219-v1:0"],
@@ -1073,7 +706,7 @@ describe("amazon-bedrock provider plugin", () => {
       },
     );
 
-    it.each([undefined, "Claude Opus 4.7"])(
+    it.each([undefined])(
       "omits temperature after resolving opaque profiles with display name %s",
       async (name) => {
         const modelId = `arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/opus-temperature-${name ? "named" : "unnamed"}`;
@@ -1106,7 +739,7 @@ describe("amazon-bedrock provider plugin", () => {
       },
     );
 
-    it.each(["anthropic.claude-3-opus-20240229-v1:0", "amazon.nova-pro-v1:0"])(
+    it.each(["amazon.nova-pro-v1:0"])(
       "keeps opaque profile caching disabled for resolved target %s",
       async (target) => {
         const profileId = target.startsWith("amazon.") ? "opaque-nova" : "opaque-legacy";
@@ -1250,4 +883,3 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

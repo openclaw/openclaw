@@ -227,6 +227,8 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         execOverrides: opts.execOverrides,
         agentId,
         sessionKey: agentSessionKey,
+        // Required isolation cannot be supplied by an existing unconfined terminal.
+        sandboxAvailable: execSession.sandbox === "required" ? false : undefined,
       };
       const policy = actorPolicy
         ? await resolvePreparedExecDefaultsAsync(prepareExecDefaults(policyInput), async () => {

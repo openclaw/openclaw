@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -7,11 +8,9 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import {
-  replaceSessionEntry,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.sqlite-entry.js";
-import type { ResolvedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
+import * as sessionReads from "../../config/sessions/session-accessor.entry-read-runtime.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { ResolvedSessionEntryStoreTarget } from "../../config/sessions/session-accessor.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -26,12 +25,14 @@ import { IDLE_GC_MS } from "./service.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  readResolvedSessionEntriesInWorker: vi.fn(),
   placementService: vi.fn(),
   isSessionWorkAdmissionActive: vi.fn(),
   isSessionLifecycleMutationActive: vi.fn(),
   runExclusiveSessionLifecycleMutation: vi.fn(),
 }));
+
+const readOwnersInWorker = sessionReads.readResolvedSessionStoreTargetsInWorker;
+const readOwners = vi.spyOn(sessionReads, "readResolvedSessionStoreTargetsInWorker");
 
 const cleanupRecord = {
   id: "worktree",
@@ -47,10 +48,6 @@ const cleanupRecord = {
   lastActiveAt: 1,
 } satisfies ManagedWorktreeRecord;
 
-// mock-isolation: Session metadata is synthetic unless a test selects the real worker reader.
-vi.mock("../../config/sessions/session-accessor.entry.js", () => ({
-  readResolvedSessionEntriesInWorker: mocks.readResolvedSessionEntriesInWorker,
-}));
 // mock-isolation: Tests select the real placement owner or an explicitly empty inventory.
 vi.mock("../../gateway/session-worker-placement-context.js", () => ({
   resolveSessionWorkerPlacementContext: () => ({
@@ -67,12 +64,13 @@ vi.mock("../../sessions/session-lifecycle-admission.js", async (importOriginal) 
 function target(
   key = cleanupRecord.ownerId,
   entry?: SessionEntry,
-): ResolvedSessionEntryAccessTarget {
+): ResolvedSessionEntryStoreTarget {
   return {
     agentId: "main",
     canonicalKey: key,
     requestedKey: key,
     storeKey: key,
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
     entry: entry ?? { sessionId: key, updatedAt: 1, archivedAt: 1 },
   };
 }
@@ -94,9 +92,8 @@ beforeEach(() => {
   mocks.runExclusiveSessionLifecycleMutation.mockImplementation(
     (_operation, { run }: { run: () => Promise<unknown> }) => run(),
   );
-  mocks.readResolvedSessionEntriesInWorker.mockImplementation(
-    ({ sessionKeys }: { sessionKeys: string[] }) =>
-      Promise.resolve(new Map(sessionKeys.map((key) => [key, target(key)]))),
+  readOwners.mockImplementation(({ sessionKeys }: { sessionKeys: readonly string[] }) =>
+    Promise.resolve(new Map(sessionKeys.map((key) => [key, target(key)]))),
   );
 });
 
@@ -115,16 +112,11 @@ describe("createManagedWorktreeOwnerPolicy", () => {
 
   it("uses the worker for cleanup facts and invalidates them after an in-process write", async () => {
     const stateDir = tempDirs.make("worktree-owner-worker-");
-    const native = await vi.importActual<
-      typeof import("../../config/sessions/session-accessor.entry.js")
-    >("../../config/sessions/session-accessor.entry.js");
-    mocks.readResolvedSessionEntriesInWorker.mockImplementation(
-      native.readResolvedSessionEntriesInWorker,
-    );
+    readOwners.mockImplementation(readOwnersInWorker);
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const key = cleanupRecord.ownerId;
       const scope = { agentId: "main", sessionKey: key };
-      replaceSessionEntrySync(scope, { sessionId: "real-owner", updatedAt: 1, archivedAt: 1 });
+      await replaceSessionEntry(scope, { sessionId: "real-owner", updatedAt: 1, archivedAt: 1 });
       const policy = createManagedWorktreeOwnerPolicy({});
       const sql = observeHostDataSql();
       try {
@@ -213,9 +205,7 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     });
     mocks.placementService.mockReturnValue(store);
     const key = cleanupRecord.ownerId;
-    mocks.readResolvedSessionEntriesInWorker.mockResolvedValue(
-      new Map([[key, { ...target(key), entry: undefined }]]),
-    );
+    readOwners.mockResolvedValue(new Map([[key, { ...target(key), entry: undefined }]]));
     await store.startDispatch({ sessionId: "remote-session", sessionKey: key, agentId: "other" });
     const policy = createManagedWorktreeOwnerPolicy({});
     const census = await policy.prepareOwners([cleanupRecord]);
@@ -238,7 +228,7 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     );
     const key = cleanupRecord.ownerId;
     const sessionId = "queued-cleanup-session";
-    mocks.readResolvedSessionEntriesInWorker.mockResolvedValue(
+    readOwners.mockResolvedValue(
       new Map([[key, target(key, { sessionId, updatedAt: 1, archivedAt: 1 })]]),
     );
     const cfg = { session: { store: "/worktree-cleanup-policy/sessions.json" } };
@@ -292,7 +282,7 @@ describe("createManagedWorktreeOwnerPolicy", () => {
         expect(policy.readOwnerState("session", key)).toBe("active");
       });
     });
-    expect(mocks.readResolvedSessionEntriesInWorker).toHaveBeenCalledTimes(1);
+    expect(readOwners).toHaveBeenCalledTimes(1);
     expect(policy.readOwnerState("session", key)).toBe("active");
     // A later cleanup acquires fresh facts instead of retaining the invalidated lifetime.
     await policy.withOwnerCleanup(cleanupRecord, async () => {
@@ -320,7 +310,7 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     const key = cleanupRecord.ownerId;
     const census = await policy.prepareOwners([cleanupRecord]);
     expect(census.readOwnerState?.("session", key)).toBe("retired");
-    mocks.readResolvedSessionEntriesInWorker.mockResolvedValue(
+    readOwners.mockResolvedValue(
       new Map([[key, target(key, { sessionId: key, updatedAt: Date.now() })]]),
     );
     await policy.withOwnerCleanup(cleanupRecord, async () => {
@@ -330,13 +320,13 @@ describe("createManagedWorktreeOwnerPolicy", () => {
 
   it("classifies recent, idle, archived and missing owners through the async census", async () => {
     const now = 1_800_000_000_000;
-    const entries = new Map<string, ResolvedSessionEntryAccessTarget>([
+    const entries = new Map<string, ResolvedSessionEntryStoreTarget>([
       ["live", target("live", { sessionId: "live", updatedAt: now - 1_000 })],
       ["idle", target("idle", { sessionId: "idle", updatedAt: now - IDLE_GC_MS - 1 })],
       ["archived", target("archived", { sessionId: "archived", updatedAt: now, archivedAt: now })],
       ["missing", { ...target("missing"), entry: undefined }],
     ]);
-    mocks.readResolvedSessionEntriesInWorker.mockResolvedValue(entries);
+    readOwners.mockResolvedValue(entries);
     const census = await createManagedWorktreeOwnerPolicy({}, () => now).prepareOwners(
       Array.from(entries.keys(), (ownerId) => ({ ...cleanupRecord, ownerId })),
     );
@@ -350,11 +340,9 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     "defers unreadable or missing cleanup preparation (%s)",
     async (result) => {
       if (result === "failed") {
-        mocks.readResolvedSessionEntriesInWorker.mockRejectedValue(
-          new Error("unavailable session store"),
-        );
+        readOwners.mockRejectedValue(new Error("unavailable session store"));
       } else {
-        mocks.readResolvedSessionEntriesInWorker.mockResolvedValue(new Map());
+        readOwners.mockResolvedValue(new Map());
       }
       const policy = createManagedWorktreeOwnerPolicy({});
       const census = await policy.prepareOwners([cleanupRecord]);

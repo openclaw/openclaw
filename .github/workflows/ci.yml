@@ -2350,9 +2350,12 @@ jobs:
           requires_webkit="$(node --input-type=module <<'NODE'
           import { existsSync } from "node:fs";
           import { resolve } from "node:path";
-          const suite = resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts");
+          const webkitSuites = new Set([
+            resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
+            resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
+          ].filter(existsSync));
           let requiresWebkit = false;
-          if (existsSync(suite)) {
+          if (webkitSuites.size > 0) {
             const { createVitest } = await import("vitest/node");
             const vitest = await createVitest({
               config: "test/vitest/vitest.ui-e2e.config.ts",
@@ -2364,7 +2367,7 @@ jobs:
             try {
               const sequencer = new vitest.config.sequence.sequencer(vitest);
               const files = await sequencer.shard(await vitest.globTestSpecifications());
-              requiresWebkit = files.some((file) => file.moduleId === suite);
+              requiresWebkit = files.some((file) => webkitSuites.has(file.moduleId));
             } finally {
               await vitest.close();
             }
@@ -3900,9 +3903,16 @@ jobs:
                 if [ "$(nproc)" -lt 8 ]; then
                   # Hosted/dispatch runners are too small for up to seven
                   # concurrent Knip processes; keep the serial path there.
+                  dc_failures=0
                   for dc in "${dc_scripts[@]}"; do
-                    pnpm "$dc"
+                    if ! pnpm "$dc"; then
+                      echo "::error title=${dc} failed::${dc} failed"
+                      dc_failures=1
+                    fi
                   done
+                  if [ "$dc_failures" -ne 0 ]; then
+                    exit 1
+                  fi
                 else
                   dc_pids=()
                   dc_logs=()

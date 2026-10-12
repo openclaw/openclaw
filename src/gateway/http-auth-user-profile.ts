@@ -36,6 +36,7 @@ const profileLog = createSubsystemLogger("gateway/user-profiles");
 
 export type AuthenticatedHttpUserProfile = {
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
+  preparedSessionProfile?: GatewayClient["preparedSessionProfile"];
   operatorRolePolicy?: GatewayOperatorRoleDefinition;
   operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
 };
@@ -242,7 +243,19 @@ async function prepareHttpProfile(
   if (!authority.isCurrent()) {
     throw new Error("HTTP profile authority changed during acquisition");
   }
-  return projectHttpProfile(display, updatedAt, operatorRolePolicy, operatorAccessAuthority);
+  return {
+    ...projectHttpProfile(display, updatedAt, operatorRolePolicy, operatorAccessAuthority),
+    ...(cfg
+      ? {
+          preparedSessionProfile: {
+            profileId: authority.profileId,
+            aliases: new Set(authority.aliases),
+            role: authority.role,
+            githubLogin: authority.githubLogin,
+          },
+        }
+      : {}),
+  };
 }
 
 /** Cookie and media disclosure retain their existing synchronous final policy check. */

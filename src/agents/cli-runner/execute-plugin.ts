@@ -577,6 +577,8 @@ export async function executePluginOwnedProcess(params: {
     } else {
       params.mcpCapture?.beginCapture(params.mcpCapture.captureKey, assertCaptureCurrent);
     }
+    await params.context.cliHistoryWriter?.assertReadable();
+    assertCurrent();
     const started = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
       assertCurrent();
       const execution = params.execute({

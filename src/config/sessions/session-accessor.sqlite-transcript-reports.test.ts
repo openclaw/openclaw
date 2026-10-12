@@ -19,7 +19,7 @@ import {
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { captureRuntimeConfigAsyncReader } from "../io.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendSessionTranscriptReport,
   loadTranscriptEvents,
@@ -63,7 +63,7 @@ const assistant = {
 const selected = { customType: "status", content: body, details: { selected: true } };
 
 async function seedReports(stopReason: AssistantMessage["stopReason"] = assistant.stopReason) {
-  await captureRuntimeConfigAsyncReader()();
+  setRuntimeConfigSnapshot({});
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   await replaceTranscriptEvents(scope, [
     { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
@@ -115,6 +115,7 @@ function transcriptSnapshot(db: DatabaseSync) {
 describe("SQLite report payload selection", () => {
   it("reserves a report with its original identity and environment before later writes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       await seedReports();
       const options = { agentId: scope.agentId };
       const release = createDeferredCore();
@@ -152,6 +153,7 @@ describe("SQLite report payload selection", () => {
 
   it("rejects a queued report after the original file is replaced with identical bytes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const db = await seedReports();
       db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       const { path: databasePath } = openOpenClawAgentDatabase({ agentId: scope.agentId });
@@ -190,6 +192,7 @@ describe("SQLite report payload selection", () => {
 
   it("cannot redirect a report to another store containing the same session key", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const requested = { ...scope, storePath: state.path("requested.sqlite") };
       const other = { ...scope, storePath: state.path("other.sqlite") };
       for (const target of [requested, other]) {
@@ -243,6 +246,7 @@ describe("SQLite report payload selection", () => {
 
   it("preserves native incognito reports and refuses an unrelated file-source restriction", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const native = { ...scope, sessionKey: "agent:main:dashboard:incognito-reports" };
       await upsertSessionEntryCore(native, { sessionId: native.sessionId, updatedAt: 1 });
       await replaceTranscriptEvents(native, [
@@ -277,6 +281,7 @@ describe("SQLite report payload selection", () => {
 
   it("fences worker abort fallbacks and preserves each run's authoritative answer", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const db = await seedReports();
       await upsertSessionEntryCore(scope, {
         sessionId: scope.sessionId,
@@ -467,6 +472,7 @@ describe("SQLite report payload selection", () => {
     "keeps %s reporting independent of unselected compressed bodies",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const db = await seedReports(kind === "run" ? "error" : "stop");
         // Unselected bodies are unavailable; their recorded navigation still supports report decisions.
         const changed = db
@@ -501,6 +507,7 @@ describe("SQLite report payload selection", () => {
 
   it("reselects through an alias after another connection changes the report branch before commit", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const db = await seedReports();
       const hostTransactions = vi.spyOn(db, "exec");
       const { path: databasePath } = openOpenClawAgentDatabase({ agentId: scope.agentId });
@@ -563,6 +570,7 @@ describe("SQLite report payload selection", () => {
 
   it("preserves custom report JSON serialization before worker transfer", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       await seedReports();
       const serializedKeys: string[] = [];
       class NestedDetails {
@@ -609,6 +617,7 @@ describe("SQLite report payload selection", () => {
     "refuses malformed %s before selecting or appending a report",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const db = await seedReports();
         const selectReport = vi.fn(() =>
           kind === "compressed facts" ? { ...selected, display: true } : undefined,
@@ -654,7 +663,7 @@ describe("SQLite report payload selection", () => {
 
   it("does not let an unreadable compressed assistant suppress a real response", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
+      setRuntimeConfigSnapshot({});
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const unreadable = {
         type: "message",
@@ -700,7 +709,7 @@ describe("SQLite report payload selection", () => {
 
   it("uses the last original duplicate member for response suppression", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
+      setRuntimeConfigSnapshot({});
       const raw = `{"type":"message","id":"duplicate","parentId":null,
         "message":{"role":"assistant","content":${JSON.stringify(body)},"responseId":"first"},
         "message":{"role":"assistant","content":${JSON.stringify(body)},"responseId":"discarded","responseId":"last"}}`;

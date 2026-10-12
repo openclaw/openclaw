@@ -68,7 +68,7 @@ it("classifies sandbox policy and revokes native consent from acknowledged actor
       permissionMode: "full" as const,
     };
     expect(resolveSandboxRuntimeStatus({ cfg, sessionKey }).sandboxed).toBe(false);
-    expect(assertAgentHarnessExecutionEnvironment(harness, params)).toBe(true);
+    await expect(assertAgentHarnessExecutionEnvironment(harness, params)).resolves.toBe(true);
     expect(
       resolveSandboxRuntimeStatus({
         cfg,
@@ -96,7 +96,7 @@ it("classifies sandbox policy and revokes native consent from acknowledged actor
       { agentId: "main", sessionKey, storePath: actor.path },
       { permissionMode: "workspace" },
     );
-    expect(() => assertAgentHarnessExecutionEnvironment(harness, params)).toThrow(
+    await expect(assertAgentHarnessExecutionEnvironment(harness, params)).rejects.toThrow(
       "requires Full access",
     );
     const requiredKey = "agent:main:dashboard:incognito-required-policy";

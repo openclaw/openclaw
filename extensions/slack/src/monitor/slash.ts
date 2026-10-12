@@ -332,6 +332,7 @@ export function createSlackCommandHandler(params: {
     const respond = responseBudget.respond;
     const respondEphemeral = (text: string) => respond({ text, response_type: "ephemeral" });
     let cfg = monitor.cfg;
+    let releaseSessionTarget: (() => void) | undefined;
     try {
       if (monitor.shouldDropMismatchedSlackEvent?.(body)) {
         await ack();
@@ -486,6 +487,7 @@ export function createSlackCommandHandler(params: {
             );
             sessionTarget.isCurrent = current.isCurrent;
             sessionTarget.source = current.source;
+            releaseSessionTarget = current.release;
             return resolvedSlashRoute;
           }
           const routing = await resolveSlackSessionEventRoutingContext({
@@ -506,6 +508,7 @@ export function createSlackCommandHandler(params: {
           resolvedSlashRoute = routing.route;
           sessionTarget.isCurrent = routing.isCurrentSession;
           sessionTarget.source = routing.sessionSource;
+          releaseSessionTarget = routing.release;
           return resolvedSlashRoute;
         }
         const { resolveAgentRoute } = await loadSlashDispatchRuntime();
@@ -816,6 +819,8 @@ export function createSlackCommandHandler(params: {
       if (!(err instanceof SlackResponseAlreadyReportedError) && responseBudget.remaining() !== 0) {
         await respondEphemeral("Sorry, something went wrong handling that command.");
       }
+    } finally {
+      releaseSessionTarget?.();
     }
     return false;
   };
