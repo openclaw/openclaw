@@ -523,6 +523,14 @@ export async function runChatSendPreAdmission(
         beforeAbort,
         cascadeDescendants: true,
       });
+      // A stale child refusal can precede beforeAbort; the request's leaf error wins.
+      if (!guard.failure && (res.error || (res.descendants && res.descendants.status !== "ok"))) {
+        try {
+          await beforeAbort();
+        } catch (error) {
+          throw abortedPartialPersistenceError(error, res.warning);
+        }
+      }
       // Descendant cancellation aggregates errors; preserve the admission reason.
       if (guard.failure) {
         throw abortedPartialPersistenceError(guard.failure.error, res.warning);

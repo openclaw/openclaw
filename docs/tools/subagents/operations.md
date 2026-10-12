@@ -238,6 +238,9 @@ A typed `/stop` sent through `chat.send` honors `expectedLeafEntryId` and, when
 that branch check is present, `sessionId`. If the check fails during descendant
 cancellation, the Gateway refuses further cancellation and reports
 `active-leaf-changed`. Cancellation already accepted by a child still settles.
+If child ownership refuses cancellation before the branch check runs, the Gateway
+rechecks the requested leaf: a changed leaf takes precedence, while an unchanged
+leaf preserves the ownership error. Neither outcome authorizes changing a replacement child.
 The cancellation result waits for pending child-session metadata writes before
 checking that the original session still owns the outcome.
 
