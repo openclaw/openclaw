@@ -12,11 +12,6 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.core.test.agents-root.json",
   },
   {
-    name: "agents-embedded-root",
-    group: "src",
-    config: "test/tsconfig/tsconfig.core.test.agents-embedded-root.json",
-  },
-  {
     name: "agents-other",
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.agents-other.json",
@@ -123,6 +118,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     name: "ui-components",
     group: "ui",
     config: "test/tsconfig/tsconfig.core.test.ui-components.json",
+  },
+  {
+    name: "agents-embedded-root",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.agents-embedded-root.json",
   },
 ] as const;
 

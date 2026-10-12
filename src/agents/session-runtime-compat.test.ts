@@ -305,10 +305,8 @@ describe("resolveManualCompactionCliTarget", () => {
 });
 
 describe("resolveCompatibleAgentRuntimeForProvider app-server bindings", () => {
-  // Regression for openclaw-vgx7. This resolver hardcoded Codex, so every other
-  // app-server harness was rejected: the /models picker offered
-  // `zai/glm-5.3 --runtime glm-bridge`, the directive answered 'Runtime
-  // "glm-bridge" is not supported for zai', and the model silently never changed.
+  // Regression for openclaw-vgx7: the binding table is shared with the /models
+  // chooser, so a pair the chooser offers is accepted here by construction.
   it("accepts every provider/runtime pair the chooser is willing to offer", () => {
     for (const binding of listAppServerRuntimeModelBackendBindings()) {
       expect(
@@ -331,6 +329,28 @@ describe("resolveCompatibleAgentRuntimeForProvider app-server bindings", () => {
   it("still rejects a runtime that no binding serves", () => {
     expect(
       resolveCompatibleAgentRuntimeForProvider({ provider: "anthropic", runtime: "codex" }),
+    ).toBeUndefined();
+  });
+
+  // A binding row must stay ADDITIVE. Reading it as "this runtime serves only
+  // this provider" rejected providers `main` accepts through the canonical
+  // applicability owner -- including Copilot's documented BYOK route, whose
+  // inherited pin was then cleared during model selection. Codex is the sole
+  // exception because `main` itself closes its accept set to codex/openai.
+  it("does not narrow a bound runtime to its binding row's provider", () => {
+    for (const runtime of ["copilot", "agentsapi"]) {
+      expect(
+        resolveCompatibleAgentRuntimeForProvider({ provider: "proof-byok", runtime }),
+        `${runtime} must still reach the canonical applicability owner for an unowned provider`,
+      ).toBe(runtime);
+    }
+  });
+
+  it("keeps Codex closed to its own providers", () => {
+    // Codex owns a binding row like Copilot does, so this is what proves the
+    // exception above is still an exception and not collateral damage.
+    expect(
+      resolveCompatibleAgentRuntimeForProvider({ provider: "proof-byok", runtime: "codex" }),
     ).toBeUndefined();
   });
 });

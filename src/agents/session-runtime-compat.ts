@@ -13,10 +13,7 @@ import {
 } from "../plugins/manifest-contract-eligibility.js";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import {
-  isAppServerRuntimeModelBackendBinding,
-  listAppServerRuntimeModelBackendBindings,
-} from "./app-server-runtime-bindings.js";
+import { isAppServerRuntimeModelBackendBinding } from "./app-server-runtime-bindings.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { isCliRuntimeAliasForProvider } from "./model-runtime-aliases.js";
 
@@ -70,27 +67,30 @@ export function resolveCompatibleAgentRuntimeForProvider(params: {
   }
   const provider = params.provider?.trim().toLowerCase() ?? "";
   // App-server harnesses are bound to their providers in ONE place
-  // (app-server-runtime-bindings.ts), shared with the /models runtime chooser.
+  // (app-server-runtime-bindings.ts), shared with the /models runtime chooser,
+  // so a pair the chooser offers is accepted here by construction and the two
+  // surfaces cannot disagree (openclaw-vgx7).
   // This answers compatibility only: the binding table is static, so an owner
   // plugin can still be disabled. Callers that ACCEPT a new selection also gate
   // on owner availability (directive-handling.model-runtime.ts); recovery of an
   // already-persisted override deliberately does not, so a temporarily
   // unavailable plugin cannot silently reroute a locked transcript.
-  // This used to hardcode Codex alone, which silently rejected every other
-  // bridge harness: `/model zai/glm-5.3 --runtime glm-bridge` returned
-  // 'Runtime "glm-bridge" is not supported for zai' and the model never changed,
-  // even though the picker offered that exact combination (openclaw-vgx7).
   if (isAppServerRuntimeModelBackendBinding({ provider, runtime })) {
     return runtime;
   }
-  if (
-    runtime === "codex" ||
-    listAppServerRuntimeModelBackendBindings().some((binding) => binding.runtime === runtime)
-  ) {
-    // This runtime owns a dedicated single-provider binding above (Codex's
-    // virtual `codex` provider included); it must never fall through to the
-    // generic ACP harness discovery below just because its plugin happens to
-    // be registered for an unrelated provider.
+  if (runtime === "codex") {
+    // Codex is the one harness whose applicability is closed: `main` answers it
+    // with `provider === "codex" || provider === "openai"`, which is exactly the
+    // accept set above (the `openai` row plus the virtual `codex` namespace), so
+    // it must not fall through to the generic discovery below. Every OTHER bound
+    // runtime keeps falling through: a binding row is an ADDITIVE chooser-
+    // discovery fact, not an exclusive applicability claim. Copilot, for
+    // instance, documents support for eligible unowned custom providers
+    // (`supportsCopilotByokProviderShape()` in extensions/copilot/harness.ts),
+    // and the canonical applicability owner -- the registered harness, then the
+    // manifest, then the CLI alias table -- is what answers for them on `main`.
+    // Rejecting here would narrow that to the single canonical provider id and
+    // would clear an already-compatible `agentRuntimeOverride` pin on selection.
     return undefined;
   }
   if (getRegisteredAgentHarness(runtime)) {

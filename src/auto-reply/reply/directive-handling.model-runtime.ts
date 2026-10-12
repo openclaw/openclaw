@@ -95,26 +95,16 @@ function resolveUnavailableHarnessOwnerText(params: {
   if (params.runtime === OPENCLAW_AGENT_RUNTIME_ID) {
     return undefined;
   }
-  // App-server harness bindings are the non-CLI parallel of the CLI runtime
-  // bindings, so a pair served by one is never served by the other. Answering
-  // from the static table first keeps the CLI-backend probe -- which falls
-  // through to synchronous plugin setup discovery once a config is supplied --
-  // off the native `/model` fast path, which forbids it and which `main` never
-  // reached here because it accepted a compatible runtime unconditionally.
-  const appServerBound = isAppServerRuntimeModelBackendBinding({
-    provider: params.provider,
-    runtime: params.runtime,
-  });
-  if (
-    !appServerBound &&
-    isCliRuntimeAliasForProvider({
-      provider: params.provider,
-      runtime: params.runtime,
-      cfg: params.cfg,
-    })
-  ) {
-    return undefined;
-  }
+  // Ask the agent-harness owner FIRST. `resolveAgentHarnessOwnerPluginIds()`
+  // reads the manifest activation plan only, so it answers every app-server
+  // harness -- the fixed-table ones and the dynamically-routed ones such as
+  // acpx's `acp-opencode` -- without touching the CLI setup registry. That
+  // matters because the CLI-backend probe falls through to SYNCHRONOUS plugin
+  // setup discovery once a config is supplied, which the native `/model` fast
+  // path forbids (`main` never reached here at all: it accepted a compatible
+  // runtime unconditionally). Gating the probe on the fixed binding table alone
+  // left dynamic harnesses -- absent from that table but compatible via
+  // manifest discovery -- falling into it and throwing.
   const workspaceDir =
     params.workspaceDir ??
     (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined) ??
@@ -125,9 +115,27 @@ function resolveUnavailableHarnessOwnerText(params: {
     config: params.cfg,
     workspaceDir,
   });
-  return ownerPluginIds.length > 0
-    ? undefined
-    : `Runtime "${params.rawRuntime}" is unavailable: no enabled plugin owns agent harness "${params.runtime}". Enable that plugin, restart the Gateway, then retry, or use /models to pick an available runtime.`;
+  if (ownerPluginIds.length > 0) {
+    return undefined;
+  }
+  // No enabled agent-harness owner. A CLI backend owns its own availability, so
+  // it is still available -- but app-server bindings are the non-CLI parallel of
+  // the CLI runtime bindings, so a pair served by one is never served by the
+  // other and probing for a bound pair would only risk the forbidden discovery.
+  if (
+    !isAppServerRuntimeModelBackendBinding({
+      provider: params.provider,
+      runtime: params.runtime,
+    }) &&
+    isCliRuntimeAliasForProvider({
+      provider: params.provider,
+      runtime: params.runtime,
+      cfg: params.cfg,
+    })
+  ) {
+    return undefined;
+  }
+  return `Runtime "${params.rawRuntime}" is unavailable: no enabled plugin owns agent harness "${params.runtime}". Enable that plugin, restart the Gateway, then retry, or use /models to pick an available runtime.`;
 }
 
 /** Applies a validated runtime choice, clearing consent with an incompatible or reset pin. */

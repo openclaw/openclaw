@@ -23,21 +23,31 @@
  *
  * `app-server-runtime-bindings.test.ts` fails when a bundled extension declares
  * an agent harness that has no row here, so a new bridge-backed provider cannot
- * silently ship without a chooser.
+ * silently ship without a chooser. That guard and scenario 5 of
+ * `scripts/proof-app-server-runtime-chooser-bindings.ts` share one scan, in
+ * `app-server-runtime-bindings.test-support.ts`, including the exclusion for
+ * harnesses whose route applicability is dynamic rather than fixed.
  *
- * KNOWN LIMITATION -- open maintainer decision, not an oversight. A row names a
- * canonical provider id, so this table cannot express the Copilot harness's
- * documented BYOK route: an eligible custom `models.providers` entry with a
- * non-empty `baseUrl` and a supported `api` is accepted by
- * `extensions/copilot/harness.ts` (via `supportsCopilotByokProviderShape()`,
- * see `docs/plugins/copilot.md` "Supported providers"), yet gets no chooser
- * entry here and is rejected by `--runtime copilot`. That is the behavior on
- * `main` today and this change does not alter it. Representing it means letting
- * the harness plugin declare its own provider applicability, which is a new
- * public plugin contract; the PR body records the options and the request for
- * maintainer direction. `scripts/proof-app-server-runtime-chooser-bindings.ts`
- * scenario 13 pins the current behavior so whichever contract is approved has a
- * control to flip.
+ * SCOPE -- these rows are ADDITIVE, never exclusive. A row names a canonical
+ * provider id, so the table cannot express the Copilot harness's documented BYOK
+ * route: an eligible custom `models.providers` entry with a non-empty `baseUrl`
+ * and a supported `api` is accepted by `extensions/copilot/harness.ts` (via
+ * `supportsCopilotByokProviderShape()`, see `docs/plugins/copilot.md`
+ * "Supported providers"). What follows from that is a split, and conflating the
+ * two halves is how this table previously narrowed existing behavior:
+ *
+ * - DISCOVERY (open maintainer decision): such a provider gets no chooser entry,
+ *   because nothing here can enumerate it. Representing it means letting the
+ *   harness plugin declare its own provider applicability -- a new public plugin
+ *   contract. The PR body records the options and the request for direction, and
+ *   `scripts/proof-app-server-runtime-chooser-bindings.ts` scenario 13a pins the
+ *   gap so whichever contract is approved has a control to flip.
+ * - APPLICABILITY (not ours to narrow): an explicit `--runtime copilot` and an
+ *   inherited `agentRuntimeOverride: "copilot"` pin stay answered by the
+ *   canonical owner -- registered harness, then manifest, then CLI alias -- in
+ *   `resolveCompatibleAgentRuntimeForProvider()`, exactly as on `main`. Reading
+ *   a row as "this runtime serves ONLY this provider" rejected those and cleared
+ *   the pin plus its native-runtime consent; scenario 13b pins that it does not.
  */
 
 /** Binding between a model provider and the app-server runtime that serves it. */

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   applyModelRuntimeDirective,
@@ -68,15 +69,88 @@ describe("resolveModelRuntimeDirective app-server owner availability", () => {
   });
 
   it("keeps the unsupported-pairing message for an incompatible runtime", () => {
+    // Codex is the one harness whose applicability is closed on `main`
+    // (`codex`/`openai` only), so it is the honest example of an incompatible
+    // pairing. `copilot` is NOT: see the custom-provider cases below.
     const resolution = resolveModelRuntimeDirective({
-      rawRuntime: "copilot",
+      rawRuntime: "codex",
       provider: "anthropic",
       cfg: baseConfig,
     });
 
     expect(resolution.kind).toBe("invalid");
     expect(resolution.kind === "invalid" && resolution.errorText).toBe(
-      'Runtime "copilot" is not supported for anthropic.',
+      'Runtime "codex" is not supported for anthropic.',
     );
+  });
+});
+
+describe("resolveModelRuntimeDirective custom-provider applicability", () => {
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+  });
+
+  // A binding row is additive chooser-discovery data, not an exclusive claim
+  // that its runtime serves only that one provider. `main` answers an unowned
+  // provider through the canonical applicability owner (registered harness, then
+  // manifest), and these pin that this branch does not narrow that.
+  it("accepts an explicit bound runtime for a provider outside its binding row", () => {
+    expect(
+      resolveModelRuntimeDirective({
+        rawRuntime: "copilot",
+        provider: "proof-byok",
+        cfg: baseConfig,
+      }),
+    ).toEqual({ kind: "set", runtime: "copilot" });
+  });
+
+  it("preserves an inherited compatible pin and its native-runtime consent", () => {
+    const entry = { agentRuntimeOverride: "copilot", nativeRuntimeConsent: "copilot" };
+    const resolution = resolveModelRuntimeDirective({
+      provider: "proof-byok",
+      cfg: baseConfig,
+      sessionEntry: entry,
+    });
+
+    expect(resolution).toEqual({ kind: "unchanged" });
+    expect(applyModelRuntimeDirective(entry, resolution)).toEqual({ updated: false });
+    expect(entry).toEqual({ agentRuntimeOverride: "copilot", nativeRuntimeConsent: "copilot" });
+  });
+
+  it("recognises a dynamic harness owner without probing CLI setup discovery", () => {
+    // The native `/model` fast path forbids synchronous plugin setup discovery
+    // (see get-reply-native-slash-fast-path.test.ts, which stubs the same seam
+    // to throw). `acp-opencode` is compatible through manifest discovery but is
+    // absent from the fixed app-server binding table, so gating the CLI probe on
+    // that table alone let it fall straight into the forbidden path.
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => {
+        throw new Error("runtime directive attempted synchronous CLI setup discovery");
+      },
+    });
+
+    expect(
+      resolveModelRuntimeDirective({
+        rawRuntime: "acp-opencode",
+        provider: "zai",
+        cfg: baseConfig,
+      }),
+    ).toEqual({ kind: "set", runtime: "acp-opencode" });
+  });
+
+  it("still clears an inherited pin the provider genuinely cannot use", () => {
+    const entry: { agentRuntimeOverride?: string; nativeRuntimeConsent?: string } = {
+      agentRuntimeOverride: "codex",
+      nativeRuntimeConsent: "codex",
+    };
+    const resolution = resolveModelRuntimeDirective({
+      provider: "proof-byok",
+      cfg: baseConfig,
+      sessionEntry: entry,
+    });
+
+    expect(resolution).toEqual({ kind: "clear" });
+    applyModelRuntimeDirective(entry, resolution);
+    expect(entry).toEqual({});
   });
 });

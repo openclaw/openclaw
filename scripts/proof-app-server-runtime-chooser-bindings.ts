@@ -8,8 +8,9 @@
  *   - Explicit lifecycle publication captures real registered harnesses, catalog
  *     routes, and synthetic configured host-auth facts. Runtime choices pass the
  *     production per-model auth/route/support checks; no fake harness is registered.
- *   - `listAppServerRuntimeModelBackendBindings()` and the real bundled plugin
- *     manifests read off disk via `listBundledPluginMetadata()`.
+ *   - `listAppServerRuntimeModelBackendBindings()`, and the real bundled plugin
+ *     manifests read off disk via `listBundledAppServerHarnessIds()` — the same
+ *     scan the unit coverage guard uses.
  *   - The downstream selection lookup is reproduced exactly as the Discord model
  *     picker does it (extensions/discord/src/monitor/
  *     native-command-model-picker-interaction.ts): resolve the rendered stable
@@ -27,8 +28,10 @@
  *      proving the fix did not blanket-add native runtimes everywhere.
  *   4. Disabled owner — a runtime whose bundled plugin is disabled is hidden
  *      instead of leaving a chooser entry that can only fail.
- *   5. Binding coverage — every agent harness declared by a real bundled
- *      manifest on disk has a binding row.
+ *   5. Binding coverage — every fixed-binding agent harness declared by a real
+ *      bundled manifest on disk has a binding row, and every dynamic-applicability
+ *      harness (acpx's ACP bridges) correctly has none. Both halves are asserted
+ *      non-vacuously.
  *   6. `/model <provider>/<model> --runtime <runtime>` directive acceptance —
  *      the real `resolveModelRuntimeDirective()` accepts the same Copilot and
  *      Codex pairings the chooser offers.
@@ -45,6 +48,14 @@
  *      post-fix directive never persists that override, so the throw is
  *      unreachable. This closes the causal chain the review described without
  *      needing GitHub Copilot credentials.
+ *  10-12. Channel callback, subsequent-turn readback, and pre-dispatch rejection
+ *      of an unsupported model/runtime identity.
+ *  13. Documented Copilot BYOK, split in two: (a) the still-open discovery gap —
+ *      an eligible unowned custom provider gets no chooser entry; (b) the
+ *      applicability NON-REGRESSION — an explicit `--runtime copilot` is still
+ *      accepted for it and an inherited compatible pin plus its native-runtime
+ *      consent survive, while an incompatible pin is cleared and an incompatible
+ *      explicit request is refused.
  *
  * Run: pnpm tsx scripts/proof-app-server-runtime-chooser-bindings.ts
  */
@@ -58,7 +69,8 @@ import { Worker } from "node:worker_threads";
 
 type CommandsModelsModule = typeof import("../src/auto-reply/reply/commands-models-catalog.js");
 type BindingsModule = typeof import("../src/agents/app-server-runtime-bindings.js");
-type BundledMetadataModule = typeof import("../src/plugins/bundled-plugin-metadata.js");
+type BindingsTestSupportModule =
+  typeof import("../src/agents/app-server-runtime-bindings.test-support.js");
 type DirectiveRuntimeModule =
   typeof import("../src/auto-reply/reply/directive-handling.model-runtime.js");
 type HarnessRuntimePluginModule = typeof import("../src/agents/harness/runtime-plugin.js");
@@ -81,9 +93,9 @@ const { buildPreparedModelsProviderData } = (await importSource(
 const { listAppServerRuntimeModelBackendBindings } = (await importSource(
   "src/agents/app-server-runtime-bindings.ts",
 )) as BindingsModule;
-const { listBundledPluginMetadata } = (await importSource(
-  "src/plugins/bundled-plugin-metadata.ts",
-)) as BundledMetadataModule;
+const { listBundledAppServerHarnessIds } = (await importSource(
+  "src/agents/app-server-runtime-bindings.test-support.ts",
+)) as BindingsTestSupportModule;
 const { applyModelRuntimeDirective, resolveModelRuntimeDirective } = (await importSource(
   "src/auto-reply/reply/directive-handling.model-runtime.ts",
 )) as DirectiveRuntimeModule;
@@ -306,28 +318,36 @@ try {
   );
   console.log("[4] disabled Copilot is not advertised");
 
-  // --- Scenario 5: every bundled app-server harness has a binding. ------------
+  // --- Scenario 5: every FIXED-BINDING bundled app-server harness has a row. --
+  // Harnesses whose applicability is dynamic per model route (acpx's ACP bridges)
+  // deliberately have no row: they are discovered from `runtimePolicy.compatibleIds`
+  // and confirmed by `harness.supports()`. The scan — exclusion included — is
+  // shared with the unit guard in src/agents/app-server-runtime-bindings.test.ts,
+  // so this scenario and that guard cannot drift apart again.
   const boundRuntimes = new Set(
     listAppServerRuntimeModelBackendBindings().map((binding) => binding.runtime),
   );
-  const bundledHarnessIds = new Set<string>();
-  for (const entry of listBundledPluginMetadata({ includeChannelConfigs: false })) {
-    const cliBackends = new Set(entry.manifest.cliBackends ?? []);
-    for (const harnessId of entry.manifest.activation?.onAgentHarnesses ?? []) {
-      if (!cliBackends.has(harnessId)) {
-        bundledHarnessIds.add(harnessId);
-      }
-    }
-  }
-  assert.ok(bundledHarnessIds.size > 0, "read zero bundled agent harnesses — the scan is broken");
-  const unbound = [...bundledHarnessIds].filter((harnessId) => !boundRuntimes.has(harnessId));
+  const { fixed: fixedHarnessIds, dynamic: dynamicHarnessIds } = listBundledAppServerHarnessIds();
+  assert.ok(fixedHarnessIds.length > 0, "read zero bundled agent harnesses — the scan is broken");
+  const unbound = fixedHarnessIds.filter((harnessId) => !boundRuntimes.has(harnessId));
   assert.deepEqual(
     unbound,
     [],
     `bundled agent harness(es) ${unbound.join(", ")} ship with no model-provider binding`,
   );
+  // The exclusion must be load-bearing, not vacuous: a scan that found no dynamic
+  // harness would pass this scenario while proving nothing about the distinction.
+  assert.ok(
+    dynamicHarnessIds.length > 0,
+    "read zero dynamic-applicability harnesses — the exclusion is vacuous and the scan is broken",
+  );
+  assert.deepEqual(
+    dynamicHarnessIds.filter((harnessId) => boundRuntimes.has(harnessId)),
+    [],
+    "a dynamic-applicability harness gained a fixed binding row; the table now claims to own its routes",
+  );
   console.log(
-    `[5] bundled app-server harnesses ${JSON.stringify([...bundledHarnessIds].toSorted())} all bound`,
+    `[5] fixed-binding app-server harnesses ${JSON.stringify(fixedHarnessIds)} all bound; dynamic-applicability harnesses ${JSON.stringify(dynamicHarnessIds)} correctly unbound`,
   );
 
   // --- Scenario 6: the /model directive accepts what the chooser offers. ------
@@ -965,14 +985,20 @@ try {
       "[12] unsupported model/runtime identity and retired index rejected before dispatch",
     );
 
-    // --- Scenario 13: the KNOWN GAP this PR does not close. -------------------
+    // --- Scenario 13: documented Copilot BYOK -- the gap vs. the non-regression.
     // docs/plugins/copilot.md documents Copilot BYOK for eligible custom
     // `models.providers` entries, and extensions/copilot/harness.ts accepts them
-    // via supportsCopilotByokProviderShape(). A static table of canonical provider
-    // ids cannot represent that, so the picker offers nothing and the directive is
-    // rejected -- the same as on main. Pinned as executable evidence of the open
-    // maintainer decision rather than left as prose, so whichever contract is
-    // approved has a control to flip.
+    // via supportsCopilotByokProviderShape(). Those are two separate facts and
+    // this PR must land on opposite sides of them:
+    //   13a DISCOVERY is still missing (open maintainer decision). A table of
+    //       canonical provider ids cannot enumerate such a provider, so the
+    //       picker offers no Copilot choice -- the same as on main.
+    //   13b APPLICABILITY must NOT have been narrowed. On main an explicit
+    //       `--runtime copilot` and an inherited `agentRuntimeOverride` pin for
+    //       such a provider are answered by the canonical owner (registered
+    //       harness, then manifest) and ACCEPTED. Reading a binding row as
+    //       exclusive rejected both and cleared the pin plus its native-runtime
+    //       consent; this pins that it does not.
     const byokConfig = {
       ...config,
       agents: {
@@ -1004,18 +1030,78 @@ try {
       false,
       "KNOWN GAP changed: a custom BYOK provider now offers Copilot -- update the contract",
     );
+    console.log(
+      '[13a] KNOWN GAP (open maintainer decision): documented Copilot BYOK provider "proof-byok" still has no Copilot chooser entry',
+    );
+
     const byokDirective = resolveModelRuntimeDirective({
       rawRuntime: "copilot",
       provider: "proof-byok",
       cfg: byokConfig,
     });
+    assert.deepEqual(
+      byokDirective,
+      { kind: "set", runtime: "copilot" },
+      `explicit --runtime copilot for an eligible BYOK provider must stay accepted as it is on main: ${JSON.stringify(byokDirective)}`,
+    );
+    // The inherited-pin half of the same contract: no explicit `--runtime`, an
+    // already-persisted compatible override, and a recorded native-runtime
+    // consent. Both must survive model selection.
+    const byokPinEntry = {
+      agentRuntimeOverride: "copilot",
+      nativeRuntimeConsent: "copilot",
+    } as Parameters<typeof applyModelRuntimeDirective>[0];
+    const byokPin = resolveModelRuntimeDirective({
+      provider: "proof-byok",
+      cfg: byokConfig,
+      sessionEntry: byokPinEntry,
+    });
+    assert.deepEqual(
+      byokPin,
+      { kind: "unchanged" },
+      `an inherited compatible copilot pin must be preserved, not cleared: ${JSON.stringify(byokPin)}`,
+    );
+    applyModelRuntimeDirective(byokPinEntry, byokPin);
+    assert.deepEqual(
+      byokPinEntry,
+      { agentRuntimeOverride: "copilot", nativeRuntimeConsent: "copilot" },
+      `applying the resolution mutated a compatible pin or its consent: ${JSON.stringify(byokPinEntry)}`,
+    );
+    // Control: an inherited pin that really is incompatible is still cleared,
+    // together with its consent, so 13b is not just "accept everything".
+    const incompatiblePinEntry = {
+      agentRuntimeOverride: "codex",
+      nativeRuntimeConsent: "codex",
+    } as Parameters<typeof applyModelRuntimeDirective>[0];
+    const incompatiblePin = resolveModelRuntimeDirective({
+      provider: "proof-byok",
+      cfg: byokConfig,
+      sessionEntry: incompatiblePinEntry,
+    });
+    assert.deepEqual(
+      incompatiblePin,
+      { kind: "clear" },
+      `an inherited incompatible pin must be cleared: ${JSON.stringify(incompatiblePin)}`,
+    );
+    applyModelRuntimeDirective(incompatiblePinEntry, incompatiblePin);
+    assert.deepEqual(
+      incompatiblePinEntry,
+      {},
+      `clearing left the incompatible pin or its consent behind: ${JSON.stringify(incompatiblePinEntry)}`,
+    );
+    // ... and an explicit incompatible request is still refused outright.
+    const incompatibleRequest = resolveModelRuntimeDirective({
+      rawRuntime: "codex",
+      provider: "proof-byok",
+      cfg: byokConfig,
+    });
     assert.equal(
-      byokDirective.kind,
+      incompatibleRequest.kind,
       "invalid",
-      "KNOWN GAP changed: --runtime copilot is now accepted for a custom BYOK provider -- update this scenario and the PR body",
+      `an explicit incompatible runtime request must be rejected: ${JSON.stringify(incompatibleRequest)}`,
     );
     console.log(
-      `[13] KNOWN GAP (open maintainer decision): documented Copilot BYOK provider "proof-byok" still has no Copilot choice and its directive is ${byokDirective.kind}`,
+      "[13b] NON-REGRESSION: explicit --runtime copilot accepted, compatible pin + consent preserved, incompatible pin cleared, incompatible request rejected",
     );
   } finally {
     await closePreparedModelRuntimeSnapshots();
