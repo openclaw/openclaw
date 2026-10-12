@@ -94,7 +94,7 @@ function renderDeviceUpdates(capability: NativeDeviceSettingsCapability | null |
         })}${renderSettingsRow({
           title: t("updates.device.check"),
           control: html`<button
-            class="btn btn--sm"
+            class="btn primary"
             type="button"
             @click=${() => capability.checkForUpdates()}
           >
