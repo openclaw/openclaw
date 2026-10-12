@@ -392,6 +392,7 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
   });
   workerService = environmentService;
   const dispatch = createWorkerPlacementDispatchService({
+    initialPlacements: placements.list(),
     placements,
     environments: {
       ...environmentService,

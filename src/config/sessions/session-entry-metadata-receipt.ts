@@ -8,6 +8,7 @@ import type { SessionRowChange, SessionRowFacts } from "../../sessions/session-r
 import { preparedSharingChanges } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import type { SessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
+  discardSessionEntryPublicationSource,
   hasSessionEntryPublicationCapacity,
   sealSessionEntryPublicationSource,
 } from "./session-entry-publication-source.js";
@@ -94,7 +95,7 @@ export function boundSessionEntryMetadataReceipts(
     return;
   }
   for (const receipt of receipts) {
-    delete receipt.source.writeToken;
+    discardSessionEntryPublicationSource(receipt.source);
     for (const fact of receipt.facts.values()) {
       if (fact.kind === "postimage") {
         delete fact.value.fullEntry;

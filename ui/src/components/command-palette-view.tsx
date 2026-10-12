@@ -20,11 +20,12 @@ import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import { LitContent } from "../lit/solid-bridge.ts";
 import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
-import type {
-  HumanMentionMenu,
-  HumanMentionMenuHost,
-} from "../pages/chat/components/chat-composer-mention-menu.ts";
-import { renderSelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.ts";
+import {
+  HumanMentionMenuView,
+  type HumanMentionMenu,
+  type HumanMentionMenuHost,
+} from "../pages/chat/components/chat-composer-mention-menu.tsx";
+import { SelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.tsx";
 import "../styles/command-palette.css";
 import type { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import {
@@ -540,27 +541,21 @@ function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
           />
           <Show when={current().draft.mentions.length > 0}>
             <div class="cmd-palette__mentions" inert={current().draft.messageLocked}>
-              <LitContent
-                render={() =>
-                  renderSelectedHumanMentions(
-                    current().query,
-                    current().draft.mentions,
-                    () => {
-                      current().draft.setMessage(current().query, []);
-                      current().requestUpdate();
-                      current().mentionHost.getTextarea()?.focus({ preventScroll: true });
-                    },
-                    current().mentionMenu.selectedAvatarUrls,
-                  )
-                }
+              <SelectedHumanMentions
+                text={current().query}
+                mentions={current().draft.mentions}
+                onRemove={() => {
+                  current().draft.setMessage(current().query, []);
+                  current().requestUpdate();
+                  current().mentionHost.getTextarea()?.focus({ preventScroll: true });
+                }}
+                avatarUrls={current().mentionMenu.selectedAvatarUrls}
               />
             </div>
           </Show>
           <LitContent render={() => current().draft.renderAttachments()} />
-          <LitContent
-            render={() =>
-              current().mentionMenu.render(current().mentionHost, current().requestUpdate)
-            }
+          <HumanMentionMenuView
+            args={[current().mentionMenu, current().mentionHost, current().requestUpdate]}
           />
           <span
             id={mentionAnnouncementId()}

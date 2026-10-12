@@ -54,7 +54,7 @@ export function createPluginReloadRecovery(
       }
       return warnings;
     },
-    prepare(
+    async prepare(
       params: Omit<Parameters<typeof preparePlugins>[0], "pluginIds" | "moduleRecoveries">,
       cause: unknown,
     ) {
@@ -81,7 +81,7 @@ export function createPluginReloadRecovery(
         moduleRecoveries,
       };
       if (selectedUnavailableIds.size) {
-        const plan = preparePlugins({ ...recoveryParams, loadModules: false });
+        const plan = await preparePlugins({ ...recoveryParams, loadModules: false });
         plan.retireGatewayRuntimeBindings();
         // The loader can add dependencies outside the requested scope. Validate
         // its actual plan before any unavailable owner could run from disk.

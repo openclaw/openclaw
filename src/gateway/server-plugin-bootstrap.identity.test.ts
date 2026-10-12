@@ -43,7 +43,7 @@ it("dispatches mixed-case plugin methods after enablement and a cold start", asy
         }
       };`,
     );
-    let previous: ReturnType<typeof prepareGatewayPluginLoad> | undefined;
+    let previous: Awaited<ReturnType<typeof prepareGatewayPluginLoad>> | undefined;
     try {
       for (const phase of ["disabled", "enabled", "cold start", "denied"] as const) {
         if (phase === "cold start") {
@@ -62,7 +62,7 @@ it("dispatches mixed-case plugin methods after enablement and a cold start", asy
           },
         };
         await state.writeConfig(config);
-        const loaded = prepareGatewayPluginLoad({
+        const loaded = await prepareGatewayPluginLoad({
           cfg: config,
           workspaceDir: state.workspaceDir,
           env: process.env,

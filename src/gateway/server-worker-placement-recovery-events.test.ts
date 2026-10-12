@@ -180,6 +180,7 @@ async function withRecoveryRuntime(
       ),
     );
     const runtime = createGatewayWorkerPlacementRuntime({
+      initialPlacements: [],
       scheduler,
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),

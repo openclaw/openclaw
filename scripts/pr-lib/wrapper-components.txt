@@ -314,6 +314,7 @@ src/agents/worktrees/capacity.ts
 src/agents/worktrees/capacity.worker.ts
 src/agents/worktrees/checkout-apfs.ts
 src/agents/worktrees/checkout-git-config.ts
+src/agents/worktrees/checkout-policy-key.ts
 src/agents/worktrees/checkout.ts
 src/agents/worktrees/errors.ts
 src/agents/worktrees/eviction.runtime.ts
@@ -344,11 +345,8 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
-src/chat/sender-identity.ts
 src/sessions/communication-admission.ts
 src/sessions/communication-policy.ts
-src/sessions/input-provenance.ts
-src/sessions/user-turn-transcript.metadata.ts
 src/config/sessions/session-actor-command.ts
 src/config/sessions/session-actor-executor.ts
 src/config/sessions/session-actor-sqlite.ts
@@ -2251,6 +2249,7 @@ src/config/sessions/transcript-replay.ts
 src/config/sessions/transcript-visible-events.ts
 src/config/sessions/work-start-error.ts
 src/gateway/control-reply-text.ts
+src/gateway/payload-limits.ts
 src/gateway/server-constants.ts
 src/gateway/session-display-projection.ts
 src/gateway/session-transcript-entry-message.ts
