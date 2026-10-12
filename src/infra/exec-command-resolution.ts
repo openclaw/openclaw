@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -29,6 +30,14 @@ export type CommandResolution = {
 };
 
 function tryResolveRealpath(filePath: string | undefined): string | undefined {
+  if (filePath && process.platform !== "win32" && filePath.split("/").includes("..")) {
+    try {
+      // Node's ordinary realpath folds parents before following symlinks; bind the OS target.
+      return fs.realpathSync.native(filePath);
+    } catch {
+      return undefined;
+    }
+  }
   return filePath ? (safeRealpathSync(filePath) ?? undefined) : undefined;
 }
 
