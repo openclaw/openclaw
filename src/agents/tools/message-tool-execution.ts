@@ -67,10 +67,7 @@ import {
   resolveSourceReplySinkDeliveryMode,
 } from "./message-tool-source-policy.js";
 import { createMessageToolTurnAuthority } from "./message-tool-turn-authority.js";
-import {
-  prepareMessageToolTurnSendBudget,
-  resolveTurnSendBudgetContext,
-} from "./message-tool-turn-send-budget.js";
+import { prepareMessageToolTurnSendBudget } from "./message-tool-turn-send-budget.js";
 import {
   hasSanitizedSendPayloadContent,
   sanitizeMessageToolVisiblePayload,
@@ -480,18 +477,6 @@ function* createMessageToolSteps(
         currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
         preparedMessageToolCatalog,
       });
-      const budgetContext = resolveTurnSendBudgetContext({
-        action,
-        args: params,
-        cfg,
-        agentId: resolvedAgentId,
-        accountId,
-        channel: scope.channel ?? effectiveCurrentChannel.currentChannelProvider,
-        currentChannel: effectiveCurrentChannel,
-        sessionConfig: options?.config,
-        sessionKey: rawPollEchoSessionKey,
-        runId: options?.runId,
-      });
       if (suppressPollVoteEcho(pollEchoSessionKey, pollVoteEchoRoute, action, params)) {
         decisions.recordPollVoteEchoSuppressed();
         return jsonResult({
@@ -548,15 +533,6 @@ function* createMessageToolSteps(
       const actionParams = actionIdempotencyKey
         ? { ...params, idempotencyKey: actionIdempotencyKey }
         : params;
-      const turnSendBudget = prepareMessageToolTurnSendBudget({
-        budgetContext,
-        cfg: rawConfig,
-        gatewayPresent: gateway !== undefined,
-        actionIdempotencyKey,
-      });
-      if (turnSendBudget.exhaustedResult) {
-        return turnSendBudget.exhaustedResult;
-      }
       const hasExactSourceTurn =
         action === "send" &&
         sourceReplySinkDeliveryMode === "message_tool_only" &&
@@ -566,6 +542,24 @@ function* createMessageToolSteps(
           ? assertActionCurrent
           : undefined,
         async () => {
+          const turnSendBudget = prepareMessageToolTurnSendBudget({
+            action,
+            args: params,
+            cfg,
+            rawConfig,
+            agentId: resolvedAgentId,
+            accountId,
+            channel: scope.channel ?? effectiveCurrentChannel.currentChannelProvider,
+            currentChannel: effectiveCurrentChannel,
+            sessionConfig: options?.config,
+            sessionKey: rawPollEchoSessionKey,
+            runId: options?.runId,
+            gatewayPresent: gateway !== undefined,
+            actionIdempotencyKey,
+          });
+          if (turnSendBudget.exhaustedResult) {
+            return turnSendBudget.exhaustedResult;
+          }
           let result: MessageActionResult;
           try {
             result = await runWithAgentToolSourceExecutionScope(assertActionCurrent, () =>
@@ -666,6 +660,9 @@ function* createMessageToolSteps(
             resolveTrustedDecisionChannel(result.channel, preparedMessageToolCatalog),
           );
           const toolResult = getToolResult(result);
+          // Settle before awaited source-reply checks so their failure cannot strand a
+          // reservation for a send that already completed.
+          const response = turnSendBudget.settleCompletedResult(toolResult, result);
           // Resolve source completion independently of display mirrors.
           const sourceReply = {
             action,
@@ -721,7 +718,7 @@ function* createMessageToolSteps(
             recordPollVote(pollEchoSessionKey, pollVoteEchoRoute, details?.pollVotedOption);
           }
           return embeddedMessageDelivery.attachEmbeddedMessageDeliveryFact(
-            turnSendBudget.settleCompletedResult(toolResult ?? jsonResult(result.payload), result),
+            response,
             messageDelivery,
           );
         },
