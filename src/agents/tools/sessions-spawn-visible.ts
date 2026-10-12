@@ -64,47 +64,15 @@ import {
   summarizeVisibleSessionSpawnError,
 } from "./sessions-spawn-visible-cleanup.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
-import { SessionsSpawnPlacementSchema } from "./sessions-spawn-visible.schema.js";
+import {
+  correctedVisibleSpawnCall,
+  SessionsSpawnPlacementSchema,
+} from "./sessions-spawn-visible.schema.js";
 
 type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {
   onSpawnEffectsStart?: () => void;
   assertActive?: () => void;
 };
-
-function correctedVisibleSpawnCall(raw: Record<string, unknown>): string {
-  const corrected = Object.fromEntries(
-    [
-      "task",
-      "user",
-      "taskName",
-      "label",
-      "agentId",
-      "model",
-      "runTimeoutSeconds",
-      "cwd",
-      "expectsCompletionMessage",
-      "sandbox",
-      "context",
-      "placement",
-      "group",
-      "projectId",
-      "projectGitUrl",
-      "worktree",
-      "worktreeName",
-      "worktreeBaseRef",
-    ]
-      .filter((key) => raw[key] !== undefined)
-      .map((key) => [key, raw[key]]),
-  );
-  if (
-    readToolStringParam(raw, "worktreeName") ||
-    readToolStringParam(raw, "worktreeBaseRef") ||
-    (isRecord(raw.placement) && raw.placement.kind === "profile")
-  ) {
-    corrected.worktree = true;
-  }
-  return `sessions_spawn(${JSON.stringify({ ...corrected, runtime: "subagent", visible: true })})`;
-}
 
 export async function maybeSpawnVisibleSession(params: {
   raw: Record<string, unknown>;

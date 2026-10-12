@@ -444,10 +444,10 @@ export async function spawnSubagentDirect(
       spawnMode,
       resolvedModelMetadata,
     });
+    const childTarget = { childSessionKey, childAgentId: targetAgentId };
     const cleanupFailedSpawn = (options?: CollectorCleanupOptions) =>
       cleanupFailedSpawnBeforeAgentStart({
-        childSessionKey,
-        childAgentId: targetAgentId,
+        ...childTarget,
         attachmentId,
         emitLifecycleHooks: threadBindingReady,
         deleteTranscript: true,
@@ -523,8 +523,7 @@ export async function spawnSubagentDirect(
         }
         if (attachmentId && isCleanupCurrent()) {
           await cleanupMaterializedSubagentAttachments({
-            childSessionKey,
-            childAgentId: targetAgentId,
+            ...childTarget,
             attachmentId,
             isCurrent: isCleanupCurrent,
           }).catch(() => {});
@@ -555,8 +554,7 @@ export async function spawnSubagentDirect(
         return {
           runId,
           requesterTurnRunId: ctx.requesterTurnRunId,
-          childSessionKey,
-          childAgentId: targetAgentId,
+          ...childTarget,
           controllerSessionKey: ownership.controllerSessionKey,
           sessionEntry: childEntry,
           requesterSessionKey: ownership.completionRequesterSessionKey,
