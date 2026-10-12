@@ -25,6 +25,10 @@ import {
 } from "../runtime/index.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 import { AgentSessionInspection } from "./agent-session-inspection.js";
+import {
+  agentSessionDeferThresholdCompaction,
+  agentSessionRunProviderCompaction,
+} from "./agent-session-types.js";
 import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
 import {
@@ -71,12 +75,61 @@ export const agentSessionSetContextReplacementHook: unique symbol = Symbol.for(
 );
 
 export abstract class AgentSessionCompaction extends AgentSessionInspection {
+  [agentSessionDeferThresholdCompaction] = false;
   private onContextReplaced?: (
     tokensAfter: number,
     tokensBefore: number,
     details?: unknown,
   ) => void;
   private assertContextReplacementActive?: () => void;
+
+  async [agentSessionRunProviderCompaction]<T>(
+    run: (
+      signal: AbortSignal,
+      committed: (tokensBefore: number, tokensAfter: number) => void,
+    ) => Promise<T>,
+    hooksHandled = false,
+  ): Promise<T> {
+    const controller = new AbortController();
+    const itemId = generateSessionEntryId();
+    let committed = false;
+    this.autoCompactionAbortController = controller;
+    try {
+      this.emit({ type: "compaction_start", reason: "threshold", itemId, hooksHandled });
+      return await run(controller.signal, (tokensBefore, tokensAfter) => {
+        // Publish the durable receipt before observers or write-handle release can fail.
+        committed = true;
+        this.emit({
+          type: "compaction_end",
+          reason: "threshold",
+          itemId,
+          hooksHandled,
+          outcome: { status: "completed", tokensBefore, tokensAfter, willRetry: false },
+        });
+        this.onContextReplaced?.(tokensAfter, tokensBefore);
+      });
+    } catch (error) {
+      if (!committed) {
+        this.emit({
+          type: "compaction_end",
+          reason: "threshold",
+          itemId,
+          hooksHandled,
+          outcome: controller.signal.aborted
+            ? { status: "aborted" }
+            : {
+                status: "failed",
+                reason: compactionErrorMessage(error, "Provider compaction failed"),
+              },
+        });
+      }
+      throw error;
+    } finally {
+      if (this.autoCompactionAbortController === controller) {
+        this.autoCompactionAbortController = undefined;
+      }
+    }
+  }
 
   [agentSessionSetContextReplacementHook](
     callback: ((tokensAfter: number, tokensBefore: number, details?: unknown) => void) | undefined,
@@ -592,6 +645,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         this.agent.state.messages = messages.slice(0, -1);
       }
       return await this.runAutoCompaction("overflow", true, requestBudget);
+    }
+
+    if (this[agentSessionDeferThresholdCompaction]) {
+      return false;
     }
 
     // For error messages (no usage data), estimate from last successful response.

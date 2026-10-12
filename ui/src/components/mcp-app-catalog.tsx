@@ -317,3 +317,14 @@ declare global {
     "openclaw-mcp-app-catalog": McpAppCatalogElement;
   }
 }
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-mcp-app-catalog": HTMLAttributes<McpAppCatalogElement> &
+        Properties<McpAppCatalogElement> & {
+          surface?: McpAppCatalogProps["surface"];
+        };
+    }
+  }
+}

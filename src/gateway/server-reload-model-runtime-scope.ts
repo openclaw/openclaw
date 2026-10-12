@@ -51,9 +51,7 @@ export function createGatewayModelRuntimeReload() {
 }
 
 /** Returns agent-local model/auth changes; undefined requires a global refresh. */
-export function resolveReloadAgentIds(
-  changedPaths: readonly string[],
-): ReadonlySet<string> | undefined {
+function resolveReloadAgentIds(changedPaths: readonly string[]): ReadonlySet<string> | undefined {
   const agentIds = new Set<string>();
   for (const path of changedPaths) {
     if (!isProviderAuthRelevantReloadPath(path)) {

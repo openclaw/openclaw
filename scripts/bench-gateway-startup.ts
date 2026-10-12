@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 import {
@@ -860,9 +861,7 @@ async function runGatewaySample(
       const exit = await stopChild(startedChild);
       const maxRssMb = rssSampler.sample();
       child = undefined;
-      flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt, {
-        flushPartial: true,
-      });
+      flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt);
 
       return {
         completionMs,
@@ -1002,8 +1001,7 @@ async function main() {
     results,
   };
   if (options.output) {
-    mkdirSync(path.dirname(options.output), { recursive: true });
-    writeFileSync(options.output, `${JSON.stringify(payload, null, 2)}\n`);
+    writeBenchmarkJson(payload, options.output);
   }
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));
