@@ -1,7 +1,7 @@
 /**
  * Node connect reconciliation tests.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -13,8 +13,22 @@ import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-co
 import { registerComputerUseProvider } from "../plugins/computer-use-registration.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
+
+const nodeConnectLog = vi.hoisted(() => ({ warn: vi.fn(), debug: vi.fn() }));
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
+      const logger = actual.createSubsystemLogger(...args);
+      return args[0] === "gateway/node-connect" ? { ...logger, ...nodeConnectLog } : logger;
+    },
+  };
+});
 
 function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParams {
   return {
@@ -516,5 +530,122 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.effectivePermissions).toEqual({ camera: false, watchReachable: false });
     expect(result.pendingPairing).toBeUndefined();
     expect(result.shouldClearPendingPairings).toBe(true);
+  });
+});
+
+describe("reconcileNodePairingOnConnect withheld command logging", () => {
+  // The logging memory is process-wide, so each case uses its own device id.
+  async function connectDevice(params: {
+    deviceId: string;
+    commands: string[];
+    allow?: string[];
+  }): Promise<string[]> {
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {
+        gateway: { nodes: { commands: { allow: params.allow ?? [] } } },
+      } as never,
+      connectParams: makeNodeConnectParams({
+        device: {
+          id: params.deviceId,
+          publicKey: "public-key",
+          signature: "signature",
+          signedAt: 1,
+          nonce: "nonce",
+        },
+        commands: params.commands,
+      }),
+      pairedNode: makePairedNode({ nodeId: params.deviceId }),
+      requestPairing: vi.fn(async () => null),
+    });
+    return result.withheldCommands;
+  }
+
+  function withheldLogs(level: "warn" | "debug", deviceId: string): unknown[][] {
+    return nodeConnectLog[level].mock.calls.filter(([message]) =>
+      String(message).startsWith(`node command surface withheld node=${deviceId} `),
+    );
+  }
+
+  beforeEach(() => {
+    nodeConnectLog.warn.mockClear();
+    nodeConnectLog.debug.mockClear();
+  });
+
+  it("warns once and demotes identical reconnects to debug", async () => {
+    const commands = ["ollama.chat", "ollama.models"];
+
+    expect(await connectDevice({ deviceId: "device-repeat", commands })).toEqual([
+      "ollama.chat",
+      "ollama.models",
+    ]);
+    await connectDevice({ deviceId: "device-repeat", commands });
+    await connectDevice({
+      deviceId: "device-repeat",
+      commands: ["ollama.models", "ollama.chat"],
+    });
+
+    expect(withheldLogs("warn", "device-repeat")).toEqual([
+      ["node command surface withheld node=device-repeat commands=ollama.chat,ollama.models"],
+    ]);
+    expect(withheldLogs("debug", "device-repeat")).toEqual([
+      ["node command surface withheld node=device-repeat commands=ollama.chat,ollama.models"],
+      ["node command surface withheld node=device-repeat commands=ollama.models,ollama.chat"],
+    ]);
+  });
+
+  it("warns again when gateway policy changes the withheld set", async () => {
+    const commands = ["ollama.chat", "ollama.models"];
+
+    await connectDevice({ deviceId: "device-policy", commands });
+    expect(
+      await connectDevice({ deviceId: "device-policy", commands, allow: ["ollama.chat"] }),
+    ).toEqual(["ollama.models"]);
+    await connectDevice({ deviceId: "device-policy", commands, allow: ["ollama.chat"] });
+
+    expect(withheldLogs("warn", "device-policy")).toEqual([
+      ["node command surface withheld node=device-policy commands=ollama.chat,ollama.models"],
+      ["node command surface withheld node=device-policy commands=ollama.models"],
+    ]);
+    expect(withheldLogs("debug", "device-policy")).toHaveLength(1);
+  });
+
+  it("warns again when withholding returns after a clear connect", async () => {
+    const commands = ["ollama.chat"];
+
+    await connectDevice({ deviceId: "device-cleared", commands });
+    expect(
+      await connectDevice({ deviceId: "device-cleared", commands, allow: ["ollama.chat"] }),
+    ).toEqual([]);
+    await connectDevice({ deviceId: "device-cleared", commands });
+
+    expect(withheldLogs("warn", "device-cleared")).toHaveLength(2);
+    expect(withheldLogs("debug", "device-cleared")).toEqual([]);
+  });
+
+  it.each(["close", "restart"] as const)(
+    "warns on the first identical reconnect after Gateway %s",
+    async (event) => {
+      const deviceId = `device-lifecycle-${event}`;
+      const commands = ["ollama.chat", "ollama.models"];
+
+      await connectDevice({ deviceId, commands });
+      await drainGlobalSingletonLifecycleState(event);
+      expect(await connectDevice({ deviceId, commands })).toEqual(commands);
+
+      expect(withheldLogs("warn", deviceId)).toHaveLength(2);
+      expect(withheldLogs("debug", deviceId)).toEqual([]);
+    },
+  );
+
+  it("tracks each node's withheld set separately", async () => {
+    const commands = ["ollama.chat"];
+
+    await connectDevice({ deviceId: "device-a", commands });
+    await connectDevice({ deviceId: "device-b", commands });
+    await connectDevice({ deviceId: "device-a", commands });
+
+    expect(withheldLogs("warn", "device-a")).toHaveLength(1);
+    expect(withheldLogs("warn", "device-b")).toHaveLength(1);
+    expect(withheldLogs("debug", "device-a")).toHaveLength(1);
   });
 });

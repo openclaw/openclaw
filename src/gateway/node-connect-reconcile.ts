@@ -5,15 +5,18 @@ import type {
   NodePairingRequestInput,
   RequestNodePairingResult,
 } from "../infra/device-pairing-node.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   intersectNodePermissionSurface,
   normalizeNodeApprovalSurfaceList,
+  sameNodeApprovalSurfaceSet,
 } from "../infra/node-pairing-surface.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   parseComputerUseCapabilityDescriptor,
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   normalizeDeclaredNodeCommands,
   resolveNodePairingCommandAllowlist,
@@ -21,6 +24,33 @@ import {
 } from "./node-command-policy.js";
 
 const log = createSubsystemLogger("gateway/node-connect");
+
+const MAX_WITHHELD_LOG_NODES = 256;
+// Cleared on Gateway close and in-process restart, so each Gateway start records
+// every node's current outcome once at warn. Eviction only costs one extra warn.
+const lastLoggedWithheldCommandsByNode = resolveGlobalMap<string, string[]>(
+  Symbol.for("openclaw.nodeConnectWithheldCommandLogs"),
+  "close-and-restart",
+);
+
+// Refusing a declared command is an operator-visible decision. Reconnects that
+// repeat an already-logged decision drop to debug so a new or changed one stands out.
+function logWithheldNodeCommands(nodeId: string, withheldCommands: string[]): void {
+  if (withheldCommands.length === 0) {
+    lastLoggedWithheldCommandsByNode.delete(nodeId);
+    return;
+  }
+  const message = `node command surface withheld node=${nodeId} commands=${withheldCommands.join(",")}`;
+  const previous = lastLoggedWithheldCommandsByNode.get(nodeId);
+  if (previous && sameNodeApprovalSurfaceSet(previous, withheldCommands)) {
+    log.debug(message);
+    return;
+  }
+  lastLoggedWithheldCommandsByNode.delete(nodeId);
+  pruneMapToMaxSize(lastLoggedWithheldCommandsByNode, MAX_WITHHELD_LOG_NODES - 1);
+  lastLoggedWithheldCommandsByNode.set(nodeId, withheldCommands);
+  log.warn(message);
+}
 
 // Node connect reconciliation turns declared caps/commands/permissions into the
 // effective runtime surface. New or upgraded surfaces create a pending pairing
@@ -89,9 +119,7 @@ export async function reconcileNodePairingOnConnect(params: {
     admittedCommands: declared,
     withheldCommands,
   });
-  if (withheldCommands.length > 0) {
-    log.warn(`node command surface withheld node=${nodeId} commands=${withheldCommands.join(",")}`);
-  }
+  logWithheldNodeCommands(nodeId, withheldCommands);
   const declaredPermissions = normalizePermissionMap(params.connectParams.permissions);
   const declaredComputerUse =
     params.connectParams.computerUse === undefined
