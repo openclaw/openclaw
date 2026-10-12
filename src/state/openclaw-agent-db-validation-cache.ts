@@ -534,10 +534,7 @@ export function hasOpenClawAgentCanonicalValidation(
   ) {
     return false;
   }
-  const canonical = createOpenClawAgentDatabaseValidationReceipt(
-    { ...database, path: pathname },
-    true,
-  );
+  const canonical = createOpenClawAgentDatabaseValidationReceipt(database, true);
   const entry: ValidationEntry = validatedPaths.get(resolveDatabasePathKey(pathname)) ?? {
     integrityVerified: false,
   };

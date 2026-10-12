@@ -16,10 +16,8 @@ import {
   refreshRemoteModelCatalog,
   REMOTE_MODEL_CATALOG_TTL_MS,
 } from "../model-catalog/remote-refresh.js";
-import {
-  readConfigMachineStateAsync,
-  writeConfigMachineStateAsync,
-} from "../state/config-machine-state-async.js";
+import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
+import { writeConfigMachineStateAsync } from "../state/config-machine-state-write-async.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";

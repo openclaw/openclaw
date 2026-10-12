@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { writeConfigMachineStateAsync } from "../../state/config-machine-state-async.js";
+import { writeConfigMachineStateAsync } from "../../state/config-machine-state-write-async.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveCronJobsStorePathAsync } from "./paths.js";
 
