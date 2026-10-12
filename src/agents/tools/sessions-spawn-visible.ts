@@ -44,7 +44,7 @@ import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
 } from "../subagents/spawn/subagent-spawn-plan.js";
-import { readRequesterPreferences } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
+import { resolveRequesterPreferences } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
 import { buildSubagentTaskMessage } from "../subagents/spawn/subagent-system-prompt.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
@@ -251,11 +251,21 @@ export async function maybeSpawnVisibleSession(params: {
     agentId: params.options?.requesterAgentIdOverride,
     assertActive,
   });
-  assertActive();
-  const requesterEntry = requesterTarget.store[requesterTarget.canonicalKey];
-  const completionRequesterSessionId = requesterEntry?.sessionId;
-  const completionRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
+  const completionEntry = requesterTarget.store[requesterTarget.canonicalKey];
+  const completionRequesterSessionId = completionEntry?.sessionId;
+  const completionRequesterLifecycleRevision = completionEntry?.lifecycleRevision;
   const requesterKey = ownership.controllerSessionKey;
+  const controllerTarget =
+    requesterKey === ownership.completionRequesterSessionKey
+      ? requesterTarget
+      : await resolveGatewaySessionStoreTargetInWorker({
+          cfg,
+          key: requesterKey,
+          agentId: params.options?.requesterAgentIdOverride,
+          assertActive,
+        });
+  assertActive();
+  const requesterEntry = controllerTarget.store[controllerTarget.canonicalKey];
   const callerDepth = getSubagentDepthFromSessionStore(requesterKey, {
     cfg,
     agentId: params.options?.requesterAgentIdOverride,
@@ -326,6 +336,7 @@ export async function maybeSpawnVisibleSession(params: {
     cfg,
     sessionKey: requesterKey,
     agentId: requesterAgentId,
+    preparedSessionEntry: requesterEntry ?? null,
   });
   // Gateway creation inherits the exact parent's requirement before admitting a child run.
   const childRuntimeSandboxed =
@@ -333,6 +344,7 @@ export async function maybeSpawnVisibleSession(params: {
     resolveSandboxRuntimeStatus({
       cfg,
       sessionKey: `agent:${targetAgentId}:dashboard:pending`,
+      preparedSessionEntry: null,
     }).sandboxed;
   const requesterSandboxed = params.options?.sandboxed === true || requesterRuntime.sandboxed;
   if (!childRuntimeSandboxed && (requesterSandboxed || params.sandbox === "require")) {
@@ -371,14 +383,7 @@ export async function maybeSpawnVisibleSession(params: {
     inheritedModel:
       targetAgentId === requesterAgentId
         ? (params.options?.requesterModel ??
-          (
-            await readRequesterPreferences({
-              cfg,
-              requesterInternalKey: requesterKey,
-              requesterAgentId,
-              assertActive,
-            })
-          ).model)
+          resolveRequesterPreferences({ cfg, requesterAgentId, requesterEntry }).model)
         : undefined,
   });
   assertActive();
