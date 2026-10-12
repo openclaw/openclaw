@@ -24,11 +24,6 @@ extension OpenClawChatViewModel {
         markTimelineChanged()
     }
 
-    /// Prefer the transcript's copy of a sentence over the live stream, regardless of arrival order.
-    var liveAssistantText: String? {
-        self.liveText(self.streamingAssistantText)
-    }
-
     var liveAssistantDisplayText: String? {
         self.liveText(self.displayedStreamingAssistantText)
     }
