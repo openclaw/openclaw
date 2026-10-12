@@ -18,6 +18,7 @@ import {
   clearOpenClawDatabaseQuarantine,
   recordOpenClawDatabaseQuarantine,
 } from "../../state/openclaw-quarantine-store.js";
+import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import {
@@ -104,6 +105,8 @@ it.each([
   { kind: "current", mode: "doctor-preparation" },
   { kind: "repair", mode: "doctor-preparation" },
   { kind: "close-failure", mode: "doctor" },
+  { kind: "dual-failure", mode: "doctor" },
+  { kind: "retirement-failure", mode: "doctor" },
   { kind: "refused", mode: "doctor" },
 ] as const)(
   "preserves inventory lifetime for $kind schema admission ($mode)",
@@ -150,13 +153,25 @@ it.each([
       await reopened.close();
       return;
     }
+    const repairFails = kind !== "retirement-failure";
+    const retirementFails = kind !== "close-failure";
     const failure = new Error("synthetic repair native close failed after commit");
+    const retirementFailure = new Error("synthetic resource retirement failed");
+    const retireResource = vi.fn(async () => {});
+    if (retirementFails) {
+      retireResource.mockRejectedValueOnce(retirementFailure);
+    }
+    const unregister = registerOpenClawStateDatabaseAsyncResource({ close: retireResource });
     const open = nodeSqlite.openNodeSqliteDatabase;
     const opener = vi
       .spyOn(nodeSqlite, "openNodeSqliteDatabase")
       .mockImplementation((pathname, options) => {
         const native = open(pathname, options);
-        if (pathname === database.path && options?.enableForeignKeyConstraints === false) {
+        if (
+          repairFails &&
+          pathname === database.path &&
+          options?.enableForeignKeyConstraints === false
+        ) {
           const close = native.close.bind(native);
           vi.spyOn(native, "close").mockImplementationOnce(() => {
             close();
@@ -166,7 +181,21 @@ it.each([
         return native;
       });
     try {
-      await expect(migrate()).rejects.toBe(failure);
+      if (repairFails && retirementFails) {
+        await expect(migrate()).rejects.toMatchObject({
+          cause: failure,
+          errors: [failure, retirementFailure],
+        });
+      } else {
+        await expect(migrate()).rejects.toBe(repairFails ? failure : retirementFailure);
+      }
+      if (retirementFails) {
+        // A failed retirement retains custody; the canonical retry must finish it.
+        await closeOpenClawStateDatabaseByPathAsync(database.path);
+        expect(retireResource).toHaveBeenCalledTimes(2);
+      } else {
+        expect(retireResource).toHaveBeenCalledTimes(1);
+      }
       expect(database.db.isOpen).toBe(false);
       expect(() => store.list()).toThrow("inventory has closed");
       const reopened = openOpenClawStateDatabase({ env });
@@ -177,6 +206,7 @@ it.each([
       ).toEqual({ name: "idx_audit_events_time" });
     } finally {
       opener.mockRestore();
+      unregister();
     }
   },
 );

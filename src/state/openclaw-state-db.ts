@@ -171,6 +171,7 @@ export async function prepareOpenClawStateDatabaseSchema(
       : {}),
   });
   let repairStarted = false;
+  let outcome: { result: { changes: string[]; warnings: string[] } } | { error: unknown };
   try {
     let needsRepair = mode === "doctor";
     if (mode === "doctor-preparation") {
@@ -181,18 +182,37 @@ export async function prepareOpenClawStateDatabaseSchema(
         needsRepair = true;
       }
     }
-    return needsRepair || needsOpenClawStateDatabaseSchemaRepair(pathname, scope)
-      ? withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () => {
-          repairStarted = true;
-          return repairStateSchema(pathname, env, scope);
-        })
-      : { changes: [], warnings: [] };
-  } finally {
-    // Readiness checks borrow the live generation; only admitted repair retires it.
-    if (repairStarted) {
+    outcome = {
+      result:
+        needsRepair || needsOpenClawStateDatabaseSchemaRepair(pathname, scope)
+          ? withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () => {
+              repairStarted = true;
+              return repairStateSchema(pathname, env, scope);
+            })
+          : { changes: [], warnings: [] },
+    };
+  } catch (error) {
+    outcome = { error };
+  }
+  // Readiness checks borrow the live generation; only admitted repair retires it.
+  if (repairStarted) {
+    try {
       await closeOpenClawStateDatabaseByPathAsync(pathname);
+    } catch (error) {
+      if ("error" in outcome) {
+        throw createSqliteLifecycleAggregateError(
+          [outcome.error, error],
+          "OpenClaw state schema repair and resource retirement failed.",
+          outcome.error,
+        );
+      }
+      throw error;
     }
   }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return outcome.result;
 }
 
 /** Bootstrap fresh/native-only state canonically before startup checkpoint access. */
