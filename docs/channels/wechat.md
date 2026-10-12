@@ -83,6 +83,8 @@ openclaw config set session.dmScope per-account-channel-peer
 
 ## Access control
 
+The notes below describe plugin version `2.4.8` and earlier.
+
 Version `2.4.8` does not register an OpenClaw pairing adapter or create pairing
 requests. The standard pairing list and approve commands cannot establish DM
 access for this version. QR login can still allow the user who scanned the code
@@ -100,8 +102,9 @@ SQLite does not revoke access granted by the plugin's legacy file or scanner
 fallback.
 
 Do not rely on standard pairing to manage or revoke DM access with version
-`2.4.8`. If you need pairing enforcement, [temporarily disable the plugin](/channels/wechat#troubleshooting)
-until a version with repaired pairing support is available.
+`2.4.8`. Version `2.4.10` reads the framework `allowFrom` file and routes sender
+and command authorization through OpenClaw's channel-ingress runtime. Update
+older installations to the current version to use that authorization path.
 
 For integrations that implement OpenClaw's pairing API, see [Pairing](/channels/pairing).
 
@@ -111,10 +114,10 @@ The package declares these OpenClaw requirements:
 
 | Plugin version | Declared OpenClaw requirement | npm tag  |
 | -------------- | ----------------------------- | -------- |
-| `2.4.8`        | `>=2026.5.12`                 | `latest` |
+| `2.4.10`       | `>=2026.5.12`                 | `latest` |
 | `1.x`          | `>=2026.1.0 <2026.3.22`       | `legacy` |
 
-Version `2.4.8` declares `>=2026.5.12`, but its startup version guard still checks
+Version `2.4.10` declares `>=2026.5.12`, but its startup version guard still checks
 `>=2026.3.22`. Passing that guard alone does not satisfy the declared requirement.
 
 If the plugin reports that your OpenClaw version is too old, either update
@@ -126,10 +129,10 @@ openclaw plugins install @tencent-weixin/openclaw-weixin@legacy
 
 Plugin 2.4.6 imports the retired `openclaw/plugin-sdk/channel-runtime` path and
 cannot load on OpenClaw 2026.8.1. If startup reports that this subpath is not
-exported, update to plugin 2.4.8, which uses the available SDK path:
+exported, update to the current plugin version:
 
 ```bash
-openclaw plugins update @tencent-weixin/openclaw-weixin@2.4.8
+openclaw plugins update @tencent-weixin/openclaw-weixin@2.4.10
 ```
 
 ## Sidecar process
