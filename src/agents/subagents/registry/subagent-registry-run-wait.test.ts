@@ -3,8 +3,10 @@
 // claim the run ended.
 import { describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { type SubagentManagerOptions, SubagentWaitManager } from "./subagent-registry-run-wait.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 const RUN_ID = "run-wait-disposition";
 const RUN_TIMEOUT_SECONDS = 3;
@@ -18,7 +20,11 @@ type AgentWaitResponse = {
 };
 
 function createRunningEntry(startedAt: number): SubagentRunRecord {
-  return {
+  // Build through the canonical fixture: a hand-rolled literal omits the root
+  // completion/delivery state every registry writer requires, and the wait
+  // manager then dies at `bindSubagentRunRecord` with "subagent run is missing
+  // canonical nested state" before it can report anything.
+  return createSubagentRunRecord({
     runId: RUN_ID,
     childSessionKey: "agent:main:subagent:child",
     requesterSessionKey: "agent:main:main",
@@ -27,8 +33,8 @@ function createRunningEntry(startedAt: number): SubagentRunRecord {
     cleanup: "keep",
     createdAt: startedAt,
     runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
-    execution: { status: "running", startedAt },
-  } as SubagentRunRecord;
+    startedAt,
+  });
 }
 
 function createWaitManager(params: {
@@ -85,7 +91,7 @@ function createWaitManager(params: {
   class TestWaitManager extends SubagentWaitManager {
     protected readonly adoptPausedSubagentRunIntoSuccessor = async () => false;
   }
-  return { manager: new TestWaitManager(options), completions, waitExpiries };
+  return { manager: new TestWaitManager(options), completions, runs, waitExpiries };
 }
 
 describe("subagent run wait disposition", () => {
@@ -170,9 +176,22 @@ describe("subagent run wait disposition", () => {
     entry.execution = { status: "queued" };
     const accepted: number[] = [];
     let attempts = 0;
+    let runsRef: Map<string, SubagentRunRecord>;
     // Mirrors the registry's real acceptance fence (subagent-registry.ts): the
     // observation is recorded before the announcement, and a later call whose
-    // observedAt differs is rejected without notifying anyone.
+    // observedAt differs is rejected without notifying anyone. The row it is
+    // handed is a published, recursively frozen postimage, so each observation
+    // is PUBLISHED as a replacement row (carrying the runtime owner forward)
+    // rather than assigned onto the frozen one, exactly as mutateSubagentRuns
+    // does in production.
+    const publish = (current: SubagentRunRecord, patch: Partial<SubagentRunRecord>) => {
+      const next = copySubagentRunRuntimeOwner(current, { ...current, ...patch });
+      // Not frozen: the live registry binds its gateway-context owner symbol
+      // onto the published row, so a frozen replacement would break the next
+      // wait rather than model one.
+      runsRef.set(next.runId, next);
+      return next;
+    };
     const reportSubagentWaitExpiry = vi.fn(
       async ({
         entry: current,
@@ -185,16 +204,18 @@ describe("subagent run wait disposition", () => {
         ) {
           return;
         }
-        current.waitExpiryObservedAt ??= observedAt;
+        const observed = publish(current, {
+          waitExpiryObservedAt: current.waitExpiryObservedAt ?? observedAt,
+        });
         attempts += 1;
         if (attempts === 1) {
           throw new Error("transient publication failure");
         }
         accepted.push(observedAt);
-        current.waitExpiryAnnouncedAt = Date.now();
+        publish(observed, { waitExpiryAnnouncedAt: Date.now() });
       },
     );
-    const { manager, completions } = createWaitManager({
+    const { manager, completions, runs } = createWaitManager({
       entry,
       wait: { status: "timeout" },
       laterWaits: [{ status: "timeout", startedAt: observedStartedAt }],
@@ -202,11 +223,14 @@ describe("subagent run wait disposition", () => {
       resolveSubagentSessionStartedAt: async () => entry.execution.startedAt,
     });
 
+    runsRef = runs;
+
     await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
     await expect.poll(() => reportSubagentWaitExpiry.mock.calls.length).toBe(2);
     await expect.poll(() => accepted).toEqual([createdAt + RUN_TIMEOUT_SECONDS * 1_000]);
-    expect(entry.waitExpiryObservedAt).toBe(createdAt + RUN_TIMEOUT_SECONDS * 1_000);
-    expect(typeof entry.waitExpiryAnnouncedAt).toBe("number");
+    const published = runs.get(RUN_ID);
+    expect(published?.waitExpiryObservedAt).toBe(createdAt + RUN_TIMEOUT_SECONDS * 1_000);
+    expect(typeof published?.waitExpiryAnnouncedAt).toBe("number");
     expect(completions).toHaveLength(0);
   });
 
