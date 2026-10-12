@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { pruneProcessedHistoryImages } from "../../agents/embedded-agent-runner/run/history-image-prune.js";
 import {
   detectAndLoadPromptImages,
   hydratePromptMediaMessages,
@@ -31,7 +30,6 @@ import {
 } from "../../media/staged-inputs.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { projectWorkerTextOrImageContent } from "../../worker/assistant-message-projection.js";
-import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { isWorkerTranscriptMessageFrameSafe } from "../../worker/transcript-message.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -72,12 +70,7 @@ export async function prepareWorkerTurnMedia(params: {
   tunnel: WorkerTunnelHandle;
   isAuthorized: () => boolean;
   signal: AbortSignal;
-}): Promise<{
-  prompt: WorkerLaunchPlan["assignment"]["prompt"];
-  history: AgentMessage[];
-  images: Awaited<ReturnType<typeof detectAndLoadPromptImages>>["images"];
-  imageFactIndexes: Awaited<ReturnType<typeof detectAndLoadPromptImages>>["imageFactIndexes"];
-}> {
+}) {
   const { turn, signal } = params;
   const assertCurrent = () => {
     signal.throwIfAborted();
@@ -129,8 +122,7 @@ export async function prepareWorkerTurnMedia(params: {
       `Cloud worker could not load ${currentImages.failedMediaCount} image attachment(s); resend the attachment and retry.`,
     );
   }
-  const pruned = pruneProcessedHistoryImages(params.history) ?? params.history;
-  const history = await hydratePromptMediaMessages(pruned, mediaOptions);
+  const history = await hydratePromptMediaMessages(params.history, mediaOptions);
   assertCurrent();
 
   const current = prepareInput(

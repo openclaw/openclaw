@@ -1,6 +1,7 @@
 import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
@@ -9,17 +10,12 @@ import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { configureAnchoredPopup } from "./anchored-overlay.ts";
 import { icons } from "./icons.ts";
+import type { ModelPickerOption } from "./model-picker.ts";
 import { renderProviderBrandIcon } from "./provider-icon.ts";
 import { revealInScrollRegion } from "./scroll-state.ts";
 import "../styles/multi-select.css";
 
-export type MultiSelectOption = {
-  value: string;
-  label: string;
-  provider?: string;
-  detail?: string;
-  disabled?: boolean;
-};
+export type MultiSelectOption = ModelPickerOption;
 
 type MultiSelectRow = MultiSelectOption & { custom?: boolean };
 
@@ -98,7 +94,6 @@ export class MultiSelect extends OpenClawLightDomElement {
     return this.options.find((option) => this.getValueKey(option.value) === key);
   }
 
-  /** Dropdown rows: unchosen options matching the query, then the custom entry. */
   private rows(): MultiSelectRow[] {
     const taken = new Set(this.value.map((entry) => this.getValueKey(entry)));
     const custom = this.query.trim();
@@ -404,5 +399,17 @@ export class MultiSelect extends OpenClawLightDomElement {
         </div>
       </wa-popup>
     `;
+  }
+}
+
+type MultiSelectAttributes = SolidJSX.HTMLAttributes<MultiSelect> & {
+  [Key in keyof MultiSelect as `prop:${Key & string}`]?: MultiSelect[Key];
+};
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-multi-select": MultiSelectAttributes;
+    }
   }
 }

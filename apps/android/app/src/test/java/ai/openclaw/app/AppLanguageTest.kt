@@ -11,7 +11,6 @@ import ai.openclaw.app.ui.chat.chatThinkingOptionLabel
 import ai.openclaw.app.ui.formatApprovalDuration
 import ai.openclaw.app.ui.formatCronWake
 import ai.openclaw.app.ui.formatUsageUpdated
-import ai.openclaw.app.ui.skillWorkshopStatusLabel
 import android.content.res.Configuration
 import android.os.Build
 import androidx.appcompat.app.AppCompatActivity
@@ -143,18 +142,10 @@ class AppLanguageTest {
       setAppLanguage(AppLanguage.English)
       assertEquals("Mic off", retained.value)
       assertEquals("Mic off · raw", retainedComposite.value)
-      assertEquals("Pending", skillWorkshopStatusLabel("pending"))
 
       setAppLanguage(AppLanguage.French)
       assertEquals("Micro désactivé", retained.value)
       assertEquals("Micro désactivé · raw", retainedComposite.value)
-      assertEquals("En attente", skillWorkshopStatusLabel("pending"))
-      assertEquals("Retenu", skillWorkshopStatusLabel("quarantined"))
-      assertEquals("Retenu", skillWorkshopStatusLabel("stale"))
-      assertEquals("Appliqué", skillWorkshopStatusLabel("applied"))
-      assertEquals("Rejeté", skillWorkshopStatusLabel("rejected"))
-      assertEquals("Chargement", skillWorkshopStatusLabel("loading"))
-      assertEquals("future_status", skillWorkshopStatusLabel("future_status"))
       assertEquals("Élevé", chatThinkingOptionLabel(ChatThinkingLevelOption("high", "high")))
       assertEquals("Adaptatif", chatThinkingOptionLabel(ChatThinkingLevelOption("adaptive", "adaptive")))
       val androidRelease =

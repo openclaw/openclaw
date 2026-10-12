@@ -92,7 +92,7 @@ it.each([
           connId: "owner-connection",
           runId,
           sessionKey: "agent:research:main",
-          terminal: true,
+          event: "exec.finished",
         });
       }
       if (denied) {

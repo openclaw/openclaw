@@ -12,15 +12,12 @@ it.skipIf(process.platform !== "linux" || !["x64", "arm64"].includes(process.arc
   "retires A/B and failed startup with real kernel-denied group signals and complete output",
   async () => {
     const fixture = resolveRuntimeWorkerUrl(processProbeEntrypoints.serviceChildSubreaper);
-    const { stdout } = await promisify(execFile)(
-      requireNodeTool("node"),
-      resolveRuntimeWorkerArgv(fixture),
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        timeout: 10_000,
-      },
-    );
+    const node = requireNodeTool("node");
+    const { stdout } = await promisify(execFile)(node, resolveRuntimeWorkerArgv(fixture, node), {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 10_000,
+    });
     expect(JSON.parse(stdout)).toEqual([
       ...["A", "B"].map((label) => ({
         label,
@@ -38,6 +35,7 @@ it.skipIf(process.platform !== "linux" || !["x64", "arm64"].includes(process.arc
         extinct: true,
         owner: "linux-subreaper",
       },
+      { label: "realtime-signal", signalNumber: 34, extinct: true },
       {
         label: "startup-failed",
         code: null,

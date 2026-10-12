@@ -190,37 +190,43 @@ it.each(["token", "webhook"] as const)(
   },
 );
 
-it.each(["token", "webhook"] as const)(
-  "reports %s identity failure before any send",
-  async (driver) => {
-    const result = await runDriver(driver, "identity");
+it.each([
+  ["token", "identity"],
+  ["webhook", "identity"],
+  ["webhook", "send"],
+] as const)(
+  "reports %s %s failures without polling bindings and cleans up owned webhooks",
+  async (driver, failure) => {
+    const result = await runDriver(driver, failure);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("");
-    expect(JSON.parse(result.stdout)).toEqual({
-      ok: false,
-      stage: "discord-api",
-      smokeId,
-      error: 'Discord API GET /users/@me failed: 403 Forbidden :: {"message":"synthetic refusal"}',
-    });
+    if (failure === "identity") {
+      expect(JSON.parse(result.stdout)).toEqual({
+        ok: false,
+        stage: "discord-api",
+        smokeId,
+        error:
+          'Discord API GET /users/@me failed: 403 Forbidden :: {"message":"synthetic refusal"}',
+      });
+    } else {
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        stage: "send-message",
+        smokeId,
+      });
+    }
     expect(
       result.requests.map(({ method, path: requestPath }) => `${method} ${requestPath}`),
-    ).toEqual(["GET /users/@me"]);
+    ).toEqual([
+      "GET /users/@me",
+      ...(failure === "send"
+        ? [
+            "POST /channels/parent/webhooks",
+            "POST /webhooks/webhook/synthetic-webhook?wait=true",
+            "DELETE /webhooks/webhook/synthetic-webhook",
+          ]
+        : []),
+    ]);
     expect(fixture.entries).not.toHaveBeenCalled();
   },
 );
-
-it("cleans up the temporary webhook after a send failure", async () => {
-  const result = await runDriver("webhook", "send");
-  expect(result.exitCode).toBe(1);
-  expect(result.stderr).toBe("");
-  expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, stage: "send-message", smokeId });
-  expect(
-    result.requests.map(({ method, path: requestPath }) => `${method} ${requestPath}`),
-  ).toEqual([
-    "GET /users/@me",
-    "POST /channels/parent/webhooks",
-    "POST /webhooks/webhook/synthetic-webhook?wait=true",
-    "DELETE /webhooks/webhook/synthetic-webhook",
-  ]);
-  expect(fixture.entries).not.toHaveBeenCalled();
-});

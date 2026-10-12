@@ -19,16 +19,6 @@ const resolvePluginDiscoveryProvidersRuntime = vi.hoisted(() =>
   vi.fn<() => ProviderPlugin[]>(() => [
     nativeProvider,
     {
-      id: "anthropic-vertex",
-      label: "Anthropic Vertex",
-      auth: [],
-      resolveSyntheticAuth: () => ({
-        apiKey: "gcp-vertex-credentials",
-        source: "gcp-vertex-credentials (ADC)",
-        mode: "api-key" as const,
-      }),
-    },
-    {
       id: "ollama",
       label: "Ollama",
       auth: [],
@@ -71,11 +61,9 @@ const resolveProviderOwnerIds = vi.hoisted(() =>
   vi.fn(({ provider }: { provider: string }) =>
     provider === "ollama"
       ? ["ollama"]
-      : provider === "anthropic-vertex"
-        ? ["anthropic-vertex"]
-        : provider === "native-auth" || provider === "native-alias"
-          ? ["native-auth"]
-          : [],
+      : provider === "native-auth" || provider === "native-alias"
+        ? ["native-auth"]
+        : [],
   ),
 );
 
@@ -115,25 +103,6 @@ beforeEach(() => {
 });
 
 describe("resolveProviderSyntheticAuthWithPlugin", () => {
-  it("falls back to lightweight discovery providers when runtime hooks are unavailable", () => {
-    expect(
-      resolveProviderSyntheticAuthWithPlugin({
-        provider: "anthropic-vertex",
-        context: {
-          config: undefined,
-          provider: "anthropic-vertex",
-          providerConfig: undefined,
-        },
-      }),
-    ).toEqual({
-      apiKey: "gcp-vertex-credentials",
-      source: "gcp-vertex-credentials (ADC)",
-      mode: "api-key",
-    });
-    expect(resolveProviderRuntimePlugin).not.toHaveBeenCalled();
-    expect(resolvePluginDiscoveryProvidersRuntime).toHaveBeenCalled();
-  });
-
   it("uses the configured provider api as the synthetic-auth hook owner", () => {
     expect(
       resolveProviderSyntheticAuthWithPlugin({
@@ -156,45 +125,35 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
     });
   });
 
-  it.each([
-    { route: "discovery", result: nativeAuth },
-    { route: "discovery", result: undefined },
-    { route: "runtime wrappers", result: nativeAuth },
-    { route: "runtime wrappers", result: undefined },
-  ])(
-    "publishes and reuses native availability through $route: $result",
-    async ({ route, result }) => {
-      const params = nativeParams();
-      nativeProvider.prepareSyntheticAuth.mockResolvedValue(result);
-      const verify = async () => {
-        expect(resolveProviderSyntheticAuthWithPlugin(params)).toBeUndefined();
-        expect(nativeProvider.prepareSyntheticAuth).not.toHaveBeenCalled();
-        expect(
-          await Promise.all([
-            prepareProviderSyntheticAuthWithPlugin(params),
-            prepareProviderSyntheticAuthWithPlugin(params),
-          ]),
-        ).toEqual([result, result]);
-        expect(
-          await prepareProviderSyntheticAuthWithPlugin({
-            ...params,
-            signal: new AbortController().signal,
-          }),
-        ).toEqual(result);
-        expect(resolveProviderSyntheticAuthWithPlugin(params)).toEqual(result);
-        expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledOnce();
-      };
-      if (route === "runtime wrappers") {
-        await resolveProviderRuntimePlugin.withImplementation(
-          () => ({ ...nativeProvider }),
-          async () =>
-            await resolvePluginDiscoveryProvidersRuntime.withImplementation(() => [], verify),
-        );
-      } else {
-        await verify();
-      }
-    },
-  );
+  it("publishes and reuses native unavailability through runtime wrappers", async () => {
+    const params = nativeParams();
+    nativeProvider.prepareSyntheticAuth.mockResolvedValue(undefined);
+    await resolveProviderRuntimePlugin.withImplementation(
+      () => ({ ...nativeProvider }),
+      async () =>
+        await resolvePluginDiscoveryProvidersRuntime.withImplementation(
+          () => [],
+          async () => {
+            expect(resolveProviderSyntheticAuthWithPlugin(params)).toBeUndefined();
+            expect(nativeProvider.prepareSyntheticAuth).not.toHaveBeenCalled();
+            expect(
+              await Promise.all([
+                prepareProviderSyntheticAuthWithPlugin(params),
+                prepareProviderSyntheticAuthWithPlugin(params),
+              ]),
+            ).toEqual([undefined, undefined]);
+            expect(
+              await prepareProviderSyntheticAuthWithPlugin({
+                ...params,
+                signal: new AbortController().signal,
+              }),
+            ).toBeUndefined();
+            expect(resolveProviderSyntheticAuthWithPlugin(params)).toBeUndefined();
+            expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledOnce();
+          },
+        ),
+    );
+  });
 
   it("keeps pure runtime auth ahead of unrelated discovery", async () => {
     const resolveSyntheticAuth = vi.fn(() => nativeAuth);

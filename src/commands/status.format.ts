@@ -1,6 +1,10 @@
 // Formatting helpers for status tokens, prompt-cache stats, and daemon runtime snippets.
 // These helpers are shared by report rows and command output surfaces.
 
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -11,9 +15,6 @@ import { getSystemdCgroupHygieneSummary } from "../daemon/service-runtime.js";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import type { SessionStatus } from "../status/types.js";
 import { formatTokenCount } from "../utils/token-format.js";
-export { shortenText } from "./text-format.js";
-
-export const formatKTokens = formatTokenCount;
 
 /** Formats the actionable entries shown under status config diagnostic headings. */
 export const formatStatusConfigDiagnosticEntries = (
@@ -36,12 +37,12 @@ export const formatTokensCompact = (
 
   let result;
   if (used == null) {
-    result = ctx ? `unknown/${formatKTokens(ctx)} (?%)` : "unknown used";
+    result = ctx ? `unknown/${formatTokenCount(ctx)} (?%)` : "unknown used";
   } else if (!ctx) {
-    result = `${formatKTokens(used)} used`;
+    result = `${formatTokenCount(used)} used`;
   } else {
     const pctLabel = sess.percentUsed != null ? `${sess.percentUsed}%` : "?%";
-    result = `${formatKTokens(used)}/${formatKTokens(ctx)} (${pctLabel})`;
+    result = `${formatTokenCount(used)}/${formatTokenCount(ctx)} (${pctLabel})`;
   }
 
   const cacheStats = resolvePromptCacheStats(sess);
@@ -62,10 +63,10 @@ export const formatPromptCacheCompact = (
   }
   const parts = [`${cacheStats.hitRate}% hit`];
   if (cacheStats.cacheRead > 0) {
-    parts.push(`read ${formatKTokens(cacheStats.cacheRead)}`);
+    parts.push(`read ${formatTokenCount(cacheStats.cacheRead)}`);
   }
   if (cacheStats.cacheWrite > 0) {
-    parts.push(`write ${formatKTokens(cacheStats.cacheWrite)}`);
+    parts.push(`write ${formatTokenCount(cacheStats.cacheWrite)}`);
   }
   return parts.join(" · ");
 };
@@ -73,35 +74,21 @@ export const formatPromptCacheCompact = (
 function resolvePromptCacheStats(
   sess: Pick<SessionStatus, "inputTokens" | "totalTokens" | "cacheRead" | "cacheWrite">,
 ) {
-  const cacheRead =
-    typeof sess.cacheRead === "number" && Number.isFinite(sess.cacheRead) && sess.cacheRead >= 0
-      ? sess.cacheRead
-      : 0;
-  const cacheWrite =
-    typeof sess.cacheWrite === "number" && Number.isFinite(sess.cacheWrite) && sess.cacheWrite >= 0
-      ? sess.cacheWrite
-      : 0;
+  const cacheRead = asNonNegativeFiniteNumber(sess.cacheRead) ?? 0;
+  const cacheWrite = asNonNegativeFiniteNumber(sess.cacheWrite) ?? 0;
   if (cacheRead <= 0 && cacheWrite <= 0) {
     return null;
   }
-  const inputTokens =
-    typeof sess.inputTokens === "number" &&
-    Number.isFinite(sess.inputTokens) &&
-    sess.inputTokens >= 0
-      ? sess.inputTokens
-      : undefined;
+  const inputTokens = asNonNegativeFiniteNumber(sess.inputTokens);
   const promptTokensFromParts =
     inputTokens != null ? inputTokens + cacheRead + cacheWrite : undefined;
-  const used = sess.totalTokens;
   // Legacy entries can carry an undersized totalTokens value. Keep the cache
   // denominator aligned with the prompt-side token fields when available, and
   // never let the fallback denominator drop below the known cached prompt
   // tokens.
   const total =
     promptTokensFromParts ??
-    (typeof used === "number" && Number.isFinite(used) && used > 0
-      ? Math.max(used, cacheRead + cacheWrite)
-      : cacheRead + cacheWrite);
+    Math.max(asPositiveFiniteNumber(sess.totalTokens) ?? 0, cacheRead + cacheWrite);
   return {
     cacheRead,
     cacheWrite,

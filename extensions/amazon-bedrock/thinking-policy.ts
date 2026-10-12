@@ -6,10 +6,6 @@ import {
   resolveClaudeSonnet5ModelIdentity,
   resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/claude-model-runtime";
-/**
- * Thinking-level policy for Claude models on Amazon Bedrock. It maps Bedrock
- * model ids to the provider SDK thinking levels that are actually supported.
- */
 import type {
   ProviderRuntimeModel,
   ProviderThinkingProfile,
@@ -50,7 +46,6 @@ function isOpus46BedrockModelRef(modelRef: string): boolean {
   );
 }
 
-/** Return whether a Bedrock model ref names Claude Opus 4.7 or newer. */
 export function isOpus47OrNewerBedrockModelRef(modelRef: string): boolean {
   return isOpus5BedrockModelRef(modelRef) || isOpus47Or48BedrockModelRef(modelRef);
 }
@@ -61,7 +56,6 @@ function isMythosPreviewBedrockModelRef(modelRef: string): boolean {
   );
 }
 
-/** Return whether a Bedrock Claude ref needs latest adaptive-thinking request shaping. */
 export function isLatestAdaptiveBedrockModelRef(
   modelId: string,
   params?: Record<string, unknown>,
@@ -77,7 +71,6 @@ export function isLatestAdaptiveBedrockModelRef(
   );
 }
 
-/** Return whether a Bedrock Claude ref supports max effort. */
 export function supportsBedrockNativeMaxEffort(
   modelId: string,
   params?: Record<string, unknown>,
@@ -91,7 +84,6 @@ export function supportsBedrockNativeMaxEffort(
   );
 }
 
-/** Resolve route-specific native effort mappings for Bedrock Claude models. */
 export function resolveBedrockNativeThinkingLevelMap(
   modelId: string,
   params?: Record<string, unknown>,
@@ -116,7 +108,6 @@ export function resolveBedrockNativeThinkingLevelMap(
   };
 }
 
-/** Resolve supported Claude thinking levels for a Bedrock model id. */
 export function resolveBedrockClaudeThinkingProfile(
   modelId: string,
   params?: Record<string, unknown>,

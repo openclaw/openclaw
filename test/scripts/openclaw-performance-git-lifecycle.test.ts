@@ -35,6 +35,7 @@ function performanceRun(
     fetchResults: [],
     performance: { mode },
     ...options,
+    env: { QUALIFICATION_DISPATCH: "false", ...options.env },
   });
 }
 

@@ -9,11 +9,17 @@ import {
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { executeGitCommand, executeGitCommandBuffered } from "../infra/git-exec.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { spawnCommand } from "./exec-spawn.js";
 import { runWithSpawnBroker } from "./spawn-broker/context.js";
 import { createSpawnBrokerHost } from "./spawn-broker/host.js";
-import { emitChildProcessSpawnSample, recordChildProcessSpawn } from "./spawn-diagnostics.js";
+import { supportsSpawnBrokerCommandTransport } from "./spawn-broker/pipe.js";
+import {
+  emitChildProcessSpawnSample,
+  recordChildProcessSpawn,
+  withGitProcessOperation,
+} from "./spawn-diagnostics.js";
 import { spawnProcess, spawnWithFallback } from "./spawn-utils.js";
 
 type SpawnImplementation = NonNullable<Parameters<typeof spawnWithFallback>[0]["spawnImpl"]>;
@@ -149,21 +155,31 @@ describe("child-process spawn diagnostics", () => {
       code: "ENOENT",
     });
     await expect(spawnCommand([missing])).rejects.toMatchObject({ code: "ENOENT" });
+    await Promise.all([
+      executeGitCommand(process.cwd(), ["--version"], { operation: "project.clone" }),
+      executeGitCommandBuffered(process.cwd(), ["--version"], { operation: "publication" }),
+    ]);
     now = 59_999;
     emitChildProcessSpawnSample();
     expect(events).toEqual([]);
     now = 90_000;
     emitChildProcessSpawnSample();
-    expect(events).toEqual([
-      expect.objectContaining({
-        family: process.versions.bun ? "bun" : "node",
-        count: 2,
-        intervalMs: 90_000,
-      }),
-    ]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          family: process.versions.bun ? "bun" : "node",
+          operation: "none",
+          count: 2,
+          intervalMs: 90_000,
+        }),
+        ...["project.clone", "publication"].map((operation) =>
+          expect.objectContaining({ family: "git", operation, count: 1, intervalMs: 90_000 }),
+        ),
+      ]),
+    );
     now = 150_000;
     emitChildProcessSpawnSample();
-    expect(events).toHaveLength(1);
+    expect(events).toHaveLength(3);
   }
 
   it(
@@ -171,7 +187,7 @@ describe("child-process spawn diagnostics", () => {
     checkSuccessfulSpawns,
   );
 
-  it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+  it.skipIf(!supportsSpawnBrokerCommandTransport())(
     "counts successful broker requests once without counting the broker transport",
     async () => {
       const host = createSpawnBrokerHost();
@@ -197,9 +213,9 @@ describe("child-process spawn diagnostics", () => {
     now = 60_000;
     emitChildProcessSpawnSample();
     expect(events).toEqual([
-      expect.objectContaining({ family: "other", count: 1 }),
-      expect.objectContaining({ family: "git", count: 1 }),
-      expect.objectContaining({ family: "bun", count: 1 }),
+      expect.objectContaining({ family: "other", operation: "none", count: 1 }),
+      expect.objectContaining({ family: "git", operation: "unknown", count: 1 }),
+      expect.objectContaining({ family: "bun", operation: "none", count: 1 }),
     ]);
     expect(JSON.stringify(events)).not.toContain("private");
 
@@ -215,5 +231,30 @@ describe("child-process spawn diagnostics", () => {
     now = 180_000;
     emitChildProcessSpawnSample();
     expect(events).toHaveLength(3);
+  });
+
+  it("captures bounded Git owners before deferred spawn events without leaking scope", () => {
+    const first = new EventEmitter() as ChildProcess;
+    const second = new EventEmitter() as ChildProcess;
+    const unknown = new EventEmitter() as ChildProcess;
+    withGitProcessOperation("checkout.diff", () => recordChildProcessSpawn("git", first));
+    withGitProcessOperation("repository.identities", () => recordChildProcessSpawn("git", second));
+    Reflect.apply(withGitProcessOperation, undefined, [
+      "/private/customer/repo",
+      () => {
+        recordChildProcessSpawn("git", unknown);
+      },
+    ]);
+    second.emit("spawn");
+    first.emit("spawn");
+    unknown.emit("spawn");
+    now = 60_000;
+    emitChildProcessSpawnSample();
+    expect(events).toEqual([
+      expect.objectContaining({ family: "git", operation: "repository.identities", count: 1 }),
+      expect.objectContaining({ family: "git", operation: "checkout.diff", count: 1 }),
+      expect.objectContaining({ family: "git", operation: "unknown", count: 1 }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain("private");
   });
 });

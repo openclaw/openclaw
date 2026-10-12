@@ -126,33 +126,6 @@ describe("browser remote profile tab ops via Playwright", () => {
     );
   });
 
-  it("uses the remote HTTP timeout for the ownership version probe", async () => {
-    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
-      createPageViaPlaywright: vi.fn(async () => page("T2")),
-    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
-    const fetchMock = vi.fn(
-      async (_url: unknown, init?: RequestInit) =>
-        await new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener(
-            "abort",
-            () => reject(new Error("ownership version probe timed out")),
-            { once: true },
-          );
-        }),
-    );
-    const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
-    state.resolved.remoteCdpTimeoutMs = 25;
-
-    const startedAt = Date.now();
-    const opened = await remote.openTab("https://t2.example");
-
-    expect(Date.now() - startedAt).toBeLessThan(700);
-    expect((opened as { ownership?: unknown }).ownership).toEqual({
-      status: "non-durable",
-      reason: "browser-identity-lookup-failed",
-    });
-  });
-
   it("preserves ownership cancellation when closing the exact created page fails", async () => {
     const close = vi.fn(async () => {
       throw new Error("created page close failed");

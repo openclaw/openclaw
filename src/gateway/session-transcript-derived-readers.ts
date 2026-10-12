@@ -23,7 +23,6 @@ export type SessionTranscriptUsageSnapshot = {
   cacheRead?: number;
   cacheWrite?: number;
   contextUsage?: ContextUsage;
-  trailingBytes?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
   costUsd?: number;

@@ -1,30 +1,16 @@
 // Gateway cron lazy loader.
 // Defers scheduler startup until cron is touched by runtime or API handlers.
-import type { CliDeps } from "../cli/deps.types.js";
 import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createLazyPromiseLoader, createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
-import type { GatewayCronExitWatcherHandoff, GatewayCronState } from "./server-cron.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
-
-type LazyGatewayCronParams = {
-  cfg: OpenClawConfig;
-  deps: CliDeps;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
-  env?: NodeJS.ProcessEnv;
-  scheduler: GatewayScheduler;
-  /**
-   * Resolves the live Gateway request context for scheduler-triggered runs.
-   * RPC-triggered runs inherit one from the caller; timer-triggered runs have
-   * no request of their own, so trusted built-in tools would otherwise see none.
-   */
-  resolveGatewayContext?: () => GatewayRequestContext | undefined;
-};
+import type {
+  buildGatewayCronService,
+  GatewayCronExitWatcherHandoff,
+  GatewayCronState,
+} from "./server-cron.js";
 
 type LoadedGatewayCronState = {
   state: GatewayCronState;
@@ -36,7 +22,9 @@ type LoadedGatewayCronState = {
 };
 
 /** Creates a cron state proxy that imports the real cron service on first use. */
-export function createLazyGatewayCronState(params: LazyGatewayCronParams): GatewayCronState {
+export function createLazyGatewayCronState(
+  params: Parameters<typeof buildGatewayCronService>[0],
+): GatewayCronState {
   const spawnBroker = getSpawnBroker();
   const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   const env = params.env ?? process.env;
@@ -293,7 +281,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async prepareWake() {
       await load();
     },
-    wake(opts) {
+    async wake(opts) {
       if (!loaded) {
         // A wake should kick off lazy loading but cannot claim success before
         // cron exists and knows whether the target job is wakeable.

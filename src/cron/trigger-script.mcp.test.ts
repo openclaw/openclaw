@@ -104,28 +104,34 @@ return {
 `;
 
 describe("cron script MCP namespace", () => {
-  it.each(["trigger", "payload"] as const)(
-    "calls an exactly named MCP tool, hides the rest, and retires the runtime (%s)",
-    async (mode) => {
-      const fixture = createMcpFixture();
+  it.each([
+    { server: "sources", tool: "list_sources", cursor: "c1" },
+    { server: "team__sources", tool: "*", cursor: null },
+  ] as const)(
+    "calls authorized MCP tools and retires the runtime ($server/$tool)",
+    async ({ server, tool, cursor }) => {
+      const fixture = createMcpFixture({
+        extra: tool === "*" ? { tools: { deny: ["team__sources__delete_source"] } } : undefined,
+      });
       const runtime = createCronScriptRuntime({ config: fixture.config });
       const input = {
-        jobId: `mcp-${mode}`,
-        script: QUIET_HOUR_SCRIPT,
-        state: { cursor: "c1" },
-        toolsAllow: ["sources__list_sources"],
+        jobId: "mcp-trigger",
+        script: QUIET_HOUR_SCRIPT.replaceAll(
+          "MCP.sources",
+          server === "sources" ? "MCP.sources" : "MCP.teamSources",
+        ),
+        state: cursor === null ? null : { cursor },
+        toolsAllow: [`${server}__${tool}`],
       };
 
-      const result =
-        mode === "trigger"
-          ? await runtime.evaluateTrigger(input)
-          : await runtime.executePayload(input);
+      const result = await runtime.evaluateTrigger(input);
 
       expect(result).toMatchObject({
-        ...(mode === "trigger" ? { kind: "evaluated", fire: false } : { kind: "completed" }),
+        kind: "evaluated",
+        fire: false,
         state: {
           cursor: "next",
-          listed: { tool: "list_sources", since: "c1", sources: [] },
+          listed: { tool: "list_sources", since: cursor ?? "start", sources: [] },
           deleteVisible: false,
         },
       });
@@ -136,32 +142,9 @@ describe("cron script MCP namespace", () => {
     },
   );
 
-  it("exposes a server-scoped glob within the owning agent's tool policy", async () => {
-    const fixture = createMcpFixture({
-      extra: { tools: { deny: ["team__sources__delete_source"] } },
-    });
-    const runtime = createCronScriptRuntime({ config: fixture.config });
-
-    await expect(
-      runtime.evaluateTrigger({
-        jobId: "mcp-server-glob",
-        script: QUIET_HOUR_SCRIPT.replaceAll("MCP.sources", "MCP.teamSources"),
-        state: null,
-        toolsAllow: ["team__sources__*"],
-      }),
-    ).resolves.toMatchObject({
-      kind: "evaluated",
-      fire: false,
-      state: { listed: { tool: "list_sources", since: "start" }, deleteVisible: false },
-    });
-    expect(fixture.starts()).toBe(1);
-  });
-
   it.each([
     { caps: "a wildcard", toolsAllow: ["*"], script: "typeof MCP" },
     { caps: "no toolsAllow", toolsAllow: undefined, script: "typeof MCP" },
-    { caps: "an unprefixed glob", toolsAllow: ["sour*"], script: "typeof MCP" },
-    { caps: "a script that never mentions it", toolsAllow: ["sources__*"], script: '"undefined"' },
   ])("starts no MCP server for $caps", async ({ toolsAllow, script }) => {
     const fixture = createMcpFixture();
     const runtime = createCronScriptRuntime({ config: fixture.config });

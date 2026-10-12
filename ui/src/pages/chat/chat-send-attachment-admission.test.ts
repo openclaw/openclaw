@@ -5,7 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import * as outboxPayloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
 import {
   readStoredOutboxStore,
-  storageTargetForGateway,
+  storageTargetForComposer,
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
@@ -22,8 +22,8 @@ import { prepareOutboxPayload } from "./outbox-payloads.ts";
 useChatSendBrowserFixture();
 
 describe("chat attachment admission", () => {
-  it.each(["connection", "recovery owner", "selected agent"])(
-    "ignores an attachment admission from a replaced %s",
+  it.each(["same owner", "connection", "recovery owner", "selected agent"])(
+    "settles overlapping attachment admissions with %s",
     async (changedOwner) => {
       const { attachments, dataUrls } = createDeliveryAttachmentBatch();
       const host = makeChatHost({
@@ -60,7 +60,7 @@ describe("chat attachment admission", () => {
           host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
         } else if (changedOwner === "selected agent") {
           host.assistantAgentId = "other";
-        } else {
+        } else if (changedOwner === "recovery owner") {
           vi.spyOn(expectDefined(host.client, "client"), "recoveryScope", "get").mockReturnValue(
             "new-synthetic-principal",
           );
@@ -73,18 +73,29 @@ describe("chat attachment admission", () => {
             throw new Error("Current submission ended before payload write");
           }),
         ]);
-        host.chatMessage = "Newer draft";
-        releases[1]!.resolve();
-        await current;
-        expect(host.chatMessage).toBe("Newer draft");
-        expect(host.chatAttachments).toEqual([]);
+        if (changedOwner !== "same owner") {
+          host.chatMessage = "Newer draft";
+          releases[1]!.resolve();
+          await current;
+          expect(host.chatMessage).toBe("Newer draft");
+          expect(host.chatAttachments).toEqual([]);
+        }
       } finally {
         releases.forEach((release) => release.resolve());
         await Promise.all([stale, current]);
       }
       const queued = listStoredChatOutboxes(host)[0]?.queue ?? [];
-      expect(queued.map((item) => item.text)).toEqual(["Current submission"]);
-      const hydrated = await prepareOutboxPayload(host, expectDefined(queued[0], "current input"));
+      expect(queued.map((item) => item.text)).toEqual(
+        changedOwner === "same owner"
+          ? ["Stale submission", "Current submission"]
+          : ["Current submission"],
+      );
+      expect(host.chatMessage).toBe(changedOwner === "same owner" ? "" : "Newer draft");
+      expect(host.chatAttachments).toEqual([]);
+      const hydrated = await prepareOutboxPayload(
+        host,
+        expectDefined(queued.at(-1), "current input"),
+      );
       expect(
         hydrated.status === "ready"
           ? hydrated.update.attachments?.map(getChatAttachmentDataUrl)
@@ -93,54 +104,6 @@ describe("chat attachment admission", () => {
       expect(host.request).not.toHaveBeenCalled();
     },
   );
-
-  it("clears the matching composer after overlapping attachment submissions settle", async () => {
-    const { attachments } = createDeliveryAttachmentBatch();
-    const host = makeChatHost({
-      requestHandlers: {},
-      connected: false,
-      chatMessage: "First overlapping prompt",
-      chatAttachments: attachments,
-    });
-    const entered = [createDeferred(), createDeferred()];
-    const release = createDeferred();
-    let writes = 0;
-    const writePayload = outboxPayloadStore.writeOutboxPayload;
-    vi.spyOn(outboxPayloadStore, "writeOutboxPayload").mockImplementation(async (...args) => {
-      const writeIndex = writes++;
-      entered[writeIndex]?.resolve();
-      await release.promise;
-      return writePayload(...args);
-    });
-    const first = handleSendChat(host);
-    let second: ReturnType<typeof handleSendChat> | undefined;
-    try {
-      await Promise.race([
-        entered[0]!.promise,
-        first.then(() => {
-          throw new Error("First submission ended before payload write");
-        }),
-      ]);
-      host.chatMessage = "Second overlapping prompt";
-      second = handleSendChat(host);
-      await Promise.race([
-        entered[1]!.promise,
-        second.then(() => {
-          throw new Error("Second submission ended before payload write");
-        }),
-      ]);
-    } finally {
-      release.resolve();
-      await Promise.all([first, second]);
-    }
-    expect(listStoredChatOutboxes(host)[0]?.queue.map((item) => item.text)).toEqual([
-      "First overlapping prompt",
-      "Second overlapping prompt",
-    ]);
-    expect(host.chatMessage).toBe("");
-    expect(host.chatAttachments).toEqual([]);
-    expect(host.request).not.toHaveBeenCalled();
-  });
 
   it.each(["committed", "payload failure", "metadata failure", "unrelated send"])(
     "preserves a newer draft while settling submitted attachment ownership (%s)",
@@ -212,7 +175,7 @@ describe("chat attachment admission", () => {
         ]);
         if (outcome === "metadata failure") {
           const write = sessionStorage.setItem.bind(sessionStorage);
-          const target = storageTargetForGateway(host.settings?.gatewayUrl);
+          const target = storageTargetForComposer(host);
           vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
             if (key === target.key) {
               throw new DOMException("quota exceeded", "QuotaExceededError");
@@ -354,7 +317,7 @@ describe("chat attachment admission", () => {
       chatAttachments: attachments,
     });
     const client = expectDefined(host.client, "recovery client");
-    const target = storageTargetForGateway(host.settings?.gatewayUrl);
+    const target = storageTargetForComposer(host);
     const recovery = vi.spyOn(client, "recoveryScope", "get");
     const originalRecovery = client.recoveryScope;
     const cleanup = vi.spyOn(outboxPayloadStore, "removeOutboxPayloads");

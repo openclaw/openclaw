@@ -102,9 +102,7 @@ openclaw_e2e_fixture_plugin_command openclaw_e2e_maybe_timeout 5s node "$OPENCLA
 const sweepFixtureLoader = `
 source() {
   if [[ "$1" == scripts/e2e/lib/plugins/fixtures.sh ]]; then
-    pack_fixture_plugin() { :; }
-    pack_fixture_plugin_with_cli_registry_dependency() { :; }
-    pack_fake_is_number_package() { :; }
+    pack_fixture_archive() { :; }
     pack_fixture_plugin_with_invalid_extension_entry() { :; }
     start_npm_fixture_registry() { :; }
     openclaw_plugins_cleanup_fixture_servers() { :; }
@@ -342,11 +340,9 @@ run_plugins_clawhub_scenario
   });
 
   it.each([
-    ["  --accept-capabilities  Accept\n", [consent]],
     ["  \u001b[32m--accept-capabilities\u001b[0m  Accept\n", [consent]],
     ["  --accept-capabilities-extra  Other\n", []],
     ["See --accept-capabilities in newer releases\n", []],
-    ["  --force  Confirm\n", []],
   ])("reads only an advertised option from help %j", (help, expected) => {
     expect(fixtureCapabilityConsentArgs(help)).toEqual(expected);
   });

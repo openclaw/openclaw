@@ -1,5 +1,4 @@
 // Metadata contract shared by Doctor migrations and client storage selection.
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixSqliteStateEnv } from "../sqlite-state.js";
 
@@ -47,17 +46,4 @@ export function normalizeMatrixStorageMetadata(value: unknown): MatrixStorageMet
     metadata.currentTokenStateClaimed = true;
   }
   return Object.keys(metadata).length > 0 ? metadata : null;
-}
-
-export async function hasMatrixStorageMetaStateInStore(params: {
-  store: Pick<PluginStateKeyedStore<MatrixStorageMetadata>, "lookup">;
-}): Promise<boolean> {
-  return normalizeMatrixStorageMetadata(await params.store.lookup(STORAGE_META_STATE_KEY)) !== null;
-}
-
-export async function writeMatrixStorageMetaStateToStore(params: {
-  payload: MatrixStorageMetadata;
-  store: Pick<PluginStateKeyedStore<MatrixStorageMetadata>, "register">;
-}): Promise<void> {
-  await params.store.register(STORAGE_META_STATE_KEY, params.payload);
 }

@@ -10,11 +10,13 @@ import {
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
-import { normalizeCommandBody, resolveTextCommand } from "./commands-registry-normalize.js";
+import { resolveTextCommand } from "./commands-registry-normalize.js";
 import { getChatCommands } from "./commands-registry.data.js";
 import type {
   ChatCommandDefinition,
@@ -25,33 +27,23 @@ import type {
   NativeCommandSpec,
 } from "./commands-registry.types.js";
 
-export {
-  isCommandEnabled,
-  listChatCommands,
-  listChatCommandsForConfig,
-} from "./commands-registry-list.js";
+export { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
 
 export {
-  getCommandDetection,
   maybeResolveTextAlias,
   normalizeCommandBody,
   resolveTextCommand,
 } from "./commands-registry-normalize.js";
 
-export { isNativeCommandSurface, shouldHandleTextCommands } from "./commands-text-routing.js";
+export { shouldHandleTextCommands } from "./commands-text-routing.js";
 
 export type {
   ChatCommandDefinition,
-  CommandArgChoiceContext,
   CommandArgDefinition,
-  CommandArgMenuSpec,
   CommandArgValues,
   CommandArgs,
-  CommandDetection,
   CommandNormalizeOptions,
-  CommandScope,
   NativeCommandSpec,
-  ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
 
 type NativeCommandProviderLookupOptions = {
@@ -61,7 +53,7 @@ type NativeCommandProviderLookupOptions = {
 function createNativeCommandNameMapper(
   provider?: string,
   options?: NativeCommandProviderLookupOptions,
-): (command: ChatCommandDefinition) => Array<{ name: string; normalizedName?: string }> {
+): (command: ChatCommandDefinition) => string[] {
   // Registry state is lifecycle-owned, so resolve the adapter once per list or lookup operation.
   const resolveNativeCommandName = !provider
     ? undefined
@@ -76,13 +68,13 @@ function createNativeCommandNameMapper(
           defaultName: command.nativeName,
         }) ?? command.nativeName)
       : undefined;
-    return [primary, ...(command.nativeAliases ?? [])]
-      .filter((name): name is string => Boolean(name))
-      .map((name) => ({ name, normalizedName: normalizeOptionalLowercaseString(name) }));
+    return [primary, ...(command.nativeAliases ?? [])].filter((name): name is string =>
+      Boolean(name),
+    );
   };
 }
 
-function supportsNativeProvider(command: ChatCommandDefinition, provider?: string): boolean {
+export function supportsNativeProvider(command: ChatCommandDefinition, provider?: string): boolean {
   if (!command.nativeProviders?.length) {
     return true;
   }
@@ -107,7 +99,7 @@ function listNativeSpecsFromCommands(
         command.scope !== "text" && command.nativeName && supportsNativeProvider(command, provider),
     )
     .flatMap((command) =>
-      mapNativeCommandNames(command).map(({ name }, index) => {
+      mapNativeCommandNames(command).map((name, index) => {
         const nativeSpec: NativeCommandSpec = {
           name,
           description: command.description,
@@ -164,25 +156,24 @@ export function mergeNativeCommandSpecs(params: {
 }): NativeCommandSpec[] {
   const merged: NativeCommandSpec[] = [];
   const names = new Set<string>();
-  const append = (spec: NativeCommandSpec, reportCollision: boolean) => {
-    const normalizedName = normalizeOptionalLowercaseString(spec.name);
-    if (!normalizedName) {
-      return;
-    }
-    if (names.has(normalizedName)) {
-      if (reportCollision) {
-        params.onCollision?.(normalizedName);
+  for (const [specs, reportCollision] of [
+    [params.primary, false],
+    [params.secondary, true],
+  ] as const) {
+    for (const spec of specs) {
+      const normalizedName = normalizeOptionalLowercaseString(spec.name);
+      if (!normalizedName) {
+        continue;
       }
-      return;
+      if (names.has(normalizedName)) {
+        if (reportCollision) {
+          params.onCollision?.(normalizedName);
+        }
+        continue;
+      }
+      names.add(normalizedName);
+      merged.push(spec);
     }
-    names.add(normalizedName);
-    merged.push(spec);
-  };
-  for (const spec of params.primary) {
-    append(spec, false);
-  }
-  for (const spec of params.secondary) {
-    append(spec, true);
   }
   return merged;
 }
@@ -202,7 +193,9 @@ export function findCommandByNativeName(
     (command) =>
       command.scope !== "text" &&
       supportsNativeProvider(command, provider) &&
-      mapNativeCommandNames(command).some(({ normalizedName }) => normalizedName === normalized),
+      mapNativeCommandNames(command).some(
+        (nativeName) => normalizeOptionalLowercaseString(nativeName) === normalized,
+      ),
   );
 }
 
@@ -238,21 +231,10 @@ export function isActiveRunSafeCommandTurn(params: {
   );
 }
 
-/** Formats a command and optional raw argument string as slash-command text. */
-export function buildCommandText(commandName: string, args?: string): string {
-  const trimmedArgs = args?.trim();
-  return trimmedArgs ? `/${commandName} ${trimmedArgs}` : `/${commandName}`;
-}
-
 function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): CommandArgValues {
   const values: CommandArgValues = {};
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return values;
-  }
-  const tokens = trimmed.split(/\s+/).filter(Boolean);
-  let index = 0;
-  for (const definition of definitions) {
+  const tokens = raw.split(/\s+/);
+  for (const [index, definition] of definitions.entries()) {
     if (index >= tokens.length) {
       break;
     }
@@ -262,7 +244,6 @@ function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): 
       break;
     }
     values[definition.name] = expectDefined(tokens[index], "command argument token");
-    index += 1;
   }
   return values;
 }
@@ -334,25 +315,11 @@ export function buildCommandTextFromArgs(
   args?: CommandArgs,
 ): string {
   const commandName = command.nativeName ?? command.key;
-  return buildCommandText(commandName, serializeCommandArgs(command, args));
+  const raw = serializeCommandArgs(command, args)?.trim();
+  return raw ? `/${commandName} ${raw}` : `/${commandName}`;
 }
 
-function resolveDefaultCommandContext(cfg?: OpenClawConfig): {
-  provider: string;
-  model: string;
-} {
-  const resolved = resolveConfiguredModelRef({
-    cfg: cfg ?? ({} as OpenClawConfig),
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  return {
-    provider: resolved.provider ?? DEFAULT_PROVIDER,
-    model: resolved.model ?? DEFAULT_MODEL,
-  };
-}
-
-export type ResolvedCommandArgChoice = { value: string; label: string };
+type ResolvedCommandArgChoice = { value: string; label: string };
 
 /** Resolves static or context-aware choices for one command argument. */
 export function resolveCommandArgChoices(
@@ -364,13 +331,17 @@ export function resolveCommandArgChoices(
     return [];
   }
   if (typeof choices === "function") {
-    const defaults = resolveDefaultCommandContext(cfg);
+    const defaults = resolveConfiguredModelRef({
+      cfg: cfg ?? {},
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+    });
     choices = choices({
       cfg,
       command: params.command,
       arg,
-      provider: params.provider ?? defaults.provider,
-      model: params.model ?? defaults.model,
+      provider: params.provider ?? defaults.provider ?? DEFAULT_PROVIDER,
+      model: params.model ?? defaults.model ?? DEFAULT_MODEL,
       agentRuntime: params.agentRuntime,
       catalog: params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined),
     });
@@ -400,75 +371,106 @@ export function canResolveCommandArgMenu<
     : args?.values?.[command.argsMenu.arg] == null;
 }
 
-/** Resolves the next argument menu to show for commands with selectable choices. */
-export function resolveCommandArgMenu(
-  params: Omit<CommandArgChoiceContext, "arg"> & {
-    args?: CommandArgs;
-    session?: { agentId: string; sessionKey: string };
-  },
-): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
+type CommandArgMenuParams = Omit<CommandArgChoiceContext, "arg"> & {
+  args?: CommandArgs;
+  session?: { agentId: string; sessionKey: string };
+};
+
+type ResolvedCommandArgMenu = {
+  arg: CommandArgDefinition;
+  choices: ResolvedCommandArgChoice[];
+  title?: string;
+};
+
+/** @deprecated Use resolveCommandArgMenuAsync. Removed at the next Plugin SDK major. */
+export function resolveCommandArgMenu(params: CommandArgMenuParams): ResolvedCommandArgMenu | null {
+  warnPluginSdkDeprecation({
+    family: "native-command-menu",
+    method: "resolveCommandArgMenu",
+    replacement: "resolveCommandArgMenuAsync",
+  });
+  const menu = resolveCommandArgMenuChoices(params);
+  if (menu && params.command.key === "verbose" && params.cfg && params.session) {
+    const { agentId, sessionKey } = params.session;
+    const entry = loadSessionEntryReadOnly({
+      agentId,
+      storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+      sessionKey,
+    });
+    setVerboseMenuTitle(
+      menu,
+      params.command,
+      entry?.verboseLevel ?? resolveAgentConfig(params.cfg, agentId)?.verboseDefault ?? "off",
+    );
+  }
+  return menu;
+}
+
+/** Resolves menu choices and session-owned status through the asynchronous read owner. */
+export async function resolveCommandArgMenuAsync(
+  params: CommandArgMenuParams,
+): Promise<ResolvedCommandArgMenu | null> {
+  const menu = resolveCommandArgMenuChoices(params);
+  if (menu && params.command.key === "verbose" && params.cfg && params.session) {
+    const { agentId, sessionKey } = params.session;
+    const entry = await readSessionEntryReadOnlyInWorker({
+      agentId,
+      storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+      sessionKey,
+    });
+    setVerboseMenuTitle(
+      menu,
+      params.command,
+      entry?.verboseLevel ?? resolveAgentConfig(params.cfg, agentId)?.verboseDefault ?? "off",
+    );
+  }
+  return menu;
+}
+
+function setVerboseMenuTitle(
+  menu: ResolvedCommandArgMenu,
+  command: ChatCommandDefinition,
+  level: string,
+): void {
+  menu.title = `Current verbose level: ${level}.\n${formatCommandArgMenuTitle({ command, menu })}`;
+}
+
+function resolveCommandArgMenuChoices(params: CommandArgMenuParams): ResolvedCommandArgMenu | null {
   if (!canResolveCommandArgMenu(params)) {
     return null;
   }
   const { command, args, cfg, provider, model, agentRuntime, catalog } = params;
   const resolvedCatalog = catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined);
+  const resolveChoices = (arg: CommandArgDefinition) =>
+    resolveCommandArgChoices({
+      command,
+      arg,
+      cfg,
+      provider,
+      model,
+      agentRuntime,
+      catalog: resolvedCatalog,
+    });
   const argSpec = command.argsMenu;
   const argName =
     argSpec === "auto"
-      ? command.args.find(
-          (arg) =>
-            resolveCommandArgChoices({
-              command,
-              arg,
-              cfg,
-              provider,
-              model,
-              agentRuntime,
-              catalog: resolvedCatalog,
-            }).length > 0,
-        )?.name
+      ? command.args.find((arg) => resolveChoices(arg).length > 0)?.name
       : argSpec.arg;
-  if (!argName) {
-    return null;
-  }
-  if (args?.values && args.values[argName] != null) {
-    return null;
-  }
   const arg = command.args.find((entry) => entry.name === argName);
-  if (!arg) {
+  if (!argName || !arg || args?.values?.[argName] != null) {
     return null;
   }
-  const choices = resolveCommandArgChoices({
-    command,
-    arg,
-    cfg,
-    provider,
-    model,
-    agentRuntime,
-    catalog: resolvedCatalog,
-  });
+  const choices = resolveChoices(arg);
   if (choices.length === 0) {
     return null;
   }
-  const menu = { arg, choices, title: argSpec !== "auto" ? argSpec.title : undefined };
-  if (command.key === "verbose" && cfg && params.session) {
-    // Native menus bypass directive dispatch; keep its status tied to the same target session.
-    const { agentId, sessionKey } = params.session;
-    const entry = loadSessionEntryReadOnly({
-      agentId,
-      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-      sessionKey,
-    });
-    const level = entry?.verboseLevel ?? resolveAgentConfig(cfg, agentId)?.verboseDefault ?? "off";
-    menu.title = `Current verbose level: ${level}.\n${formatCommandArgMenuTitle({ command, menu })}`;
-  }
-  return menu;
+  return { arg, choices, title: argSpec !== "auto" ? argSpec.title : undefined };
 }
 
 /** Formats the prompt title shown before an argument-choice menu. */
 export function formatCommandArgMenuTitle(params: {
   command: ChatCommandDefinition;
-  menu: NonNullable<ReturnType<typeof resolveCommandArgMenu>>;
+  menu: ResolvedCommandArgMenu;
 }): string {
   const { command, menu } = params;
   if (menu.title) {
@@ -480,16 +482,8 @@ export function formatCommandArgMenuTitle(params: {
       .map((choice) => choice.label.trim())
       .filter(Boolean)
       .join(", ");
-    if (options.length > 0 && options.length <= 160) {
-      return `Choose ${menu.arg.name} for /${commandLabel}.\nOptions: ${options}.`;
-    }
-    return `Choose ${menu.arg.name} for /${commandLabel}.`;
+    const suffix = options.length > 0 && options.length <= 160 ? `\nOptions: ${options}.` : "";
+    return `Choose ${menu.arg.name} for /${commandLabel}.${suffix}`;
   }
   return `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
-}
-
-/** Returns true for normalized slash-command text. */
-export function isCommandMessage(raw: string): boolean {
-  const trimmed = normalizeCommandBody(raw);
-  return trimmed.startsWith("/");
 }

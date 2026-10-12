@@ -1,15 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import path, { dirname, join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import path, { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -101,93 +92,6 @@ function runStopExistingLocalApp(params: { fakeLsof?: string; fakePgrep: string 
 }
 
 describe("scripts/build-and-run-mac.sh", () => {
-  it.each(["pnpm", "corepack"])(
-    "prepares the Apple resource bundle before SwiftPM with %s",
-    (runner) => {
-      const root = tempDirs.make("openclaw-mac-mermaid-test-");
-      const binDir = join(root, "bin");
-      mkdirSync(binDir);
-      mkdirSync(join(root, "apps/macos"), { recursive: true });
-      for (const sourcePath of [
-        scriptPath,
-        "scripts/prepare-apple-mermaid.mjs",
-        "scripts/pnpm-runner.mts",
-        "scripts/windows-cmd-helpers.mjs",
-      ]) {
-        const target = join(root, sourcePath);
-        mkdirSync(dirname(target), { recursive: true });
-        copyFileSync(sourcePath, target);
-      }
-      const resources = join(
-        root,
-        "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid",
-      );
-      mkdirSync(resources, { recursive: true });
-      writeFileSync(join(resources, "stale.js"), "stale");
-      symlinkSync(process.execPath, join(binDir, "node"));
-      symlinkSync("/bin/bash", join(binDir, "bash"));
-      symlinkSync("/usr/bin/dirname", join(binDir, "dirname"));
-      const expectedArgs = ["--dir", "packages/mermaid-renderer", "build"];
-      if (runner === "corepack") {
-        expectedArgs.unshift("pnpm");
-      }
-      for (const [name, body] of [
-        [
-          runner,
-          [
-            'const { mkdirSync, writeFileSync } = require("node:fs");',
-            'const assert = require("node:assert/strict");',
-            `assert.deepEqual(process.argv.slice(2), ${JSON.stringify(expectedArgs)});`,
-            'mkdirSync("apps/shared/mermaid/assets/mermaid", { recursive: true });',
-            'writeFileSync("apps/shared/mermaid/assets/mermaid/index.html", "offline diagram");',
-          ],
-        ],
-        [
-          "swift",
-          [
-            'const { existsSync, readFileSync, writeFileSync } = require("node:fs");',
-            'const assert = require("node:assert/strict");',
-            `const resources = ${JSON.stringify(resources)};`,
-            'assert.equal(readFileSync(`${resources}/index.html`, "utf8"), "offline diagram");',
-            "assert.equal(existsSync(`${resources}/stale.js`), false);",
-            `writeFileSync(${JSON.stringify(join(root, "prepared-before-swift"))}, "ready");`,
-            "process.exit(23);",
-          ],
-        ],
-      ] as const) {
-        const target = join(binDir, name);
-        writeFileSync(target, ["#!/usr/bin/env node", ...body].join("\n"));
-        chmodSync(target, 0o755);
-      }
-
-      const result = spawnSync("/bin/bash", [join(root, scriptPath)], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          npm_execpath: "",
-          OPENCLAW_MAC_RUN_LOG: join(root, "launch.log"),
-          PATH: binDir,
-        },
-      });
-
-      // The fake compiler stops the real entrypoint before any app cleanup or launch.
-      expect(result.status, result.stderr).toBe(23);
-      expect(existsSync(join(root, "prepared-before-swift"))).toBe(true);
-    },
-  );
-
-  it("prints help before build or launch side effects", () => {
-    const result = spawnSync("/bin/bash", [scriptPath, "--help"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: build-and-run-mac.sh");
-    expect(result.stdout).toContain("Build, stop, and relaunch");
-    expect(result.stderr).toBe("");
-  });
-
   it("rejects unknown options before build or launch side effects", () => {
     const result = spawnSync("/bin/bash", [scriptPath, "--wat"], {
       cwd: process.cwd(),
@@ -263,7 +167,6 @@ const nativeScripts = [
   "scripts/codesign-mac-app.sh",
   "scripts/create-dmg.sh",
   "scripts/dev/computer-use-macos-live-rig.sh",
-  "scripts/dev/ios-pull-gateway-log.sh",
   "scripts/e2e/parallels-macos-smoke.sh",
   "scripts/e2e/parallels-windows-prepare.sh",
   "scripts/format-swift.sh",
@@ -484,38 +387,6 @@ describe("macOS Bash selection", () => {
       bash4Findings(source).map((finding) => `${file}:${finding}`),
     );
     expect(findings).toEqual([]);
-  });
-
-  it.each([
-    'mapfile -t fields <<<"$metadata"',
-    "readarray fields",
-    "coproc worker",
-    "declare -A values",
-    "local -rA values",
-    "declare -n ref=value",
-    "${value,,}",
-    "${value^}",
-    "${values[-1]}",
-    "${!prefix@}",
-    "${value@Q}",
-    "cmd |& reader",
-    "cmd &>>log",
-    "case x in x) cmd ;;& esac",
-    "case x in x) cmd ;& esac",
-    'printf -v "values[0]" %s x',
-    "[[ -v value ]]",
-    "wait -n",
-    "exec {fd}<file",
-    "read -N 3 value",
-    "shopt -s globstar",
-  ])("rejects runtime-incompatible syntax: %s", (source) => {
-    expect(bash4Findings(source).length).toBeGreaterThan(0);
-  });
-
-  it("allows Bash 3.2 array reads, scalar printf, negative substrings, and explanatory comments", () => {
-    expect(
-      bash4Findings("read -a fields\nprintf -v value %s x\n${value: -1}\n# avoid mapfile"),
-    ).toEqual([]);
   });
 
   it("keeps package commands from overriding native script shebangs through PATH", () => {

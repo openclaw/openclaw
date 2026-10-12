@@ -1,4 +1,4 @@
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import type {
   GitHubPublicationExecutionRow,
   GitHubPublicationRow,
@@ -6,17 +6,16 @@ import type {
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { recoverGitHubPublicationBranchAndIndex } from "./github-publication-git-index.js";
 
-type PublicationRow = GitHubPublicationExecutionRow;
-type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
-
 export async function recoverGitHubPublicationWorkspace(
-  row: PublicationRow,
-  run: (argv: string[], options?: GitCommandOptions) => Promise<string>,
+  row: GitHubPublicationExecutionRow,
+  worktree: ManagedWorktreeRecord,
+  run: Parameters<typeof recoverGitHubPublicationBranchAndIndex>[0]["run"],
   assertCustody: () => void,
 ): Promise<void> {
-  const worktree = managedWorktrees.findLiveById(row.worktree_id);
   if (
-    worktree?.repoFingerprint !== row.repository_fingerprint ||
+    worktree.id !== row.worktree_id ||
+    worktree.removedAt !== undefined ||
+    worktree.repoFingerprint !== row.repository_fingerprint ||
     worktree.branch !== row.branch ||
     !row.source_head_commit ||
     !row.workspace_tree
@@ -37,27 +36,18 @@ export async function recoverGitHubPublicationWorkspace(
 export async function readKnownGitHubPublicationPullRequestUrls(
   row: GitHubPublicationExecutionRow,
 ): Promise<string[]> {
-  const {
-    worktree_id,
-    repository_fingerprint,
-    repository,
-    branch,
-    base_branch,
-    identity_account_id,
-    pull_request_url,
-  } = row;
   const result = await executeExistingOpenClawStateRead(
     {},
     {
       type: "githubPublication.knownPullRequestUrls",
       input: {
-        worktree_id,
-        repository_fingerprint,
-        repository,
-        branch,
-        base_branch,
-        identity_account_id,
-        pull_request_url,
+        worktree_id: row.worktree_id,
+        repository_fingerprint: row.repository_fingerprint,
+        repository: row.repository,
+        branch: row.branch,
+        base_branch: row.base_branch,
+        identity_account_id: row.identity_account_id,
+        pull_request_url: row.pull_request_url,
       },
     },
     { current: true },

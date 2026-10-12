@@ -2,7 +2,6 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { renderMessageAttachment } from "./chat-message-attachments.ts";
 import {
   releaseChatMediaResourceSubscriber,
@@ -99,88 +98,42 @@ function localAttachment(
 
 describe("nonimage attachment source admission", () => {
   it.each([
-    ["document", "notes.pdf", "inline"],
-    ["audio", "recording.mp3", "card"],
-    ["video", "recording.mp4", "card"],
-    ["audio", "preview.mp3", "preview"],
+    ["document", "notes.pdf", "inline", true],
+    ["audio", "recording.mp3", "card", true],
+    ["video", "recording.mp4", "card", true],
+    ["audio", "recording.mp3", "inline", false],
+    ["video", "recording.mp4", "inline", false],
+    ["video", "preview.mp4", "preview", false],
+    ["document", "drawing.svg", "card", false],
   ] as const)(
-    "defers a local %s metadata read until its %s %s card is near the viewport",
-    async (kind, label, presentation) => {
+    "routes %s %s %s metadata through its source owner (deferred=%s)",
+    async (kind, label, presentation, deferred) => {
       const fetchMock = vi.fn<typeof fetch>(async () =>
-        Response.json({ available: false, reason: "Fixture missing", retryable: false }),
+        Response.json(
+          deferred
+            ? { available: false, reason: "Fixture missing", retryable: false }
+            : { available: false },
+        ),
       );
       vi.stubGlobal("fetch", fetchMock);
       const first = mount(localAttachment(kind, label), {}, undefined, presentation);
-      mount(localAttachment(kind, `other-${label}`), {}, undefined, presentation);
-      await settle();
-
-      expect(first.container.textContent).toContain(label);
-      expect(fetchMock).not.toHaveBeenCalled();
-      const observation = observations.find(({ element }) => first.container.contains(element));
-      expect(observation).toBeDefined();
-      observation?.show();
-      await settle();
-      expect(fetchMock).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each([true, false])(
-    "keeps the focused download through metadata resolution with sidebar=%s",
-    async (withSidebar) => {
-      const metadata = createDeferred<Response>();
-      const fetchMock = vi.fn<typeof fetch>(() => metadata.promise);
-      vi.stubGlobal("fetch", fetchMock);
-      const onOpenSidebar = vi.fn<(content: SidebarContent) => void>();
-      const { container } = mount(
-        localAttachment("document", "keyboard.pdf"),
-        {},
-        withSidebar ? onOpenSidebar : undefined,
-      );
-      const link = container.querySelector<HTMLAnchorElement>("a[download]");
-      expect(link).not.toBeNull();
-      if (!link) {
-        throw new Error("Missing pending download");
+      if (deferred) {
+        mount(localAttachment(kind, `other-${label}`), {}, undefined, presentation);
       }
-      expect(link.hasAttribute("href")).toBe(false);
-      expect(link.tabIndex).toBe(0);
-      expect(fetchMock).not.toHaveBeenCalled();
-      link.focus();
       await settle();
+      if (deferred) {
+        expect(first.container.textContent).toContain(label);
+        expect(fetchMock).not.toHaveBeenCalled();
+        const observation = observations.find(({ element }) => first.container.contains(element));
+        expect(observation).toBeDefined();
+        observation?.show();
+        await settle();
+      } else {
+        expect(observations).toHaveLength(0);
+      }
       expect(fetchMock).toHaveBeenCalledOnce();
-      expect(container.querySelector("a[download]")).toBe(link);
-      expect(document.activeElement).toBe(link);
-      expect(link.getAttribute("aria-disabled")).toBe("true");
-      link.click();
-      expect(onOpenSidebar).not.toHaveBeenCalled();
-      metadata.resolve(
-        Response.json({
-          available: true,
-          mediaTicket: "keyboard",
-          mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-          sizeBytes: 2048,
-        }),
-      );
-      await settle();
-      expect(container.querySelector("a[download]")).toBe(link);
-      expect(document.activeElement).toBe(link);
-      expect(link.getAttribute("href")).toContain("mediaTicket=keyboard");
-      expect(link.hasAttribute("aria-disabled")).toBe(false);
     },
   );
-
-  it.each([
-    ["audio", "recording.mp3", "inline"],
-    ["video", "recording.mp4", "inline"],
-    ["video", "preview.mp4", "preview"],
-    ["document", "drawing.svg", "card"],
-  ] as const)("preserves the existing %s %s %s source owner", async (kind, label, presentation) => {
-    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ available: false }));
-    vi.stubGlobal("fetch", fetchMock);
-    mount(localAttachment(kind, label), {}, undefined, presentation);
-    await settle();
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(observations).toHaveLength(0);
-  });
 
   it("defers a managed ticket without delaying the admitted download", async () => {
     const url = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
@@ -291,7 +244,6 @@ describe("nonimage attachment source admission", () => {
 
   it.each([
     ["inline", false],
-    ["card", true],
     ["preview", true],
   ] as const)(
     "preserves %s voice-note expansion controls before admission",

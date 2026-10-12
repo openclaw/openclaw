@@ -188,7 +188,7 @@ export function captureGatewayDeviceRevocation(
 /** Carry the original capture through a composed commit guard without changing its contract. */
 export function bindGatewayDeviceRevocation<T extends () => unknown>(
   guard: T,
-  isCurrent: CurrentCaller | undefined,
+  isCurrent: (() => unknown) | undefined,
 ): T {
   const capture = isCurrent ? captures.get(isCurrent) : undefined;
   if (capture) {
@@ -230,6 +230,18 @@ export function readAcceptedGatewayDeviceSourceAuthority(
 ): CurrentCaller | undefined {
   const capture = guard ? captures.get(guard) : undefined;
   return capture?.state.sourceAccepted ? capture.isSourceCurrent : undefined;
+}
+
+/** Prepared grants consume owned facts; opaque transport callbacks keep their native fence. */
+export function hasPreparedGatewayDeviceAuthority(
+  client: { invalidated?: boolean } | null | undefined,
+  guard: (() => unknown) | undefined,
+): boolean {
+  const accepted = readAcceptedGatewayDeviceSourceAuthority(guard);
+  return (
+    (accepted ? accepted() : !client?.invalidated) &&
+    readGatewayDeviceRevocationGuard(guard)?.() !== false
+  );
 }
 
 /** Only a producer-proven dependency cohort can share queued-input custody. */
@@ -285,8 +297,5 @@ export function invalidateGatewayDeviceRevocation(
 export function closeGatewayDeviceRevocation(context: object): void {
   const owner = getOwner(context);
   owner.closed = true;
-  for (const bucket of owner.devices.values()) {
-    bucket.clear();
-  }
   owner.devices.clear();
 }

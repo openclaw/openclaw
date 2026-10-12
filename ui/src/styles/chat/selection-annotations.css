@@ -165,27 +165,15 @@ openclaw-chat-comment-pins {
   margin-top: 4px;
 }
 
-:is(
-  .chat-comment-preview__scroll,
-  .chat-comment-preview__text--comment,
-  .chat-annotation-editor textarea
-)[data-at-start="false"] {
+:is(.chat-comment-preview__scroll, .chat-comment-preview__text--comment)[data-at-start="false"] {
   --annotation-fade-top: 12px;
 }
 
-:is(
-  .chat-comment-preview__scroll,
-  .chat-comment-preview__text--comment,
-  .chat-annotation-editor textarea
-)[data-at-end="false"] {
+:is(.chat-comment-preview__scroll, .chat-comment-preview__text--comment)[data-at-end="false"] {
   --annotation-fade-bottom: 12px;
 }
 
-:is(
-  .chat-comment-preview__scroll,
-  .chat-comment-preview__text--comment,
-  .chat-annotation-editor textarea
-)[data-scrollable="true"] {
+:is(.chat-comment-preview__scroll, .chat-comment-preview__text--comment)[data-scrollable="true"] {
   mask-image: linear-gradient(
     to bottom,
     transparent,

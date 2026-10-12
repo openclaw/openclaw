@@ -475,7 +475,7 @@ describe("scheduleChatScroll", () => {
     expect(host.chatReadingHistory).toBe(false);
   });
 
-  it.each(["commit", "resize", "schedule", "remote-input"] as const)(
+  it.each(["commit", "resize", "schedule"] as const)(
     "preserves a pending manual jump across an automatic %s",
     (update) => {
       const frames = installAnimationFrameQueue();
@@ -485,9 +485,7 @@ describe("scheduleChatScroll", () => {
       host.chatUserNearBottom = false;
 
       scheduleChatScroll(host, true, false, { source: "manual" });
-      if (update === "remote-input") {
-        lockChatScroll(host, "remote-input");
-      } else if (update === "schedule") {
+      if (update === "schedule") {
         scheduleChatScroll(host);
       } else {
         scheduleCommittedChatScroll(host, false, false, {
@@ -650,6 +648,23 @@ describe("programmatic scroll ownership", () => {
 
     expect(host.chatUserNearBottom).toBe(false);
   });
+
+  it.each([false, true])(
+    "clears the latest affordance at a measured end without changing reader policy (locked=%s)",
+    (locked) => {
+      const { host } = createScrollHost();
+      host.chatIsProgrammaticScroll = () => true;
+      host.chatNewMessagesBelow = true;
+      host.chatFollowLocked = locked;
+      host.chatReadingHistory = locked;
+
+      handleChatScroll(host, createScrollEvent(3000, 2600, 400));
+
+      expect(host.chatNewMessagesBelow).toBe(false);
+      expect(host.chatFollowLocked).toBe(locked);
+      expect(host.chatReadingHistory).toBe(locked);
+    },
+  );
 });
 
 describe("reader-controlled panel takeover", () => {

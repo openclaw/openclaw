@@ -1,15 +1,15 @@
 import {
-  buildChannelInboundMediaPayload,
   formatInboundMediaUnavailableText,
   formatMediaPlaceholderText,
-  toInboundMediaFactsWithMetadata,
   type ChannelInboundMediaInput,
-  type ChannelInboundMediaPayload,
-  type InboundMediaFacts,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import type { MediaKind, SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import type {
+  MediaKind,
+  SavedRemoteMedia,
+  saveRemoteMedia,
+} from "openclaw/plugin-sdk/media-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -31,13 +31,6 @@ import { buildButtonProps, type MattermostInteractionResponse } from "./interact
 type MattermostMediaInfo = Pick<ChannelInboundMediaInput, "contentType" | "fileName" | "path"> & {
   kind: MediaKind;
 };
-
-export async function buildMattermostInboundMediaPayload(
-  media: readonly MattermostMediaInfo[],
-): Promise<ChannelInboundMediaPayload & { media: InboundMediaFacts[] }> {
-  const facts = await toInboundMediaFactsWithMetadata(media);
-  return { ...buildChannelInboundMediaPayload(facts), media: facts };
-}
 
 export function formatMattermostPendingMediaText(params: {
   body: string;
@@ -90,15 +83,9 @@ const MONITOR_RESOURCE_CACHE_MAX_ENTRIES = 1000;
 const MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
 const MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
 
-type SaveRemoteMedia = (params: {
-  url: string;
-  requestInit?: RequestInit;
-  filePathHint?: string;
-  maxBytes: number;
-  ssrfPolicy?: { allowedHostnames?: string[] };
-  responseHeaderTimeoutMs?: number;
-  readIdleTimeoutMs?: number;
-}) => Promise<Pick<SavedRemoteMedia, "contentType" | "fileName" | "path">>;
+type SaveRemoteMedia = (
+  params: Parameters<typeof saveRemoteMedia>[0],
+) => Promise<Pick<SavedRemoteMedia, "contentType" | "fileName" | "path">>;
 
 export function createMattermostMonitorResources(params: {
   accountId: string;

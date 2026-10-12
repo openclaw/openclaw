@@ -15,6 +15,7 @@ import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
+  resolveActiveEmbeddedRunOwner,
   setActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
 } from "../runs.js";
@@ -45,27 +46,27 @@ describe("deferred logical-turn lifecycle", () => {
     handles.length = 0;
   });
 
-  it.each([
-    { label: "omitted", reason: undefined },
-    { label: "explicit user", reason: "user_abort" as const },
-  ])("classifies $label cancellation when the caller signal stays live", ({ reason }) => {
-    const caller = new AbortController();
-    const manager = createDeferredEmbeddedRunLifecycleManager({
-      runId: "cancelled-logical-run",
-      sessionId,
-      sessionKey,
-      abortSignal: caller.signal,
-    });
+  it.each([{ label: "omitted", reason: undefined }])(
+    "classifies $label cancellation when the caller signal stays live",
+    ({ reason }) => {
+      const caller = new AbortController();
+      const manager = createDeferredEmbeddedRunLifecycleManager({
+        runId: "cancelled-logical-run",
+        sessionId,
+        sessionKey,
+        abortSignal: caller.signal,
+      });
 
-    manager.abort(reason);
+      manager.abort(reason);
 
-    expect(caller.signal.aborted).toBe(false);
-    expect(resolveReplyOperationAbortReason(undefined, manager.signal.reason)).toBe("user");
-    expect(resolveAgentRunErrorLifecycleFields(manager.signal.reason, caller.signal)).toEqual({
-      aborted: true,
-      stopReason: "aborted",
-    });
-  });
+      expect(caller.signal.aborted).toBe(false);
+      expect(resolveReplyOperationAbortReason(undefined, manager.signal.reason)).toBe("user");
+      expect(resolveAgentRunErrorLifecycleFields(manager.signal.reason, caller.signal)).toEqual({
+        aborted: true,
+        stopReason: "aborted",
+      });
+    },
+  );
 
   it.each([
     { reason: "restart" as const, matchesReason: isAgentRunRestartAbortReason },
@@ -130,6 +131,27 @@ describe("deferred logical-turn lifecycle", () => {
     await manager.complete();
     expect(isEmbeddedAgentRunActive(sessionId)).toBe(false);
     expect(resolveReplyOperationAbortReason(undefined, manager.signal.reason)).toBe("user");
+  });
+
+  it("keeps the logical turn start time on the CLI owner", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      const manager = createDeferredEmbeddedRunLifecycleManager({
+        runId: "long-cli-run",
+        sessionId,
+        sessionKey,
+      });
+      // Embedded preparation and fallback can run long before the CLI takes over.
+      vi.setSystemTime(1_000_000 + 5 * 60_000);
+
+      manager.handoffToCli();
+
+      expect(resolveActiveEmbeddedRunOwner(sessionId)?.startedAtMs).toBe(1_000_000);
+      await manager.complete();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("records only the accepted candidate terminal trajectory", async () => {

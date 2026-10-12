@@ -3,11 +3,12 @@ import { expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as registryRead from "../../agents/subagents/registry/subagent-registry-read.js";
 import {
-  clearSubagentRunsReadCacheForTest,
-  persistSubagentRunsToDisk,
-} from "../../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry.store.test-support.js";
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import { getSubagentRunRuntimeKey } from "../../agents/subagents/registry/subagent-run-generation.js";
 import {
   bindSwarmRunReservation,
   holdQueuedSwarmRun,
@@ -241,7 +242,7 @@ it.each(["describe", "list"] as const)(
               swarmRequesterSessionKey: targetKey,
               collectorCompletion: { status: "done" },
             });
-            persistSubagentRunsToDisk(new Map([[published.runId, published]]), [
+            persistRegistryFixture(new Map([[published.runId, published]]), [
               ...retainedRunIds,
               published.runId,
             ]);
@@ -621,7 +622,7 @@ it.each(["executor", "reservation"] as const)(
             activeRunIds: [],
           }),
         ).toBe(true);
-        bindSwarmRunReservation(run.runId, run);
+        bindSwarmRunReservation(run.runId, getSubagentRunRuntimeKey(run));
       }
       try {
         expect(registryRead.isSubagentRunLive(run)).toBe(owner === "executor");

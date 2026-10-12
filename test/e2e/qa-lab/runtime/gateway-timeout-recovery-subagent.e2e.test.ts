@@ -391,7 +391,7 @@ describe("Gateway timeout recovery subagent delivery", () => {
     cleanups.push(async () => expect((await owner.stop()).errors).toEqual([]));
     const gateway = await owner.start({
       repoRoot: REPO_ROOT,
-      useRepoCli: true,
+      useRepoCli: false,
       providerBaseUrl: `${provider.baseUrl}/v1`,
       providerMode: "mock-openai",
       primaryModel: MODEL,

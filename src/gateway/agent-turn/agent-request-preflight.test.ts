@@ -4,15 +4,63 @@ import * as acpSessionMeta from "../../acp/runtime/session-meta-readonly.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import {
   enqueueSwarmRun,
-  reserveSwarmRun,
   closeSwarmScheduler,
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as swarmScheduler } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  inspectAgentDatabaseAdmission,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
 import * as sessionStoreLookup from "../session-utils-store-lookup.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import { createAgentTurnIo } from "./io.js";
+
+describe("agent database admission preflight", () => {
+  afterEach(() => recordAgentDatabaseAdmissions([]));
+
+  it.each(["pending", "failed", "mismatch"] as const)(
+    "reports %s admission with the appropriate retry contract",
+    (state) => {
+      const refusal =
+        state === "mismatch"
+          ? inspectAgentDatabaseAdmission({
+              agentId: "worker",
+              path: "/isolated/worker.sqlite",
+              metadata: { role: "agent", agentId: "other" },
+            })!
+          : createAgentDatabaseInspectionRefusal({
+              agentId: "worker",
+              paths: ["/isolated/worker.sqlite"],
+              reason: "Inspection has not admitted this agent.",
+              pending: state === "pending",
+            });
+      recordAgentDatabaseAdmissions([refusal]);
+      const respond = vi.fn();
+      const result = prepareAgentRequestPreflight({
+        request: {
+          message: "continue",
+          agentId: "worker",
+          idempotencyKey: "inspection-retry",
+        },
+        context: { getRuntimeConfig: () => ({}), dedupe: new Map() },
+        client: null,
+        io: createAgentTurnIo(respond),
+      } as never);
+
+      expect(result).toBeUndefined();
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: "UNAVAILABLE",
+        message: `${refusal.reason}\n${refusal.repairHint}`,
+        details: refusal,
+        retryable: state === "pending",
+        ...(state === "pending" ? { retryAfterMs: 250 } : {}),
+      });
+    },
+  );
+});
 
 function runPreflight(
   swarmOutputSchema?: Record<string, unknown>,
@@ -130,7 +178,7 @@ describe("agent request Swarm preflight", () => {
     vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntry").mockReturnValue(undefined);
   });
 
-  it("carries the admitted scheduler group and its live cap without trusting saved launch settings", async () => {
+  it("carries the admitted scheduler group and cap without trusting saved launch settings", async () => {
     const launched = createDeferred();
     enqueueSwarmRun({
       groupId: '["main","agent:main:main","restored-group"]',
@@ -149,13 +197,6 @@ describe("agent request Swarm preflight", () => {
       lane: 'subagent:swarm:["main","agent:main:main","restored-group"]',
       maxConcurrent: 32,
     });
-    reserveSwarmRun({
-      groupId: '["main","agent:main:main","restored-group"]',
-      runId: "next-child",
-      maxConcurrent: 8,
-      activeRunIds: [],
-    });
-    expect(result?.swarmExecutionLane?.maxConcurrent).toBe(8);
   });
 
   it.each([

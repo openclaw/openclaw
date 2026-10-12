@@ -557,7 +557,6 @@ vi.mock("./chrome.js", () => ({
       exe: { kind: "chrome", path: "/fake/chrome" },
       userDataDir: chromeUserDataDir.dir,
       cdpPort: profile.cdpPort,
-      startedAt: Date.now(),
       proc,
     };
   }),

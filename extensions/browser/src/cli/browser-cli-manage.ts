@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
+import { inheritOptionFromParent } from "openclaw/plugin-sdk/cli-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger, defaultRuntime, info } from "openclaw/plugin-sdk/runtime-env";
 import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -19,6 +20,8 @@ import type { NativeBrowserPolicyReport } from "../browser/native-policy.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
+  parseBrowserPositiveIntegerOption,
+  printBrowserList,
   printBrowserJsonResult as printJsonResult,
   resolveBrowserProfileQuery as resolveProfileQuery,
   runBrowserCliCommand as runBrowserCommand,
@@ -27,6 +30,17 @@ import {
 } from "./browser-cli-shared.js";
 
 const BROWSER_MANAGE_REQUEST_TIMEOUT_MS = 45_000;
+
+function resolveBrowserManagementTimeout(
+  command: Command,
+  fallbackMs = BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
+): number {
+  // Management budgets replace Commander's default, never an operator's authored timeout.
+  const timeout = inheritOptionFromParent<string>(command, "timeout", "cli");
+  return timeout === undefined
+    ? fallbackMs
+    : parseBrowserPositiveIntegerOption(timeout, "--timeout");
+}
 
 type BrowserDoctorCheck = {
   name: string;
@@ -43,31 +57,37 @@ function sanitizeTableCell(value: string): string {
 }
 
 async function fetchBrowserManagement<T>(
+  command: Command,
   parent: BrowserParentOpts,
   path: string,
   query?: Parameters<typeof callBrowserRequest>[1]["query"],
-  timeoutMs = BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
 ): Promise<T> {
-  return await callBrowserRequest<T>(parent, { method: "GET", path, query }, { timeoutMs });
+  return await callBrowserRequest<T>(
+    parent,
+    { method: "GET", path, query },
+    { timeoutMs: resolveBrowserManagementTimeout(command) },
+  );
 }
 
 async function runBrowserToggle(
+  command: Command,
   parent: BrowserParentOpts,
   params: {
-    profile?: string;
     path: string;
     query?: Record<string, string | number | boolean | undefined>;
   },
 ) {
+  const profile = parent.browserProfile;
   await callBrowserRequest(parent, {
     method: "POST",
     path: params.path,
-    query: resolveProfileQuery(params.profile, params.query),
+    query: resolveProfileQuery(profile, params.query),
   });
   const status = await fetchBrowserManagement<BrowserStatus>(
+    command,
     parent,
     "/",
-    resolveProfileQuery(params.profile),
+    resolveProfileQuery(profile),
   );
   if (printJsonResult(parent, status)) {
     return;
@@ -82,22 +102,14 @@ function parseTabIndex(value: string): number {
 }
 
 function logBrowserTabs(tabs: BrowserTab[]) {
-  if (tabs.length === 0) {
-    defaultRuntime.log("No tabs (browser closed or no targets).");
-    return;
-  }
-  defaultRuntime.log(
-    tabs
-      .map((t, i) => {
-        const labelHandle = t.label ? `label:${t.label}` : undefined;
-        const suggested = t.suggestedTargetId ? `use: ${t.suggestedTargetId}` : undefined;
-        const handles = [suggested, t.tabId ? `tab: ${t.tabId}` : undefined, labelHandle]
-          .filter(Boolean)
-          .join(" ");
-        return `${i + 1}. ${t.title || "(untitled)"}${handles ? ` [${handles}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
-      })
-      .join("\n"),
-  );
+  printBrowserList(tabs, "No tabs (browser closed or no targets).", (t, i) => {
+    const labelHandle = t.label ? `label:${t.label}` : undefined;
+    const suggested = t.suggestedTargetId ? `use: ${t.suggestedTargetId}` : undefined;
+    const handles = [suggested, t.tabId ? `tab: ${t.tabId}` : undefined, labelHandle]
+      .filter(Boolean)
+      .join(" ");
+    return `${i + 1}. ${t.title || "(untitled)"}${handles ? ` [${handles}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
+  });
 }
 
 function formatDoctorLine(check: BrowserDoctorCheck): string {
@@ -116,7 +128,12 @@ function formatBrowserDoctorGatewayError(error: unknown): string {
   return String(error);
 }
 
-async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
+async function runBrowserDoctor(
+  command: Command,
+  parent: BrowserParentOpts,
+  profile?: string,
+  deep?: boolean,
+) {
   const checks: BrowserDoctorCheck[] = [];
   const probe = async (name: string, read: () => Promise<Omit<BrowserDoctorCheck, "name">>) => {
     try {
@@ -129,6 +146,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
 
   try {
     report = await fetchBrowserManagement<BrowserDoctorReport>(
+      command,
       parent,
       "/doctor",
       resolveProfileQuery(profile),
@@ -186,6 +204,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
 
   await probe("profiles", async () => {
     const profiles = await fetchBrowserManagement<{ profiles: ProfileStatus[] }>(
+      command,
       parent,
       "/profiles",
     );
@@ -198,6 +217,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
   if (status.running) {
     await probe("tabs", async () => {
       const result = await fetchBrowserManagement<{ running: boolean; tabs: BrowserTab[] }>(
+        command,
         parent,
         "/tabs",
         resolveProfileQuery(profile),
@@ -213,6 +233,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
   if (deep && status.running) {
     await probe("native-policy", async () => {
       const policy = await fetchBrowserManagement<NativeBrowserPolicyReport>(
+        command,
         parent,
         "/policy",
         resolveProfileQuery(profile),
@@ -227,10 +248,19 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
       };
     });
     await probe("live-snapshot", async () => {
-      const result = await fetchBrowserManagement<
+      // Keep the diagnostic snapshot bounded independently of management request budgets.
+      const result = await callBrowserRequest<
         | { ok: true; format: "aria"; nodes?: unknown[] }
         | { ok: true; format: "ai"; snapshot?: string }
-      >(parent, "/snapshot", resolveProfileQuery(profile, { format: "aria", limit: 25 }), 10_000);
+      >(
+        parent,
+        {
+          method: "GET",
+          path: "/snapshot",
+          query: resolveProfileQuery(profile, { format: "aria", limit: 25 }),
+        },
+        { timeoutMs: 10_000 },
+      );
       const count =
         result.format === "aria"
           ? Array.isArray(result.nodes)
@@ -280,6 +310,16 @@ export function registerBrowserManageCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
+  const runManagementRequest = <T = unknown>(
+    command: Command,
+    params: Omit<Parameters<typeof runBrowserCliRequest<T>>[0], "parent" | "timeoutMs">,
+  ) =>
+    runBrowserCliRequest<T>({
+      parent: parentOpts(command),
+      ...params,
+      timeoutMs: resolveBrowserManagementTimeout(command),
+    });
+
   browser
     .command("status")
     .description("Show browser status")
@@ -287,6 +327,7 @@ export function registerBrowserManageCommands(
       const parent = parentOpts(cmd);
       await runBrowserCommand(async () => {
         const status = await fetchBrowserManagement<BrowserStatus>(
+          cmd,
           parent,
           "/",
           resolveProfileQuery(parent?.browserProfile),
@@ -336,12 +377,12 @@ export function registerBrowserManageCommands(
   browser
     .command("doctor")
     .description("Check browser plugin readiness")
-    .option("--deep", "Inspect native enterprise policy and run a live snapshot probe")
+    .option("--deep", "Inspect native enterprise policy and run a live snapshot check")
     .action(async (opts: { deep?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        const result = await runBrowserDoctor(parent, profile, opts.deep === true);
+        const result = await runBrowserDoctor(cmd, parent, profile, opts.deep === true);
         if (!printJsonResult(parent, result)) {
           defaultRuntime.log(result.checks.map(formatDoctorLine).join("\n"));
         }
@@ -351,32 +392,24 @@ export function registerBrowserManageCommands(
       });
     });
 
-  browser
-    .command("start")
-    .description("Start the browser (no-op if already running)")
-    .option("--headless", "Launch a local managed browser headless for this start")
-    .action(async (opts: { headless?: boolean }, cmd) => {
+  for (const [action, description] of [
+    ["start", "Start the browser (no-op if already running)"],
+    ["stop", "Stop the browser (best-effort)"],
+  ] as const) {
+    const command = browser.command(action).description(description);
+    if (action === "start") {
+      command.option("--headless", "Launch a local managed browser headless for this start");
+    }
+    command.action(async (opts: { headless?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        await runBrowserToggle(parent, {
-          profile,
-          path: "/start",
-          query: opts.headless ? { headless: true } : undefined,
+        await runBrowserToggle(cmd, parent, {
+          path: `/${action}`,
+          query: action === "start" && opts.headless ? { headless: true } : undefined,
         });
       });
     });
-
-  browser
-    .command("stop")
-    .description("Stop the browser (best-effort)")
-    .action(async (_opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      await runBrowserCommand(async () => {
-        await runBrowserToggle(parent, { profile, path: "/stop" });
-      });
-    });
+  }
 
   browser
     .command("reset-profile")
@@ -400,11 +433,9 @@ export function registerBrowserManageCommands(
     .command("tabs")
     .description("List open tabs")
     .action(async (_opts, cmd) => {
-      await runBrowserCliRequest<{ tabs: BrowserTab[] }>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<{ tabs: BrowserTab[] }>(cmd, {
         method: "GET",
         path: "/tabs",
-        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
         json: (result) => ({ tabs: result.tabs ?? [] }),
         print: (result) => logBrowserTabs(result.tabs ?? []),
       });
@@ -414,11 +445,9 @@ export function registerBrowserManageCommands(
     .command("tab")
     .description("Tab shortcuts (index-based)")
     .action(async (_opts, cmd) => {
-      await runBrowserCliRequest<{ tabs: BrowserTab[] }>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<{ tabs: BrowserTab[] }>(cmd, {
         path: "/tabs/action",
         body: { action: "list" },
-        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
         json: (result) => ({ tabs: result.tabs ?? [] }),
         print: (result) => logBrowserTabs(result.tabs ?? []),
       });
@@ -429,11 +458,9 @@ export function registerBrowserManageCommands(
     .description("Open a new tab (about:blank)")
     .option("--label <label>", "Assign a friendly tab label")
     .action(async (opts: { label?: string }, cmd) => {
-      await runBrowserCliRequest<{ tab?: BrowserTab }>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<{ tab?: BrowserTab }>(cmd, {
         path: "/tabs/action",
         body: { action: "new", label: opts.label },
-        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
         successMessage: ({ tab: opened }) =>
           opened?.tabId
             ? `opened new tab ${opened.tabId}${opened.label ? ` (${opened.label})` : ""}`
@@ -447,11 +474,9 @@ export function registerBrowserManageCommands(
     .argument("<targetId>", BROWSER_TAB_REFERENCE_HELP)
     .argument("<label>", "Friendly label")
     .action(async (targetId: string, label: string, _opts, cmd) => {
-      await runBrowserCliRequest<{ tab?: BrowserTab }>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<{ tab?: BrowserTab }>(cmd, {
         path: "/tabs/action",
         body: { action: "label", targetId, label },
-        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
         successMessage: ({ tab: tabValue }) =>
           `labeled tab ${tabValue?.tabId ?? targetId} as ${tabValue?.label ?? label}`,
       });
@@ -476,7 +501,7 @@ export function registerBrowserManageCommands(
           parent,
           path: "/tabs/action",
           body: { action, index: index === undefined ? undefined : index - 1 },
-          timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
+          timeoutMs: resolveBrowserManagementTimeout(cmd),
           successMessage: action === "select" ? `selected tab ${index}` : "closed tab",
         });
       });
@@ -488,11 +513,9 @@ export function registerBrowserManageCommands(
     .argument("<url>", "URL to open")
     .option("--label <label>", "Assign a friendly tab label")
     .action(async (url: string, opts: { label?: string }, cmd) => {
-      await runBrowserCliRequest<BrowserTab>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<BrowserTab>(cmd, {
         path: "/tabs/open",
         body: { url, ...(opts.label ? { label: opts.label } : {}) },
-        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
         successMessage: (tabLocal) =>
           `opened: ${tabLocal.url}\n${tabLocal.tabId ? `tab: ${tabLocal.tabId}\n` : ""}${tabLocal.label ? `label: ${tabLocal.label}\n` : ""}id: ${tabLocal.targetId}`,
       });
@@ -503,11 +526,9 @@ export function registerBrowserManageCommands(
     .description("Focus a tab by tab reference")
     .argument("<targetId>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (targetId: string, _opts, cmd) => {
-      await runBrowserCliRequest({
-        parent: parentOpts(cmd),
+      await runManagementRequest(cmd, {
         path: "/tabs/focus",
         body: { targetId },
-        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
         json: () => ({ ok: true }),
         successMessage: `focused tab ${targetId}`,
       });
@@ -519,12 +540,10 @@ export function registerBrowserManageCommands(
     .argument("[targetId]", `${BROWSER_TAB_REFERENCE_HELP} (optional)`)
     .action(async (targetId: string | undefined, _opts, cmd) => {
       const target = targetId?.trim();
-      await runBrowserCliRequest({
-        parent: parentOpts(cmd),
+      await runManagementRequest(cmd, {
         method: target ? "DELETE" : "POST",
         path: target ? `/tabs/${encodeURIComponent(target)}` : "/act",
         body: target ? undefined : { kind: "close" },
-        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
         json: () => ({ ok: true }),
         successMessage: "closed tab",
       });
@@ -534,33 +553,21 @@ export function registerBrowserManageCommands(
     .command("profiles")
     .description("List all browser profiles")
     .action(async (_opts, cmd) => {
-      await runBrowserCliRequest<{ profiles: ProfileStatus[] }>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<{ profiles: ProfileStatus[] }>(cmd, {
         profile: null,
         method: "GET",
         path: "/profiles",
-        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
         json: (result) => ({ profiles: result.profiles ?? [] }),
-        print: (result) => {
-          const profiles = result.profiles ?? [];
-          if (profiles.length === 0) {
-            defaultRuntime.log("No profiles configured.");
-            return;
-          }
-          defaultRuntime.log(
-            profiles
-              .map((p) => {
-                const status = p.running ? "running" : "stopped";
-                const tabs = p.running ? ` (${p.tabCount} tabs)` : "";
-                const def = p.isDefault ? " [default]" : "";
-                const loc = formatBrowserConnectionSummary(p);
-                const remote = p.isRemote ? " [remote]" : "";
-                const driver = p.driver !== "openclaw" ? ` [${p.driver}]` : "";
-                return `${p.name}: ${status}${tabs}${def}${remote}${driver}\n  ${loc}, color: ${p.color}`;
-              })
-              .join("\n"),
-          );
-        },
+        print: (result) =>
+          printBrowserList(result.profiles ?? [], "No profiles configured.", (p) => {
+            const status = p.running ? "running" : "stopped";
+            const tabs = p.running ? ` (${p.tabCount} tabs)` : "";
+            const def = p.isDefault ? " [default]" : "";
+            const loc = formatBrowserConnectionSummary(p);
+            const remote = p.isRemote ? " [remote]" : "";
+            const driver = p.driver !== "openclaw" ? ` [${p.driver}]` : "";
+            return `${p.name}: ${status}${tabs}${def}${remote}${driver}\n  ${loc}, color: ${p.color}`;
+          }),
       });
     });
 
@@ -569,31 +576,22 @@ export function registerBrowserManageCommands(
     .description("List Chrome-family profiles available for cookie import")
     .option("--browser <browser>", "System browser (chrome|brave|edge|chromium); omit to list all")
     .action(async (opts: { browser?: string }, cmd) => {
-      await runBrowserCliRequest<{ systemProfiles: SystemProfileInfo[] }>({
-        parent: parentOpts(cmd),
+      await runManagementRequest<{ systemProfiles: SystemProfileInfo[] }>(cmd, {
         profile: null,
         method: "GET",
         path: "/system-profiles",
         query: opts.browser ? { browser: opts.browser } : undefined,
-        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
         json: (result) => ({ systemProfiles: result.systemProfiles ?? [] }),
-        print: (result) => {
-          const systemProfiles = result.systemProfiles ?? [];
-          if (systemProfiles.length === 0) {
-            defaultRuntime.log("No system browser profiles found.");
-            return;
-          }
-          defaultRuntime.log("browser\tid\tname\thasCookies");
-          defaultRuntime.log(
-            systemProfiles
-              .map((profile) =>
-                [profile.browser, profile.id, profile.name, profile.hasCookies ? "yes" : "no"]
-                  .map(sanitizeTableCell)
-                  .join("\t"),
-              )
-              .join("\n"),
-          );
-        },
+        print: (result) =>
+          printBrowserList(
+            result.systemProfiles ?? [],
+            "No system browser profiles found.",
+            (profile) =>
+              [profile.browser, profile.id, profile.name, profile.hasCookies ? "yes" : "no"]
+                .map(sanitizeTableCell)
+                .join("\t"),
+            "browser\tid\tname\thasCookies",
+          ),
       });
     });
 
@@ -620,7 +618,7 @@ export function registerBrowserManageCommands(
             into: opts.into,
             domains,
           },
-          timeoutMs: 120_000,
+          timeoutMs: resolveBrowserManagementTimeout(cmd, 120_000),
           successMessage: (result) =>
             info(
               `Imported cookies into "${result.into}": ${result.cookies.imported}/${result.cookies.total} imported, ${result.cookies.failed} failed, ${result.cookies.skipped} skipped; ${result.domains.length} domains`,

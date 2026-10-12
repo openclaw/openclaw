@@ -2,17 +2,6 @@
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 
-function failOrUndefined(params: { onMissing: "throw" | "undefined"; message: string }): undefined {
-  if (params.onMissing === "throw") {
-    throw new Error(params.message);
-  }
-  return undefined;
-}
-
-function decodeJsonPointerToken(token: string): string {
-  return token.replace(/~1/g, "/").replace(/~0/g, "~");
-}
-
 /**
  * Encodes one JSON Pointer path token using RFC 6901 escaping.
  */
@@ -30,38 +19,32 @@ export function readJsonPointer(
   options: { onMissing?: "throw" | "undefined" } = {},
 ): unknown {
   const onMissing = options.onMissing ?? "throw";
+  const fail = (message: string): undefined => {
+    if (onMissing === "throw") {
+      throw new Error(message);
+    }
+    return undefined;
+  };
   if (!pointer.startsWith("/")) {
-    return failOrUndefined({
-      onMissing,
-      message:
-        'File-backed secret ids must be absolute JSON pointers (for example: "/providers/openai/apiKey").',
-    });
+    return fail(
+      'File-backed secret ids must be absolute JSON pointers (for example: "/providers/openai/apiKey").',
+    );
   }
 
-  const tokens = pointer
-    .slice(1)
-    .split("/")
-    .map((token) => decodeJsonPointerToken(token));
-
   let current: unknown = root;
-  for (const token of tokens) {
+  for (const rawToken of pointer.slice(1).split("/")) {
+    const token = rawToken.replace(/~1/g, "/").replace(/~0/g, "~");
     if (Array.isArray(current)) {
       // Array segments must be canonical non-negative indexes, not partial parses like "1abc".
       const index = parseConfigPathArrayIndex(token);
       if (index === undefined || index >= current.length) {
-        return failOrUndefined({
-          onMissing,
-          message: `JSON pointer segment "${token}" is out of bounds.`,
-        });
+        return fail(`JSON pointer segment "${token}" is out of bounds.`);
       }
       current = current[index];
       continue;
     }
     if (!isJsonObject(current) || !Object.hasOwn(current, token)) {
-      return failOrUndefined({
-        onMissing,
-        message: `JSON pointer segment "${token}" does not exist.`,
-      });
+      return fail(`JSON pointer segment "${token}" does not exist.`);
     }
     current = current[token];
   }

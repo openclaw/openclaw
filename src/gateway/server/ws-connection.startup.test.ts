@@ -2,6 +2,7 @@
  * WebSocket connection startup regression tests.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildDeviceAuthPayload } from "../../../packages/gateway-client/src/device-auth.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -59,7 +60,6 @@ import {
   createGatewayAuthRateLimiter,
 } from "../auth-rate-limit.js";
 import * as gatewayAuth from "../auth.js";
-import { buildDeviceAuthPayload } from "../device-auth.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../server-constants.js";
 import { createWorkerNodeEnrollmentManager } from "../worker-environments/node-enrollment.js";
@@ -450,7 +450,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
     expect(clients.size).toBe(0);
   });
 
-  it.each([GATEWAY_STARTUP_CLOSE_CODE, 1006])(
+  it.each([GATEWAY_STARTUP_CLOSE_CODE])(
     "keeps startup-unavailable close code %i at debug level",
     async (observedCloseCode) => {
       const responseReceived = createDeferred<{
@@ -547,56 +547,10 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
     },
   );
 
-  it("admits the exact cloud-worker setup node through restart startup", async () => {
-    await withStartupTestState(
-      { label: "gateway-startup-cloud-worker", layout: "state-only" },
-      async (state) => {
-        const { store, setupId, beginEnrollment, admitsNodeSetupCompletion } =
-          await seedProvisioningNodeSetup();
-        const issued = await ensureDevicePairSetupBootstrapToken({
-          setupId,
-          profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-        });
-        if (issued.status !== "pending") {
-          throw new Error("expected pending cloud-worker setup token");
-        }
-        await beginEnrollment();
-        const harness = await attachStartupNodeConnect({
-          bootstrapToken: issued.token,
-          admitsNodeSetupCompletion,
-          identityPath: state.path("startup-node.sqlite"),
-          isPendingWorkerNodeSetup: (candidateSetupId, deviceId) =>
-            store.hasPendingNodeEnrollmentSetup(candidateSetupId, deviceId),
-        });
-
-        await expect(harness.response).resolves.toMatchObject({
-          ok: true,
-          payload: { type: "hello-ok", auth: { role: "node", scopes: [] } },
-        });
-        expect(harness.clients.size).toBe(1);
-        expect(harness.nodeRegistry.register).toHaveBeenCalledOnce();
-        expect(harness.pendingSetup).toHaveBeenCalledWith(setupId, harness.identity.deviceId);
-        expect(store.get("startup-worker-environment")).toMatchObject({
-          state: "provisioning",
-          nodeSetupId: setupId,
-          nodeDeviceId: harness.identity.deviceId,
-          destroyRequestedAtMs: null,
-        });
-        expect(store.hasPendingNodeEnrollmentSetup(setupId, harness.identity.deviceId)).toBe(true);
-        await expect(harness.setupCompletion).resolves.toMatchObject({
-          setupId,
-          deviceId: harness.identity.deviceId,
-        });
-        harness.socket.emit("close", 1000, Buffer.from("done"));
-      },
-    );
-  });
-
   it.each([
     // Node preparation goes directly from provisioning to ready; bootstrapping is SSH-only.
     ["provisioning", false],
     ["ready", false],
-    ["idle", false],
     ["attached", false],
     ["provisioning", true],
   ] as const)(

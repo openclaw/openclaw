@@ -3,6 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderSyntheticAuthResult } from "../plugins/provider-external-auth.types.js";
 import { prepareSyntheticAuthWithProvider } from "../plugins/provider-synthetic-auth.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 
 /** Auth refresh owns the requested providers and their separate native auth namespaces. */
@@ -13,6 +14,9 @@ export function preparedSyntheticAuthProviderScope(
   // OpenAI's native runtime has a separate auth namespace, never a bearer alias.
   if (scoped.has("openai")) {
     scoped.add("codex");
+  }
+  if (scoped.has("anthropic")) {
+    scoped.add("claude-cli");
   }
   return scoped;
 }
@@ -40,6 +44,12 @@ export function listPreparedSyntheticAuthProviderRefs(
       ),
     ),
   ].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listRegistrySyntheticAuthProviderRefs(registry: PluginRegistry | undefined) {
+  return listPreparedSyntheticAuthProviderRefs(
+    registry?.providers.map(({ provider }) => provider) ?? [],
+  );
 }
 
 export async function prepareSyntheticAuth(params: {

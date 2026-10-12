@@ -356,13 +356,6 @@ export async function createNodeWorkerContainer(
   return { engine: engine.id, containerId, engineTarget: engine.target };
 }
 
-export function buildNodeWorkerContainerStartArgv(
-  engine: NodeWorkerContainerEngine,
-  containerId: string,
-): string[] {
-  return [engine.command, "start", "--attach", "--interactive", containerId];
-}
-
 /** Inspect the container rather than its disposable Docker client process. */
 export async function inspectNodeWorkerContainer(
   engine: NodeWorkerContainerEngine,

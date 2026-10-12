@@ -18,26 +18,20 @@ function parseTcpPort(raw: string | undefined): number | null {
 }
 
 export function parseTcpEndpoint(raw: string): { host: string; port: number } | null {
-  const endpoint = raw.trim();
-  const bracketMatch = endpoint.match(/^\[([^\]]+)\]:(\d+)$/);
-  if (bracketMatch) {
-    const port = parseTcpPort(bracketMatch[2]);
-    return port === null
-      ? null
-      : {
-          host: normalizeTcpHost(expectDefined(bracketMatch[1], "bracket match capture group 1")),
-          port,
-        };
-  }
-  const lastColon = endpoint.lastIndexOf(":");
-  if (lastColon <= 0 || lastColon >= endpoint.length - 1) {
+  // Prefer brackets; the greedy bare host retains unbracketed IPv6 through the last colon.
+  const match = /^(?:\[([^\]]+)\]|([\s\S]+)):(\d+)$/.exec(raw.trim());
+  if (!match) {
     return null;
   }
-  const port = parseTcpPort(endpoint.slice(lastColon + 1));
-  if (port === null) {
-    return null;
-  }
-  return { host: normalizeTcpHost(endpoint.slice(0, lastColon)), port };
+  const port = parseTcpPort(match[3]);
+  return port === null
+    ? null
+    : {
+        host: normalizeTcpHost(
+          expectDefined(match[1] ?? match[2], "bracket match capture group 1"),
+        ),
+        port,
+      };
 }
 
 /** Parses the address field emitted for a TCP listener by lsof or netstat. */

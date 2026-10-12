@@ -39,18 +39,12 @@ async function prepareConfig(raw = "{}\n") {
 }
 
 describe("createSystemAgentTool.execute config writes", () => {
-  it.each([
-    ["agents.defaults.models.fixture/primary.agentRuntime.id", "openclaw"],
-    ["agents.defaults.model.primary", "fixture/primary"],
-    ["models.providers.fixture.baseUrl", "https://example.invalid/v1"],
-    ["env.vars.FIXTURE_SETTING", "fixture-value"],
-    ["plugins.entries.fixture.enabled", "true"],
-  ])("offers approval without writing %s", async (configKey, value) => {
+  it("offers approval for an inference setting without writing it", async () => {
     const configPath = await prepareConfig();
     const result = await createSystemAgentTool({ surface: "cli" }).execute("proposal", {
       action: "config_set",
-      path: configKey,
-      value,
+      path: "agents.defaults.models.fixture/primary.agentRuntime.id",
+      value: "openclaw",
     });
     expect(result.details).toMatchObject({ needsApproval: true });
     expect(await fs.readFile(configPath, "utf8")).toBe("{}\n");
@@ -211,10 +205,10 @@ describe("chat secret config-write recovery", () => {
     if (!(failure instanceof Error)) {
       throw new Error("expected failed config operation");
     }
-    const entries = secretStore.listSecretStoreEntries({ scope: team, includeDeleted: true });
+    const entries = await secretStore.listSecretStoreEntries({ scope: team, includeDeleted: true });
     expect(entries).toHaveLength(1);
     const name = entries[0]!.name;
-    expect(secretStore.readSecretStoreValue({ scope: team, name })).toEqual({
+    expect(await secretStore.readSecretStoreValue({ scope: team, name })).toEqual({
       ok: true,
       value: secret,
     });

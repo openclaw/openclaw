@@ -30,6 +30,21 @@ const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
 export const INTERRUPTED_SETTINGS_WAIT_ERROR =
   "Chat settings update was interrupted. Review and retry when ready.";
 
+export type StoredComposerState = {
+  version: 4;
+  gatewayOwner: string;
+  sessions: Record<string, StoredComposerSession>;
+  recovery: Record<string, StoredComposerRecovery>;
+  legacyReceipts?: Partial<Record<"1" | "2" | "3", string>>;
+  recoveryBlocked?: true;
+};
+
+export type StoredComposerRecovery = {
+  sourceVersion: 1 | 2 | 3 | 4;
+  sourceScopeKey: string;
+  session: StoredComposerSession;
+};
+
 export type StoredComposerSession = {
   awaitingDefaults?: true;
   draft?: string;
@@ -44,6 +59,7 @@ export type StoredComposerSession = {
 export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
   return (
     left.id === right.id &&
+    left.storageScope === right.storageScope &&
     left.asyncQuestionItemId === right.asyncQuestionItemId &&
     left.text === right.text &&
     left.workContextUnavailable === right.workContextUnavailable &&
@@ -59,11 +75,10 @@ export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueI
   );
 }
 
-function normalizeChatAttachment(value: unknown): ChatAttachment | null {
-  if (!isRecord(value)) {
+function normalizeChatAttachment(entry: unknown): ChatAttachment | null {
+  if (!isRecord(entry)) {
     return null;
   }
-  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const mimeType = normalizeOptionalString(entry.mimeType);
   if (!id || !mimeType) {
@@ -91,11 +106,10 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
   return restored;
 }
 
-export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
-  if (!isRecord(value)) {
+export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
+  if (!isRecord(entry)) {
     return null;
   }
-  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const text = typeof entry.text === "string" ? entry.text : "";
   const createdAt = asFiniteNumber(entry.createdAt) ?? Date.now();
@@ -114,6 +128,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  const storageScope = normalizeOptionalString(entry.storageScope);
+  if (storageScope) {
+    item.storageScope = storageScope;
+  }
   const asyncQuestionItemId = normalizeOptionalString(entry.asyncQuestionItemId);
   if (asyncQuestionItemId && asyncQuestionItemId.length <= 256) {
     item.asyncQuestionItemId = asyncQuestionItemId;
@@ -263,11 +281,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   return item;
 }
 
-export function normalizeStoredSession(value: unknown): StoredComposerSession | null {
-  if (!isRecord(value)) {
+export function normalizeStoredSession(entry: unknown): StoredComposerSession | null {
+  if (!isRecord(entry)) {
     return null;
   }
-  const entry = value;
   const draft = typeof entry.draft === "string" ? entry.draft : undefined;
   const draftMentions = draft ? readHumanMentions(draft, entry.draftMentions) : undefined;
   if (entry.goalMode !== undefined && !isChatGoalDraftMode(entry.goalMode)) {

@@ -6,16 +6,17 @@ import {
   readActiveTranscriptEntryAnchor,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
+import { awaitAgentHarnessAgentEndHook } from "../../harness/lifecycle-hook-helpers.js";
 import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import type { EmbeddedAttemptExecutionState } from "./types.js";
 
@@ -25,11 +26,9 @@ const hoisted = vi.hoisted(() => ({
   waitForCompletionRequiredAsyncTasks: vi.fn(),
 }));
 
+// mock-isolation: Keep skill scheduling and plugin hooks outside phase-ordering tests.
 vi.mock("../../harness/agent-end-side-effects.js", () => ({
-  runAgentEndSideEffects: hoisted.runAgentEndSideEffects,
-}));
-vi.mock("./agent-end-context.js", () => ({
-  buildEmbeddedAgentEndContext: () => ({}),
+  runAgentEndSideEffectsAsync: hoisted.runAgentEndSideEffects,
 }));
 vi.mock("./attempt-async-tasks.js", () => ({
   shouldWaitForCompletionRequiredAsyncTasks: hoisted.shouldWaitForCompletionRequiredAsyncTasks,
@@ -53,12 +52,12 @@ describe("embedded attempt phase lifecycle state", () => {
     let timedOut = false;
     let timedOutDuringCompaction = false;
     const messages: never[] = [];
-    const removeTrailingEntries = vi.fn(() => 0);
+    const removeTrailingEntriesAsync = vi.fn(async () => 0);
     const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntry: vi.fn(),
+      appendCustomEntryAsync: vi.fn(async () => undefined),
       buildSessionContext: () => ({ messages }),
       getEntries: () => [],
-      removeTrailingEntries,
+      removeTrailingEntriesAsync,
     });
     const activeSession = {
       agent: { state: { messages } },
@@ -98,7 +97,6 @@ describe("embedded attempt phase lifecycle state", () => {
         promptError: null,
         promptErrorSource: null,
         yieldAborted: false,
-        sessionIdUsed: "session-1",
       },
       readLifecycleState: () => ({
         aborted: timedOut,
@@ -113,7 +111,7 @@ describe("embedded attempt phase lifecycle state", () => {
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 0,
-      nestedToolActivities: [],
+      nestedToolActivityState: createAttemptNestedToolActivityState(),
       cache: {
         retention: undefined,
       },
@@ -121,7 +119,7 @@ describe("embedded attempt phase lifecycle state", () => {
     });
 
     expect(result.timedOutDuringCompaction).toBe(true);
-    expect(removeTrailingEntries).toHaveBeenCalledOnce();
+    expect(removeTrailingEntriesAsync).toHaveBeenCalledOnce();
   });
 
   it("settles a user-aborted run whose async-task wait throws AbortError", async () => {
@@ -132,10 +130,10 @@ describe("embedded attempt phase lifecycle state", () => {
     hoisted.waitForCompletionRequiredAsyncTasks.mockRejectedValueOnce(abortError);
     const messages: never[] = [];
     const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntry: vi.fn(),
+      appendCustomEntryAsync: vi.fn(async () => undefined),
       buildSessionContext: () => ({ messages }),
       getEntries: () => [],
-      removeTrailingEntries: vi.fn(() => 0),
+      removeTrailingEntriesAsync: vi.fn(async () => 0),
     });
     const activeSession = {
       agent: { state: { messages } },
@@ -173,7 +171,6 @@ describe("embedded attempt phase lifecycle state", () => {
         promptError: null,
         promptErrorSource: null,
         yieldAborted: false,
-        sessionIdUsed: "session-1",
       },
       readLifecycleState: () => ({
         aborted: true,
@@ -186,7 +183,7 @@ describe("embedded attempt phase lifecycle state", () => {
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 0,
-      nestedToolActivities: [],
+      nestedToolActivityState: createAttemptNestedToolActivityState(),
       cache: {
         retention: undefined,
       },
@@ -224,10 +221,10 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionId: "session-1",
     };
     const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntry: vi.fn(),
+      appendCustomEntryAsync: vi.fn(async () => undefined),
       buildSessionContext: () => ({ messages }),
       getEntries: () => [],
-      removeTrailingEntries: vi.fn(() => 0),
+      removeTrailingEntriesAsync: vi.fn(async () => 0),
     });
 
     const runAbortDeadlineAtMs = Date.now() + 60_000;
@@ -261,7 +258,6 @@ describe("embedded attempt phase lifecycle state", () => {
         promptError: null,
         promptErrorSource: null,
         yieldAborted: false,
-        sessionIdUsed: "session-1",
       },
       readLifecycleState: () => ({
         aborted: false,
@@ -274,25 +270,7 @@ describe("embedded attempt phase lifecycle state", () => {
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 1,
-      nestedToolActivities: [
-        createNestedToolActivity({
-          runId: "run-test",
-          scopeId: "scope-test",
-          afterEntryId: null,
-          startOrder: 0,
-          parentToolCallId: "outer-exec",
-          toolCallId: "tool_call:outer-exec:read:1",
-          toolName: "read",
-          input: { path: "missing.txt" },
-          result: {
-            content: [{ type: "text", text: "ENOENT" }],
-            details: { status: "error", error: "ENOENT" },
-          },
-          isError: true,
-          startedAt: 1,
-          timestamp: 2,
-        }),
-      ],
+      nestedToolActivityState: createAttemptNestedToolActivityState(),
       cache: {
         retention: undefined,
       },
@@ -406,7 +384,7 @@ describe("embedded attempt phase lifecycle state", () => {
           prepared: {
             bootstrap: { shouldRecordCompletedBootstrapTurn: true },
             bundleTools: { uncompactedEffectiveTools: [] },
-            toolBase: { nestedToolActivities: undefined },
+            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
             sessionRuntime: {
               sessionManager,
               agentSession: { hookRunner: null },
@@ -469,60 +447,87 @@ describe("embedded attempt phase lifecycle state", () => {
     },
   );
 
-  it("emits an abort-classified agent_end event when a teardown error races the abort", async () => {
-    const abortError = Object.assign(new Error("This operation was aborted"), {
-      name: "AbortError",
-    });
-    await completeEmbeddedAttemptAfterTurn(
-      {
-        attempt: {
-          runId: "run-1",
-          sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
-        } as never,
-        activeContextEngine: undefined,
-        agentDir: "/tmp/agent",
-        resolveActiveContextEnginePluginId: () => undefined,
-        setup: { effectiveWorkspace: "/tmp/workspace", sessionAgentId: "main" },
-        sessionLock: {
-          withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
-        },
-        state: { terminal: { kind: "aborted", source: "external" } },
-        prepared: {
-          bootstrap: { shouldRecordCompletedBootstrapTurn: false },
-          bundleTools: { uncompactedEffectiveTools: [{ name: "skill_workshop" }] },
-          toolBase: { nestedToolActivities: undefined },
-          sessionRuntime: {
-            sessionManager: SessionManager.inMemory(),
-            agentSession: { hookRunner: null },
-            state: { prePromptMessageCount: 0 },
-            contextGuards: { getAfterTurnCheckpoint: () => null },
-            cacheTrace: null,
-            anthropicPayloadLogger: null,
+  it("preserves cron job identity in agent_end after failure", async () => {
+    const promptError = new Error("provider failed");
+    const runAgentEnd = vi.fn<
+      NonNullable<Parameters<typeof awaitAgentHarnessAgentEndHook>[0]["hookRunner"]>["runAgentEnd"]
+    >(async () => {});
+    hoisted.runAgentEndSideEffects.mockImplementation(awaitAgentHarnessAgentEndHook);
+    for (const jobId of [undefined, "job-1"]) {
+      const sessionKey = jobId ? "agent:main:cron:job-1:run:run-1" : "agent:main:main";
+      runAgentEnd.mockClear();
+      hoisted.runAgentEndSideEffects.mockClear();
+      await completeEmbeddedAttemptAfterTurn(
+        {
+          attempt: {
+            runId: "run-1",
+            sessionId: "session-1",
+            sessionKey,
+            jobId,
+            trigger: jobId ? "cron" : "user",
+            contextTokenBudget: 180_000,
+            sessionFile: "/tmp/session.jsonl",
+          } as never,
+          activeContextEngine: undefined,
+          agentDir: "/tmp/agent",
+          resolveActiveContextEnginePluginId: () => undefined,
+          setup: { effectiveWorkspace: "/tmp/workspace", sessionAgentId: "main" },
+          sessionLock: {
+            withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
           },
+          state: {
+            terminal: { kind: "ok" },
+          },
+          prepared: {
+            bootstrap: { shouldRecordCompletedBootstrapTurn: false },
+            bundleTools: { uncompactedEffectiveTools: [{ name: "skill_workshop" }] },
+            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
+            sessionRuntime: {
+              sessionManager: SessionManager.inMemory(),
+              agentSession: { hookRunner: { hasHooks: () => true, runAgentEnd } },
+              state: { prePromptMessageCount: 0 },
+              contextGuards: { getAfterTurnCheckpoint: () => null },
+              cacheTrace: null,
+              anthropicPayloadLogger: null,
+            },
+          },
+          diagnostics: { diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never },
+        } as never,
+        {
+          promptError,
+          sessionIdUsed: "session-1",
+          messagesSnapshot: [],
+          lastCallUsage: undefined,
+          promptCache: undefined,
+          compactionOccurredThisAttempt: false,
+        } as never,
+        {
+          yieldAborted: false,
+          transcriptLeafId: null,
+          promptStartedAt: Date.now(),
+          beforeAgentFinalizeRevisionReason: undefined,
         },
-        diagnostics: { diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never },
-      } as never,
-      {
-        promptError: abortError,
-        sessionIdUsed: "session-1",
-        messagesSnapshot: [],
-        lastCallUsage: undefined,
-        promptCache: undefined,
-        compactionOccurredThisAttempt: false,
-      } as never,
-      {
-        yieldAborted: false,
-        transcriptLeafId: null,
-        promptStartedAt: Date.now(),
-        beforeAgentFinalizeRevisionReason: undefined,
-      },
-    );
+      );
 
-    expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledTimes(1);
-    const event = hoisted.runAgentEndSideEffects.mock.calls[0]?.[0]?.event;
-    expect(event).toMatchObject({ success: false });
-    expect(event?.error).toBeUndefined();
+      expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledTimes(1);
+      const event = hoisted.runAgentEndSideEffects.mock.calls[0]?.[0]?.event;
+      expect(event).toMatchObject({ success: false });
+      expect(event?.error).toBe("provider failed");
+      expect(runAgentEnd).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ success: false }),
+        expect.objectContaining({ runId: "run-1", sessionId: "session-1", sessionKey }),
+        { unrefTimeout: false },
+      );
+      if (jobId) {
+        expect(runAgentEnd).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ jobId }),
+          expect.anything(),
+        );
+      } else {
+        expect(runAgentEnd.mock.calls[0]?.[1]).not.toHaveProperty("jobId");
+      }
+    }
   });
 
   it.each(["blocked writes", "interrupted tool result"] as const)(
@@ -568,7 +573,11 @@ describe("embedded attempt phase lifecycle state", () => {
 
       await completeEmbeddedAttemptAfterTurn(
         {
-          attempt: { runId: "reused-run-id", sessionId: target.sessionId } as never,
+          attempt: {
+            runId: "reused-run-id",
+            sessionId: target.sessionId,
+            contextTokenBudget: 180_000,
+          } as never,
           activeContextEngine: undefined,
           agentDir: dir,
           resolveActiveContextEnginePluginId: () => undefined,
@@ -585,7 +594,7 @@ describe("embedded attempt phase lifecycle state", () => {
           prepared: {
             bootstrap: { shouldRecordCompletedBootstrapTurn: true },
             bundleTools: { uncompactedEffectiveTools: [{ name: "skill_workshop" }] },
-            toolBase: { nestedToolActivities: undefined },
+            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
             sessionRuntime: {
               sessionManager,
               agentSession: { hookRunner: null },
@@ -665,6 +674,7 @@ describe("embedded attempt phase lifecycle state", () => {
         {
           attempt: {
             runId: "after-turn",
+            contextTokenBudget: 180_000,
             sessionId: target.sessionId,
             sessionKey: target.sessionKey,
             sessionTarget: target,
@@ -684,7 +694,7 @@ describe("embedded attempt phase lifecycle state", () => {
               shouldRecordCompletedBootstrapTurn: scenario !== "completion not requested",
             },
             bundleTools: { uncompactedEffectiveTools: [] },
-            toolBase: { nestedToolActivities: undefined },
+            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
             sessionRuntime: {
               sessionManager,
               agentSession: { hookRunner: null },
@@ -744,108 +754,5 @@ describe("embedded attempt phase lifecycle state", () => {
       await Promise.allSettled([heldWriter, afterTurn]);
       await lifecycle.dispose();
     }
-  });
-
-  it("skips agent_end side effects for settled-turn finalization", async () => {
-    await completeEmbeddedAttemptAfterTurn(
-      {
-        attempt: {
-          operation: "settled-tool-finalization",
-          runId: "run-1",
-          sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
-        } as never,
-        activeContextEngine: undefined,
-        agentDir: "/tmp/agent",
-        resolveActiveContextEnginePluginId: () => undefined,
-        setup: { effectiveWorkspace: "/tmp/workspace", sessionAgentId: "main" },
-        sessionLock: {
-          withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
-        },
-        state: { terminal: { kind: "ok" } },
-        prepared: {
-          bootstrap: { shouldRecordCompletedBootstrapTurn: false },
-          bundleTools: { uncompactedEffectiveTools: [] },
-          toolBase: { nestedToolActivities: undefined },
-          sessionRuntime: {
-            sessionManager: SessionManager.inMemory(),
-            agentSession: { hookRunner: null },
-            state: { prePromptMessageCount: 0 },
-            contextGuards: { getAfterTurnCheckpoint: () => null },
-            cacheTrace: null,
-            anthropicPayloadLogger: null,
-          },
-        },
-        diagnostics: { diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never },
-      } as never,
-      {
-        promptError: null,
-        sessionIdUsed: "session-1",
-        messagesSnapshot: [],
-        lastCallUsage: undefined,
-        promptCache: undefined,
-        compactionOccurredThisAttempt: false,
-      } as never,
-      {
-        yieldAborted: false,
-        transcriptLeafId: null,
-        promptStartedAt: Date.now(),
-        beforeAgentFinalizeRevisionReason: undefined,
-      },
-    );
-
-    expect(hoisted.runAgentEndSideEffects).not.toHaveBeenCalled();
-  });
-
-  it("skips agent_end side effects for a detached run", async () => {
-    await completeEmbeddedAttemptAfterTurn(
-      {
-        attempt: {
-          sessionPersistence: "detached",
-          sessionKey: "agent:main:telegram:group:1",
-          runId: "run-1",
-          sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
-        } as never,
-        activeContextEngine: undefined,
-        agentDir: "/tmp/agent",
-        resolveActiveContextEnginePluginId: () => undefined,
-        setup: { effectiveWorkspace: "/tmp/workspace", sessionAgentId: "main" },
-        sessionLock: {
-          withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
-        },
-        state: { terminal: { kind: "ok" } },
-        prepared: {
-          bootstrap: { shouldRecordCompletedBootstrapTurn: false },
-          bundleTools: { uncompactedEffectiveTools: [] },
-          toolBase: { nestedToolActivities: undefined },
-          sessionRuntime: {
-            sessionManager: SessionManager.inMemory(),
-            agentSession: { hookRunner: null },
-            state: { prePromptMessageCount: 0 },
-            contextGuards: { getAfterTurnCheckpoint: () => null },
-            cacheTrace: null,
-            anthropicPayloadLogger: null,
-          },
-        },
-        diagnostics: { diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never },
-      } as never,
-      {
-        promptError: null,
-        sessionIdUsed: "session-1",
-        messagesSnapshot: [],
-        lastCallUsage: undefined,
-        promptCache: undefined,
-        compactionOccurredThisAttempt: false,
-      } as never,
-      {
-        yieldAborted: false,
-        transcriptLeafId: null,
-        promptStartedAt: Date.now(),
-        beforeAgentFinalizeRevisionReason: undefined,
-      },
-    );
-
-    expect(hoisted.runAgentEndSideEffects).not.toHaveBeenCalled();
   });
 });

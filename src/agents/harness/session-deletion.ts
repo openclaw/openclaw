@@ -2,6 +2,7 @@ import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycl
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
+import { wrapNativeSessionDeletionMutation } from "./native-session/deletion-participant.js";
 import type {
   AgentHarnessSessionDeletionMutation,
   AgentHarnessSessionDeletionParams,
@@ -53,6 +54,7 @@ function captureAgentHarnessSessionMutations(
         run: (
           prepared: ReadonlyMap<string, readonly PreparedAgentHarnessSessionDeletion[]>,
         ) => Promise<T>,
+        assertSourceCurrent?: () => void,
       ): Promise<T> => {
         const pending = targets.flatMap((target) =>
           owners
@@ -72,6 +74,7 @@ function captureAgentHarnessSessionMutations(
           }
           const { owner, target } = candidate;
           let active = true;
+          let preparing = true;
           const assertCurrent = () => {
             target.initialization?.assertRollbackCurrent();
             if (
@@ -86,24 +89,32 @@ function captureAgentHarnessSessionMutations(
               );
             }
           };
-          try {
+          const assertEffectCurrent = () => {
             assertCurrent();
+            if (preparing) {
+              assertSourceCurrent?.();
+            }
+          };
+          try {
+            assertEffectCurrent();
             const result = await owner.prepare<T>(
-              { ...target, assertCurrent },
+              { ...target, assertCurrent: assertEffectCurrent },
               async (mutation) => {
                 assertCurrent();
+                // The transaction now owns forward authority; rollback and terminal
+                // cleanup must settle even if that source is subsequently revoked.
+                preparing = false;
                 const mutations = prepared.get(target.sessionKey) ?? [];
-                mutations.push({
-                  assertCurrent,
-                  commit: () => {
-                    assertCurrent();
-                    mutation.commit();
-                  },
-                  rollback: () => {
-                    assertCurrent();
-                    mutation.rollback();
-                  },
-                });
+                mutations.push(
+                  Object.assign(
+                    wrapNativeSessionDeletionMutation(mutation, {
+                      assertCurrent,
+                      committed() {},
+                      rolledBack() {},
+                    }),
+                    { assertCurrent },
+                  ),
+                );
                 prepared.set(target.sessionKey, mutations);
                 return await prepareNext(index + 1);
               },

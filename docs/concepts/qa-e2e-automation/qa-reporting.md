@@ -48,6 +48,15 @@ skip can leave the scenario passing when its paired runtime passes, but the
 skipped cell stays labeled `skip`. Unexpected skips and pairs with both runtimes
 skipped still fail the parity gate. Missing captures are labeled `missing`.
 
+Unexpected exits of a ready QA Gateway child report its exit code and signal
+alongside the recent Gateway logs. Intentional shutdown and replacement remain
+separate from runtime failures.
+
+Explicit tool-result error flags take precedence over keywords in returned text;
+error result blocks remain failures. Results without an error flag retain text-based
+error detection. A successful file read can therefore contain words such as
+"failed" without losing its successful tool-coverage receipt.
+
 ### Scheduled instances and retained observations
 
 Schema v3 evidence gives each scheduled scenario instance its own identity.

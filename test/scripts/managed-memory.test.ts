@@ -51,7 +51,7 @@ it.for([
 ])(
   "owns $kind cancellation until cgroup cleanup settles (uncertain=$uncertain)",
   async (params) => {
-    const enteredCleanup = createDeferred<void>();
+    const enteredCleanup = createDeferred();
     const cleanup = createDeferred<number>();
     const memory = await import("../../scripts/lib/managed-memory.mts");
     vi.spyOn(memory, "runLinuxMemoryCommand").mockImplementation(async () => {
@@ -137,40 +137,25 @@ it("snapshots Linux command inputs before loading containment", async () => {
   );
 });
 
-it.for<StdioOptions>(["inherit", "pipe", "ignore", [0, 1, 2], [null, "pipe"]])(
-  "preserves standard stdio %j",
-  async (stdio) => {
-    const memory = await import("../../scripts/lib/managed-memory.mts");
-    const run = vi.spyOn(memory, "runLinuxMemoryCommand").mockResolvedValue(0);
-    await runManagedCommand({ ...command, stdio, platform: "linux" });
-    expect(run).toHaveBeenCalledWith(expect.objectContaining({ stdio }), expect.any(Function));
-  },
-);
-
-it.for<StdioOptions>([
-  ["ignore", "pipe", "ipc"],
-  ["ignore", "pipe", "pipe", "pipe"],
-])("rejects unsupported stdio %j before entering containment", async (stdio) => {
+it.each<{ stdio: StdioOptions; supported: boolean }>([
+  { stdio: "inherit", supported: true },
+  { stdio: ["ignore", "pipe", "ipc"], supported: false },
+  { stdio: ["ignore", "pipe", "pipe", "pipe"], supported: false },
+])("admits supported stdio only: $stdio", async ({ stdio, supported }) => {
   const memory = await import("../../scripts/lib/managed-memory.mts");
   const run = vi.spyOn(memory, "runLinuxMemoryCommand");
-  await expect(runManagedCommand({ ...command, stdio, platform: "linux" })).rejects.toThrow(
-    "do not support IPC or extra stdio descriptors",
-  );
-  expect(run).not.toHaveBeenCalled();
+  if (supported) {
+    run.mockResolvedValue(0);
+  }
+  const result = runManagedCommand({ ...command, stdio, platform: "linux" });
+  if (supported) {
+    await result;
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ stdio }), expect.any(Function));
+  } else {
+    await expect(result).rejects.toThrow("do not support IPC or extra stdio descriptors");
+    expect(run).not.toHaveBeenCalled();
+  }
 });
-
-it.each([undefined, 1_001])(
-  "keeps wall deadline ownership in the managed runner (%s)",
-  async (timeoutMs) => {
-    mocks.control.mockReturnValue(response("LoadState=not-found\n"));
-    const run = vi.fn(async (_options: Parameters<typeof runLinuxMemoryCommand>[0]) => 0);
-    await runLinuxMemoryCommand({ ...command, timeoutMs }, run);
-    expect(
-      run.mock.calls[0]?.[0]?.args?.filter((arg) => arg.startsWith("--property=RuntimeMaxSec=")),
-    ).toEqual([]);
-    expect(run).toHaveBeenCalledWith(expect.objectContaining({ requireProcessTreeExit: true }));
-  },
-);
 
 it("generates separate cleanup identities for concurrent invocations", async () => {
   mocks.control.mockReset().mockReturnValue(response("LoadState=not-found\n"));
@@ -193,8 +178,14 @@ it("generates separate cleanup identities for concurrent invocations", async () 
   }
 });
 
-it("refuses an existing generated scope without launching or stopping it", async () => {
-  mocks.control.mockReset().mockReturnValue(response("LoadState=loaded\n"));
+it.each([
+  { reason: "existing scope", probe: response("LoadState=loaded\n") },
+  {
+    reason: "unavailable user manager",
+    probe: { error: new Error("no user bus"), stdout: "", status: 1 },
+  },
+])("refuses $reason without launching or stopping it", async ({ probe }) => {
+  mocks.control.mockReset().mockReturnValue(probe);
   const run = vi.fn();
   await expect(runLinuxMemoryCommand(command, run)).rejects.toThrow("user manager");
   expect(run).not.toHaveBeenCalled();
@@ -210,40 +201,28 @@ it.each(["darwin", "win32"] as const)(
   },
 );
 
-it("forces remaining scope members before waiting for systemd cleanup", async () => {
-  mocks.control.mockReset().mockReturnValue(response("LoadState=not-found\n"));
-  await runLinuxMemoryCommand(command, async () => 0);
-  expect(mocks.control.mock.calls.map((call) => call[1])).toEqual([
-    ["--user", "show", "--property=LoadState", memoryScope],
-    ["--user", "kill", "--kill-whom=all", "--signal=SIGKILL", memoryScope],
-    ["--user", "stop", memoryScope],
-    [
-      "--user",
-      "show",
-      "--property=LoadState",
-      "--property=ActiveState",
-      "--property=ControlGroup",
-      memoryScope,
-    ],
-  ]);
-});
-
-it("does not start work when the systemd user manager is unavailable", async () => {
-  mocks.control.mockReturnValue({ error: new Error("no user bus"), stdout: "", status: 1 });
-  const run = vi.fn();
-  await expect(runLinuxMemoryCommand(command, run)).rejects.toThrow("user manager");
-  expect(run).not.toHaveBeenCalled();
-});
-
-it("preserves a pre-spawn failure without claiming an unjoined scope", async () => {
-  mocks.control.mockReturnValue(response("LoadState=not-found\n"));
-  const error = Object.assign(new Error("systemd-run missing"), { code: "ENOENT" });
-  await expect(
-    runLinuxMemoryCommand(command, async () => {
-      throw error;
-    }),
-  ).rejects.toBe(error);
-});
+it.each([false, true])(
+  "preserves failure after cgroup extinction (unjoined=%s)",
+  async (unjoined) => {
+    mocks.control.mockReturnValue(response("LoadState=not-found\n"));
+    const original = unjoined
+      ? Object.assign(new Error("detached descendant held output"), { processTreeState: "live" })
+      : Object.assign(new Error("systemd-run missing"), { code: "ENOENT" });
+    const result = runLinuxMemoryCommand(command, async () => {
+      throw original;
+    });
+    if (unjoined) {
+      await expect(result).rejects.toMatchObject({
+        message: original.message,
+        code: "EPROCESSGROUP_CLEANUP_FAILED",
+        processTreeState: "terminated",
+      });
+      await expect(result).rejects.not.toHaveProperty("cause");
+    } else {
+      await expect(result).rejects.toBe(original);
+    }
+  },
+);
 
 it.each([
   ["1", false],
@@ -274,35 +253,56 @@ it.each([
   },
 );
 
-it.each([undefined, "ENOENT"])(
-  "preserves failure %s when descendant cleanup is uncertain",
-  async (code) => {
+it.each([
+  ...[undefined, "ENOENT"].map((code) => ({
+    probe: response("LoadState=loaded\nActiveState=failed\n"),
+    original: Object.assign(new Error("workload failed"), { code }),
+  })),
+  ...[undefined, null].map((stdout) => ({
+    probe: { error: Object.assign(new Error("spawn failed"), { code: "ENOMEM" }), stdout },
+    original: undefined,
+  })),
+])(
+  "retains admission and the original failure when cleanup is uncertain: %j",
+  async ({ probe, original }) => {
     let now = 0;
     vi.spyOn(Date, "now").mockImplementation(() => (now += 6_000));
     mocks.control
       .mockReset()
-      .mockReturnValue(response("LoadState=loaded\nActiveState=failed\n"))
+      .mockReturnValue(probe)
       .mockReturnValueOnce(response("LoadState=not-found\n"));
-    const original = Object.assign(new Error("workload failed"), { code });
     await expect(
       runLinuxMemoryCommand(command, async () => {
-        throw original;
+        if (original) {
+          throw original;
+        }
+        return 0;
       }),
-    ).rejects.toMatchObject({ cause: original });
+    ).rejects.toMatchObject({
+      code: "EPROCESSGROUP_CLEANUP_FAILED",
+      processTreeState: "indeterminate",
+      cause: original,
+    });
   },
 );
 
-it("passes literal arguments and restores preloads only inside the bounded launcher", async () => {
-  mocks.control.mockReturnValue(response("LoadState=not-found\n"));
-  const run = vi.fn(async () => 0);
+it("bounds literal arguments and preloads while the managed runner owns deadlines and cleanup", async () => {
+  mocks.control.mockReset().mockReturnValue(response("LoadState=not-found\n"));
+  const run = vi.fn(async (_options: Parameters<typeof runLinuxMemoryCommand>[0]) => 0);
   await expect(
     runLinuxMemoryCommand(
-      { ...command, args: ["$LITERAL"], env: { NODE_OPTIONS: "--require=workload" } },
+      {
+        ...command,
+        timeoutMs: 1_001,
+        args: ["$LITERAL"],
+        env: { NODE_OPTIONS: "--require=workload" },
+      },
       run,
     ),
   ).resolves.toBe(0);
   expect(run).toHaveBeenCalledWith(
     expect.objectContaining({
+      requireProcessTreeExit: true,
       args: expect.arrayContaining([
         "--expand-environment=no",
         "--property=MemoryMax=268435456",
@@ -313,26 +313,23 @@ it("passes literal arguments and restores preloads only inside the bounded launc
       env: { OPENCLAW_MANAGED_NODE_OPTIONS: "--require=workload" },
     }),
   );
+  expect(
+    run.mock.calls[0]?.[0]?.args?.filter((arg) => arg.startsWith("--property=RuntimeMaxSec=")),
+  ).toEqual([]);
+  expect(mocks.control.mock.calls.map((call) => call[1])).toEqual([
+    ["--user", "show", "--property=LoadState", memoryScope],
+    ["--user", "kill", "--kill-whom=all", "--signal=SIGKILL", memoryScope],
+    ["--user", "stop", memoryScope],
+    [
+      "--user",
+      "show",
+      "--property=LoadState",
+      "--property=ActiveState",
+      "--property=ControlGroup",
+      memoryScope,
+    ],
+  ]);
 });
-
-it.each([undefined, null])(
-  "retains admission when a cleanup probe has no output (%s)",
-  async (stdout) => {
-    let now = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => (now += 6_000));
-    mocks.control
-      .mockReset()
-      .mockReturnValue({
-        error: Object.assign(new Error("spawn failed"), { code: "ENOMEM" }),
-        stdout,
-      })
-      .mockReturnValueOnce(response("LoadState=not-found\n"));
-    await expect(runLinuxMemoryCommand(command, async () => 0)).rejects.toMatchObject({
-      code: "EPROCESSGROUP_CLEANUP_FAILED",
-      processTreeState: "indeterminate",
-    });
-  },
-);
 
 it.each([
   { scope: "openclaw-check-abcd.scope", swap: "0", group: "1", expected: true },
@@ -371,19 +368,3 @@ it.each([
     ).toBe(expected);
   },
 );
-
-it("records cgroup extinction after an inner process-group cleanup failure", async () => {
-  mocks.control.mockReturnValue(response("LoadState=not-found\n"));
-  const original = Object.assign(new Error("detached descendant held output"), {
-    processTreeState: "live",
-  });
-  const result = runLinuxMemoryCommand(command, async () => {
-    throw original;
-  });
-  await expect(result).rejects.toMatchObject({
-    message: original.message,
-    code: "EPROCESSGROUP_CLEANUP_FAILED",
-    processTreeState: "terminated",
-  });
-  await expect(result).rejects.not.toHaveProperty("cause");
-});

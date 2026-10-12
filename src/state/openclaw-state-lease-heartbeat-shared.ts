@@ -1,3 +1,4 @@
+import type { MessagePort } from "node:worker_threads";
 import type { StateLeaseProcessOwner } from "../infra/state-lease-process-owner.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
@@ -38,7 +39,13 @@ export type LeaseHeartbeatRenewalFailure = {
   elapsedMs: number;
 };
 
+export type LeaseHeartbeatLoss = {
+  path: "automatic-renewal" | "activation" | "explicit-verify" | "explicit-renew";
+  outcome: "no-current-owned-unexpired-row" | "operation-error";
+};
+
 export type LeaseHeartbeatWorkerData = {
+  databaseAdmissionPort: MessagePort;
   path: string;
   expectedIdentity: string;
   /** The actor's startup operations settle before this worker begins renewal. */
@@ -51,6 +58,8 @@ export type LeaseHeartbeatWorkerData = {
   shared: SharedArrayBuffer;
   /** Odd while native renewal is in flight; progress is never lease authority. */
   renewalProgress: SharedArrayBuffer;
+  /** Latest completed asynchronous request; completion is never lease authority. */
+  completedRequest: SharedArrayBuffer;
 };
 
 export type LeaseHeartbeatRequest = {
@@ -62,6 +71,7 @@ export type LeaseHeartbeatParentMessage = LeaseHeartbeatRequest | { startup: "ac
 
 export type LeaseHeartbeatReply =
   | LeaseHeartbeatRenewalFailure
+  | { loss: LeaseHeartbeatLoss }
   | { startup: "prepared" }
   | { id: number; ok: true; expiresAt: number }
   | { id: number; ok: false; message: string; payload?: OpenClawStateWorkerErrorPayload };

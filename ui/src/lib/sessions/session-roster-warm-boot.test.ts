@@ -4,17 +4,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { BootRecord } from "../../app/boot-record.ts";
+import { clearBootRecords, type BootRecord } from "../../app/boot-record.ts";
+import * as snapshotPrewarm from "../../pages/chat/session-snapshot-prewarm.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sidebarBootSnapshot } from "../../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { createSessionCapability } from "./index.ts";
+import type { BootRoster } from "./session-boot-roster.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
 import type { SessionCapability, SessionGateway } from "./session-capability.ts";
-import type { SessionRosterRecord } from "./session-roster-cache.ts";
 
 const url = "ws://gateway.example.test";
 const scope = gatewayCredentialScope(url);
 const bootRecord: BootRecord = {
   version: 2,
+  recoveryScope: "test-recovery-scope",
   authMethod: "token",
   credential: "9d17676d",
   savedAt: 1,
@@ -24,14 +27,9 @@ const bootRecord: BootRecord = {
   groups: [{ name: "Work", position: 0 }],
   sectionOrder: ["category:Work"],
 };
-function roster(): SessionRosterRecord {
+function roster(): BootRoster {
   return {
-    version: 1,
-    scope,
-    savedAt: Date.now(),
-    profileId: "profile-one",
     agentId: "main",
-    query: {},
     result: sessionsResult(
       [
         {
@@ -63,19 +61,28 @@ afterEach(() => {
     sessions.dispose();
   }
   activeCapabilities.clear();
+  vi.restoreAllMocks();
 });
 
 function harness(
   options: {
-    cached?: Promise<SessionRosterRecord | null>;
+    cached?: Promise<BootRoster | null>;
     withBootRecord?: boolean;
+    admittedRecord?: BootRecord;
+    retainedHelloScope?: string;
   } = {},
 ) {
   let connectionRevision = 0;
   let snapshot: SessionGateway["snapshot"] = {
     client: null,
     phase: "connecting",
-    hello: null,
+    hello: options.retainedHelloScope
+      ? {
+          type: "hello-ok",
+          protocol: 1,
+          auth: { role: "operator", scopes: [], recoveryScope: options.retainedHelloScope },
+        }
+      : null,
     sessionKey: "agent:main:deleted",
     selfUser: null,
   };
@@ -109,13 +116,16 @@ function harness(
       return () => eventListeners.delete(listener);
     },
   };
-  const read = vi.fn(() => options.cached ?? Promise.resolve(roster()));
-  const write = vi.fn();
-  const selection = { state: { selectedId: "main" }, subscribe: () => () => undefined };
-  const sessions = createSessionCapability(gateway, selection, {
-    rosterCache: { read, write },
-    ...(options.withBootRecord !== false ? { bootRecord } : {}),
+  const read = vi.spyOn(snapshotPrewarm, "readSidebarBootSnapshot").mockImplementation(async () => {
+    const cached = await (options.cached ?? Promise.resolve(roster()));
+    return cached ? sidebarBootSnapshot(cached) : null;
   });
+  const selection = { state: { selectedId: "main" }, subscribe: () => () => undefined };
+  const sessions = createSessionCapability(
+    gateway,
+    selection,
+    options.withBootRecord !== false ? { bootRecord: options.admittedRecord ?? bootRecord } : {},
+  );
   activeCapabilities.add(sessions);
   const publish = (patch: Partial<typeof snapshot>) => {
     snapshot = { ...snapshot, ...patch };
@@ -124,7 +134,6 @@ function harness(
   return {
     sessions,
     read,
-    write,
     request,
     live,
     gateway,
@@ -164,6 +173,106 @@ function harness(
 }
 
 describe("session capability warm roster", () => {
+  it.each(["profile", "credentials", "gateway", "stop"])(
+    "retains canonical display identity through transport/client replacement, then retires it on %s",
+    async (retirement) => {
+      const h = harness({ withBootRecord: false });
+      h.connect();
+      const live = sessionsResult([{ key: "agent:main:retained", kind: "direct" }], 2);
+      h.live.resolve(live);
+      await h.sessions.refresh();
+      expect(h.sessions.presentation.result).toEqual(live);
+      expect(h.sessions.presentation.resultCached).not.toBe(true);
+      expect(h.sessions.presentation.profileId).toBe("profile-one");
+      const requestCount = h.request.mock.calls.length;
+      h.publish({ phase: "reconnecting", selfUser: undefined });
+      expect(h.sessions.state.result).toBeNull();
+      expect(h.sessions.presentation.result).toEqual(live);
+      expect(h.sessions.presentation.profileId).toBe("profile-one");
+      h.publish({ client: createTestGatewayClient(h.request) });
+      expect(h.sessions.presentation.result).toEqual(live);
+      expect(h.sessions.presentation.profileId).toBe("profile-one");
+      expect(h.request).toHaveBeenCalledTimes(requestCount);
+      if (retirement === "profile") {
+        h.connect("profile-two");
+      } else if (retirement === "stop") {
+        h.publish({ client: null, phase: "stopped" });
+      } else {
+        if (retirement === "gateway") {
+          Object.defineProperty(h.gateway, "connection", {
+            value: { gatewayUrl: "ws://other.example.test", token: "test-token" },
+          });
+        } else {
+          h.changeCredentials();
+        }
+        h.publish({ phase: "connecting" });
+      }
+      expect(h.sessions.presentation.result).toBeNull();
+      expect(h.sessions.presentation.profileId).toBeUndefined();
+      h.sessions.dispose();
+    },
+  );
+
+  it.each(["profile", "credentials", "retirement"])(
+    "pairs admitted warm rows with display identity and retires both on %s change",
+    async (change) => {
+      const h = harness();
+      await h.sessions.whenCachedRosterSettled();
+      expect(h.sessions.presentation).toMatchObject({
+        result: roster().result,
+        resultCached: true,
+        profileId: "profile-one",
+      });
+      expect(h.request).not.toHaveBeenCalled();
+      if (change === "profile") {
+        h.connect("profile-two");
+      } else if (change === "credentials") {
+        h.changeCredentials();
+        h.publish({ phase: "connecting" });
+      } else {
+        clearBootRecords(scope, { recoveryScope: bootRecord.recoveryScope! });
+      }
+      expect(h.sessions.presentation.result).toBeNull();
+      expect(h.sessions.presentation.profileId).toBeUndefined();
+      h.live.resolve(sessionsResult([], 2));
+    },
+  );
+
+  it("retires the captured account even with a different live hello identity", async () => {
+    const h = harness({ retainedHelloScope: "live-account" });
+    await h.sessions.whenCachedRosterSettled();
+    expect(h.sessions.state.resultCached).toBe(true);
+    clearBootRecords(scope, { recoveryScope: "other-account" });
+    expect(h.sessions.state.resultCached).toBe(true);
+    clearBootRecords(scope, { recoveryScope: bootRecord.recoveryScope! });
+    expect(h.sessions.state.resultCached).toBe(false);
+    expect(h.sessions.state.result).toBeNull();
+    expect(h.sessions.state.groups).toEqual([]);
+  });
+
+  it.each(["pending", "published"])(
+    "keeps its %s roster through unrelated owner retirement",
+    async (stage) => {
+      const cached = createDeferred<BootRoster | null>();
+      const h = harness({ cached: cached.promise });
+      if (stage === "published") {
+        cached.resolve(roster());
+        await h.sessions.whenCachedRosterSettled();
+      }
+      clearBootRecords(scope, { recoveryScope: "different-owner" });
+      cached.resolve(roster());
+      await h.sessions.whenCachedRosterSettled();
+      expect(h.sessions.state.resultCached).toBe(true);
+      expect(h.sessions.state.result).toEqual(roster().result);
+      expect(h.sessions.state.groups).toEqual(["Work"]);
+      expect(h.request).not.toHaveBeenCalled();
+      clearBootRecords(scope, { recoveryScope: bootRecord.recoveryScope! });
+      expect(h.sessions.state.result).toBeNull();
+      expect(h.sessions.state.resultCached).toBe(false);
+      expect(h.sessions.state.groups).toEqual([]);
+    },
+  );
+
   it.each([10, 30])(
     "preserves event ordering during cached startup (event updatedAt: %s)",
     async (updatedAt) => {
@@ -202,7 +311,7 @@ describe("session capability warm roster", () => {
   );
 
   it("publishes groups synchronously, then the cached roster without a connection or canonical revision", async () => {
-    const cached = createDeferred<SessionRosterRecord | null>();
+    const cached = createDeferred<BootRoster | null>();
     const h = harness({ cached: cached.promise });
     expect(h.sessions.cachedRoutingDefaults).toEqual({ mainKey: "main", scope: "per-sender" });
     expect(h.sessions.state.groups).toEqual(["Work"]);
@@ -223,7 +332,7 @@ describe("session capability warm roster", () => {
     });
     expect(h.sessions.canonicalListRevision).toBe(0);
     expect(h.request).not.toHaveBeenCalled();
-    expect(h.write).not.toHaveBeenCalled();
+    expect(h.sessions.captureBootRoster()).toBeNull();
     h.publish({ phase: "reconnecting" });
     expect(h.sessions.state.result?.sessions).toHaveLength(2);
     expect(h.sessions.state.resultCached).toBe(true);
@@ -262,7 +371,7 @@ describe("session capability warm roster", () => {
       await vi.waitFor(() =>
         expect(h.request).toHaveBeenCalledWith("sessions.list", expect.anything()),
       );
-      expect(h.write).not.toHaveBeenCalled();
+      expect(h.sessions.captureBootRoster()).toBeNull();
       const live = sessionsResult(
         [{ key: "agent:main:kept", sessionId: "kept", kind: "direct" }],
         2,
@@ -274,21 +383,17 @@ describe("session capability warm roster", () => {
         expect(h.sessions.captureReconcile()(observed)).toBe(true);
         expect(h.sessions.state.result?.sessions).toHaveLength(2);
         expect(h.sessions.state.resultCached).toBe(true);
-        expect(h.write).not.toHaveBeenCalled();
+        expect(h.sessions.captureBootRoster()).toBeNull();
       }
       h.live.resolve(live);
       await vi.waitFor(() => expect(h.sessions.state.resultCached).toBe(false));
       const expected = observed ? { ...live, sessions: [observed] } : live;
       expect(h.sessions.state.result).toEqual(expected);
       expect(h.sessions.canonicalListRevision).toBe(1);
-      expect(h.write).toHaveBeenCalledWith(
-        expect.objectContaining({
-          scope,
-          profileId: "profile-one",
-          agentId: "main",
-          result: expected,
-        }),
-      );
+      expect(h.sessions.captureBootRoster()).toMatchObject({
+        agentId: "main",
+        result: expected,
+      });
     },
   );
 
@@ -333,7 +438,7 @@ describe("session capability warm roster", () => {
         const accepted = h.sessions.state.result?.sessions.find((row) => row.key === observed.key);
         expect(accepted).toMatchObject(observed);
         expect(h.sessions.state.resultCached).toBe(true);
-        expect(h.write).not.toHaveBeenCalled();
+        expect(h.sessions.captureBootRoster()).toBeNull();
 
         h.live.resolve(live);
         await vi.waitFor(() => expect(h.sessions.state.resultCached).toBe(false));
@@ -413,7 +518,7 @@ describe("session capability warm roster", () => {
         }
         const accepted = h.sessions.state.result?.sessions.find((row) => row.key === key);
         expect(accepted?.label).toBe(observeAfterReconnect ? current.label : previous.label);
-        expect(h.write).not.toHaveBeenCalled();
+        expect(h.sessions.captureBootRoster()).toBeNull();
 
         h.live.resolve(sessionsResult([previous], 3));
         await Promise.resolve();
@@ -429,15 +534,6 @@ describe("session capability warm roster", () => {
     },
   );
 
-  it("does not persist live rows for password authentication", async () => {
-    const h = harness({ withBootRecord: false });
-    h.connect("profile-one", "password");
-    const live = sessionsResult([{ key: "agent:main:private", kind: "direct" }], 2);
-    h.live.resolve(live);
-    await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
-    expect(h.write).not.toHaveBeenCalled();
-  });
-
   it("drops a mismatched profile before bootstrap asks for its live rows", async () => {
     const h = harness();
     await h.sessions.whenCachedRosterSettled();
@@ -448,15 +544,13 @@ describe("session capability warm roster", () => {
     const live = sessionsResult([{ key: "agent:main:new-profile", kind: "direct" }], 2);
     h.live.resolve(live);
     await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
-    expect(h.write).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: "profile-two", result: live }),
-    );
+    expect(h.sessions.captureBootRoster()?.result).toEqual(live);
   });
 
   it.each(["credentials", "credentials-before-notification"] as const)(
     "does not publish a late cache read after %s",
     async (transition) => {
-      const cached = createDeferred<SessionRosterRecord | null>();
+      const cached = createDeferred<BootRoster | null>();
       const h = harness({ cached: cached.promise });
       h.changeCredentials();
       expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
@@ -474,7 +568,7 @@ describe("session capability warm roster", () => {
   it.each(["connect", "dispose"] as const)(
     "releases the roster wait on %s while the cache read is still pending",
     async (transition) => {
-      const cached = createDeferred<SessionRosterRecord | null>();
+      const cached = createDeferred<BootRoster | null>();
       const h = harness({ cached: cached.promise });
       const settled = h.sessions.whenCachedRosterSettled();
       if (transition === "connect") {
@@ -483,14 +577,7 @@ describe("session capability warm roster", () => {
         h.sessions.dispose();
       }
       expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
-      await expect(
-        Promise.race([
-          settled.then(() => "released"),
-          new Promise<string>((resolve) => {
-            setTimeout(() => resolve("held"), 200);
-          }),
-        ]),
-      ).resolves.toBe("released");
+      await expect(settled).resolves.toBeUndefined();
       cached.resolve(roster());
       await settled;
       expect(h.sessions.state.result).toBeNull();
@@ -531,16 +618,7 @@ describe("session capability warm roster", () => {
       await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
       h.publish({ sessionKey: "agent:main:other" });
       expect(h.sessions.state.result).toEqual(live);
-      expect(h.write).toHaveBeenCalledWith(
-        expect.objectContaining({ scope: gatewayCredentialScope(nextUrl) }),
-      );
+      expect(h.sessions.captureBootRoster()?.result).toEqual(live);
     },
   );
-
-  it("rejects an incompatible profile from an injected roster reader", async () => {
-    const invalid = { ...roster(), profileId: "other" };
-    const h = harness({ cached: Promise.resolve(invalid) });
-    await h.sessions.whenCachedRosterSettled();
-    expect(h.sessions.state.result).toBeNull();
-  });
 });

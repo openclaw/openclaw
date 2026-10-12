@@ -233,31 +233,23 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
         : "allowlist"
       : (account.config.dm?.policy ?? "pairing");
     const directOperator = params.context?.conversationReadOrigin === "direct-operator";
-    const allowed = finalPolicy.blocked
-      ? false
-      : directOperator
-        ? classification.kind === "direct"
-          ? account.config.dm?.enabled !== false && dmPolicy !== "disabled"
-          : classification.kind === "group"
-            ? groupPolicy !== "disabled"
-            : groupPolicy !== "disabled" &&
-              dmPolicy !== "disabled" &&
-              account.config.dm?.enabled !== false
-        : classification.kind === "direct"
-          ? account.config.dm?.enabled !== false &&
-            dmPolicy !== "disabled" &&
-            (current || includesEntry(account.config.dm?.allowFrom, classification.remoteUserId))
-          : classification.kind === "group"
-            ? groupPolicy !== "disabled" &&
-              (current || groupPolicy === "open" || room.config !== undefined)
-            : current
-              ? groupPolicy !== "disabled" &&
-                dmPolicy !== "disabled" &&
-                account.config.dm?.enabled !== false
-              : groupPolicy === "open" &&
-                dmPolicy !== "disabled" &&
-                account.config.dm?.enabled !== false &&
-                hasWildcardEntry(account.config.dm?.allowFrom);
+    const dmEnabled = account.config.dm?.enabled !== false && dmPolicy !== "disabled";
+    const groupEnabled = groupPolicy !== "disabled";
+    const allowed =
+      !finalPolicy.blocked &&
+      (classification.kind === "direct"
+        ? dmEnabled &&
+          (directOperator ||
+            current ||
+            includesEntry(account.config.dm?.allowFrom, classification.remoteUserId))
+        : classification.kind === "group"
+          ? groupEnabled &&
+            (directOperator || current || groupPolicy === "open" || room.config !== undefined)
+          : groupEnabled &&
+            dmEnabled &&
+            (directOperator ||
+              current ||
+              (groupPolicy === "open" && hasWildcardEntry(account.config.dm?.allowFrom))));
     if (!allowed) {
       throw new ToolAuthorizationError("Matrix read target is not allowed.");
     }

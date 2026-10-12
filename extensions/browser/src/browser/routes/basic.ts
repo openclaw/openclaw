@@ -10,7 +10,7 @@ import {
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { buildBrowserDoctorReport } from "../doctor.js";
 import { listBrowserEngines, resolveBrowserEngine } from "../engines/registry.js";
-import { BrowserError, toBrowserErrorResponse } from "../errors.js";
+import { BrowserError } from "../errors.js";
 import {
   inspectNativeBrowserPolicy,
   nativePolicyAvailability,
@@ -22,15 +22,9 @@ import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { getProfileLifecycle, isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import { parseSystemProfileDomains } from "../system-profile-domains.js";
 import { dismissSystemProfileImportPrompt } from "../system-profile-import-state.js";
-import { readBody, resolveProfileContext } from "./agent.shared.js";
+import { handleRouteError, readBody, resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import {
-  jsonBrowserError,
-  jsonError,
-  runProfileRouteOperation,
-  toBoolean,
-  toStringOrEmpty,
-} from "./utils.js";
+import { jsonError, runProfileRouteOperation, toBoolean, toStringOrEmpty } from "./utils.js";
 
 const STATUS_CDP_HTTP_TIMEOUT_MS = 300;
 const STATUS_CDP_TRANSPORT_TIMEOUT_MS = 600;
@@ -38,26 +32,11 @@ const STATUS_GRAPHICS_COMMAND_TIMEOUT_MS = 1_000;
 const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = 7_000;
 const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
 
-function remainingChromeMcpStatusTimeoutMs(startedAtMs: number): number {
-  return Math.max(1, STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS - (Date.now() - startedAtMs));
-}
-
-function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
-  if (isProfileRestartRequiredError(err)) {
-    throw err;
-  }
-  const mapped = toBrowserErrorResponse(err);
-  if (mapped) {
-    return jsonBrowserError(res, mapped);
-  }
-  jsonError(res, 500, String(err));
-}
-
 async function sendBasicJsonResponse(res: BrowserResponse, run: () => Promise<unknown>) {
   try {
     res.json(await run());
   } catch (err) {
-    return handleBrowserRouteError(res, err);
+    return handleRouteError(res, err, { formatMessage: String });
   }
 }
 
@@ -100,7 +79,7 @@ function registerBasicProfilePost(
     try {
       await withBasicRequestAdmission(req, () => run({ req, res, profileCtx }), profileCtx.profile);
     } catch (err) {
-      return handleBrowserRouteError(res, err);
+      return handleRouteError(res, err, { formatMessage: String });
     }
   });
 }
@@ -133,29 +112,28 @@ async function buildBrowserStatus(
 
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
   const { descriptor: engine } = resolveBrowserEngine(profileCtx.profile.engine);
-  const [cdpHttp, cdpReady, pageReady] = capabilities.usesChromeMcp
-    ? await (async () => {
-        const statusStartedAtMs = Date.now();
-        let pageReachable = false;
-        const transportReady = await profileCtx.isTransportAvailable(
-          STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS,
-          signal,
-          {
-            timeoutMs: () => remainingChromeMcpStatusTimeoutMs(statusStartedAtMs),
-            onResult: (tabCount) => (pageReachable = tabCount !== null),
-          },
-        );
-        return [transportReady, transportReady, pageReachable] as const;
-      })()
-    : await (async () => {
-        const [http, ready] = await Promise.all([
-          profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS, signal),
-          profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS, signal),
-        ]);
-        // For managed CDP profiles, the transport check already includes a WS
-        // handshake against the page, so pageReady mirrors cdpReady.
-        return [http, ready, ready] as const;
-      })();
+  let cdpHttp: boolean;
+  let cdpReady: boolean;
+  let pageReady = false;
+  if (capabilities.usesChromeMcp) {
+    const deadlineMs = Date.now() + STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS;
+    cdpReady = await profileCtx.isTransportAvailable(
+      STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS,
+      signal,
+      {
+        timeoutMs: () => Math.max(1, deadlineMs - Date.now()),
+        onResult: (tabCount) => (pageReady = tabCount !== null),
+      },
+    );
+    cdpHttp = cdpReady;
+  } else {
+    [cdpHttp, cdpReady] = await Promise.all([
+      profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS, signal),
+      profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS, signal),
+    ]);
+    // Managed CDP transport checks already include a page WebSocket handshake.
+    pageReady = cdpReady;
+  }
 
   const profileState = current.profiles.get(profileCtx.profile.name);
   const lifecycle = profileState ? getProfileLifecycle(profileState) : null;
@@ -267,7 +245,7 @@ async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSign
         id: "live-snapshot",
         label: "Live snapshot",
         status: "warn" as const,
-        summary: "No per-tab CDP WebSocket available for the lightweight live snapshot probe",
+        summary: "No per-tab CDP WebSocket available for the lightweight live snapshot check",
       };
     }
     const snap = await snapshotAria({
@@ -350,17 +328,14 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     if (!profileCtx) {
       return;
     }
-    try {
-      const report = await runProfileRouteOperation({
+    await sendBasicJsonResponse(res, () =>
+      runProfileRouteOperation({
         profileCtx,
         signal: req.signal,
         assertCurrent: req.assertCurrent,
         run: (signal) => inspectProfileNativePolicy(req, profileCtx, signal),
-      });
-      res.json(report);
-    } catch (err) {
-      return handleBrowserRouteError(res, err);
-    }
+      }),
+    );
   });
 
   app.get("/system-profiles", async (req, res) => {
@@ -390,71 +365,55 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     }));
   });
 
-  app.get("/", async (req, res) => {
-    const profileCtx = resolveProfileContext(req, res, ctx);
-    if (!profileCtx) {
-      return;
-    }
-    try {
-      const status = await runProfileRouteOperation({
-        profileCtx,
-        signal: req.signal,
-        assertCurrent: req.assertCurrent,
-        run: async (signal) => await buildBrowserStatus(ctx, profileCtx, signal),
-      });
-      res.json(status);
-    } catch (err) {
-      return handleBrowserRouteError(res, err);
-    }
-  });
-
-  app.get("/doctor", async (req, res) => {
-    const profileCtx = resolveProfileContext(req, res, ctx);
-    if (!profileCtx) {
-      return;
-    }
-    try {
-      const report = await runProfileRouteOperation({
-        profileCtx,
-        signal: req.signal,
-        assertCurrent: req.assertCurrent,
-        run: async (signal) => {
-          const status = await buildBrowserStatus(ctx, profileCtx, signal);
-          const relay = ctx.state().extensionRelays?.get(profileCtx.profile.name);
-          const identity =
-            relay?.ownership === "borrowed"
-              ? (await relay.client.status()).identity
-              : relay?.bridge.identity;
-          const doctorReport = buildBrowserDoctorReport({
-            status,
-            extensionVersion:
-              status.transport === "extension" ? identity?.extensionVersion : undefined,
-          });
-          if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
-            const policy = await inspectProfileNativePolicy(req, profileCtx, signal);
-            doctorReport.status.nativePolicy = summarizeNativePolicy(policy);
-            doctorReport.checks.push({
-              id: "native-policy",
-              label: "Native enterprise policy",
-              status:
-                policy.state === "failed"
-                  ? "fail"
-                  : policy.state === "effective" || policy.state === "none"
-                    ? "pass"
-                    : "info",
-              summary: doctorReport.status.nativePolicy.detail,
+  for (const route of ["/", "/doctor"]) {
+    app.get(route, async (req, res) => {
+      const profileCtx = resolveProfileContext(req, res, ctx);
+      if (!profileCtx) {
+        return;
+      }
+      await sendBasicJsonResponse(res, () =>
+        runProfileRouteOperation({
+          profileCtx,
+          signal: req.signal,
+          assertCurrent: req.assertCurrent,
+          run: async (signal) => {
+            const status = await buildBrowserStatus(ctx, profileCtx, signal);
+            if (route === "/") {
+              return status;
+            }
+            const relay = ctx.state().extensionRelays?.get(profileCtx.profile.name);
+            const identity =
+              relay?.ownership === "borrowed"
+                ? (await relay.client.status()).identity
+                : relay?.bridge.identity;
+            const report = buildBrowserDoctorReport({
+              status,
+              extensionVersion:
+                status.transport === "extension" ? identity?.extensionVersion : undefined,
             });
-            doctorReport.checks.push(await runBrowserLiveProbe(profileCtx, signal));
-            doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");
-          }
-          return doctorReport;
-        },
-      });
-      res.json(report);
-    } catch (err) {
-      return handleBrowserRouteError(res, err);
-    }
-  });
+            if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
+              const policy = await inspectProfileNativePolicy(req, profileCtx, signal);
+              report.status.nativePolicy = summarizeNativePolicy(policy);
+              report.checks.push({
+                id: "native-policy",
+                label: "Native enterprise policy",
+                status:
+                  policy.state === "failed"
+                    ? "fail"
+                    : policy.state === "effective" || policy.state === "none"
+                      ? "pass"
+                      : "info",
+                summary: report.status.nativePolicy.detail,
+              });
+              report.checks.push(await runBrowserLiveProbe(profileCtx, signal));
+              report.ok = report.checks.every((check) => check.status !== "fail");
+            }
+            return report;
+          },
+        }),
+      );
+    });
+  }
 
   registerBasicProfilePost(app, ctx, "/start", async ({ req, res, profileCtx }) => {
     const headlessOverride = parseHeadlessStartOverride({ req, res, profileCtx });

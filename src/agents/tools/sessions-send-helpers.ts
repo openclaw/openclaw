@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
@@ -5,6 +6,7 @@ import {
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
+import { jsonResult } from "./tool-results.js";
 
 export type SessionDeliveryTarget = {
   channel: string;
@@ -12,6 +14,38 @@ export type SessionDeliveryTarget = {
   accountId?: string;
   threadId?: string; // Forum topic/thread ID
 };
+
+export function sendFailure(
+  status: "error" | "forbidden",
+  error: string,
+  sessionKey?: string,
+  runId: string = crypto.randomUUID(),
+) {
+  return jsonResult({
+    runId,
+    status,
+    error,
+    ...(sessionKey !== undefined ? { sessionKey } : {}),
+  });
+}
+
+export function sendReplyResult(
+  receipt: { runId: string; sessionKey: string; watched?: boolean },
+  result: { replyText?: string; sourceReplyDelivered?: boolean },
+) {
+  const { replyText: reply, sourceReplyDelivered } = result;
+  return jsonResult({
+    ...receipt,
+    ...(reply
+      ? { status: "ok" as const, delivery: { status: "skipped" as const }, reply }
+      : {
+          status: "no_reply" as const,
+          message: sourceReplyDelivered
+            ? "The target delivered its final reply directly to its source conversation. Do not resend."
+            : "No visible reply or pending delivery. Continue or retry if needed.",
+        }),
+  });
+}
 
 export function resolveSessionDeliveryTargetFromKey(
   sessionKey: string,

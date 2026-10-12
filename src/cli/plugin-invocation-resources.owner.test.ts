@@ -4,9 +4,11 @@ import type { DatabaseSync } from "node:sqlite";
 import { Command } from "commander";
 import { resolvePluginProviders } from "openclaw/plugin-sdk/provider-catalog-runtime";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { getRegisteredAgentHarness, registerAgentHarness } from "../agents/harness/registry.js";
 import type { AgentHarness } from "../agents/harness/types.js";
-import { registerPluginCliCommands } from "../plugins/cli.js";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { registerPluginCliCommandsFromValidatedConfig } from "../plugins/cli.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { acquirePluginRegistryForInspection } from "../plugins/loader.js";
 import {
@@ -21,11 +23,14 @@ import {
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import {
+  AsyncWorkScope,
   captureAsyncWorkTracker,
   getAsyncWorkSignal,
+  runOutsideAsyncWorkScope,
   trackAsyncWork,
 } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
 import { registerCommandGroups } from "./program/register-command-groups.js";
 import {
@@ -179,6 +184,7 @@ afterEach(() => {
     cleanup();
   }
   resetPluginLoaderTestStateForTest();
+  clearRuntimeConfigSnapshot();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -247,6 +253,120 @@ it("releases an acquisition that finishes after admission closes", async () => {
   await rejected;
   await closing;
   expect(fixture.state.disposals).toBe(1);
+});
+
+it("keeps closed command admission separate from retained cleanup authority", async () => {
+  const resources = new CliPluginInvocationResources();
+  const foreign = new AsyncWorkScope();
+  const load = vi.fn(async () => {
+    throw new Error("denied load must not run");
+  });
+  const command = vi.fn();
+  const release = vi.fn(async () => {});
+  resources.beginClose();
+  try {
+    await expect(resources.acquire(load)).rejects.toThrow("invocation is closed");
+    await expect(foreign.track(() => resources.acquire(load))).rejects.toThrow(
+      "invocation is closed",
+    );
+    await resources.runCleanup(async () => {
+      await expect(runOutsideAsyncWorkScope(() => resources.acquire(load))).rejects.toThrow(
+        "invocation is closed",
+      );
+      await expect(resources.run(command)).rejects.toThrow("invocation is closed");
+      expect(() => resources.adopt({ release })).toThrow("invocation is closed");
+      resources.register(command);
+      await expect(resources.waitForRegistrations()).rejects.toThrow(
+        "CLI command registration failed",
+      );
+    });
+    expect(load).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+  } finally {
+    await foreign.drain();
+    await resources.release();
+  }
+});
+
+it("joins cleanup-held acquisition and its sibling work before native disposal", async () => {
+  const fixture = nativeFixture();
+  const resources = new CliPluginInvocationResources();
+  const nested = new AsyncWorkScope();
+  const loadReady = createDeferredCore();
+  const finishLoad = createDeferredCore();
+  const cleanupReady = createDeferredCore();
+  const finishCleanup = createDeferredCore();
+  resources.beginClose();
+  const cleanup = resources.runCleanup(async () => {
+    await nested.track(() =>
+      resources.acquire(async () => {
+        const acquisition = await fixture.load();
+        loadReady.resolve();
+        await finishLoad.promise;
+        return acquisition;
+      }),
+    );
+    cleanupReady.resolve();
+    await finishCleanup.promise;
+    fixture.state.afterCleanup = fixture.state.database!.prepare("SELECT 42 AS value").get();
+  });
+  let closing: Promise<void> | undefined;
+  try {
+    await awaitGateBeforeSettlement(loadReady.promise, cleanup, "cleanup acquisition was refused");
+    closing = resources.release();
+    expect(fixture.state.database!.isOpen).toBe(true);
+    expect(fixture.state.disposals).toBe(0);
+    finishLoad.resolve();
+    await awaitGateBeforeSettlement(
+      cleanupReady.promise,
+      cleanup,
+      "late cleanup acquisition was refused",
+    );
+    expect(fixture.state.database!.isOpen).toBe(true);
+    expect(fixture.state.disposals).toBe(0);
+  } finally {
+    finishLoad.resolve();
+    finishCleanup.resolve();
+    await Promise.allSettled([cleanup, closing ?? resources.release()]);
+    await nested.drain();
+  }
+  await expect(cleanup).resolves.toBeUndefined();
+  await expect(closing).resolves.toBeUndefined();
+  expect(fixture.state.afterCleanup).toEqual({ value: 42 });
+  expect(fixture.state.disposals).toBe(1);
+  expect(fixture.state.database!.isOpen).toBe(false);
+});
+
+it("seals acquisition before physical disposal even inside retained cleanup", async () => {
+  const resources = new CliPluginInvocationResources();
+  const disposing = createDeferredCore();
+  const disposed = createDeferredCore();
+  const release = vi.fn(async () => {
+    disposing.resolve();
+    await disposed.promise;
+  });
+  const load = vi.fn(async () => {
+    throw new Error("sealed load must not run");
+  });
+  resources.adopt({ release });
+  const closing = resources.release();
+  try {
+    await disposing.promise;
+    await resources.runCleanup(async () => {
+      // A repeated close cannot reopen admission after the disposal snapshot was taken.
+      resources.beginClose();
+      await expect(resources.acquire(load)).rejects.toThrow("invocation is closed");
+    });
+    expect(load).not.toHaveBeenCalled();
+  } finally {
+    disposed.resolve();
+    await closing;
+  }
+  resources.beginClose();
+  await expect(resources.acquire(load)).rejects.toThrow("invocation is closed");
+  expect(load).not.toHaveBeenCalled();
+  expect(release).toHaveBeenCalledOnce();
 });
 
 it("retains CLI SDK providers through their actual local Gateway context", async () => {
@@ -444,7 +564,11 @@ it("leaves standalone command programs with their caller after registration retu
   const fixture = nativeFixture();
   fixture.state.resume.resolve();
   const program = new Command();
-  await registerPluginCliCommands(program, fixture.config, fixture.env);
+  const configPath = path.join(fixture.env.HOME, "openclaw.json");
+  fs.writeFileSync(configPath, JSON.stringify(fixture.config));
+  await withEnvAsync({ ...fixture.env, OPENCLAW_CONFIG_PATH: configPath }, () =>
+    registerPluginCliCommandsFromValidatedConfig(program, fixture.env),
+  );
   expect(getCliPluginInvocationResources()).toBeUndefined();
   expect(program.commands.map((command) => command.name())).toEqual(["native"]);
   await program.parseAsync(["node", "fixture", "native"]);

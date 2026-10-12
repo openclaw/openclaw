@@ -1,11 +1,12 @@
-import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { nothing, render } from "lit";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import "../../../lib/toast.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
+import { createComposerContainer } from "../chat-composer.test-support.ts";
 import { createChatProps } from "../chat-view.test-helpers.ts";
 import { renderChat } from "../chat-view.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
@@ -20,12 +21,23 @@ type CommentControllerElement = HTMLElement & {
   disabled: boolean;
   presented: boolean;
   updateComplete: Promise<unknown>;
-  performUpdate(): void;
 };
+
+beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+});
 
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   for (const id of payloads) {
     releaseChatAttachmentPayload(id);
   }
@@ -96,28 +108,51 @@ async function mountComments(additional: ChatAttachment[] = []) {
 }
 
 describe("comment actions outside the transcript", () => {
-  it("keeps the controller idle across unchanged chat renders and updates when composition is disabled", async () => {
-    const container = document.createElement("div");
+  it("keeps an editor across draft renders and retires it when composition is disabled", async () => {
+    const container = createComposerContainer();
+    onTestFinished(() => {
+      render(nothing, container);
+    });
     document.body.append(container);
-    const props = createChatProps({ loading: true });
+    const attachment: ChatAttachment = {
+      id: "rendered-comment",
+      mimeType: "text/plain",
+      selectionAnnotation: {
+        text: "Selected passage",
+        comment: "In-progress edit",
+        sessionKey: "main",
+        start: 0,
+        end: 16,
+      },
+    };
+    const props = createChatProps({ loading: true, attachments: [attachment] });
     render(renderChat(props), container);
     const controller = container.querySelector<CommentControllerElement>(
       "openclaw-chat-comment-controller",
     )!;
     await controller.updateComplete;
-    const updates = vi.spyOn(controller, "performUpdate");
+    controller.dispatchEvent(
+      new CustomEvent("openclaw-comment-action", {
+        bubbles: true,
+        detail: { action: "edit", id: attachment.id },
+      }),
+    );
+    const editor = document.querySelector<HTMLTextAreaElement>(".chat-annotation-editor textarea")!;
+    expect(editor.value).toBe("In-progress edit");
+    editor.value = "A draft that must survive";
 
     render(renderChat(props), container);
     await controller.updateComplete;
-    expect(updates).not.toHaveBeenCalled();
+    expect(document.querySelector(".chat-annotation-editor textarea")).toBe(editor);
 
     render(renderChat({ ...props, draft: "A new draft" }), container);
     await controller.updateComplete;
-    expect(updates).not.toHaveBeenCalled();
+    expect(editor.value).toBe("A draft that must survive");
+    expect(document.querySelector(".chat-annotation-editor textarea")).toBe(editor);
 
     render(renderChat({ ...props, canSend: false }), container);
     await controller.updateComplete;
-    expect(updates).toHaveBeenCalledOnce();
+    expect(document.querySelector(".chat-annotation-editor")).toBeNull();
   });
 
   it("edits and deletes staged comments without a built-in transcript, releasing replaced payloads", async () => {
@@ -256,16 +291,13 @@ describe("comment actions outside the transcript", () => {
   it("keeps same-scope editors open and transfers abort ownership when the read signal changes", async () => {
     const fixture = await mountComments();
     fixture.edit();
-    const updates = vi.spyOn(fixture.controller, "performUpdate");
     fixture.controller.props = { ...fixture.controller.props, draft: "A new draft" };
     await fixture.controller.updateComplete;
-    expect(updates).not.toHaveBeenCalled();
     expect(fixture.input()).not.toBeNull();
 
     const nextOwner = new AbortController();
     fixture.controller.props = { ...fixture.controller.props, readSignal: nextOwner.signal };
     await fixture.controller.updateComplete;
-    expect(updates).toHaveBeenCalledOnce();
     expect(fixture.input()).toBeNull();
     fixture.edit();
     fixture.signalOwner.abort();

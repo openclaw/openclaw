@@ -18,7 +18,7 @@ import {
   dispatchReplyFromConfig,
   globalBeforeAll0,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import {
   withDispatchProcessedOutcomeSink,
   type DispatchProcessedNote,

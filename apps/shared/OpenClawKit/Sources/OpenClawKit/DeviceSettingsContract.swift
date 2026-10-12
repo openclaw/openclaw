@@ -96,23 +96,15 @@ public enum DeviceSettingsAppearance: String, Encodable, Sendable {
     case system, light, dark
 }
 
-public enum DeviceSettingsLocationMode: String, CaseIterable, Encodable, Sendable {
-    case off, whileUsing, always
+public typealias DeviceSettingsLocationMode = OpenClawLocationMode
 
+extension OpenClawLocationMode {
     public init(_ mode: OpenClawLocationMode) {
-        switch mode {
-        case .off: self = .off
-        case .whileUsing: self = .whileUsing
-        case .always: self = .always
-        }
+        self = mode
     }
 
     public var nativeMode: OpenClawLocationMode {
-        switch self {
-        case .off: .off
-        case .whileUsing: .whileUsing
-        case .always: .always
-        }
+        self
     }
 }
 
@@ -574,8 +566,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
     }
 
     public func javaScript() throws -> String {
-        let data = try JSONEncoder().encode(self)
-        let json = String(bytes: data, encoding: .utf8)!
+        let json = try String(bytes: JSONEncoder().encode(self), encoding: .utf8)!
         return "window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__ = \(json); " +
             "window.dispatchEvent(new CustomEvent('openclaw:native-device-settings-changed', " +
             "{detail: window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__}));"

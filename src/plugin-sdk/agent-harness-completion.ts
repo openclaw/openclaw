@@ -21,6 +21,10 @@ import {
   loadRequesterSessionEntry,
 } from "../agents/subagents/announce/subagent-announce-delivery.js";
 import {
+  captureRequesterSessionEntryCurrent,
+  withSubagentRequesterSource,
+} from "../agents/subagents/announce/subagent-announce-delivery.runtime.js";
+import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
 } from "../agents/subagents/announce/subagent-announce-origin.js";
@@ -63,6 +67,29 @@ export async function deliverAgentHarnessCompletion(params: {
   expectedRequester?: { sessionId: string; lifecycleRevision?: string };
 }): Promise<AgentHarnessCompletionDelivery> {
   const scope = assertAgentHarnessCompletionScope(params.scope);
+  const run = () =>
+    withSubagentRequesterSource(
+      scope.requesterSessionKey,
+      scope.requesterAgentId,
+      async (isCurrent): Promise<AgentHarnessCompletionDelivery> =>
+        isCurrent?.() === false
+          ? {
+              delivered: false,
+              path: "none",
+              recoveryBlocked: true,
+              error: "completion requester locator is missing or replaced",
+            }
+          : deliverAgentHarnessCompletionBound(params),
+    );
+  return params.completionCustody
+    ? runWithAgentHarnessCompletionCustody(params.completionCustody, scope, run)
+    : run();
+}
+
+async function deliverAgentHarnessCompletionBound(
+  params: Parameters<typeof deliverAgentHarnessCompletion>[0],
+): Promise<AgentHarnessCompletionDelivery> {
+  const scope = assertAgentHarnessCompletionScope(params.scope);
   const completionCustody = params.completionCustody;
   const signal = completionCustody
     ? AbortSignal.any([completionCustody.signal, ...(params.signal ? [params.signal] : [])])
@@ -75,14 +102,26 @@ export async function deliverAgentHarnessCompletion(params: {
   const statusLabel = params.statusLabel?.trim() || params.status;
   const eventStatus = params.status === "succeeded" ? "ok" : "error";
   const expectedRequester = params.expectedRequester;
-  const requester = loadRequesterSessionEntry(requesterSessionKey, scope.requesterAgentId);
+  const readRequesterCurrent = captureRequesterSessionEntryCurrent(
+    requesterSessionKey,
+    scope.requesterAgentId,
+  );
+  const requester = await loadRequesterSessionEntry(requesterSessionKey, scope.requesterAgentId);
   const requesterSessionId = requester.entry?.sessionId;
   const requesterLifecycleRevision = requester.entry?.lifecycleRevision;
-  const isRequesterCurrent = () => {
+  const isRequesterCurrent = (rejectRetiredCustody = false) => {
     if (completionCustody && !isAgentHarnessCompletionCustodyCurrent(completionCustody, scope)) {
+      if (rejectRetiredCustody) {
+        throw new Error("Harness completion custody retired");
+      }
       return false;
     }
-    const current = loadRequesterSessionEntry(requesterSessionKey, scope.requesterAgentId).entry;
+    let current: ReturnType<typeof readRequesterCurrent>;
+    try {
+      current = readRequesterCurrent();
+    } catch {
+      return false;
+    }
     return (
       Boolean(requesterSessionId) &&
       current?.sessionId === requesterSessionId &&
@@ -127,7 +166,7 @@ export async function deliverAgentHarnessCompletion(params: {
   ];
   const prompt = formatAgentInternalEventsForPrompt(internalEvents);
   const deliver = async (): Promise<AgentHarnessCompletionDelivery> => {
-    if (!requesterSessionId || !isRequesterCurrent()) {
+    if (!requesterSessionId || !isRequesterCurrent(true)) {
       return {
         delivered: false,
         path: "none",
@@ -136,13 +175,21 @@ export async function deliverAgentHarnessCompletion(params: {
       };
     }
     if (requester.agentId && requester.storePath) {
-      const custody = reconcileHarnessCompletionDelivery({
+      const custody = await reconcileHarnessCompletionDelivery({
         agentId: requester.agentId,
         storePath: requester.storePath,
         sessionKey: requester.canonicalKey,
         sourceRunId: buildAnnounceIdempotencyKey(params.announceId),
         taskRunId: childSessionKey,
       });
+      if (!isRequesterCurrent()) {
+        return {
+          delivered: false,
+          path: "none",
+          recoveryBlocked: true,
+          error: "completion requester locator is missing or replaced",
+        };
+      }
       if (custody === "delivered") {
         return { delivered: true, path: "direct" };
       }
@@ -196,9 +243,7 @@ export async function deliverAgentHarnessCompletion(params: {
     resolveGatewayContext
       ? withPluginRuntimeGatewayContextResolver(resolveGatewayContext, deliver)
       : deliver();
-  return completionCustody
-    ? await runWithAgentHarnessCompletionCustody(completionCustody, scope, deliverInGateway)
-    : await deliverInGateway();
+  return await deliverInGateway();
 }
 
 /** Returns true when completion delivery reached a persistent direct or steered path. */

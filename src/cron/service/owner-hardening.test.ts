@@ -4,7 +4,11 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { observeCronJobWrites } from "../../../test/helpers/cron/runtime-mutation.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
@@ -16,6 +20,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -79,12 +84,25 @@ beforeEach(async () => {
       import fs from "node:fs";
       import { CronService } from ${JSON.stringify(serviceUrl.href)};
       import { deserialize } from "node:v8";
-      import { MessagePort } from "node:worker_threads";
+      import { Worker } from "node:worker_threads";
       import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
       const [storePath, jobId, mode, releasePath, outputPath] = process.argv.slice(2);
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const logger = { debug() {}, info() {}, warn() {}, error() {} };
       let activationClock = Date.now();
+      if (mode === "crash-activation") {
+        const originalPost = Worker.prototype.postMessage;
+        Worker.prototype.postMessage = function (message, ...args) {
+          if (message?.type === "execute" && message.input instanceof Uint8Array) {
+            const command = deserialize(message.input);
+            if (command?.type === "cron.activateRun" && command.input?.handle?.jobId === jobId) {
+              // Install before startup captures the worker method; the reservation is durable here.
+              process.kill(process.pid, "SIGKILL");
+            }
+          }
+          return originalPost.call(this, message, ...args);
+        };
+      }
       const cron = new CronService({
         ...(mode === "crash-activation" ? { nowMs: () => ++activationClock } : {}),
         scheduler: createTestGatewayScheduler(),
@@ -107,33 +125,13 @@ beforeEach(async () => {
           }
           fs.appendFileSync(outputPath, job.agentId + ":" + process.pid + "\\n");
           process.stdout.write("started\\n");
-          if (mode === "block" || mode === "barrier-block") await new Promise(() => {});
+          if (mode === "block") await new Promise(() => {});
           await sleep(150);
           return { status: "ok", summary: "done" };
         },
       });
       if (mode !== "manual-postcommit-crash") await cron.start();
-      if (mode === "barrier-block") {
-        process.stdout.write("ready\\n");
-        while (!fs.existsSync(releasePath)) await sleep(10);
-        await cron.run(jobId, "force");
-      }
       if (mode === "crash-activation") {
-        const originalOn = MessagePort.prototype.on;
-        MessagePort.prototype.on = function (event, listener) {
-          if (event !== "message") return originalOn.call(this, event, listener);
-          return originalOn.call(this, event, function (message) {
-            // The worker has changed both receipt and job rows, and is waiting
-            // for the real owner to admit COMMIT. Death here must roll both back.
-            if (message?.stage === "commit" && message.facts?.bytes instanceof Uint8Array) {
-              const outcome = deserialize(message.facts.bytes);
-              if (outcome?.activation?.job?.id === jobId) {
-                process.kill(process.pid, "SIGKILL");
-              }
-            }
-            return Reflect.apply(listener, this, [message]);
-          });
-        };
         await cron.run(jobId, "force");
       }
       if (mode === "manual-postcommit-crash") await cron.run(jobId, "due");
@@ -144,7 +142,6 @@ beforeEach(async () => {
         process.stdout.write("completed\\n");
         while (!fs.existsSync(releasePath + ".exit")) await sleep(10);
       }
-      if (mode === "due") await sleep(350);
       cron.stop();
     `,
   );
@@ -170,14 +167,7 @@ function makeCommandJob(id: string, nextRunAtMs: number, trigger = false): CronJ
 function spawnRunner(params: {
   storePath: string;
   jobId: string;
-  mode:
-    | "barrier-block"
-    | "block"
-    | "hold-alive"
-    | "trigger"
-    | "due"
-    | "crash-activation"
-    | "manual-postcommit-crash";
+  mode: "block" | "hold-alive" | "trigger" | "crash-activation" | "manual-postcommit-crash";
   releasePath: string;
   outputPath: string;
 }): ChildProcess {
@@ -329,42 +319,15 @@ function claimMarkerlessReceipt(storePath: string, job: CronJob, startedAtMs: nu
 }
 
 describe("cron durable run ownership", () => {
-  it("rolls back the receipt and queued marker when reservation commit admission is refused", async () => {
-    vi.useRealTimers();
-    const { storePath } = await makeStorePath();
-    const now = Date.now();
-    const job = makeCommandJob("receipt-required", now + 60_000);
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    inspectActiveCronRunReceipt({ storePath, jobId: job.id });
-    const rejectCommit = vi.fn(() => {
-      throw new Error("receipt commit refused");
-    });
-    const stopObserving = observeCronJobWrites(job.id, (written) => {
-      if (written.queuedAtMs !== undefined) {
-        rejectCommit();
-      }
-    });
-    const runner = vi.fn(async () => ({ status: "ok" as const }));
-    const cron = makeParentService(storePath, runner);
-    try {
-      await expect(cron.run(job.id, "force")).rejects.toThrow("receipt commit refused");
-      expect(rejectCommit).toHaveBeenCalledOnce();
-      expect(runner).not.toHaveBeenCalled();
-      expect(receipts(storePath, job.id)).toEqual([]);
-      expect((await loadCronStore(storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
-    } finally {
-      cron.stop();
-      stopObserving();
-    }
-  });
-
-  it("rolls back the receipt with the running marker when activation crashes", async () => {
+  it("recovers a queued reservation when the Gateway crashes before activation", async () => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
     const job = makeCommandJob("atomic-activation-crash", now + 60_000);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const outputPath = path.join(scriptRoot, `activation-output-${now}`);
+    // Hand the seeded database to the child Gateway before simulating its crash.
+    await closeOpenClawStateDatabaseAsync();
     const child = spawnRunner({
       storePath,
       jobId: job.id,
@@ -373,23 +336,31 @@ describe("cron durable run ownership", () => {
       outputPath,
     });
 
+    let diagnostic = "";
+    child.stderr?.on("data", (chunk) => {
+      diagnostic += String(chunk);
+    });
     await waitForExit(child);
-    expect(child.signalCode).toBe("SIGKILL");
+    expect(child.signalCode, `child exit ${child.exitCode}: ${diagnostic}`).toBe("SIGKILL");
     expect(fs.existsSync(outputPath)).toBe(false);
-    const rolledBack = (await loadCronStore(storePath)).jobs[0];
-    expect(rolledBack?.state.queuedAtMs).toEqual(expect.any(Number));
-    expect(rolledBack?.state.runningAtMs).toBeUndefined();
+    const queued = (await loadCronStore(storePath)).jobs[0];
+    expect(queued?.state.queuedAtMs).toEqual(expect.any(Number));
+    expect(queued?.state.runningAtMs).toBeUndefined();
     expect(receipts(storePath, job.id)).toMatchObject([
-      { status: "running", startedAtMs: rolledBack?.state.queuedAtMs },
+      { status: "running", startedAtMs: queued?.state.queuedAtMs },
     ]);
 
-    const recovered = makeParentService(storePath);
+    const recoveredRunner = vi.fn(async () => ({ status: "ok" as const }));
+    const recovered = makeParentService(storePath, recoveredRunner);
     try {
       await recovered.start();
       expect(receipts(storePath, job.id)).toMatchObject([{ status: "interrupted" }]);
       const persisted = (await loadCronStore(storePath)).jobs[0];
       expect(persisted?.state.queuedAtMs).toBeUndefined();
       expect(persisted?.state.runningAtMs).toBeUndefined();
+      expect(recoveredRunner).not.toHaveBeenCalled();
+      await expect(recovered.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+      expect(recoveredRunner).toHaveBeenCalledOnce();
     } finally {
       recovered.stop();
     }
@@ -715,59 +686,78 @@ describe("cron durable run ownership", () => {
     }
   });
 
-  it("admits one payload across overlapping scheduler processes", async () => {
+  it("admits one due payload across overlapping Gateway service callers", async ({ signal }) => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
     const job = makeCommandJob("overlapping-ticks", now - 1);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
-    const releasePath = path.join(scriptRoot, `barrier-${now}`);
-    const outputPath = path.join(scriptRoot, `ticks-${now}`);
-    const first = spawnRunner({ storePath, jobId: job.id, mode: "due", releasePath, outputPath });
-    const second = spawnRunner({ storePath, jobId: job.id, mode: "due", releasePath, outputPath });
-    await Promise.all([waitForExit(first), waitForExit(second)]);
-    expect(first.exitCode).toBe(0);
-    expect(second.exitCode).toBe(0);
-
-    const invocations = fs.existsSync(outputPath)
-      ? fs.readFileSync(outputPath, "utf8").trim().split("\n").filter(Boolean)
-      : [];
-    expect(invocations).toHaveLength(1);
-    expect(receipts(storePath, job.id)).toMatchObject([{ status: "ok" }]);
+    const entered = createDeferred();
+    const finish = createDeferred();
+    const runner = vi.fn(async () => {
+      entered.resolve();
+      await finish.promise;
+      return { status: "ok" as const };
+    });
+    const callers = [makeParentService(storePath, runner), makeParentService(storePath, runner)];
+    const runs = callers.map((cron) => cron.run(job.id, "due"));
+    const completed = Promise.all(runs);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, completed, "No due payload was admitted"),
+        signal,
+      );
+      expect(runner).toHaveBeenCalledOnce();
+      finish.resolve();
+      const results = await completed;
+      expect(results.filter((result) => result.ok && "ran" in result && result.ran)).toHaveLength(
+        1,
+      );
+      expect(results.filter((result) => result.ok && "ran" in result && !result.ran)).toHaveLength(
+        1,
+      );
+      expect(runner).toHaveBeenCalledOnce();
+      expect(receipts(storePath, job.id)).toMatchObject([{ status: "ok" }]);
+    } finally {
+      finish.resolve();
+      await Promise.allSettled(runs);
+      for (const cron of callers) {
+        cron.stop();
+      }
+    }
   });
 
-  it("preserves different jobs activated concurrently by two gateways", async () => {
+  it("preserves different jobs activated concurrently by Gateway service callers", async ({
+    signal,
+  }) => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
     const firstJob = makeCommandJob("gateway-a-job", now + 60_000);
     const secondJob = makeCommandJob("gateway-b-job", now + 60_000);
     await saveCronStore(storePath, { version: 1, jobs: [firstJob, secondJob] });
-    const firstBarrier = path.join(scriptRoot, `gateway-a-barrier-${now}`);
-    const secondBarrier = path.join(scriptRoot, `gateway-b-barrier-${now}`);
-    const first = spawnRunner({
-      storePath,
-      jobId: firstJob.id,
-      mode: "barrier-block",
-      releasePath: firstBarrier,
-      outputPath: path.join(scriptRoot, `gateway-a-output-${now}`),
-    });
-    const second = spawnRunner({
-      storePath,
-      jobId: secondJob.id,
-      mode: "barrier-block",
-      releasePath: secondBarrier,
-      outputPath: path.join(scriptRoot, `gateway-b-output-${now}`),
+    const finish = createDeferred();
+    const cases = [firstJob, secondJob].map((job) => {
+      const entered = createDeferred();
+      const cron = makeParentService(
+        storePath,
+        vi.fn(async () => {
+          entered.resolve();
+          await finish.promise;
+          return { status: "ok" as const };
+        }),
+      );
+      return { entered, cron, run: cron.run(job.id, "force") };
     });
     try {
-      await Promise.all([waitForLine(first, "ready"), waitForLine(second, "ready")]);
-      const firstStarted = waitForLine(first, "started");
-      const secondStarted = waitForLine(second, "started");
-      await Promise.all([
-        fsPromises.writeFile(firstBarrier, "start"),
-        fsPromises.writeFile(secondBarrier, "start"),
-      ]);
-      await Promise.all([firstStarted, secondStarted]);
+      await withinTest(
+        Promise.all(
+          cases.map(({ entered, run }) =>
+            awaitGateBeforeSettlement(entered.promise, run, "Job did not enter its payload"),
+          ),
+        ),
+        signal,
+      );
 
       const persisted = await loadCronStore(storePath);
       expect(persisted.jobs.find((job) => job.id === firstJob.id)?.state.runningAtMs).toEqual(
@@ -778,11 +768,16 @@ describe("cron durable run ownership", () => {
       );
       expect(receipts(storePath, firstJob.id)[0]).toMatchObject({ status: "running" });
       expect(receipts(storePath, secondJob.id)[0]).toMatchObject({ status: "running" });
+      finish.resolve();
+      await expect(Promise.all(cases.map(({ run }) => run))).resolves.toEqual([
+        { ok: true, ran: true },
+        { ok: true, ran: true },
+      ]);
     } finally {
-      for (const child of [first, second]) {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGKILL");
-        }
+      finish.resolve();
+      await Promise.allSettled(cases.map(({ run }) => run));
+      for (const { cron } of cases) {
+        cron.stop();
       }
     }
   });

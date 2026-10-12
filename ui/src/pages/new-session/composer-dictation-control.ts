@@ -110,8 +110,7 @@ export class NewSessionDictationControl {
     return html`
       ${renderComposerVoiceButton({
         connected,
-        sending: false,
-        isBusy: !enabled,
+        disabled: !enabled,
         dictation,
         idleLabel: t("newSession.dictate"),
         microphonePicker: renderMicrophonePicker({

@@ -36,7 +36,7 @@ export async function reportUpdateFailure(params: {
   if (!confirmed || !params.isCurrent()) {
     return null;
   }
-  return await params.client.request<SubmittedUpdateReport>(
+  return params.client.request<SubmittedUpdateReport>(
     "update.report",
     {
       action: "submit",

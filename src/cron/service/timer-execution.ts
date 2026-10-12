@@ -16,16 +16,17 @@ import { cronScriptFailureMetadata } from "../script-failure.js";
 import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
   CronJob,
+  CronJobExecutionResult,
   CronStoredJob,
   CronNextCheckProposal,
   CronRunOutcome,
   CronRunTelemetry,
+  CronRunDeliveryResult,
+  CronTriggerEvalOutcome,
 } from "../types.js";
 import { abortErrorMessage, timeoutErrorMessage } from "./execution-errors.js";
-import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
+import type { CronServiceState } from "./state.js";
 import {
-  type CronJobExecutionResult,
-  type CronTriggerEvalOutcome,
   type ExecuteJobCoreOptions,
   resolveMainSessionCronDeliveryContext,
 } from "./timer-execution-timeout.js";
@@ -257,7 +258,7 @@ async function executeMainSessionCronJob(
     job,
     state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
   );
-  const deliveryContext = resolveMainSessionCronDeliveryContext(state, job);
+  const deliveryContext = await resolveMainSessionCronDeliveryContext(state, job);
   const queuedSystemEvent = normalizeQueuedSystemEventHandle(
     state.deps.enqueueSystemEvent(text, {
       agentId,
@@ -519,7 +520,9 @@ async function executeScriptCronJob(
       state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
     );
     const deliveryContext =
-      job.sessionTarget === "main" ? resolveMainSessionCronDeliveryContext(state, job) : undefined;
+      job.sessionTarget === "main"
+        ? await resolveMainSessionCronDeliveryContext(state, job)
+        : undefined;
     const eventOptions = { agentId, ...(deliveryContext ? { deliveryContext } : {}) };
     if (job.sessionTarget === "main" && notify) {
       state.deps.enqueueSystemEvent(notify, {
@@ -551,6 +554,7 @@ async function executeScriptCronJob(
     deliverySuppressionReason: result.deliverySuppressionReason,
     deliveryState: result.deliveryState,
     delivery: result.delivery,
+    diagnostics: result.diagnostics,
     nextCheck: result.nextCheck,
     scriptStateChanged: result.stateChanged === true,
     ...(result.stateChanged === true ? { scriptState: result.state } : {}),

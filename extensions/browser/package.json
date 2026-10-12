@@ -1,11 +1,11 @@
 {
   "name": "@openclaw/browser-plugin",
-  "version": "2026.9.7",
+  "version": "2026.9.9",
   "private": true,
   "description": "OpenClaw browser tool plugin",
   "type": "module",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "chrome-devtools-mcp": "1.10.1",
     "express": "5.2.1",
     "playwright-core": "1.63.0",

@@ -1,9 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import type { CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
+import { prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
+import type { CodeModeNodeInput, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 
 vi.mock("node:diagnostics_channel", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:diagnostics_channel")>();
@@ -93,6 +95,67 @@ afterEach(async () => {
 });
 
 describe("Node Code Mode worker custody", () => {
+  it("shares catalog bytes across cells while sending current execution limits", async () => {
+    const catalog = Array.from({ length: 109 }, (_, i) => ({
+      callableName: `tool_${i}`,
+      name: `tool_${i}`,
+      source: "openclaw",
+      description: "catalog metadata ".repeat(100),
+    }));
+    let start = { ...input, ...prepareCodeModeNodeCatalog({ catalog, namespaces: [] }) };
+    const execute = () => host.run(() => nodeCodeModeExecutor.execute(start, { timeoutMs: 1000 }));
+    await execute();
+    const first = fixture.executions.at(-1)!.input as CodeModeNodeInput;
+    await execute();
+    const second = fixture.executions.at(-1)!.input as CodeModeNodeInput;
+    expect(first.kind).toBe("exec");
+    expect(second.kind).toBe("exec");
+    if (first.kind !== "exec" || second.kind !== "exec") {
+      throw new Error("expected execution payloads");
+    }
+    expect(second.initialization).toBe(first.initialization);
+    expect(second.initialization.byteLength).toBeGreaterThan(100_000);
+    expect(second).not.toHaveProperty("catalog");
+    expect(second).not.toHaveProperty("apiFiles");
+    expect(second).not.toHaveProperty("namespaces");
+    expect(JSON.stringify(second).length).toBeLessThan(500);
+
+    start = {
+      ...input,
+      ...prepareCodeModeNodeCatalog({
+        catalog: [{ ...catalog[0]!, description: "new revision" }],
+        namespaces: [],
+      }),
+      config: { ...input.config, maxPendingToolCalls: 3 },
+    };
+    await execute();
+    const revised = fixture.executions.at(-1)!.input as CodeModeNodeInput;
+    if (revised.kind !== "exec") {
+      throw new Error("expected execution payload");
+    }
+    expect(revised.initialization).not.toBe(first.initialization);
+    expect(JSON.parse(new TextDecoder().decode(revised.initialization))).toMatchObject({
+      __openclawCatalog: [{ description: "new revision" }],
+    });
+    expect(revised.config.maxPendingToolCalls).toBe(3);
+  });
+
+  it("observes in-place changes to public executor inputs", async () => {
+    const catalog = [{ callableName: "lookup", description: "original" }];
+    const start = { ...input, catalog };
+    const execute = () => host.run(() => nodeCodeModeExecutor.execute(start, { timeoutMs: 1000 }));
+    await execute();
+    catalog[0]!.description = "updated";
+    await execute();
+    const sent = fixture.executions.at(-1)!.input as CodeModeNodeInput;
+    if (sent.kind !== "exec") {
+      throw new Error("expected execution payload");
+    }
+    expect(JSON.parse(new TextDecoder().decode(sent.initialization))).toMatchObject({
+      __openclawCatalog: [{ description: "updated" }],
+    });
+  });
+
   it("joins its native workers at host close without retiring a sibling host", async () => {
     const sibling = new LegacyPluginSdkResourceHost();
     const siblingScheduler = createTestGatewayScheduler();
@@ -130,37 +193,76 @@ describe("Node Code Mode worker custody", () => {
     }
   });
 
-  it("closes a standalone completed worker without retaining an unowned idle timer", async () => {
-    await nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 });
-    expect(fixture.pools.at(-1)?.isClosed).toBe(true);
-  });
+  it.each(["standalone", "runtime changed"] as const)(
+    "closes a completed worker when %s prevents idle retention",
+    async (reason) => {
+      let previous: (typeof fixture.pools)[number] | undefined;
+      if (reason === "runtime changed") {
+        await run();
+        previous = fixture.pools.at(-1)!;
+        previous.run.mockImplementationOnce(async () => {
+          fixture.workerUrl += ".updated";
+          return fixture.completed;
+        });
+      }
+      expect(
+        await (reason === "standalone"
+          ? nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 })
+          : run()),
+      ).toMatchObject({ status: "completed" });
+      expect((previous ?? fixture.pools.at(-1))?.isClosed).toBe(true);
+    },
+  );
 
-  it("retains a failed host retirement for the next acquisition to join", async () => {
-    const previous = new LegacyPluginSdkResourceHost();
-    const previousScheduler = createTestGatewayScheduler();
-    previous.bindScheduler(previousScheduler);
-    await previous.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
-    const retired = fixture.pools.at(-1)!;
-    retired.close.mockRejectedValueOnce(new Error("native exit uncertain"));
-    await expect(previous.close()).rejects.toThrow(
-      "Plugin SDK resources could not all be disposed",
-    );
-    expect(retired.isClosed).toBe(false);
-    await run();
-    expect(retired.close).toHaveBeenCalledTimes(2);
-    expect(retired.isClosed).toBe(true);
-    await previousScheduler.stop();
-  });
+  it.each(["host", "idle"] as const)(
+    "joins failed %s retirement before acquiring a successor",
+    async (reason) => {
+      const previous = reason === "host" ? new LegacyPluginSdkResourceHost() : host;
+      const previousScheduler = reason === "host" ? createTestGatewayScheduler() : scheduler;
+      if (reason === "host") {
+        previous.bindScheduler(previousScheduler);
+      }
+      await previous.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
+      const retired = fixture.pools.at(-1)!;
+      const count = fixture.pools.length;
+      retired.close.mockRejectedValueOnce(new Error("native exit uncertain"));
+      if (reason === "host") {
+        await expect(previous.close()).rejects.toThrow(
+          "Plugin SDK resources could not all be disposed",
+        );
+      } else {
+        fixture.workerUrl += ".updated";
+        await expect(run()).rejects.toThrow("native exit uncertain");
+      }
+      expect(retired.isClosed).toBe(false);
+      expect(fixture.pools).toHaveLength(count);
+      expect(await run()).toMatchObject({ status: "completed" });
+      expect(retired.close).toHaveBeenCalledTimes(2);
+      expect(retired.isClosed).toBe(true);
+      expect(fixture.pools).toHaveLength(count + 1);
+      if (reason === "host") {
+        await previousScheduler.stop();
+      }
+    },
+  );
 
-  it("reuses idle workers within five minutes and expires each after inactivity", async () => {
+  it("reuses idle workers and expires them without retaining completed caller context", async () => {
+    const caller = new AsyncLocalStorage<string>();
+    const retiredContexts: Array<string | undefined> = [];
     vi.useFakeTimers();
     try {
-      await Promise.all([run(), run()]);
+      await caller.run("completed-turn", () => Promise.all([run(), run()]));
       const count = fixture.pools.length;
       const previous = fixture.pools.at(-1)!;
       const reused = fixture.pools.at(-2)!;
+      for (const pool of [previous, reused]) {
+        pool.close.mockImplementation(async () => {
+          retiredContexts.push(caller.getStore());
+          pool.isClosed = true;
+        });
+      }
       await vi.advanceTimersByTimeAsync(70_000);
-      expect(await run()).toMatchObject({ status: "completed" });
+      expect(await caller.run("reused-turn", run)).toMatchObject({ status: "completed" });
       expect(fixture.pools).toHaveLength(count);
       expect(previous.isClosed).toBe(false);
       await vi.advanceTimersByTimeAsync(4 * 60_000);
@@ -168,7 +270,9 @@ describe("Node Code Mode worker custody", () => {
       expect(reused.isClosed).toBe(false);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(reused.isClosed).toBe(true);
+      expect(retiredContexts).toEqual([undefined, undefined]);
     } finally {
+      caller.disable();
       vi.useRealTimers();
     }
   });
@@ -321,30 +425,6 @@ describe("Node Code Mode worker custody", () => {
     expect(previous.run).toHaveBeenCalledTimes(previousExecutions);
     expect(sibling.isClosed).toBe(true);
     expect(fixture.pools.at(-1)?.url).toBe(fixture.workerUrl);
-  });
-
-  it("retains failed idle retirement and joins its native retry before allocating a successor", async () => {
-    await run();
-    const previous = fixture.pools.at(-1)!;
-    const count = fixture.pools.length;
-    previous.close.mockRejectedValueOnce(new Error("native exit uncertain"));
-    fixture.workerUrl += ".updated";
-    await expect(run()).rejects.toThrow("native exit uncertain");
-    expect(fixture.pools).toHaveLength(count);
-    expect(await run()).toMatchObject({ status: "completed" });
-    expect(previous.close).toHaveBeenCalledTimes(2);
-    expect(fixture.pools).toHaveLength(count + 1);
-  });
-
-  it("retires a completing worker when its runtime entry changed during execution", async () => {
-    await run();
-    const previous = fixture.pools.at(-1)!;
-    previous.run.mockImplementationOnce(async () => {
-      fixture.workerUrl += ".updated";
-      return fixture.completed;
-    });
-    expect(await run()).toMatchObject({ status: "completed" });
-    expect(previous.isClosed).toBe(true);
   });
 
   it("does not release an excess completed pool after native cleanup fails", async () => {

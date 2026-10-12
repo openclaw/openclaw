@@ -89,8 +89,10 @@ afterEach(() => {
 describe("subagent completion media after requester wake failure", () => {
   it.each<{
     name: string;
-    event: Partial<AgentInternalEvent>;
-    content: string;
+    event?: Partial<AgentInternalEvent>;
+    payloads?: Record<string, unknown>[];
+    content?: string;
+    absent?: boolean;
     media?: string[];
     asVoice?: boolean;
   }>([
@@ -137,18 +139,8 @@ describe("subagent completion media after requester wake failure", () => {
       content: "(no output)",
       media: undefined,
     },
-  ])("delivers $name through the direct fallback", async ({ event, content, media, asVoice }) => {
-    const { result, sendMessage } = await deliver({ event });
-    expect(result).toMatchObject({ delivered: true, path: "direct" });
-    expect(sendMessage).toHaveBeenCalledOnce();
-    const payload = mockCallArg(sendMessage);
-    expect(payload.content).toBe(content);
-    expect(payload.mediaUrls).toEqual(media);
-    expect(payload.asVoice).toBe(asVoice);
-  });
-
-  it("uses visible requester payload media and preserves voice intent", async () => {
-    const { result, sendMessage } = await deliver({
+    {
+      name: "requester voice payload",
       payloads: [
         {
           text: `Voice ready\nMEDIA:/tmp/voice.ogg\n${hidden}`,
@@ -156,31 +148,37 @@ describe("subagent completion media after requester wake failure", () => {
           audioAsVoice: true,
         },
       ],
-    });
-    expect(result).toMatchObject({ delivered: true, path: "direct" });
-    expect(sendMessage).toHaveBeenCalledOnce();
-    expect(mockCallArg(sendMessage)).toMatchObject({
       content: "Voice ready",
-      mediaUrls: ["/tmp/voice.ogg"],
+      media: ["/tmp/voice.ogg"],
       asVoice: true,
-    });
-  });
-
-  it("does not deliver a result recorded as absent", async () => {
-    const { sendMessage } = await deliver({
+    },
+    {
+      name: "recorded absent result",
       event: { result: "(no output)", noVisibleResult: true },
-    });
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("excludes media from failed completions", async () => {
-    const { result, sendMessage } = await deliver({
+      absent: true,
+    },
+    {
+      name: "failed completion without its media",
       event: { status: "error", statusLabel: "failed", result: "(no output)", mediaUrls: [image] },
-    });
-    expect(result).toMatchObject({ delivered: true, path: "direct" });
-    expect(sendMessage).toHaveBeenCalledOnce();
-    expect(mockCallArg(sendMessage).mediaUrls).toBeUndefined();
-  });
+    },
+  ])(
+    "delivers only visible completed content: $name",
+    async ({ event, payloads, content, media, asVoice, absent }) => {
+      const { result, sendMessage } = await deliver({ event, payloads });
+      if (absent) {
+        expect(sendMessage).not.toHaveBeenCalled();
+        return;
+      }
+      expect(result).toMatchObject({ delivered: true, path: "direct" });
+      expect(sendMessage).toHaveBeenCalledOnce();
+      const payload = mockCallArg(sendMessage);
+      if (content !== undefined) {
+        expect(payload.content).toBe(content);
+      }
+      expect(payload.mediaUrls).toEqual(media);
+      expect(payload.asVoice).toBe(asVoice);
+    },
+  );
 
   it("does not settle or retry a partially sent media batch", async () => {
     const onDeliveryResult = vi.fn();

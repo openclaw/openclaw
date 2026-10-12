@@ -20,12 +20,12 @@ not consume a train. Continue an existing beta train with its next `beta.N` when
 otherwise increment the highest stable/beta patch and start at `beta.1`.
 Prefer `-beta.N`, never new numeric-only beta suffixes.
 
-| Track           | Branch/version                                                        | Registry selector                                                |
-| --------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| Regular beta    | `release/YYYY.M.PATCH`, `YYYY.M.PATCH-beta.N`                         | `beta`                                                           |
-| Regular stable  | `release/YYYY.M.PATCH`, `YYYY.M.PATCH`                                | `beta` by default; intentional publication/promotion to `latest` |
-| Extended stable | `extended-stable/YYYY.M.33`, either trailing completed month's `.33+` | `extended-stable`                                                |
-| Development     | moving main                                                           | not a release                                                    |
+| Track           | Branch/version                                                 | Registry selector                                                |
+| --------------- | -------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Regular beta    | `release/YYYY.M.PATCH`, `YYYY.M.PATCH-beta.N`                  | `beta`                                                           |
+| Regular stable  | `release/YYYY.M.PATCH`, `YYYY.M.PATCH`                         | `beta` by default; intentional publication/promotion to `latest` |
+| Extended stable | `extended-stable/YYYY.M.33`, trailing completed month's `.33+` | `extended-stable`                                                |
+| Development     | moving main                                                    | not a release                                                    |
 
 Use the release preparation controller before manual version edits:
 
@@ -55,6 +55,8 @@ be repaired later to add that platform.
 When backport discovery is requested or part of planning, read
 [backport discovery](backport-discovery.md), freeze the baseline and main SHA,
 and obtain approval for the categorized ledger before mutating the branch.
+Include its selected-contract closure and CI-optimization dispositions; recheck
+closure against the final candidate before freezing or starting qualification.
 Backports stay optional and operator-selected. An unspecified target means the
 newest open release branch. Extended-stable preparation additionally uses
 [its backport procedure](extended-stable-backports.md).
@@ -83,14 +85,50 @@ Use `$openclaw-changelog-update` for source-history inventory, human credit,
 editorial grouping, renderer limits, and verification. Generate the complete
 history manifest and notes during preparation; editorial work may overlap
 Code validation. Refresh them for actual source changes, not tooling retries.
-Beta notes use the stable-base
-`## YYYY.M.PATCH` section in `CHANGELOG/YYYY.M.PATCH.md`, with Highlights,
-Changes and Fixes. `CHANGELOG.md` is the generated index; the matching
-`CHANGELOG/records/YYYY.M.PATCH.md` retains the complete contribution record.
+Beta notes use the exact
+`## YYYY.M.PATCH-beta.N` section in `CHANGELOG/YYYY.M.PATCH-beta.N.md` and
+matching `CHANGELOG/records/YYYY.M.PATCH-beta.N.md`. Capture npm's current
+`openclaw@beta` version before publication as the delta baseline, including a
+stable version when `beta` and `latest` coincide. Never choose the last GitHub
+prerelease. Preserve the resolved tag in the contribution manifest and reuse
+it for verification/recovery after the selector moves. Every beta gets freshly
+inventoried delta prose; a new candidate refuses cumulative-only notes.
+Stable notes remain cumulative in `CHANGELOG/YYYY.M.PATCH.md`, with their own
+record. `CHANGELOG.md` is the generated index.
 Use the shared resolver and writer documented in the changelog skill. Canonical PR
 provenance follows current `origin/main`; retain a release-branch PR only while
 its change has not been forward-ported. Do not change root README as routine
 release prep or prefill a future changelog section.
+
+Before freezing Code SHA, verify and stamp the state and agent schema-history
+tables alongside the changelog:
+
+```bash
+node scripts/release-schema-history.mjs YYYY.M.PATCH-beta.N
+```
+
+Use the exact approved version (stable cuts omit `-beta.N`). This stamps only
+`Unreleased` schema rows in `docs/reference/database-schemas/{state,agent}-schema-history.md`;
+existing release attributions and migration notes are preserved. Commit both
+histories with the version and release notes before qualification, not as a
+later changelog-only delta.
+
+Before stamping, manually audit every `Unreleased` row against complete Git
+history and release tags. A shallow checkout or missing tags cannot establish
+that a row is unpublished. Find the bump with `git log -p -S
+'OPENCLAW_STATE_SCHEMA_VERSION = N;' -- src/state` (use
+`OPENCLAW_AGENT_SCHEMA_VERSION` for agents), following earlier constant owners
+when needed. For the introducing commit, use `git tag --contains <sha> --sort=v:refname`
+and select the first tag matching `^v[0-9]{4}\.[0-9]+\.[0-9]+$`.
+If one exists, record that exact stable tag instead of the new cut; otherwise
+record the earliest containing beta, or leave `Unreleased` for the stamping
+step when neither exists. Inspect the tagged constant too: a release can
+contain several development-only bumps and publish the highest version.
+At stable promotion, audit beta-only cells the same way and replace them with
+their first containing stable tag (or this approved stable cut if it is first).
+Keep any earlier-beta provenance in the migration notes where useful.
+This is a release checklist check, not a CI ancestry check: ordinary shallow
+CI checkouts do not carry the complete release history needed to prove it.
 
 When final notes were already included in the qualified Code SHA, retain that
 same commit as Release SHA. If notes change afterward, commit only the release

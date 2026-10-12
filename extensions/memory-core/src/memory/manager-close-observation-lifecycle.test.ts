@@ -9,6 +9,7 @@ import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { MemoryFileWatcher } from "./file-watcher.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexManager } from "./manager.js";
@@ -76,7 +77,7 @@ describe("MemoryIndexManager observation close lifecycle", () => {
   async function open(agentId: string) {
     const cfg: OpenClawConfig = {
       plugins: { enabled: false },
-      agents: { defaults: { workspace: state.workspaceDir }, list: [{ id: agentId }] },
+      agents: { defaults: { workspace: state.workspaceDir }, entries: { [agentId]: {} } },
       memory: {
         search: {
           provider: "openai",
@@ -88,7 +89,11 @@ describe("MemoryIndexManager observation close lifecycle", () => {
         },
       },
     };
-    const manager = await MemoryIndexManager.get({ cfg, agentId });
+    const manager = await MemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId,
+    });
     if (!manager) {
       throw new Error("Expected a persistent Memory manager");
     }

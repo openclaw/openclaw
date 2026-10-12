@@ -1,7 +1,9 @@
+import { logWarn } from "../../../logger.js";
 import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
+import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
@@ -10,6 +12,7 @@ export type RequesterSettleWakeBatchCallbacks = {
   transitionBatch: (
     batch: readonly SubagentRunRecord[],
     state: RequesterSettleWakeBatchState,
+    onPublished: (entries: readonly SubagentRunRecord[]) => void,
   ) => void | Promise<void>;
   completeBatch: (
     batch: readonly SubagentRunRecord[],
@@ -20,6 +23,7 @@ export type RequesterSettleWakeBatchCallbacks = {
 };
 
 const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
+const REQUESTER_SETTLE_WAKE_MAX_DEFERRALS = 10;
 
 /** Reads stay independent; the first prepared decision owns mutation and delivery. */
 export function createRequesterSettleBatchClaim(
@@ -59,22 +63,6 @@ export function createRequesterSettleBatchClaim(
   };
 }
 
-/** Fence consumed pause notices and completions superseded by a pause. */
-export function isRequesterWakeStateCurrent(
-  entry: SubagentRunRecord,
-  rearmGeneration: number | undefined,
-  pause: boolean,
-): boolean {
-  const wake = entry.requesterSettleWake;
-  return Boolean(
-    wake &&
-    wake.rearmGeneration === rearmGeneration &&
-    (pause
-      ? entry.pauseReason === "sessions_yield" && wake.pauseNotice
-      : entry.pauseReason !== "sessions_yield"),
-  );
-}
-
 export function retainedYieldIdentity(state: RequesterSettleWakeBatchState) {
   return {
     ...(state.pauseNotice ? { pauseNotice: state.pauseNotice } : {}),
@@ -82,6 +70,88 @@ export function retainedYieldIdentity(state: RequesterSettleWakeBatchState) {
     ...(state.afterRequesterYield === true ? { afterRequesterYield: true as const } : {}),
     ...(state.yieldedFinalDeliverable === true ? { yieldedFinalDeliverable: true as const } : {}),
     ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
+  };
+}
+
+export function startRequesterSettleWakeAttempt(
+  state: RequesterSettleWakeBatchState,
+  batchRunIds: RequesterSettleWakeBatchState["batchRunIds"],
+  admissionMarker: Pick<RequesterSettleWakeBatchState, "yieldedFinalDeliverable">,
+): RequesterSettleWakeBatchState {
+  return {
+    status: "dispatching",
+    attemptCount: state.attemptCount + 1,
+    batchRunIds,
+    deferralCount: state.deferralCount,
+    ...retainedYieldIdentity(state),
+    ...admissionMarker,
+  };
+}
+
+export function deferRequesterSettleWakePreparation(
+  state: RequesterSettleWakeBatchState,
+): RequesterSettleWakeBatchState {
+  return { ...state, nextAttemptAt: Date.now() + 30_000 };
+}
+
+/** Returns true when the stale-descendant wait is spent and this batch may dispatch. */
+export function createRequesterSettleBatchDeferral(params: {
+  readDescendants: () => Promise<{ active: number } | undefined>;
+  claimCurrentBatch: () => boolean;
+  readState: () => RequesterSettleWakeBatchState;
+  transitionBatch: (state: RequesterSettleWakeBatchState) => Promise<void>;
+  batchRunIds: RequesterSettleWakeBatchState["batchRunIds"];
+  retryDelayMs: number;
+}) {
+  return async (
+    overrides: Partial<Pick<RequesterSettleWakeBatchState, "status" | "lastError">> = {},
+    countTowardsLimitOverride?: boolean,
+  ): Promise<boolean> => {
+    let countTowardsLimit = countTowardsLimitOverride;
+    if (countTowardsLimit === undefined) {
+      const descendants = await params.readDescendants();
+      if (!descendants) {
+        return false;
+      }
+      countTowardsLimit = descendants.active === 0;
+    }
+    if (!params.claimCurrentBatch()) {
+      return false;
+    }
+    const state = { ...params.readState(), ...overrides };
+    const now = Date.now();
+    if ((state.nextAttemptAt ?? 0) > now) {
+      return false;
+    }
+    // Active work still defers delivery, but cannot recharge a spent wait.
+    const deferralCount =
+      (state.deferralCount ?? 0) >= REQUESTER_SETTLE_WAKE_MAX_DEFERRALS
+        ? REQUESTER_SETTLE_WAKE_MAX_DEFERRALS
+        : countTowardsLimit
+          ? (state.deferralCount ?? 0) + 1
+          : 0;
+    if (countTowardsLimit && deferralCount >= REQUESTER_SETTLE_WAKE_MAX_DEFERRALS) {
+      if (state.deferralCount !== deferralCount) {
+        await params.transitionBatch({ ...state, deferralCount });
+      }
+      // An ended descendant whose own delivery never settles must not cost
+      // this batch its completed results: stop waiting and deliver them.
+      logWarn(
+        `requester settle wake stopped waiting for unsettled descendants after ${deferralCount} deferrals; delivering the drained batch`,
+      );
+      return true;
+    }
+    await params.transitionBatch({
+      status: state.status,
+      attemptCount: state.attemptCount,
+      ...(state.replayCount !== undefined ? { replayCount: state.replayCount } : {}),
+      nextAttemptAt: Math.max(state.nextAttemptAt ?? 0, now + params.retryDelayMs),
+      batchRunIds: params.batchRunIds,
+      ...retainedYieldIdentity(state),
+      ...(state.lastError !== undefined ? { lastError: state.lastError } : {}),
+      deferralCount,
+    });
+    return false;
   };
 }
 
@@ -114,26 +184,21 @@ export function readSharedBatchState(
 }
 
 export function captureRequesterRunOwner(requesterRun: SubagentRunRecord | null | undefined) {
-  const requesterGeneration = requesterRun?.generation;
-  const requesterCreatedAt = requesterRun?.createdAt;
   const requesterTaskRunId = requesterRun?.taskRunId ?? requesterRun?.runId;
   return (currentRequester: SubagentRunRecord | null | undefined, continuationRunId: string) => {
-    // Normal admission adopts a paused requester before execution starts.
-    // Only this admitted continuation may replace its captured task owner.
-    if (
-      (currentRequester !== requesterRun ||
-        currentRequester?.generation !== requesterGeneration ||
-        currentRequester?.createdAt !== requesterCreatedAt) &&
-      (!requesterRun ||
-        !currentRequester ||
-        currentRequester.runId !== continuationRunId ||
-        currentRequester.taskRunId !== requesterTaskRunId ||
-        currentRequester.requesterSessionKey !== requesterRun.requesterSessionKey ||
-        currentRequester.requesterAgentId !== requesterRun.requesterAgentId)
-    ) {
-      return false;
+    if (!currentRequester || !requesterRun) {
+      return !currentRequester && !requesterRun;
     }
-    return true;
+    if (isSameSubagentRun(currentRequester, requesterRun)) {
+      return isSameSubagentRunOwner(currentRequester, requesterRun);
+    }
+    // Only the admitted continuation may replace its captured task owner.
+    return (
+      currentRequester.runId === continuationRunId &&
+      currentRequester.taskRunId === requesterTaskRunId &&
+      currentRequester.requesterSessionKey === requesterRun.requesterSessionKey &&
+      currentRequester.requesterAgentId === requesterRun.requesterAgentId
+    );
   };
 }
 

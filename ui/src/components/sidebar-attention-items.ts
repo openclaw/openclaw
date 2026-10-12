@@ -8,8 +8,6 @@ import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 
 registerSidebarAttentionEnglish();
 
-// A cron job counts as overdue when its next planned run is this far in the
-// past; mirrors the threshold the Overview attention list used.
 const CRON_OVERDUE_GRACE_MS = 300_000;
 const ALERT_QUESTION_MAX_LENGTH = 1_000;
 

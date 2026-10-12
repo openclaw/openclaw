@@ -18,7 +18,6 @@ import {
   type Tool as BedrockTool,
   type ToolChoice,
   type ToolConfiguration,
-  type ToolResultContentBlock,
   ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
@@ -32,6 +31,7 @@ import {
   clampReasoning,
   createHttpProxyAgentsForTarget,
   createToolArgumentPreviewSchedule,
+  hasRuntimeContextMarker,
   parseStreamingJson,
   sanitizeSurrogates,
   transformMessages,
@@ -74,6 +74,7 @@ import {
   failTransportStream,
   finalizeTerminalToolCallArguments,
   notifyProviderHttpMetadata,
+  sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
@@ -85,6 +86,7 @@ import {
 import { resolveBedrockRuntimeAuth } from "./aws-credential-refresh.js";
 import {
   resolveBedrockCachePoint,
+  resolveBedrockCacheRetention,
   resolveBedrockPromptCachePolicy,
   type BedrockOptions,
 } from "./bedrock-options.js";
@@ -94,18 +96,23 @@ import {
   supportsBedrockNativeMaxEffort,
 } from "./thinking-policy.js";
 
-type Block = (TextContent | ThinkingContent | ToolCall) & {
-  index?: number;
-  partialJson?: string;
-};
+type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number };
 type BedrockEventSink = { push(event: AssistantMessageEvent): void };
 type ToolArgumentPreviewSchedules = WeakMap<
   ToolCall,
   ReturnType<typeof createToolArgumentPreviewSchedule>
 >;
 type PendingBedrockToolCall = {
-  block: ToolCall & Pick<Block, "partialJson">;
+  block: ToolCall;
   contentIndex: number;
+};
+type BedrockBlockState = {
+  blocks: Block[];
+  output: AssistantMessage;
+  stream: BedrockEventSink;
+  toolArgumentPreviewSchedules: ToolArgumentPreviewSchedules;
+  redactedReasoningChunks: Map<number, Uint8Array[]>;
+  pendingToolCallEnds: PendingBedrockToolCall[];
 };
 
 function readBedrockStopDetails(fields: DocumentType | undefined): unknown {
@@ -152,9 +159,6 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     });
 
     const blocks = output.content as Block[];
-    const pendingToolCallEnds: PendingBedrockToolCall[] = [];
-    const toolArgumentPreviewSchedules: ToolArgumentPreviewSchedules = new WeakMap();
-    const redactedReasoningChunks = new Map<number, Uint8Array[]>();
     const fable5 = resolveClaudeFable5ModelIdentity(model) !== undefined;
     // Claude classifiers may refuse after partial output. Hold every event until
     // messageStop proves the response is safe to expose.
@@ -162,6 +166,14 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
       : undefined;
     const eventSink = refusalBuffer ?? stream;
+    const blockState: BedrockBlockState = {
+      blocks,
+      output,
+      stream: eventSink,
+      toolArgumentPreviewSchedules: new WeakMap(),
+      redactedReasoningChunks: new Map(),
+      pendingToolCallEnds: [],
+    };
 
     const config: BedrockRuntimeClientConfig = {
       profile: options.profile,
@@ -214,8 +226,9 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     try {
       options.signal?.throwIfAborted();
       client = new BedrockRuntimeClient(config);
-      const cacheRetention = resolveCacheRetention(model, options.cacheRetention);
-      const cachePoint = resolveBedrockCachePoint(model, cacheRetention);
+      const cachePolicy = resolveBedrockPromptCachePolicy(model);
+      const cacheRetention = resolveBedrockCacheRetention(cachePolicy, options.cacheRetention);
+      const cachePoint = resolveBedrockCachePoint(cachePolicy, cacheRetention);
       const additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
       const thinking = (additionalModelRequestFields as Record<string, unknown> | undefined)
         ?.thinking;
@@ -279,31 +292,11 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
           }
           eventSink.push({ type: "start", partial: output });
         } else if (item.contentBlockStart) {
-          handleContentBlockStart(
-            item.contentBlockStart,
-            blocks,
-            output,
-            eventSink,
-            toolArgumentPreviewSchedules,
-          );
+          handleContentBlockStart(item.contentBlockStart, blockState);
         } else if (item.contentBlockDelta) {
-          handleContentBlockDelta(
-            item.contentBlockDelta,
-            blocks,
-            output,
-            eventSink,
-            redactedReasoningChunks,
-            toolArgumentPreviewSchedules,
-          );
+          handleContentBlockDelta(item.contentBlockDelta, blockState);
         } else if (item.contentBlockStop) {
-          handleContentBlockStop(
-            item.contentBlockStop,
-            blocks,
-            output,
-            eventSink,
-            redactedReasoningChunks,
-            pendingToolCallEnds,
-          );
+          handleContentBlockStop(item.contentBlockStop, blockState);
         } else if (item.messageStop) {
           sawMessageStop = true;
           if ((item.messageStop.stopReason as string | undefined) === "refusal") {
@@ -348,17 +341,10 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       // Some valid provider streams omit contentBlockStop; never persist their scratch state.
       for (const block of blocks) {
         if (block.index !== undefined && block.type !== "toolCall") {
-          handleContentBlockStop(
-            { contentBlockIndex: block.index },
-            blocks,
-            output,
-            eventSink,
-            redactedReasoningChunks,
-            pendingToolCallEnds,
-          );
+          handleContentBlockStop({ contentBlockIndex: block.index }, blockState);
         }
       }
-      flushPendingBedrockToolCalls(pendingToolCallEnds, blocks, output, eventSink);
+      flushPendingBedrockToolCalls(blockState);
       refusalBuffer?.flush();
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
@@ -372,8 +358,6 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
           output.content = output.content.filter((block) => block.type !== "toolCall");
           for (const block of output.content) {
             delete (block as Block).index;
-            // partialJson is only a streaming scratch buffer; never persist it.
-            delete (block as Block).partialJson;
           }
           if (refusalBuffer) {
             refusalBuffer.discard();
@@ -426,91 +410,59 @@ function resolveSimpleBedrockOptions(
   model: Model<"bedrock-converse-stream">,
   options?: SimpleStreamOptions,
 ): BedrockOptions {
-  const bedrockOptions = options as BedrockOptions | undefined;
-  const base = {
-    ...bedrockOptions,
+  const base: BedrockOptions = {
+    ...options,
     ...buildBaseOptions(model, options, undefined),
   };
   if (requiresMandatoryAdaptiveThinking(model)) {
-    return {
-      ...base,
-      maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
-      reasoning: options?.reasoning,
-      thinkingBudgets: options?.thinkingBudgets,
-    } satisfies BedrockOptions;
+    base.maxTokens = resolveAdaptiveBedrockMaxTokens(model, base.maxTokens);
+    base.reasoning = options?.reasoning;
+    base.thinkingBudgets = options?.thinkingBudgets;
+    return base;
   }
-  if (!options?.reasoning) {
-    const reasoning = resolveClaudeOpus5ModelIdentity(model) !== undefined ? "high" : undefined;
-    return {
-      ...base,
-      ...(reasoning !== undefined || supportsAdaptiveThinking(model)
-        ? { maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens) }
-        : {}),
-      reasoning,
-    } satisfies BedrockOptions;
-  }
-
-  if (options.reasoning === "off") {
-    return {
-      ...base,
-      ...(supportsAdaptiveThinking(model)
-        ? { maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens) }
-        : {}),
-      reasoning: "off",
-    } satisfies BedrockOptions;
+  if (!options?.reasoning || options.reasoning === "off") {
+    base.reasoning =
+      options?.reasoning === "off"
+        ? "off"
+        : resolveClaudeOpus5ModelIdentity(model) !== undefined
+          ? "high"
+          : undefined;
+    if (base.reasoning === "high" || supportsAdaptiveThinking(model)) {
+      base.maxTokens = resolveAdaptiveBedrockMaxTokens(model, base.maxTokens);
+    }
+    return base;
   }
 
+  base.reasoning = options.reasoning;
+  base.thinkingBudgets = options.thinkingBudgets;
   if (isAnthropicClaudeModel(model)) {
     if (supportsAdaptiveThinking(model)) {
-      return {
-        ...base,
-        maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
-        reasoning: options.reasoning,
-        thinkingBudgets: options.thinkingBudgets,
-      } satisfies BedrockOptions;
+      base.maxTokens = resolveAdaptiveBedrockMaxTokens(model, base.maxTokens);
+    } else {
+      // An absent caller cap lets the helper fit thinking within the model cap.
+      const adjusted = adjustMaxTokensForThinking(
+        base.maxTokens,
+        model.maxTokens,
+        options.reasoning,
+        options.thinkingBudgets,
+      );
+      base.maxTokens = adjusted.maxTokens;
+      if (adjusted.thinkingBudget < 1024) {
+        base.reasoning = "off";
+      } else {
+        base.thinkingBudgets = {
+          ...options.thinkingBudgets,
+          [clampReasoning(options.reasoning)!]: adjusted.thinkingBudget,
+        };
+      }
     }
-
-    // Undefined means the caller did not request an output cap; let the helper use the model cap.
-    // Do not coerce to 0 here, or the thinking budget would become the entire maxTokens value.
-    const adjusted = adjustMaxTokensForThinking(
-      base.maxTokens,
-      model.maxTokens,
-      options.reasoning,
-      options.thinkingBudgets,
-    );
-
-    if (adjusted.thinkingBudget < 1024) {
-      return {
-        ...base,
-        maxTokens: adjusted.maxTokens,
-        reasoning: "off",
-      } satisfies BedrockOptions;
-    }
-
-    return {
-      ...base,
-      maxTokens: adjusted.maxTokens,
-      reasoning: options.reasoning,
-      thinkingBudgets: {
-        ...options.thinkingBudgets,
-        [clampReasoning(options.reasoning)!]: adjusted.thinkingBudget,
-      },
-    } satisfies BedrockOptions;
   }
-
-  return {
-    ...base,
-    reasoning: options.reasoning,
-    thinkingBudgets: options.thinkingBudgets,
-  } satisfies BedrockOptions;
+  return base;
 }
 
 function handleContentBlockStart(
   event: ContentBlockStartEvent,
-  blocks: Block[],
-  output: AssistantMessage,
-  stream: BedrockEventSink,
-  toolArgumentPreviewSchedules: ToolArgumentPreviewSchedules,
+  { blocks, output, stream, toolArgumentPreviewSchedules }: BedrockBlockState,
 ): void {
   const index = event.contentBlockIndex!;
   const start = event.start;
@@ -533,11 +485,13 @@ function handleContentBlockStart(
 
 function handleContentBlockDelta(
   event: ContentBlockDeltaEvent,
-  blocks: Block[],
-  output: AssistantMessage,
-  stream: BedrockEventSink,
-  redactedReasoningChunks: Map<number, Uint8Array[]>,
-  toolArgumentPreviewSchedules: ToolArgumentPreviewSchedules,
+  {
+    blocks,
+    output,
+    stream,
+    redactedReasoningChunks,
+    toolArgumentPreviewSchedules,
+  }: BedrockBlockState,
 ): void {
   const contentBlockIndex = event.contentBlockIndex!;
   const delta = event.delta;
@@ -645,11 +599,7 @@ function handleMetadata(
 
 function handleContentBlockStop(
   event: ContentBlockStopEvent,
-  blocks: Block[],
-  output: AssistantMessage,
-  stream: BedrockEventSink,
-  redactedReasoningChunks: Map<number, Uint8Array[]>,
-  pendingToolCallEnds: PendingBedrockToolCall[],
+  { blocks, output, stream, redactedReasoningChunks, pendingToolCallEnds }: BedrockBlockState,
 ): void {
   const index = blocks.findIndex((b) => b.index === event.contentBlockIndex);
   const block = blocks[index];
@@ -691,12 +641,12 @@ function handleContentBlockStop(
   }
 }
 
-function flushPendingBedrockToolCalls(
-  pending: PendingBedrockToolCall[],
-  blocks: Block[],
-  output: AssistantMessage,
-  stream: BedrockEventSink,
-): void {
+function flushPendingBedrockToolCalls({
+  pendingToolCallEnds: pending,
+  blocks,
+  output,
+  stream,
+}: BedrockBlockState): void {
   if (blocks.some((block) => block.type === "toolCall" && block.index !== undefined)) {
     throw new Error("Provider completed stream with an incomplete tool call");
   }
@@ -827,26 +777,6 @@ function mapThinkingLevelToEffort(
 }
 
 /**
- * Resolve cache retention preference.
- * Nova requires explicit opt-in; other models retain the existing env/default policy.
- */
-function resolveCacheRetention(
-  model: Model<"bedrock-converse-stream">,
-  cacheRetention?: CacheRetention,
-): CacheRetention {
-  if (cacheRetention) {
-    return cacheRetention;
-  }
-  if (resolveBedrockPromptCachePolicy(model) === "nova") {
-    return "none";
-  }
-  if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {
-    return "long";
-  }
-  return "short";
-}
-
-/**
  * Check if the model is an Anthropic Claude model on Bedrock.
  * Checks both model ID and model name to support application inference profiles
  * whose ARNs don't contain the model name.
@@ -898,18 +828,28 @@ function normalizeToolCallId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
-function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolResultMember {
-  const content: ToolResultContentBlock[] = [];
-  for (const block of message.content) {
+function convertTextImageContent(
+  blocks: ToolResultMessage["content"],
+  skipEmptyImages: boolean,
+): Array<ContentBlock.TextMember | ContentBlock.ImageMember> {
+  const content: Array<ContentBlock.TextMember | ContentBlock.ImageMember> = [];
+  for (const block of blocks) {
     if (block.type === "text") {
       content.push({ text: sanitizeSurrogates(block.text) });
       continue;
     }
-    if (block.type === "image" && describeToolResultMediaPlaceholder([block])) {
+    if (
+      block.type === "image" &&
+      (!skipEmptyImages || describeToolResultMediaPlaceholder([block]))
+    ) {
       content.push({ image: createImageBlock(block.mimeType, block.data) });
     }
   }
+  return content;
+}
 
+function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolResultMember {
+  const content = convertTextImageContent(message.content, true);
   return {
     toolResult: {
       toolUseId: message.toolCallId,
@@ -936,31 +876,16 @@ function convertMessages(
 
     switch (m.role) {
       case "user": {
-        const content: ContentBlock[] = [];
-        if (typeof m.content === "string") {
-          content.push({ text: sanitizeSurrogates(m.content) });
-        } else {
-          for (const c of m.content) {
-            switch (c.type) {
-              case "text":
-                content.push({ text: sanitizeSurrogates(c.text) });
-                break;
-              case "image":
-                content.push({ image: createImageBlock(c.mimeType, c.data) });
-                break;
-              default:
-                continue;
-            }
-          }
-        }
+        const content =
+          typeof m.content === "string"
+            ? [{ text: sanitizeSurrogates(m.content) }]
+            : convertTextImageContent(m.content, false);
         if (content.length === 0) {
           continue;
         }
-        if (
-          m.runtimeContextCarrier === true &&
-          !bindsClaudeThinkingPrefix(model) &&
-          firstVolatileMessageIndex === undefined
-        ) {
+        const volatileRuntimeContext =
+          hasRuntimeContextMarker(m) && !bindsClaudeThinkingPrefix(model);
+        if (volatileRuntimeContext && firstVolatileMessageIndex === undefined) {
           firstVolatileMessageIndex = result.length;
         }
         result.push({
@@ -1108,16 +1033,18 @@ function convertMessages(
     }
   }
 
-  // Cache points include their entire prefix, so anchors after transient runtime
-  // context would still cache volatile bytes even when those anchors are stable.
+  // Cache points include their entire prefix, so none may follow transient runtime context.
   if (cachePoint && result.at(-1)?.role === ConversationRole.USER) {
-    const cacheAnchor = result.findLast(
-      (message, index) =>
-        message.role === ConversationRole.USER &&
-        (firstVolatileMessageIndex === undefined || index < firstVolatileMessageIndex),
-    );
-    if (cacheAnchor?.content) {
-      cacheAnchor.content.push({ cachePoint });
+    // Keep the prior checkpoint reachable when a new turn exceeds AWS's 20-block lookback.
+    let remaining = 2;
+    for (let index = (firstVolatileMessageIndex ?? result.length) - 1; index >= 0; index--) {
+      const message = result[index];
+      if (message?.role === ConversationRole.USER && message.content) {
+        message.content.push({ cachePoint });
+        if (--remaining === 0) {
+          break;
+        }
+      }
     }
   }
 
@@ -1132,7 +1059,7 @@ function convertToolConfig(
     return undefined;
   }
 
-  const bedrockTools: BedrockTool[] = tools.map((tool) => ({
+  const bedrockTools: BedrockTool[] = sortPromptCacheToolsByName(tools).map((tool) => ({
     toolSpec: {
       name: tool.name,
       description: tool.description,
@@ -1170,11 +1097,6 @@ function mapStopReason(reason: string | undefined): {
       return { stopReason: "length" };
     case BedrockStopReason.TOOL_USE:
       return { stopReason: "toolUse" };
-    case BedrockStopReason.CONTENT_FILTERED:
-    case BedrockStopReason.GUARDRAIL_INTERVENED:
-    case BedrockStopReason.MALFORMED_MODEL_OUTPUT:
-    case BedrockStopReason.MALFORMED_TOOL_USE:
-      return { stopReason: "error", errorMessage: reason };
     default:
       return reason ? { stopReason: "error", errorMessage: reason } : { stopReason: "error" };
   }

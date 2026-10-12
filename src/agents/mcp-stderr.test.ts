@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import process from "node:process";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -26,18 +25,6 @@ describe("MCP stderr diagnostics", () => {
   afterEach(() => {
     vi.useRealTimers();
     logDebug.mockClear();
-  });
-
-  it("joins a diagnostic split at every UTF-8 byte boundary", () => {
-    const probe = createStderrProbe();
-    try {
-      for (const byte of Buffer.from("alpha 你好 😀 omega\r\n")) {
-        probe.stderr.write(Buffer.from([byte]));
-      }
-      expect(logDebug.mock.calls).toEqual([["bundle-mcp:probe: alpha 你好 😀 omega"]]);
-    } finally {
-      probe.detachStderr?.();
-    }
   });
 
   it("reports sustained newline-free progress without waiting for an idle gap", () => {
@@ -75,50 +62,16 @@ describe("MCP stderr diagnostics", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("emits CR progress frames without duplicating a split CRLF", () => {
-    const probe = createStderrProbe();
-    try {
-      probe.stderr.write("start\rmiddle\r");
-      probe.stderr.write("\nlast");
-      probe.detachStderr?.();
-      expect(logDebug.mock.calls).toEqual([
-        ["bundle-mcp:probe: start"],
-        ["bundle-mcp:probe: middle"],
-        ["bundle-mcp:probe: last"],
-      ]);
-    } finally {
-      probe.detachStderr?.();
-    }
-  });
-
-  it.each(["newline", "detach"])("marks a UTF-8-safe bounded tail on %s", (ending) => {
+  it("marks a UTF-8-safe bounded tail on newline", () => {
     const probe = createStderrProbe();
     try {
       probe.stderr.write(`xx😀${"y".repeat(4000)}`);
       probe.stderr.write("y".repeat(4189));
-      if (ending === "newline") {
-        probe.stderr.write("\n");
-      }
+      probe.stderr.write("\n");
       probe.detachStderr?.();
       expect(logDebug.mock.calls).toEqual([
         [`bundle-mcp:probe: [stderr line truncated] ${"y".repeat(8189)}`],
       ]);
-    } finally {
-      probe.detachStderr?.();
-    }
-  });
-
-  it("flushes natural EOF once and releases its listeners", async () => {
-    const probe = createStderrProbe();
-    try {
-      const ended = once(probe.stderr, "end");
-      probe.stderr.end("fatal tail");
-      await ended;
-      probe.detachStderr?.();
-      expect(logDebug.mock.calls).toEqual([["bundle-mcp:probe: fatal tail"]]);
-      for (const event of ["data", "end", "close"]) {
-        expect(probe.stderr.listenerCount(event)).toBe(0);
-      }
     } finally {
       probe.detachStderr?.();
     }

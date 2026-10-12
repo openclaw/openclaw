@@ -1,4 +1,3 @@
-import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -15,8 +14,8 @@ export function prepareAgentWaitForTurn(
   context: Pick<GatewayRequestContext, "chatAbortControllers" | "chatQueuedTurns" | "dedupe">,
   params: AgentWaitParams,
 ) {
-  const runId = (params.runId ?? "").trim();
-  const timeoutMs = resolveNonNegativeIntegerOption(params.timeoutMs, 30_000);
+  const runId = params.runId.trim();
+  const timeoutMs = params.timeoutMs ?? 30_000;
   const source = resolveAgentWaitSource(context, runId);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const queuedResult = () => {
@@ -44,8 +43,17 @@ export function prepareAgentWaitForTurn(
     if (queuedBeforeWait) {
       return queuedBeforeWait;
     }
-    const snapshot = await waitForAgentJob({ runId, timeoutMs, source });
-    const queuedAfterWait = queuedResult();
+    let queuedDuringWait: ReturnType<typeof queuedResult>;
+    const snapshot = await waitForAgentJob({
+      runId,
+      timeoutMs,
+      source,
+      stopWaiting: () => {
+        queuedDuringWait = queuedResult();
+        return queuedDuringWait !== undefined;
+      },
+    });
+    const queuedAfterWait = queuedDuringWait ?? queuedResult();
     if (queuedAfterWait) {
       return queuedAfterWait;
     }

@@ -1,19 +1,15 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  SessionTranscriptReadScope,
-  TranscriptEvent,
-} from "../config/sessions/session-accessor.sqlite-contract.js";
 import { resolveVisibleHistoryEventCount } from "../config/sessions/session-accessor.sqlite-history-projection.js";
 import {
+  readTranscriptDisplayDeltaFromProjection,
   readRecentSessionTranscriptHistoryEventsFromProjection,
   readSessionTranscriptHistoryEventByIdFromProjection,
   readSessionTranscriptHistoryEventLookupFromProjection,
   readSessionTranscriptHistoryEventPageFromProjection,
-  readSessionTranscriptHistoryEventsFromProjection,
   readSessionTranscriptHistoryAnchorPageFromProjection,
-  type SessionTranscriptMessageByIdOptions,
 } from "../config/sessions/session-accessor.sqlite-history-query.js";
+import { readSessionTranscriptSourcePageFromProjection } from "../config/sessions/session-accessor.sqlite-history-source.js";
 import type {
   CurrentTranscriptProjection,
   SessionTranscriptMessageEvent,
@@ -24,64 +20,53 @@ import {
 } from "../config/sessions/session-accessor.sqlite-reset-window.js";
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import type {
-  TranscriptRecentReadLimits,
-  TranscriptAnchorPageOptions,
-} from "../sessions/transcript-anchor-page.js";
-import type {
-  TranscriptReadWindow,
-  TranscriptReadWindowOptions,
-} from "../sessions/transcript-read-window.js";
-import type { SubagentCoordinationDisplayResolver } from "./chat-display-projection.history.js";
+import type { TranscriptAnchorPageOptions } from "../sessions/transcript-anchor-page.js";
+import type { TranscriptReadWindowOptions } from "../sessions/transcript-read-window.js";
 import {
-  ArchivedTranscriptReader,
-  type ReadRecentSessionMessagesOptions,
-  type ReadSessionMessagesAsyncOptions,
-} from "./session-transcript-archive-reader.js";
+  createChatHistoryRecoveryProjection,
+  isPendingAssistantError,
+} from "./chat-display-projection.core.js";
+import {
+  dropPreSessionStartAnnouncePairs,
+  isPreSessionStartAssistantMessage,
+} from "./chat-display-projection.history.js";
+import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
+import {
+  readChatHistoryMessageId,
+  readChatHistoryRecoveryContext,
+} from "./session-history-tail.js";
+import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 import type { ResolvedTranscriptReadTarget } from "./session-transcript-read-target.js";
+import type {
+  ReadRecentSessionMessagesOptions,
+  ReadRecentSessionMessagesResult,
+  ReadSessionMessageByIdResult,
+  ReadSessionMessagesAroundIdResult,
+  ReadSessionMessagesResult,
+  SessionTranscriptMessageByIdOptions,
+  SessionTranscriptProjectionSelection,
+  SessionTranscriptProjectionSelectionResults,
+  SessionTranscriptReadOptions,
+  SessionTranscriptReadScope,
+  SessionTranscriptReader,
+  SessionTranscriptPageReader,
+  SessionTranscriptVisitor,
+  SubagentCoordinationDisplayResolver,
+} from "./session-transcript-read.types.js";
+import {
+  prepareSessionTranscriptSummaryReader,
+  type SessionTranscriptSummaryQuery,
+} from "./session-transcript-summary.js";
 
-export type { SessionTranscriptReadScope };
 export type SessionTranscriptReadAccess = {
+  subagentCoordination?: SubagentCoordinationDisplayResolver;
   resolveTarget: (scope: SessionTranscriptReadScope) => Promise<ResolvedTranscriptReadTarget>;
   readSnapshot: <T>(
     target: ResolvedTranscriptReadTarget,
     read: (projection: CurrentTranscriptProjection) => T,
     options?: { readOnly?: boolean },
   ) => Promise<T>;
-};
-
-export type ReadRecentSessionMessagesResult = {
-  olderOffset?: number;
-  omittedOversized?: boolean;
-  activeLeafEntryId?: string | null;
-  deltaCursor?: string;
-  displaySource?: string;
-  readWindow?: TranscriptReadWindow;
-  windowReset?: boolean;
-  messages: unknown[];
-  transcriptEvents?: TranscriptEvent[];
-  transcriptPath?: string;
-  transcriptSource?: "active" | "reset-archive";
-  totalMessages: number;
-};
-
-export type ReadSessionMessagesResult = {
-  messages: unknown[];
-  transcriptPath?: string;
-};
-
-export type ReadSessionMessageByIdResult = {
-  message?: unknown;
-  seq?: number;
-  oversized: boolean;
-  found: boolean;
-  serializedBytes?: number;
-};
-
-type SessionTranscriptReadOptions = {
-  allowResetArchiveFallback?: boolean;
-  readOnly?: boolean;
 };
 
 function archivedTranscriptReader(target: ResolvedTranscriptReadTarget): ArchivedTranscriptReader {
@@ -125,36 +110,18 @@ function capAnchorEventsByBytes(
   return events.slice(start);
 }
 
-function normalizeRecentSqliteReadOptions(
-  opts?: Partial<ReadRecentSessionMessagesOptions> &
-    TranscriptReadWindowOptions & { readOnly?: boolean },
-) {
+function readRecentSqliteMessageRecords(
+  projection: CurrentTranscriptProjection,
+  opts?: Partial<ReadRecentSessionMessagesOptions> & TranscriptReadWindowOptions,
+): ReadRecentSessionMessagesResult {
   const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
-  return {
+  const page = readRecentSessionTranscriptHistoryEventsFromProjection(projection, {
     maxMessages,
     maxBytes: resolveIntegerOption(opts?.maxBytes, 8 * 1024 * 1024, { min: 1024 }),
     maxLines: resolveIntegerOption(opts?.maxLines, maxMessages * 20 + 20, { min: maxMessages }),
     captureReadWindow: opts?.captureReadWindow,
     expectedReadWindow: opts?.expectedReadWindow,
-    readOnly: opts?.readOnly,
-  };
-}
-
-function readRecentSqliteMessageRecords(
-  projection: CurrentTranscriptProjection,
-  opts?: Partial<ReadRecentSessionMessagesOptions> &
-    TranscriptReadWindowOptions & { readOnly?: boolean },
-): {
-  activeLeafEntryId?: string | null;
-  deltaCursor?: string;
-  displaySource?: string;
-  readWindow?: TranscriptReadWindow;
-  windowReset?: boolean;
-  messages: unknown[];
-  totalMessages: number;
-} {
-  const normalized = normalizeRecentSqliteReadOptions(opts);
-  const page = readRecentSessionTranscriptHistoryEventsFromProjection(projection, normalized);
+  });
   return {
     ...(page.activeLeafEntryId !== undefined ? { activeLeafEntryId: page.activeLeafEntryId } : {}),
     ...(page.deltaCursor ? { deltaCursor: page.deltaCursor } : {}),
@@ -166,11 +133,238 @@ function readRecentSqliteMessageRecords(
   };
 }
 
-export type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {
-  found: boolean;
-  hasOverreadContext: boolean;
-  offset: number;
-};
+function filterSessionMessagesMatchingId(messages: unknown[], messageId: string): unknown[] {
+  return messages.filter(
+    (message) => asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id === messageId,
+  );
+}
+
+/** Select and format one admitted projection; acquisition and archive fallback stay outside. */
+export function selectSessionTranscriptProjection<
+  Selection extends SessionTranscriptProjectionSelection,
+>(
+  projection: CurrentTranscriptProjection,
+  selection: Selection,
+  sessionFile?: string,
+): SessionTranscriptProjectionSelectionResults[Selection["kind"]];
+export function selectSessionTranscriptProjection(
+  projection: CurrentTranscriptProjection,
+  selection: SessionTranscriptProjectionSelection,
+  sessionFile?: string,
+): SessionTranscriptProjectionSelectionResults[SessionTranscriptProjectionSelection["kind"]] {
+  switch (selection.kind) {
+    case "delta":
+      return readTranscriptDisplayDeltaFromProjection(projection, selection.options);
+    case "count":
+      return resolveVisibleHistoryEventCount(projection);
+    case "recent":
+      return {
+        ...readRecentSqliteMessageRecords(projection, selection.options),
+        transcriptPath: sessionFile,
+        transcriptSource: "active",
+      };
+    case "page": {
+      const page = readSessionTranscriptHistoryEventPageFromProjection(
+        projection,
+        selection.options,
+      );
+      return {
+        ...(Object.hasOwn(page, "activeLeafEntryId")
+          ? { activeLeafEntryId: page.activeLeafEntryId }
+          : {}),
+        ...(page.olderOffset !== undefined ? { olderOffset: page.olderOffset } : {}),
+        ...(page.deltaCursor ? { deltaCursor: page.deltaCursor } : {}),
+        ...(page.omittedOversized ? { omittedOversized: true } : {}),
+        messages: projectSqliteHistoryEvents(page.events),
+        displaySource: page.displaySource,
+        ...(page.readWindow ? { readWindow: page.readWindow } : {}),
+        ...(page.windowReset ? { windowReset: true } : {}),
+        totalMessages: page.totalMessages,
+        transcriptPath: sessionFile,
+        transcriptSource: "active",
+      };
+    }
+    case "around-id": {
+      const page = readSessionTranscriptHistoryAnchorPageFromProjection(
+        projection,
+        selection.options,
+      );
+      if (!page.found) {
+        return {
+          found: false,
+          hasOverreadContext: false,
+          messages: [],
+          offset: 0,
+          totalMessages: page.totalMessages,
+          transcriptPath: sessionFile,
+        };
+      }
+      return {
+        found: true,
+        ...(page.windowReset ? { windowReset: true } : {}),
+        ...(page.readWindow ? { readWindow: page.readWindow } : {}),
+        displaySource: page.displaySource,
+        hasOverreadContext: page.hasOverreadContext,
+        messages: capAnchorEventsByBytes(page.events, selection.options.maxBytes)
+          .map(sqliteMessageEventWithSeq)
+          .filter((message) => message !== undefined),
+        offset: page.offset,
+        totalMessages: page.totalMessages,
+        transcriptPath: sessionFile,
+      };
+    }
+    case "by-id": {
+      const event = readSessionTranscriptHistoryEventByIdFromProjection(
+        projection,
+        selection.messageId,
+        selection.options,
+        selection.options?.historyVisibility
+          ? (candidate) =>
+              isPreSessionStartAssistantMessage(
+                sqliteMessageEventWithSeq(candidate),
+                selection.options?.historyVisibility?.sessionStartedAt,
+              )
+          : undefined,
+      );
+      return event
+        ? {
+            found: true,
+            message: sqliteMessageEventWithSeq(event),
+            ...(selection.options?.historyVisibility
+              ? {
+                  historyContext: {
+                    displaySource: event.displayPosition?.source,
+                    ...(event.preceding
+                      ? { precedingMessage: sqliteMessageEventWithSeq(event.preceding) }
+                      : {}),
+                  },
+                }
+              : {}),
+            oversized: false,
+            seq: event.seq,
+            ...(event.serializedBytes !== undefined
+              ? { serializedBytes: event.serializedBytes }
+              : {}),
+          }
+        : { found: false, oversized: false };
+    }
+    case "source": {
+      const { events, ...page } = readSessionTranscriptSourcePageFromProjection(
+        projection,
+        selection.options,
+      );
+      return {
+        ...page,
+        messages: projectSqliteHistoryEvents(events),
+        transcriptPath: sessionFile,
+      };
+    }
+    case "lookup": {
+      const lookup = readSessionTranscriptHistoryEventLookupFromProjection(
+        projection,
+        selection.messageId,
+      );
+      return {
+        hasDisplayMessages: lookup.hasDisplayMessages,
+        messages: filterSessionMessagesMatchingId(
+          projectSqliteHistoryEvents(lookup.events),
+          selection.messageId,
+        ),
+      };
+    }
+  }
+  throw new Error("Unsupported transcript history selection");
+}
+
+function visitProjectionMessages(
+  projection: CurrentTranscriptProjection,
+  visit: (message: unknown, seq: number) => void,
+): number {
+  let count = 0;
+  const visible = resolveVisibleMessagePositions(projection);
+  for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
+    const message = asOptionalRecord(entry.event)?.message;
+    if (message !== undefined) {
+      visit(message, entry.seq);
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/** Apply display visibility to an exact read without reacquiring its archive generation. */
+export async function filterSessionMessageHistoryVisibility(
+  selected: ReadSessionMessageByIdResult,
+  scope: SessionTranscriptReadScope,
+  messageId: string,
+  visibility: SessionTranscriptMessageByIdOptions["historyVisibility"],
+  readers: SessionTranscriptPageReader,
+): Promise<ReadSessionMessageByIdResult> {
+  const { historyContext, ...result } = selected;
+  if (!visibility || !result.found) {
+    return result;
+  }
+  if (
+    !dropPreSessionStartAnnouncePairs(
+      historyContext?.precedingMessage === undefined
+        ? [result.message]
+        : [historyContext.precedingMessage, result.message],
+      visibility.sessionStartedAt,
+    ).includes(result.message)
+  ) {
+    return { found: false, oversized: false, historyHidden: true };
+  }
+  if (result.oversized) {
+    return {
+      found: true,
+      oversized: true,
+      ...(result.seq === undefined ? {} : { seq: result.seq }),
+    };
+  }
+  if (isPendingAssistantError(result.message)) {
+    // Recovery needs later turn context; keep those bounded indexed reads in this worker.
+    const archive = historyContext?.transcriptPath
+      ? new ArchivedTranscriptReader({
+          exactArchivePath: historyContext.transcriptPath,
+          sessionId: scope.sessionId,
+        })
+      : undefined;
+    const recoveryReaders = {
+      ...readers,
+      readSessionMessagesAroundIdWithStatsAsync: archive
+        ? (_scope: SessionTranscriptReadScope, options: TranscriptAnchorPageOptions) =>
+            archive.readAroundId(options)
+        : readers.readSessionMessagesAroundIdWithStatsAsync,
+    };
+    const createRecovery = () =>
+      createChatHistoryRecoveryProjection({
+        maxChars: MAX_PAYLOAD_BYTES,
+        subagentCoordination: readers.subagentCoordination,
+      });
+    const recovery = createRecovery();
+    recovery.append([result.message]);
+    const context = await readChatHistoryRecoveryContext({
+      messages: [result.message],
+      createRecovery: () => recovery,
+      readers: recoveryReaders,
+      readScope: scope,
+      displaySource: historyContext?.displaySource,
+      maxBytes: MAX_PAYLOAD_BYTES,
+      sessionStartedAt: visibility.sessionStartedAt,
+    });
+    // The scanner may stop at a user boundary before appending its final chunk.
+    const projected = createRecovery();
+    projected.append([result.message, ...context]);
+    if (
+      !projected
+        .result()
+        .messages.some((message) => readChatHistoryMessageId(message) === messageId)
+    ) {
+      return { found: false, oversized: false, historyHidden: true };
+    }
+  }
+  return result;
+}
 
 /** Share pagination and archive policy while the caller owns acquisition and restoration. */
 export function createSessionTranscriptReader(access: SessionTranscriptReadAccess) {
@@ -179,26 +373,34 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     visit: (message: unknown, seq: number) => void,
   ): Promise<number> {
     const target = await access.resolveTarget(scope);
-    return access.readSnapshot(target, (projection) => {
-      let count = 0;
-      const visible = resolveVisibleMessagePositions(projection);
-      for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
-        const message = asOptionalRecord(entry.event)?.message;
-        if (message !== undefined) {
-          visit(message, entry.seq);
-          count += 1;
-        }
-      }
-      return count;
-    });
+    return access.readSnapshot(target, (projection) => visitProjectionMessages(projection, visit));
   }
-  async function readSnapshotIfPresent<T>(
+
+  async function readSessionTranscriptSummaryAsync(
+    scope: SessionTranscriptReadScope,
+    query: SessionTranscriptSummaryQuery,
+  ) {
+    const select = await prepareSessionTranscriptSummaryReader(query);
+    const target = await access.resolveTarget(scope);
+    return access.readSnapshot(target, (projection) =>
+      select((visit) => {
+        visitProjectionMessages(projection, visit);
+      }),
+    );
+  }
+
+  async function readSnapshotIfPresent<Selection extends SessionTranscriptProjectionSelection>(
     target: ResolvedTranscriptReadTarget,
-    read: (projection: CurrentTranscriptProjection) => T,
+    selection: Selection,
     options?: SessionTranscriptReadOptions,
-  ): Promise<T | undefined> {
+  ): Promise<SessionTranscriptProjectionSelectionResults[Selection["kind"]] | undefined> {
     try {
-      return await access.readSnapshot(target, read, options);
+      return await access.readSnapshot(
+        target,
+        (projection) =>
+          selectSessionTranscriptProjection(projection, selection, target.sessionFile),
+        options,
+      );
     } catch (error) {
       // Count and exact-ID reads retain their existing missing-store result.
       // History reads suppress the error only to try a reset archive.
@@ -216,39 +418,40 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
 
   async function readSessionMessageCountAsync(scope: SessionTranscriptReadScope): Promise<number> {
     const target = await access.resolveTarget(scope);
-    return (await readSnapshotIfPresent(target, resolveVisibleHistoryEventCount)) ?? 0;
-  }
-
-  async function readSessionMessagesAsync(
-    scope: SessionTranscriptReadScope,
-    opts: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
-  ): Promise<unknown[]> {
-    return (await readSessionMessagesWithSourceAsync(scope, opts)).messages;
+    return (await readSnapshotIfPresent(target, { kind: "count" })) ?? 0;
   }
 
   async function readSessionMessagesWithSourceAsync(
     scope: SessionTranscriptReadScope,
-    opts: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
+    opts: Parameters<SessionTranscriptReader["readSessionMessagesWithSourceAsync"]>[1],
   ): Promise<ReadSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
-    const messages =
-      (await readSnapshotIfPresent(
-        target,
-        (projection) =>
-          opts.mode === "recent"
-            ? readRecentSqliteMessageRecords(projection, opts).messages
-            : projectSqliteHistoryEvents(
-                readSessionTranscriptHistoryEventsFromProjection(projection),
-              ),
-        opts,
-      )) ?? [];
-    if (messages.length === 0 && opts.allowResetArchiveFallback === true) {
-      return await archivedTranscriptReader(target).read(opts);
+    if (opts.cursor?.kind === "archive") {
+      return archivedTranscriptReader(target).readSourcePage(opts, opts.cursor.snapshot);
     }
-    return {
-      messages,
-      transcriptPath: target.sessionFile,
-    };
+    const snapshot = (await readSnapshotIfPresent(
+      target,
+      { kind: "source", options: opts },
+      opts,
+    )) ?? { messages: [] };
+    if (
+      opts.allowResetArchiveFallback === true &&
+      !opts.cursor &&
+      (snapshot.snapshot?.totalMessages ?? 0) === 0
+    ) {
+      return archivedTranscriptReader(target).readSourcePage(
+        opts,
+        snapshot.snapshot ?? {
+          indexedSeq: -1,
+          activeEventCount: 0,
+          totalMessages: 0,
+          generation: undefined,
+          tailEventSeq: undefined,
+          resetSeq: null,
+        },
+      );
+    }
+    return snapshot;
   }
 
   async function readSessionMessageByIdAsync(
@@ -257,118 +460,69 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     opts?: SessionTranscriptMessageByIdOptions & { allowResetArchiveFallback?: boolean },
   ): Promise<ReadSessionMessageByIdResult> {
     const target = await access.resolveTarget(scope);
-    const foundEvent = await readSnapshotIfPresent(target, (projection) =>
-      readSessionTranscriptHistoryEventByIdFromProjection(projection, messageId, opts),
+    const found = await readSnapshotIfPresent(target, { kind: "by-id", messageId, options: opts });
+    const selected = found?.found
+      ? found
+      : opts?.allowResetArchiveFallback === true && !opts.currentOnly
+        ? await archivedTranscriptReader(target).readById(messageId, opts.historyVisibility)
+        : { found: false, oversized: false };
+    return filterSessionMessageHistoryVisibility(
+      selected,
+      scope,
+      messageId,
+      opts?.historyVisibility,
+      {
+        ...reader,
+        subagentCoordination: access.subagentCoordination,
+      },
     );
-    if (foundEvent) {
-      return {
-        found: true,
-        message: sqliteMessageEventWithSeq(foundEvent),
-        oversized: false,
-        seq: foundEvent.seq,
-        ...(foundEvent.serializedBytes !== undefined
-          ? { serializedBytes: foundEvent.serializedBytes }
-          : {}),
-      };
-    }
-    if (opts?.allowResetArchiveFallback === true && !opts.currentOnly) {
-      return await archivedTranscriptReader(target).readById(messageId);
-    }
-    return { found: false, oversized: false };
   }
 
-  /** Read exact membership while retaining full-history validity and empty-only archive fallback. */
+  /** Read exact membership with current visibility and empty-only archive fallback. */
   async function readSessionMessagesMatchingIdAsync(
     scope: SessionTranscriptReadScope,
     messageId: string,
   ): Promise<unknown[]> {
     const target = await access.resolveTarget(scope);
     const lookup = await access.readSnapshot(target, (projection) =>
-      readSessionTranscriptHistoryEventLookupFromProjection(projection, messageId),
+      selectSessionTranscriptProjection(projection, { kind: "lookup", messageId }),
     );
-    const messages = lookup.hasDisplayMessages
-      ? projectSqliteHistoryEvents(lookup.events)
-      : await archivedTranscriptReader(target).readMessageCandidatesById(messageId);
-    return messages.filter(
-      (message) => asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id === messageId,
+    if (lookup.hasDisplayMessages) {
+      return lookup.messages;
+    }
+    return filterSessionMessagesMatchingId(
+      await archivedTranscriptReader(target).readMessageCandidatesById(messageId),
+      messageId,
     );
   }
 
-  async function readRecentSessionMessagesWithStatsAsync(
+  async function readMessagePage(
     scope: SessionTranscriptReadScope,
-    opts: ReadRecentSessionMessagesOptions &
-      TranscriptReadWindowOptions &
-      SessionTranscriptReadOptions,
+    selection: Extract<SessionTranscriptProjectionSelection, { kind: "recent" | "page" }>,
   ): Promise<ReadRecentSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
-    const page = (await readSnapshotIfPresent(
-      target,
-      (projection) => readRecentSqliteMessageRecords(projection, opts),
-      opts,
-    )) ?? { messages: [], totalMessages: 0 };
+    const page = (await readSnapshotIfPresent(target, selection, selection.options)) ?? {
+      messages: [],
+      totalMessages: 0,
+    };
     if (
       !page.windowReset &&
       page.totalMessages === 0 &&
-      page.messages.length === 0 &&
-      opts.allowResetArchiveFallback === true
+      (selection.kind === "page" || page.messages.length === 0) &&
+      selection.options.allowResetArchiveFallback === true
     ) {
-      return await archivedTranscriptReader(target).readRecentWithStats(opts);
+      const archive = archivedTranscriptReader(target);
+      return selection.kind === "recent"
+        ? archive.readRecentWithStats(selection.options)
+        : archive.readPage(selection.options);
     }
-    return {
-      ...page,
-      transcriptPath: target.sessionFile,
-      transcriptSource: "active",
-    };
+    return { ...page, transcriptPath: target.sessionFile, transcriptSource: "active" };
   }
 
-  async function readSessionMessagesPageWithStatsAsync(
-    scope: SessionTranscriptReadScope,
-    opts: TranscriptReadWindowOptions &
-      SessionTranscriptReadOptions & {
-        offset: number;
-        maxMessages: number;
-        beforeSeq?: number;
-        recentAtHead?: TranscriptRecentReadLimits;
-        maxBytes?: number;
-        allowOversizedFirst?: boolean;
-      },
-  ): Promise<ReadRecentSessionMessagesResult> {
-    const target = await access.resolveTarget(scope);
-    const page = await readSnapshotIfPresent(
-      target,
-      (projection) => readSessionTranscriptHistoryEventPageFromProjection(projection, opts),
-      opts,
-    );
-    if (
-      (!page || (page.totalMessages === 0 && !page.windowReset)) &&
-      opts.allowResetArchiveFallback === true
-    ) {
-      return await archivedTranscriptReader(target).readPage(opts);
-    }
-    if (!page) {
-      return {
-        messages: [],
-        totalMessages: 0,
-        transcriptPath: target.sessionFile,
-        transcriptSource: "active",
-      };
-    }
-    return {
-      ...(Object.hasOwn(page, "activeLeafEntryId")
-        ? { activeLeafEntryId: page.activeLeafEntryId }
-        : {}),
-      ...(page.olderOffset !== undefined ? { olderOffset: page.olderOffset } : {}),
-      ...(page.deltaCursor ? { deltaCursor: page.deltaCursor } : {}),
-      ...(page.omittedOversized ? { omittedOversized: true } : {}),
-      messages: projectSqliteHistoryEvents(page.events),
-      displaySource: page.displaySource,
-      ...(page.readWindow ? { readWindow: page.readWindow } : {}),
-      ...(page.windowReset ? { windowReset: true } : {}),
-      totalMessages: page.totalMessages,
-      transcriptPath: target.sessionFile,
-      transcriptSource: "active",
-    };
-  }
+  const readRecentSessionMessagesWithStatsAsync: SessionTranscriptReader["readRecentSessionMessagesWithStatsAsync"] =
+    (scope, options) => readMessagePage(scope, { kind: "recent", options });
+  const readSessionMessagesPageWithStatsAsync: SessionTranscriptReader["readSessionMessagesPageWithStatsAsync"] =
+    (scope, options) => readMessagePage(scope, { kind: "page", options });
   /** Reads one message-id-anchored page from a single transcript snapshot. */
   async function readSessionMessagesAroundIdWithStatsAsync(
     scope: SessionTranscriptReadScope,
@@ -381,11 +535,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       scope.sessionEntry.sessionId !== scope.sessionId
         ? undefined
         : target.sessionFile;
-    const page = await readSnapshotIfPresent(
-      target,
-      (projection) => readSessionTranscriptHistoryAnchorPageFromProjection(projection, opts),
-      opts,
-    );
+    const page = await readSnapshotIfPresent(target, { kind: "around-id", options: opts }, opts);
     if (!page?.found) {
       if (opts.allowResetArchiveFallback === true) {
         return await new ArchivedTranscriptReader({
@@ -404,25 +554,13 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
         transcriptPath: target.sessionFile,
       };
     }
-    return {
-      found: true,
-      ...(page.windowReset ? { windowReset: true } : {}),
-      ...(page.readWindow ? { readWindow: page.readWindow } : {}),
-      displaySource: page.displaySource,
-      hasOverreadContext: page.hasOverreadContext,
-      messages: capAnchorEventsByBytes(page.events, opts.maxBytes)
-        .map(sqliteMessageEventWithSeq)
-        .filter((message) => message !== undefined),
-      offset: page.offset,
-      totalMessages: page.totalMessages,
-      transcriptPath: target.sessionFile,
-    };
+    return page;
   }
 
-  return {
+  const reader = {
     visitSessionMessagesAsync,
+    readSessionTranscriptSummaryAsync,
     readSessionMessageCountAsync,
-    readSessionMessagesAsync,
     readSessionMessagesWithSourceAsync,
     readSessionMessageByIdAsync,
     readSessionMessagesMatchingIdAsync,
@@ -430,7 +568,5 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     readSessionMessagesPageWithStatsAsync,
     readSessionMessagesAroundIdWithStatsAsync,
   };
+  return reader satisfies SessionTranscriptReader & SessionTranscriptVisitor;
 }
-export type SessionTranscriptReader = ReturnType<typeof createSessionTranscriptReader> & {
-  subagentCoordination?: SubagentCoordinationDisplayResolver;
-};

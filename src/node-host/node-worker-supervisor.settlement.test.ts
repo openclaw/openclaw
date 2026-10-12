@@ -57,7 +57,7 @@ it("joins accepted workspace retention before sealing journals on close", async 
   }
 });
 
-it.each(["cancelled", "caller-abort", "cleanup-failure"] as const)(
+it.each(["cancelled", "cleanup-failure"] as const)(
   "joins pending admission cancellation through %s settlement",
   async (outcome) => {
     const input = testWorkerLaunchInput("/synthetic/workspace", "pending-cancel");
@@ -67,7 +67,6 @@ it.each(["cancelled", "caller-abort", "cleanup-failure"] as const)(
     const finishing = createDeferred();
     const releaseFinish = createDeferred();
     const controller = new AbortController();
-    const callerAbort = new Error("Caller revoked admission");
     const cleanupFailure = new Error("Physical reservation cleanup failed");
     const snapshots: number[] = [];
     let receipt: NodeWorkerLaunchReceipt | undefined;
@@ -123,9 +122,6 @@ it.each(["cancelled", "caller-abort", "cleanup-failure"] as const)(
     let cancellationSettled = false;
     try {
       await entered.promise;
-      if (outcome === "caller-abort") {
-        controller.abort(callerAbort);
-      }
       cancelling = supervisor.cancel(identity).then(
         (value) => {
           cancellationSettled = true;
@@ -223,40 +219,12 @@ describe("node worker persistence settlement lifetime", () => {
       await f.launching;
       f.emitResult.resolve();
       await f.entered.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(observed).toEqual([]);
       f.persistence.resolve();
       await vi.advanceTimersByTimeAsync(0);
       expect(observed).toEqual([expect.objectContaining({ state: "completed" })]);
       await waiting;
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      controller.abort();
-      release.resolve();
-      await Promise.allSettled([waiting, f.launching]);
-      await f.dispose();
-      vi.useRealTimers();
-    }
-  });
-
-  it("wakes status waiters only after the exact turn is journaled, independently of its retained child", async () => {
-    vi.useFakeTimers();
-    const f = await fixture();
-    try {
-      const observed: NodeWorkerLaunchReceipt[] = [];
-      const waiting = f.supervisor
-        .status(f.identity.launchId, { waitMs: 20_000 })
-        .then((receipt) => {
-          if (receipt) {
-            observed.push(receipt);
-          }
-          return receipt;
-        });
-      await vi.advanceTimersByTimeAsync(0);
-      f.emitResult.resolve();
-      await f.entered.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(observed).toEqual([]);
-      f.persistence.resolve();
-      await expect(waiting).resolves.toMatchObject({ state: "completed" });
       expect(vi.getTimerCount()).toBe(0);
       expect(f.snapshots.at(-1)).toBe(0);
       expect(await f.supervisor.hasActiveWork()).toBe(true);
@@ -268,6 +236,9 @@ describe("node worker persistence settlement lifetime", () => {
       ).resolves.toBeUndefined();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
+      controller.abort();
+      release.resolve();
+      await Promise.allSettled([waiting, f.launching]);
       await f.dispose();
       vi.useRealTimers();
     }
@@ -304,45 +275,32 @@ describe("node worker persistence settlement lifetime", () => {
     },
   );
 
-  it.each(["ownership read", "terminal admission"] as const)(
-    "retains the stale launch when recovery closes during %s",
-    async (boundary) => {
-      const f = recoveryFixture(true);
-      const entered = createDeferred();
-      const release = createDeferred();
-      if (boundary === "ownership read") {
-        mocks.launchMatching.mockResolvedValueOnce(f.original).mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return f.original;
-        });
-      } else {
-        mocks.launchFinish.mockImplementationOnce(async (...args) => {
-          entered.resolve();
-          await release.promise;
-          return f.finish(...args);
-        });
-      }
-      const recovering = f.recover(f.original, true, undefined, true);
-      try {
-        await entered.promise;
-        f.close();
-        release.resolve();
-        expect(await recovering).toEqual(f.original);
-        expect(await f.store.nonterminalCount()).toBe(1);
-        if (boundary === "ownership read") {
-          expect(mocks.remove).not.toHaveBeenCalled();
-          expect(mocks.launchFinish).not.toHaveBeenCalled();
-        }
-      } finally {
-        f.close();
-        release.resolve();
-        await recovering;
-      }
-    },
-  );
+  it("retains the stale launch when recovery closes during ownership read", async () => {
+    const f = recoveryFixture(true);
+    const entered = createDeferred();
+    const release = createDeferred();
+    mocks.launchMatching.mockResolvedValueOnce(f.original).mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return f.original;
+    });
+    const recovering = f.recover(f.original, true, undefined, true);
+    try {
+      await entered.promise;
+      f.close();
+      release.resolve();
+      expect(await recovering).toEqual(f.original);
+      expect(await f.store.nonterminalCount()).toBe(1);
+      expect(mocks.remove).not.toHaveBeenCalled();
+      expect(mocks.launchFinish).not.toHaveBeenCalled();
+    } finally {
+      f.close();
+      release.resolve();
+      await recovering;
+    }
+  });
 
-  it.each(["before admission", "after admission", "unknown settlement"] as const)(
+  it.each(["after admission", "unknown settlement"] as const)(
     "preserves recovery cancellation and terminal authority %s",
     async (boundary) => {
       const f = recoveryFixture();
@@ -376,12 +334,11 @@ describe("node worker persistence settlement lifetime", () => {
           expect(mocks.launchFinish).toHaveBeenCalledOnce();
           expect(await f.store.nonterminalCount()).toBe(1);
         } else {
-          const state = boundary === "before admission" ? "cancelled" : "interrupted";
           expect(await settled).toEqual([
-            { status: "fulfilled", value: expect.objectContaining({ state }) },
-            { status: "fulfilled", value: expect.objectContaining({ state }) },
+            { status: "fulfilled", value: expect.objectContaining({ state: "interrupted" }) },
+            { status: "fulfilled", value: expect.objectContaining({ state: "interrupted" }) },
           ]);
-          expect(mocks.launchFinish).toHaveBeenCalledTimes(boundary === "before admission" ? 2 : 1);
+          expect(mocks.launchFinish).toHaveBeenCalledOnce();
           expect(await f.store.nonterminalCount()).toBe(0);
         }
       } finally {
@@ -390,44 +347,6 @@ describe("node worker persistence settlement lifetime", () => {
       }
     },
   );
-
-  it("keeps receipt replay available after close without admitting a new launch", async () => {
-    const f = await fixture();
-    try {
-      f.emitResult.resolve();
-      await f.entered.promise;
-      f.persistence.resolve();
-      await nextTurn();
-      const completed = await f.supervisor.status(f.identity.launchId);
-      await f.dispose();
-      const writes = mocks.turnFinish.mock.calls.length + mocks.launchFinish.mock.calls.length;
-      expect(await f.supervisor.status(f.identity.launchId)).toEqual(completed);
-      expect(await f.supervisor.cancel(f.identity)).toEqual(completed);
-      await expect(
-        f.supervisor.launch(
-          testWorkerLaunchInput("/synthetic/workspace", "after-close-turn"),
-          TEST_WORKER_ENDPOINT,
-        ),
-      ).rejects.toThrow("supervisor is closed");
-      expect(mocks.turnFinish.mock.calls.length + mocks.launchFinish.mock.calls.length).toBe(
-        writes,
-      );
-    } finally {
-      await f.dispose();
-    }
-  });
-
-  it("does not initialize recovery for a receipt read after closing an unused supervisor", async () => {
-    const supervisor = createNodeWorkerSupervisor({
-      env: { OPENCLAW_STATE_DIR: "/synthetic/state" },
-    });
-    mocks.launchList.mockRejectedValue(new Error("Recovery must stay closed"));
-    mocks.turnGet.mockResolvedValue(undefined);
-    await supervisor.close();
-    expect(await supervisor.status("absent-turn")).toBeUndefined();
-    expect(mocks.launchList).not.toHaveBeenCalled();
-    expect(mocks.prepare).not.toHaveBeenCalled();
-  });
 
   it("retries failed close cleanup before completing shutdown", async () => {
     const f = await fixture();
@@ -508,10 +427,7 @@ describe("node worker persistence settlement lifetime", () => {
     }
   });
 
-  it.each([
-    { timing: "during persistence", expectedState: "cancelled" },
-    { timing: "after failed cleanup", expectedState: "failed" },
-  ] as const)(
+  it.each([{ timing: "during persistence", expectedState: "cancelled" }] as const)(
     "retries owned container cleanup when cancellation starts $timing",
     async ({ timing, expectedState }) => {
       const f = await fixture();

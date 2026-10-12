@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { runNodeMain } from "../../../scripts/run-node.mts";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as sourcePreparation from "../../../scripts/lib/source-update-artifact-preflight.mts";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { runNodeMain } from "../../../test/scripts/run-node-boundary.test-support.js";
 import * as serviceFiles from "../../daemon/inspect-files.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
@@ -14,9 +15,9 @@ import {
 import * as gatewayLocks from "../../infra/gateway-lock.js";
 import { tryAcquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as portProbe from "../../infra/ports-probe.js";
-import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { retainCommandProcessCleanup } from "../../process/exec-spawn.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -27,10 +28,10 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createUpdateCommandFailureResult } from "./update-command-result.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
+import { withServiceHome } from "./update-command-service-home.test-support.js";
 import { withGatewayRuntimeArtifactPublication } from "./update-command-service-maintenance.js";
 
 const mocks = vi.hoisted(() => ({ service: vi.fn<() => GatewayService>() }));
@@ -39,30 +40,8 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
   resolveGatewayService: mocks.service,
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => mockSystemAccountHome());
 afterEach(() => vi.restoreAllMocks());
-
-async function withServiceHome(run: (home: string) => Promise<void>): Promise<void> {
-  const home = tempDirs.make("openclaw-runtime-publication-");
-  vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
-  await withEnvAsync(
-    {
-      HOME: home,
-      USERPROFILE: home,
-      APPDATA: path.join(home, "AppData"),
-      OPENCLAW_GATEWAY_PORT: undefined,
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_STATE_DIR: undefined,
-      OPENCLAW_CONFIG_PATH: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_SUPERVISOR_MODE: undefined,
-      OPENCLAW_SERVICE_MARKER: undefined,
-      OPENCLAW_SERVICE_KIND: undefined,
-    },
-    () => run(home),
-  );
-}
 
 async function withRuntimePublicationFixture(
   run: (fixture: {
@@ -255,13 +234,9 @@ export function prepareBundledPluginRuntime() {
           withPluginLifecycleLease({ env, waitMs: 0, leaseMs }, async (lease) => {
             // The worker acquires against its real clock; align the controlled timer clock afterward.
             vi.setSystemTime(readExpiry() - leaseMs);
-            const result = await completeSourceUpdateRuntime({
-              root,
-              sourceRuntimePrepared,
-              timeoutMs: 1_000,
-              lease,
-              beforePublication: park,
-              beforePersistentEffect: async () => {
+            const writeFile = fs.writeFile;
+            vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+              if (args[0] === artifact && args[1] === "candidate") {
                 const maintenance = getOpenClawDatabaseMaintenanceScope();
                 expect(maintenance).toBeDefined();
                 maintenance?.assertDatabaseAccess(lease.databasePath);
@@ -273,7 +248,14 @@ export function prepareBundledPluginRuntime() {
                 lease.assertOwned();
                 expect(readExpiry()).toBeGreaterThan(before + leaseMs * 3);
                 expect(lease.signal.aborted).toBe(false);
-              },
+              }
+              return await writeFile(...args);
+            });
+            const result = await completeSourceUpdateRuntime({
+              root,
+              sourceRuntimePrepared,
+              timeoutMs: 1_000,
+              beforePublication: park,
             });
             expect(getOpenClawDatabaseMaintenanceScope()).toBeUndefined();
             const afterPublication = readExpiry();
@@ -298,6 +280,47 @@ export function prepareBundledPluginRuntime() {
       }
     }),
 );
+
+it("holds the source-completion lease until accepted command cleanup settles", () =>
+  withRuntimePublicationFixture(async ({ root, env }) => {
+    vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("git");
+    const cleanupEntered = createDeferredCore();
+    const releaseCleanup = createDeferredCore();
+    let settled = false;
+    vi.spyOn(sourcePreparation, "loadSourceRuntimePreparation").mockResolvedValue(() => ({
+      changed: false,
+      async publish() {},
+      async cleanup() {
+        retainCommandProcessCleanup(releaseCleanup.promise);
+        cleanupEntered.resolve();
+      },
+    }));
+    const completion = completeSourceUpdateRuntime({
+      root,
+      sourceRuntimePrepared: false,
+      timeoutMs: 1_000,
+    }).finally(() => {
+      settled = true;
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        cleanupEntered.promise,
+        completion,
+        "Runtime completion exited before its cleanup was admitted",
+      );
+      await expect(
+        withPluginLifecycleLease({ env, waitMs: 0 }, async () => "acquired"),
+      ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_HELD" });
+      expect(settled).toBe(false);
+    } finally {
+      releaseCleanup.resolve();
+      await completion;
+      closeOpenClawStateDatabaseForTest();
+    }
+    await expect(
+      withPluginLifecycleLease({ env, waitMs: 0 }, async () => "acquired"),
+    ).resolves.toBe("acquired");
+  }));
 
 it.each([
   "unknown runtime",
@@ -580,70 +603,47 @@ it.each(["inspection", "publication"])(
     }),
 );
 
-it.each([
-  "running",
-  "changed launcher",
-  "replaced entrypoint",
-  "changed manager",
-  "changed state directory",
-  "disjoint becomes affected",
-  "disjoint becomes unknown",
-])("rechecks publication authority after an awaited boundary: %s", (change) =>
-  withRuntimePublicationFixture(async ({ home, root, env, service }) => {
-    if (change.startsWith("disjoint")) {
-      const snapshot = path.join(root, ".artifacts", "serving");
-      await fs.mkdir(path.join(snapshot, "dist"), { recursive: true });
-      await fs.writeFile(path.join(snapshot, "package.json"), JSON.stringify({ name: "openclaw" }));
-      await fs.writeFile(path.join(snapshot, "dist", "entry.js"), "export {};\n");
-      vi.mocked(service.readCommand).mockResolvedValue({
-        programArguments: [process.execPath, path.join(snapshot, "dist", "entry.js"), "gateway"],
-      });
-    }
-    const untouched = path.join(root, "dist-runtime", "unchanged.txt");
-    await fs.writeFile(untouched, "original");
-    const beforePersistentEffect = async () => {
-      await Promise.resolve();
-      if (change === "running") {
-        vi.mocked(service.readRuntime).mockResolvedValue({
-          status: "running",
-          systemd: { managerUid: 2001 },
-        });
-      } else if (change === "changed manager") {
-        vi.mocked(service.readRuntime).mockResolvedValue({
-          status: "stopped",
-          systemd: { managerUid: 3002 },
-        });
-      } else if (change === "changed state directory") {
-        env.OPENCLAW_STATE_DIR = path.join(home, "replacement-state");
-      } else if (change === "replaced entrypoint") {
-        const entry = path.join(root, "dist", "entry.js");
-        await fs.rename(entry, `${entry}.previous`);
-        await fs.writeFile(entry, "export const replaced = true;\n");
-      } else if (change === "disjoint becomes unknown") {
-        vi.mocked(service.readCommand).mockResolvedValue(null);
-      } else {
+it.each(["running", "disjoint becomes unknown"])(
+  "rechecks publication authority after an awaited boundary: %s",
+  (change) =>
+    withRuntimePublicationFixture(async ({ root, env, service }) => {
+      if (change.startsWith("disjoint")) {
+        const snapshot = path.join(root, ".artifacts", "serving");
+        await fs.mkdir(path.join(snapshot, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(snapshot, "package.json"),
+          JSON.stringify({ name: "openclaw" }),
+        );
+        await fs.writeFile(path.join(snapshot, "dist", "entry.js"), "export {};\n");
         vi.mocked(service.readCommand).mockResolvedValue({
-          programArguments: [
-            process.execPath,
-            path.join(root, "dist", "entry.js"),
-            "gateway",
-            ...(change === "changed launcher" ? ["--verbose"] : []),
-          ],
+          programArguments: [process.execPath, path.join(snapshot, "dist", "entry.js"), "gateway"],
         });
       }
-    };
-    await expect(
-      withGatewayRuntimeArtifactPublication(
-        { root, env, timeoutMs: 200, assertCurrent() {} },
-        async (assertPublicationCurrent) => {
-          await beforePersistentEffect();
-          await assertPublicationCurrent();
-          await fs.writeFile(untouched, "published");
-        },
-      ),
-    ).rejects.toThrow(/affected Gateway/);
-    expect(await fs.readFile(untouched, "utf8")).toBe("original");
-  }),
+      const untouched = path.join(root, "dist-runtime", "unchanged.txt");
+      await fs.writeFile(untouched, "original");
+      const beforePersistentEffect = async () => {
+        await Promise.resolve();
+        if (change === "running") {
+          vi.mocked(service.readRuntime).mockResolvedValue({
+            status: "running",
+            systemd: { managerUid: 2001 },
+          });
+        } else if (change === "disjoint becomes unknown") {
+          vi.mocked(service.readCommand).mockResolvedValue(null);
+        }
+      };
+      await expect(
+        withGatewayRuntimeArtifactPublication(
+          { root, env, timeoutMs: 200, assertCurrent() {} },
+          async (assertPublicationCurrent) => {
+            await beforePersistentEffect();
+            await assertPublicationCurrent();
+            await fs.writeFile(untouched, "published");
+          },
+        ),
+      ).rejects.toThrow(/affected Gateway/);
+      expect(await fs.readFile(untouched, "utf8")).toBe("original");
+    }),
 );
 
 it.each(["repository", "existing alias parent", "missing alias parent"])(

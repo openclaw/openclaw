@@ -163,7 +163,9 @@ it("confines cached and retargeted skill instructions to the required root at re
     expect(skills.every((skill) => skill.source.readContent === undefined)).toBe(true);
     await expect(readInstalledSkill(skills, "inside")).resolves.toBe("Inside instructions");
     await expect(readCodeModeSkill(aliasSkill)).resolves.toBe("Inside instructions");
-    await expect(readInstalledSkill(skills, "outside")).rejects.toThrow("Unknown installed skill");
+    await expect(readInstalledSkill(skills, "outside")).rejects.toThrow(
+      "is not available to this agent",
+    );
     await fs.unlink(alias);
     await fs.symlink(outside, alias);
     await expect(readInstalledSkill(skills, "alias")).rejects.toThrow();
@@ -235,7 +237,7 @@ it("keeps the host-owned skill root when plugin options widen placement or repla
       { type: "text", text: "Inside instructions" },
     ]);
     await expect(read.execute("outside", { name: "outside" })).rejects.toThrow(
-      "Unknown installed skill",
+      "is not available to this agent",
     );
     expect(() => createTools({ sessionPermissionPolicy: { root: parent, mode: "full" } })).toThrow(
       "escapes the captured required workspace",

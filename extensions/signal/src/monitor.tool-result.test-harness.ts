@@ -189,16 +189,13 @@ export function createMockSignalDaemonHandle(
   overrides: {
     stop?: MockFn;
     exited?: Promise<SignalDaemonExitEvent>;
-    isExited?: () => boolean;
   } = {},
 ): SignalDaemonHandle {
   const stop = overrides.stop ?? (vi.fn() as unknown as MockFn);
   const exited = overrides.exited ?? new Promise<SignalDaemonExitEvent>(() => {});
-  const isExited = overrides.isExited ?? (() => false);
   return {
     stop: stop as unknown as () => Promise<void>,
     exited,
-    isExited,
   };
 }
 
@@ -222,7 +219,6 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
     ...actual,
     resolveStorePath: vi.fn(() => signalToolResultSessionStore.path),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
-    readSessionUpdatedAt: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
   };
 });
@@ -233,6 +229,13 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   );
   return {
     ...actual,
+    resolveInboundSessionEnvelopeContextAsync: vi.fn(
+      async ({ cfg }: Parameters<typeof actual.resolveInboundSessionEnvelopeContextAsync>[0]) => ({
+        storePath: signalToolResultSessionStore.path,
+        envelopeOptions: actual.resolveEnvelopeFormatOptions(cfg),
+        previousTimestamp: undefined,
+      }),
+    ),
     runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
       const resolveTurn = params.adapter.resolveTurn;
       return await actual.runChannelInboundEvent({

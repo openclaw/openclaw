@@ -1,4 +1,4 @@
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -15,16 +15,16 @@ import type {
   CronAgentExecutionStarted,
   CronCompletionStatus,
   CronJob,
+  CronJobExecutionResult,
   CronNextCheckProposal,
   CronResolvedDeliveryState,
   CronRunOutcome,
+  CronRunDeliveryResult,
   CronRunTelemetry,
 } from "../types.js";
-import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
+import type { CronServiceState } from "./state.js";
 
 export const MAX_CRON_TIMER_DELAY_MS = 60_000;
-
-export const HEARTBEAT_SKIP_DISABLED = "disabled";
 
 /**
  * Minimum gap between consecutive fires of the same cron job.  This is a
@@ -41,15 +41,6 @@ export const DEFAULT_MAX_MISSED_JOBS_PER_RESTART = 5;
 
 export const DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS = 2 * 60_000;
 
-export type CronJobExecutionResult = CronRunOutcome &
-  CronRunTelemetry &
-  CronRunDeliveryResult & {
-    nextCheck?: CronNextCheckProposal;
-    scriptStateChanged?: boolean;
-    scriptState?: unknown;
-    triggerEval?: CronTriggerEvalOutcome;
-  };
-
 export type TimedCronRunOutcome = CronJobExecutionResult & {
   jobId: string;
   job: CronJob;
@@ -62,6 +53,13 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   runReceipt?: CronRunReceiptHandle;
   runReceiptContext?: OpenClawStateWorkerContext;
   receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
+  request?: {
+    executionJob: CronJob;
+    preserveCadence: boolean;
+    scheduleOwnershipAtMs: number;
+    runId?: string;
+    terminalTracker?: { emitted: boolean };
+  };
   startedAt: number;
   endedAt: number;
 };
@@ -74,13 +72,6 @@ export type CronJobRunResult = CronRunOutcome &
     endedAt: number;
     nextCheck?: CronNextCheckProposal;
   };
-
-export type CronTriggerEvalOutcome = {
-  fired: boolean;
-  stateChanged: boolean;
-  state?: unknown;
-  busy?: true;
-};
 
 export type IsolatedAgentSetupTimeoutSignal = {
   error: string;
@@ -140,10 +131,10 @@ export function runsDetachedFromMainSession(job: CronJob): boolean {
   return job.sessionTarget !== "main" || job.payload.kind === "script";
 }
 
-export function resolveMainSessionCronDeliveryContext(
+export async function resolveMainSessionCronDeliveryContext(
   state: CronServiceState,
   job: CronJob,
-): DeliveryContext | undefined {
+): Promise<DeliveryContext | undefined> {
   const targetSessionKey = job.sessionKey?.trim();
   if (!targetSessionKey) {
     return undefined;
@@ -161,7 +152,7 @@ export function resolveMainSessionCronDeliveryContext(
     return undefined;
   }
   try {
-    const sessionEntry = loadSessionEntryReadOnly({
+    const sessionEntry = await readSessionEntryReadOnlyInWorker({
       agentId,
       sessionKey: targetSessionKey,
       storePath,

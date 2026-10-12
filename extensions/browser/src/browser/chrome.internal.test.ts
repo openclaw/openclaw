@@ -14,6 +14,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
+const nativeProcessIdentities = vi.hoisted(
+  () => new Map<number, () => import("@openclaw/proc-safe/identity").ProcessIdentity | null>(),
+);
+
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/proc-safe/identity")>();
+  return {
+    ...actual,
+    readProcessIdentity: (pid: number) => {
+      const readFixture = nativeProcessIdentities.get(pid);
+      return readFixture ? readFixture() : actual.readProcessIdentity(pid);
+    },
+  };
+});
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -359,6 +373,7 @@ describe("chrome.ts internal", () => {
     vi.restoreAllMocks();
     spawnMock.mockReset();
     execFileSyncMock.mockReset();
+    nativeProcessIdentities.clear();
     ensurePortAvailableMock.mockReset();
     ensurePortAvailableMock.mockImplementation(async () => {});
     registerManagedProxyBrowserCdpBypassMock.mockReset();
@@ -755,46 +770,6 @@ describe("chrome.ts internal", () => {
       });
     });
 
-    it("accepts a ready CDP diagnostic after the launch HTTP probe expires", async () => {
-      stubBrowserExecutableAndPrefs("present");
-      spawnMock.mockImplementation(() => makeFakeProc());
-
-      const originalFetch = globalThis.fetch;
-      let now = 1_000_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
-      let discoveryCalls = 0;
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-          const url =
-            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-          if (url.includes("/json/version")) {
-            discoveryCalls += 1;
-            if (discoveryCalls === 1) {
-              now += 2;
-              throw new Error("ECONNREFUSED");
-            }
-          }
-          return await originalFetch(input, init);
-        }),
-      );
-
-      await withMockChromeCdpServer({
-        wsPath: "/devtools/browser/COLD_START",
-        run: async (baseUrl) => {
-          const port = new URL(baseUrl).port;
-          const profile = makeProfile(Number(port));
-          const running = await launchOpenClawChrome(
-            makeResolved({ localLaunchTimeoutMs: 1 }),
-            profile,
-          );
-          expect(running.pid).toBe(4242);
-          expect(discoveryCalls).toBeGreaterThan(1);
-          running.proc.kill?.("SIGTERM");
-        },
-      });
-    });
-
     it("keeps the launched process when fallback diagnostic sees HTTP before WS readiness", async () => {
       stubBrowserExecutableAndPrefs("present");
       const fakeProc = makeFakeProc();
@@ -861,6 +836,7 @@ describe("chrome.ts internal", () => {
     });
 
     it("clears stale singleton locks even when the profile-in-use marker rolls out of the stderr tail", async () => {
+      nativeProcessIdentities.set(535, () => null);
       vi.spyOn(process, "kill").mockImplementation(() => {
         throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
       });
@@ -1176,6 +1152,13 @@ describe("chrome.ts internal", () => {
     ])(
       "distinguishes a $name profile lock before releasing data",
       async ({ error, target, expected }) => {
+        nativeProcessIdentities.set(43213, () => ({
+          pid: 43213,
+          parentPid: 1,
+          startTimeMicros: Date.UTC(2026, 6, 17, 12) * 1000,
+          startTimeResolutionMicros: 1,
+          exited: false,
+        }));
         stubBrowserExecutableAndPrefs("present");
         const profile = { ...makeProfile(51117), driver: "openclaw" as const };
         const lockPath = path.join(resolveOpenClawUserDataDir(profile.name), "SingletonLock");
@@ -1226,7 +1209,14 @@ describe("chrome.ts internal", () => {
 
         const managedPid = 43213;
         let managedProcessAlive = true;
-        let processStartTime = "Fri Jul 17 12:00:00 2026";
+        let processStartTimeMicros = Date.UTC(2026, 6, 17, 12) * 1000;
+        nativeProcessIdentities.set(managedPid, () => ({
+          pid: managedPid,
+          parentPid: 1,
+          startTimeMicros: processStartTimeMicros,
+          startTimeResolutionMicros: 1,
+          exited: !managedProcessAlive,
+        }));
         let rotateProcessIdentity = true;
         let userDataDir = "";
         const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid, signal) => {
@@ -1246,7 +1236,7 @@ describe("chrome.ts internal", () => {
             onCommand: (method) => {
               if (method === "SystemInfo.getProcessInfo") {
                 if (rotateProcessIdentity) {
-                  processStartTime = "Fri Jul 17 12:01:00 2026";
+                  processStartTimeMicros += 60_000_000;
                   rotateProcessIdentity = false;
                 }
                 return { processInfo: [{ type: "browser", id: managedPid }] };
@@ -1274,9 +1264,6 @@ describe("chrome.ts internal", () => {
               execFileSyncMock.mockImplementation((command: string, args: string[]) => {
                 if (command === "ps" && args.includes("command=")) {
                   return `${executablePath} --remote-debugging-port=${port} --user-data-dir=${userDataDir}${suffix} --no-first-run\n`;
-                }
-                if (path.basename(command) === "ps" && args.includes("lstart=")) {
-                  return `${processStartTime}\n`;
                 }
                 if (command === "lsof") {
                   return `p${managedPid}\n`;
@@ -1686,28 +1673,6 @@ describe("chrome.ts internal", () => {
       await expect(
         launchOpenClawChrome(makeResolved({ localLaunchTimeoutMs: 20 }), makeProfile(54325)),
       ).rejects.toThrow("Managed Chrome process spawned without a pid.");
-    });
-
-    it("preflights managed-proxy policy and registers exact CDP probe URLs", async () => {
-      stubBrowserExecutableAndPrefs("present");
-      const release = vi.fn();
-      registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => release);
-      spawnMock.mockImplementation(() => makeFakeProc());
-
-      await withMockChromeCdpServer({
-        wsPath: "/devtools/browser/BYPASS_OK",
-        run: async (baseUrl) => {
-          const port = Number(new URL(baseUrl).port);
-          const profile = { ...makeProfile(port), cdpUrl: baseUrl };
-          const running = await launchOpenClawChrome(makeResolved(), profile);
-          expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(baseUrl);
-          expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
-            `${baseUrl}/json/version`,
-          );
-          expect(release).toHaveBeenCalled();
-          running.proc.kill?.("SIGTERM");
-        },
-      });
     });
 
     it("releases scoped bypass registrations when the CDP probe never succeeds", async () => {

@@ -108,7 +108,7 @@ guarantee; rejecting tool-bearing output cannot undo native helper effects.
 
 A selected agent harness must implement isolated completion. Otherwise the call
 fails before inference with a `does not support isolated completion` error.
-This fail-closed behavior prevents a JSON task from silently becoming a normal
+Rejecting the call prevents a JSON task from silently becoming a normal
 tool-capable agent turn.
 
 CLI runtimes must provide the equivalent isolated preparation guarantee. The

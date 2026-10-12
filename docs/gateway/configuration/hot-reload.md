@@ -22,18 +22,57 @@ accepted source revision and whether it came from a Gateway write or a file edit
 Later hot-reloadable writes do not erase a committed restart requirement while
 its application is pending.
 
+UI preferences remain in `ui.prefs`. Changing them preserves prepared model
+catalogs, provider authentication, and plugin registrations. Display changes
+still publish the updated config to consumers that read those settings.
+
+The `agents.create`, `agents.update`, and `agents.delete` Gateway methods wait
+for runtime application before reporting success. A successful response lets
+clients immediately create sessions or read the updated agent roster. If the
+config was saved but could not be applied, including when reload is `off`, the
+method returns `UNAVAILABLE` with recovery guidance instead of reporting the
+agent change as ready. Inspect `config.get` before retrying a saved mutation.
+An active config application finishes before the next queued config. When a newer
+config preserves a pending or unfinished Gateway write's changes, that write waits
+for the newer config to apply. A superseding edit that overwrites an unapplied
+change still reports that earlier write as unconfirmed.
+
+Agent-only edits retain session admission and active runtimes for unchanged agents.
+Creation prepares the new agent's runtime database before publishing its config entry.
+Overlapping creation and deletion preserve unchanged agents' prepared model generations
+and session creation. Registry discovery follows completed roster publications;
+removing an agent still revokes access to that agent's stores.
+Concurrent writers release each completed reload's lifecycle lease through the shared
+writer queue, so a busy database does not leave later reloads waiting for lease expiry.
+A database-open refusal for a deleting agent leaves other agents' admitted work usable.
+Overlapping agent edits can supersede an earlier model-runtime refresh. If that
+refresh fails, the newer config retries the unfinished preparation without
+requiring a Gateway restart, including when the newer edit does not change models.
+If that successor is invalid or fails preparation, the affected model owners can stay
+unavailable until a valid config is applied. Correct the rejected config and reapply
+it; even an unchanged valid config completes the pending model preparation.
+
 If a busy state store temporarily refuses the reload's lifecycle lease, the
-Gateway keeps the change pending and retries automatically with a capped backoff.
-No additional config edit is needed. The previous runtime stays active until the
-change applies, and shutdown cancels pending retries. Other reload failures remain
-visible in the Gateway log.
+Gateway keeps the change pending and retries automatically with increasing backoff,
+up to one final attempt after the five-second backoff. The previous runtime stays
+active until the change applies. Exhausted retries or a non-retryable admission
+failure return `UNAVAILABLE` to waiting config mutations; a later config observation
+can retry the saved change. Shutdown cancels retries and settles waiting mutations.
+Reload failures remain visible in the Gateway log.
 
 If an automatic plugin reload cannot drain active work, the Gateway records the
-failure and keeps the last-good runtime. Later config edits do not repeat that
-drain while its plugin generation is still active. Run `openclaw plugins reload
-<id> --wait` to finish the replacement, or revert the pending plugin settings.
-Edits that still include the unapplied plugin settings remain pending until
-recovery; they cannot publish those settings through an unrelated hot update.
+failure and keeps the last-good runtime. When the drain timed out on that
+plugin's admitted work, the Gateway retries the replacement automatically once
+the work finishes; no additional config edit is needed. Other drain failures
+wait for `openclaw plugins reload <id> --wait` or a revert of the pending plugin
+settings. Until then, later edits do not repeat the drain, and edits that still
+include the unapplied plugin settings stay pending; they cannot publish those
+settings through an unrelated hot update, and they apply together with the
+retry or recovery. While edits are pending, `config.get` reports an
+`appliedConfigHash` that differs from the saved revision, which the Control UI
+shows as unapplied config. `openclaw plugins reload <id> --wait` also lets you
+watch a timed-out replacement finish. A Gateway restart applies the saved config
+in full.
 
 Direct file edits are treated as untrusted until they validate. The source's file adapter waits
 for editor temp-write/rename churn to settle, reads the final file, and rejects
@@ -115,6 +154,18 @@ back to OpenClaw.
 Changes to `agents.defaults.models`, agent model selection and fallbacks, and
 `models.providers` hot-apply without draining the Codex plugin. Changing Codex's
 own plugin settings still follows its plugin reload policy.
+Overlapping model or credential changes use the newer write's runtime application;
+superseding an earlier publication does not itself require a Gateway restart.
+
+Agent sandbox tool allow/deny lists under `agents.entries.<id>.tools.sandbox`
+hot-apply without restarting plugin services. Workboard reads live session facts;
+File Transfer reloads only for workspace inputs.
+
+If a service stop times out during config hot reload, that service remains owned
+and degraded while the Gateway keeps serving. Healthy services can finish their
+reloads. The warning names the plugin and service; plugin health includes its service
+failure. Once cleanup settles, retry `openclaw plugins reload <id>` to recover the
+affected plugin. A slow service cleanup does not schedule a Gateway restart.
 
 Channel transport edits, such as `channels.slack.streaming.mode`, retain prepared
 session rows and model catalogs. Agent rosters, session policy, store topology,
@@ -186,6 +237,11 @@ Audit collection (`logging.audit.enabled`, `messages`, and `executionIdentity`)
 applies to subsequent events and admissions. Disabling collection drains already
 accepted writes; enabling it does not reconstruct earlier events or add identity
 to runs already admitted without one. Existing retention policy is unchanged.
+
+When Memory Core is selected, changes to `models.providers` reload its index
+service. Cached memory managers close before replacements use the new provider
+configuration, so correcting an embedding endpoint or credential does not require
+a Gateway restart. Existing indexes remain on disk.
 
 Operation settings apply at their next use; they do not restart in-flight runs
 or recreate provisioned workers. Approval expiry changes affect newly issued
@@ -268,7 +324,7 @@ Revoking a command cancels its active invocations and rejects later input and
 results. Revoking desktop streaming also closes its observer transports. Browser
 node routing applies to subsequent operations. Node pairing policy
 (`gateway.nodes.pairing`) also hot-applies: pending automatic approvals recheck
-the current policy before granting access, including after SSH probes. Existing
+the current policy before granting access, including after SSH checks. Existing
 paired devices remain paired. Terminal shell changes apply to newly opened
 terminals; active terminals keep their original shell. Detached-session timeout
 changes recalculate deadlines from each terminal's original disconnect time.

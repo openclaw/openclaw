@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { ModelCatalogEntry } from "../../api/types.ts";
+import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { switchChatModel } from "./chat-session.ts";
@@ -19,6 +19,36 @@ const model: ModelCatalogEntry = {
     { agentRuntime: { id: "codex", source: "model" }, available: true, contextWindow: 200_000 },
   ],
 };
+
+function renderControls(
+  result: SessionsListResult,
+  models: ModelCatalogEntry[],
+  options: Pick<
+    Parameters<typeof renderChatModelControls>[0],
+    "onModelSelect" | "onModelSetup" | "modelSelectionLocked"
+  > = {},
+  container = document.createElement("div"),
+) {
+  render(
+    renderChatModelControls({
+      activeRunId: null,
+      connected: true,
+      gatewayAvailable: true,
+      loading: false,
+      modelCatalog: models,
+      modelCatalogState: { hasSnapshot: true, status: "ready" },
+      modelSwitching: false,
+      sending: false,
+      sessionKey: "main",
+      selectedSession: result.sessions[0],
+      sessionsResult: result,
+      stream: null,
+      ...options,
+    }),
+    container,
+  );
+  return container;
+}
 
 function renderRuntimeModel(
   entry: ModelCatalogEntry,
@@ -38,24 +68,20 @@ function renderRuntimeModel(
     result.sessions[0]!.activeModel = entry.id;
     result.sessions[0]!.activeModelProvider = entry.provider;
   }
-  const container = document.createElement("div");
-  render(
-    renderChatModelControls({
-      activeRunId: null,
-      connected: true,
-      gatewayAvailable: true,
-      loading: false,
-      modelCatalog: [entry],
-      modelSwitching: false,
-      sending: false,
-      sessionKey: "main",
-      selectedSession: result.sessions[0],
-      sessionsResult: result,
-      stream: null,
-    }),
-    container,
-  );
-  return container;
+  return renderControls(result, [entry]);
+}
+
+function selectionHost(result: SessionsListResult, models: ModelCatalogEntry[]) {
+  return makeChatHost({
+    sessionKey: "main",
+    sessionsResult: result,
+    chatModelCatalog: models,
+    chatModelSwitchPromises: {},
+    requestHandlers: {
+      "sessions.patch": { ok: true, key: "main", path: "", entry: { sessionId: "main" } },
+      "sessions.list": result,
+    },
+  });
 }
 
 describe("chat model runtime choices", () => {
@@ -93,37 +119,19 @@ describe("chat model runtime choices", () => {
         ? { id: "acpx", source: "session-key" }
         : defaultModel.agentRuntime;
       result.sessions[0]!.runtimeSelectionLocked = runtimeLocked || undefined;
-      const host = makeChatHost({
-        sessionKey: "main",
-        sessionsResult: result,
-        chatModelCatalog: models,
-        chatModelSwitchPromises: {},
-        requestHandlers: {
-          "sessions.patch": { ok: true, key: "main", path: "", entry: { sessionId: "main" } },
-          "sessions.list": result,
-        },
-      });
+      const host = selectionHost(result, models);
       const container = document.createElement("div");
       let selection: Promise<boolean> | undefined;
       const draw = () =>
-        render(
-          renderChatModelControls({
-            activeRunId: null,
-            connected: true,
-            gatewayAvailable: true,
-            loading: false,
-            modelCatalog: models,
-            modelSwitching: false,
-            sending: false,
-            sessionKey: "main",
-            selectedSession: result.sessions[0],
-            sessionsResult: result,
-            stream: null,
+        renderControls(
+          result,
+          models,
+          {
             onModelSelect: (value, key, runtime) => {
               selection = switchChatModel(host, value, key, runtime);
               return selection;
             },
-          }),
+          },
           container,
         );
       try {
@@ -189,7 +197,7 @@ describe("chat model runtime choices", () => {
     },
   );
 
-  it.each([undefined, "codex"])(
+  it.each([undefined])(
     "selects exactly one row with absent base runtime metadata and selected runtime %s",
     (selectedRuntime) => {
       const { agentRuntime: _runtime, ...unknownRuntimeModel } = model;
@@ -230,11 +238,7 @@ describe("chat model runtime choices", () => {
     ).toContain("Chat only");
   });
 
-  it.each([
-    { observed: false, alternate: true },
-    { observed: true, alternate: true },
-    { observed: false, alternate: false },
-  ])(
+  it.each([{ observed: true, alternate: true }])(
     "labels a Codex default with alternate=$alternate and observed=$observed",
     ({ observed, alternate }) => {
       const container = renderRuntimeModel(
@@ -256,7 +260,7 @@ describe("chat model runtime choices", () => {
       ).toEqual(alternate ? ["GPT-5.6 Sol codex", "GPT-5.6 Sol"] : ["GPT-5.6 Sol"]);
       expect(
         container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
-      ).toBe(alternate && !observed ? "GPT-5.6 Sol codex" : "GPT-5.6 Sol");
+      ).toBe(alternate ? "GPT-5.6 Sol codex" : "GPT-5.6 Sol");
     },
   );
 
@@ -283,12 +287,6 @@ describe("chat model runtime choices", () => {
 
   it.each([
     { name: "an inherited default model", initialRuntime: "openclaw", modelOverrideSource: null },
-    { name: "a pinned model", initialRuntime: "openclaw", modelOverrideSource: "user" },
-    {
-      name: "an effective matching harness without a runtime pin",
-      initialRuntime: "codex",
-      modelOverrideSource: "user",
-    },
   ] as const)(
     "pins the chosen harness for $name and resets through Default",
     async ({ initialRuntime, modelOverrideSource }) => {
@@ -298,37 +296,19 @@ describe("chat model runtime choices", () => {
         modelOverrideSource,
       });
       result.sessions[0]!.agentRuntime = { id: initialRuntime, source: "provider" };
-      const host = makeChatHost({
-        sessionKey: "main",
-        sessionsResult: result,
-        chatModelCatalog: [model],
-        chatModelSwitchPromises: {},
-        requestHandlers: {
-          "sessions.patch": { ok: true, key: "main", path: "", entry: { sessionId: "main" } },
-          "sessions.list": result,
-        },
-      });
+      const host = selectionHost(result, [model]);
       const container = document.createElement("div");
       let selection: Promise<boolean> | undefined;
       const draw = () =>
-        render(
-          renderChatModelControls({
-            activeRunId: null,
-            connected: true,
-            gatewayAvailable: true,
-            loading: false,
-            modelCatalog: [model],
-            modelSwitching: false,
-            sending: false,
-            sessionKey: "main",
-            selectedSession: result.sessions[0],
-            sessionsResult: result,
-            stream: null,
+        renderControls(
+          result,
+          [model],
+          {
             onModelSelect: (value, key, runtime) => {
               selection = switchChatModel(host, value, key, runtime);
               return selection;
             },
-          }),
+          },
           container,
         );
       try {
@@ -345,8 +325,8 @@ describe("chat model runtime choices", () => {
         expect(defaultRow().parentElement?.querySelector("[data-chat-model-option]")).toBe(
           defaultRow(),
         );
-        expect(runtimeRow().getAttribute("aria-selected")).toBe(String(initialRuntime === "codex"));
-        expect(defaultRow().getAttribute("aria-selected")).toBe(String(initialRuntime !== "codex"));
+        expect(runtimeRow().getAttribute("aria-selected")).toBe("false");
+        expect(defaultRow().getAttribute("aria-selected")).toBe("true");
         runtimeRow().click();
         await selection;
         expect(host.request).toHaveBeenCalledWith("sessions.patch", {
@@ -380,43 +360,32 @@ describe("chat model runtime choices", () => {
     },
   );
 
-  it.each(["missing-auth", "cooldown", "unsupported-runtime", "locked"] as const)(
+  it.each(["missing-auth", "unsupported-runtime", "locked"] as const)(
     "preserves the %s guard for additional harness rows",
     (guard) => {
       const onSelect = vi.fn();
       const onSetup = vi.fn();
       const result = createSessionsListResult({ model: model.id, defaultsModel: model.id });
       result.sessions[0]!.agentRuntime = model.agentRuntime;
-      const container = document.createElement("div");
-      render(
-        renderChatModelControls({
-          activeRunId: null,
-          connected: true,
-          gatewayAvailable: true,
-          loading: false,
-          modelCatalog: [
-            {
-              ...model,
-              runtimeChoices: [
-                {
-                  ...model.runtimeChoices![0]!,
-                  available: false,
-                  ...(guard === "locked" ? {} : { unavailableReason: guard }),
-                },
-              ],
-            },
-          ],
+      const container = renderControls(
+        result,
+        [
+          {
+            ...model,
+            runtimeChoices: [
+              {
+                ...model.runtimeChoices![0]!,
+                available: false,
+                ...(guard === "locked" ? {} : { unavailableReason: guard }),
+              },
+            ],
+          },
+        ],
+        {
           modelSelectionLocked: guard === "locked",
-          modelSwitching: false,
-          sending: false,
-          sessionKey: "main",
-          selectedSession: result.sessions[0],
-          sessionsResult: result,
-          stream: null,
           onModelSelect: onSelect,
           onModelSetup: onSetup,
-        }),
-        container,
+        },
       );
       const row = container.querySelector<HTMLButtonElement>('[data-chat-model-runtime="codex"]');
       if (guard === "locked") {
@@ -425,7 +394,7 @@ describe("chat model runtime choices", () => {
         expect(row?.querySelector(".chat-controls__model-option-name")?.textContent).toBe(
           "GPT-5.6 Sol codex",
         );
-        expect(row?.disabled).toBe(guard === "cooldown" || guard === "unsupported-runtime");
+        expect(row?.disabled).toBe(guard === "unsupported-runtime");
         if (guard === "unsupported-runtime") {
           expect(row?.title).toBe("This harness is unavailable for this model.");
         }

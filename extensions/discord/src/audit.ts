@@ -11,10 +11,7 @@ export function collectDiscordAuditChannelIds(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) {
-  const account = inspectDiscordAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
+  const account = inspectDiscordAccount(params);
   return collectDiscordAuditChannelIdsForAccount(account.config);
 }
 

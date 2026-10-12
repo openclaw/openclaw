@@ -8,6 +8,7 @@ import {
   createOperatorClient,
 } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -24,7 +25,6 @@ import {
 import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { announceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
-import * as registryPersistence from "./subagents/registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";
 import {
   addSubagentRunForTests,
@@ -85,7 +85,7 @@ export function registerSessionsSendRequesterRetirementTests({
         spawnedBy: requesterSessionKey,
         spawnDepth: 1,
       });
-      resetSubagentRegistryForTests();
+      await resetSubagentRegistryForTests();
       const childPending = createDeferredCore();
       const terminalReply = { disposition: "visible", text: "Result after requester retirement" };
       callGatewayMock.mockImplementation(async (request: GatewayCall) => {
@@ -140,7 +140,7 @@ export function registerSessionsSendRequesterRetirementTests({
         });
         setActiveEmbeddedRun(childSessionId, handle, childSessionKey);
       } else {
-        addSubagentRunForTests({
+        await addSubagentRunForTests({
           runId: "retiring-original-child-run",
           childSessionKey,
           requesterSessionKey,
@@ -171,46 +171,29 @@ export function registerSessionsSendRequesterRetirementTests({
         requesterRetired = true;
         admission.close();
       };
-      const publish = registryPersistence.publishSubagentRunPostimages;
-      const retireBeforePublication = vi
-        .spyOn(registryPersistence, "publishSubagentRunPostimages")
-        .mockImplementation((params) =>
-          publish({
-            ...params,
-            persist: (owner, options, ...runIds) =>
-              params.persist(
-                owner,
-                {
-                  ...options,
-                  onCommitted: () => {
-                    if (
-                      retirement === "before publication" &&
-                      !requesterRetired &&
-                      runIds.includes(runId)
-                    ) {
-                      retireRequester();
-                    }
-                    options.onCommitted?.();
-                  },
-                },
-                ...runIds,
-              ),
-          }),
-        );
-      const execute = stateWorker.runOpenClawStateWorkerOperation;
-      const retire = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation(async (owner, run, options) => {
-          const result = await execute(owner, run, options);
+      const retireBeforePublication = probe.command(
+        stateWorker,
+        async (command, executeOptions, scope) => {
+          const result = await scope.execute(command, executeOptions);
           if (
-            retirement === "after publication" &&
+            retirement === "before publication" &&
             !requesterRetired &&
-            getSubagentRunByRunId(runId)?.requesterTurnRunId === requesterTurnRunId
+            command.type === "subagents.persistChanges"
           ) {
             retireRequester();
           }
           return result;
-        });
+        },
+      );
+      const stopRetiring = subscribeSubagentRunChanges("persistence", () => {
+        if (
+          retirement === "after publication" &&
+          !requesterRetired &&
+          getSubagentRunByRunId(runId)?.requesterTurnRunId === requesterTurnRunId
+        ) {
+          retireRequester();
+        }
+      });
       announceTesting.setDepsForTest({ callGateway: callGatewayMock });
       let stopObserving = () => {};
       try {
@@ -262,7 +245,14 @@ export function registerSessionsSendRequesterRetirementTests({
         await settleSessionWork();
         expect(requesterCalls()).toHaveLength(1);
         expect(requesterCalls()[0]?.params).toMatchObject({
-          message: expect.stringContaining(terminalReply.text),
+          message: "Continue the OpenClaw runtime event.",
+          internalEvents: [
+            {
+              type: "task_completion",
+              childSessionKey,
+              result: expect.stringContaining(terminalReply.text),
+            },
+          ],
           inputProvenance: { sourceTool: "subagent_announce" },
         });
         emitAgentEvent({
@@ -274,13 +264,13 @@ export function registerSessionsSendRequesterRetirementTests({
         await settleSessionWork();
         expect(requesterCalls()).toHaveLength(1);
       } finally {
-        retire.mockRestore();
+        stopRetiring();
         retireBeforePublication.mockRestore();
         admission.close();
         clearActiveEmbeddedRun(childSessionId, handle, childSessionKey);
         childPending.resolve();
         stopObserving();
-        resetSubagentRegistryForTests();
+        await resetSubagentRegistryForTests();
         await settleSessionWork();
         announceTesting.setDepsForTest();
       }
@@ -327,7 +317,7 @@ export function registerSessionsSendRequesterRetirementTests({
         spawnDepth: 1,
       });
     }
-    resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests();
     const childrenPending = children.map(() => createDeferredCore());
     let acceptedMessages = 0;
     callGatewayMock.mockImplementation(async (request: GatewayCall) => {
@@ -425,25 +415,17 @@ export function registerSessionsSendRequesterRetirementTests({
           }),
         () => toolCurrent,
       );
-    const execute = stateWorker.runOpenClawStateWorkerOperation;
-    const retireTool = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation(async (owner, run, options) => {
-        const result = await execute(owner, run, options);
-        if (
-          revokeTool &&
-          getSubagentRunByRunId("second-watched-run")?.requesterTurnRunId === requesterTurnRunId
-        ) {
-          toolCurrent = false;
-        }
-        if (
-          finish === "retired" &&
-          getSubagentRunByRunId("second-watched-run")?.requesterTurnRunId === requesterTurnRunId
-        ) {
-          admission.close();
-        }
-        return result;
-      });
+    const stopRetiringTool = subscribeSubagentRunChanges("persistence", () => {
+      if (getSubagentRunByRunId("second-watched-run")?.requesterTurnRunId !== requesterTurnRunId) {
+        return;
+      }
+      if (revokeTool) {
+        toolCurrent = false;
+      }
+      if (finish === "retired") {
+        admission.close();
+      }
+    });
     announceTesting.setDepsForTest({ callGateway: callGatewayMock });
     let stopObserving = () => {};
     try {
@@ -523,7 +505,7 @@ export function registerSessionsSendRequesterRetirementTests({
       });
       admission.close();
       childrenPending[firstIndex]!.resolve();
-      await firstSettled.promise;
+      await withinTest(firstSettled.promise, signal);
       expect(
         getSubagentRunByRunId(children[firstIndex]!.runId),
         "The first accepted result must retain its completion owner",
@@ -559,12 +541,12 @@ export function registerSessionsSendRequesterRetirementTests({
         ),
       ).toHaveLength(1);
     } finally {
-      retireTool.mockRestore();
+      stopRetiringTool();
       admission.close();
       childrenPending.forEach((pending) => pending.resolve());
       stopObserving();
-      resetSubagentRegistryForTests();
       await settleSessionWork();
+      await resetSubagentRegistryForTests();
       announceTesting.setDepsForTest();
       operator.release();
     }

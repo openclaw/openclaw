@@ -4,6 +4,7 @@ import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-ope
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
+import { publishUserGitHubConnectionCommit } from "./user-github-connection-events.js";
 import {
   emitUserProfilesChanged,
   fenceUserProfileMutationAuthority,
@@ -56,7 +57,6 @@ async function write<Key extends keyof UserProfileWriteOperations>(
       {
         assertCurrent,
         createAdmission: (operation) => {
-          let inTransaction = false;
           const pending = new Map<
             number,
             {
@@ -99,6 +99,12 @@ async function write<Key extends keyof UserProfileWriteOperations>(
                 }
                 entry.published = true;
                 entry.fence.settle(true);
+                if (facts.githubConnections) {
+                  publishUserGitHubConnectionCommit(
+                    context.admission.databasePath,
+                    facts.githubConnections,
+                  );
+                }
                 onCommitted?.(facts);
               });
               if (
@@ -120,18 +126,10 @@ async function write<Key extends keyof UserProfileWriteOperations>(
               request.facts.kind === "user-profile-write" &&
               request.facts.operation === type
             ) {
-              if (inTransaction) {
-                throw new Error("Profile mutation requested overlapping transactions");
-              }
-              inTransaction = grant();
+              grant();
               return;
             }
-            if (
-              !inTransaction ||
-              request.stage !== "commit" ||
-              !isUserProfileMutationPublication(request.facts) ||
-              pending.has(request.facts.sequence)
-            ) {
+            if (request.stage !== "commit" || !isUserProfileMutationPublication(request.facts)) {
               throw new Error(
                 "Profile mutation requires its exact transaction and commit admission",
               );
@@ -146,7 +144,6 @@ async function write<Key extends keyof UserProfileWriteOperations>(
             const entry = { facts, publication, fence, granted: false, published: false };
             pending.set(facts.sequence, entry);
             entry.granted = grant();
-            inTransaction = false;
           });
           publicationSettled = operation.settled.then((settlement) => {
             let receiptsValid = false;

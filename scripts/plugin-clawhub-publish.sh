@@ -6,6 +6,14 @@ fi
 
 set -euo pipefail
 
+# Convert only absolute native paths; drive-relative CLI overrides must still fail.
+shell_path() {
+  case "${OSTYPE}:$1" in
+    msys*:[a-zA-Z]:[\\/]*|cygwin*:[a-zA-Z]:[\\/]*|msys*:\\\\*|cygwin*:\\\\*) cygpath -u "$1" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
 usage() {
   echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir> [--metadata-root <trusted-checkout>]"
   echo "       bash scripts/plugin-clawhub-publish.sh [--validate-packed|--publish-packed] <clawpack.tgz>"
@@ -17,7 +25,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
 fi
 
 mode="${1:-}"
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script_dir="$(cd "$(dirname "$(shell_path "${BASH_SOURCE[0]}")")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 invocation_root="$(pwd)"
 
@@ -48,7 +56,7 @@ if [[ "${1:-}" == "--metadata-root" ]]; then
     echo "--metadata-root requires a trusted checkout and an unpacked package mode" >&2
     exit 2
   fi
-  metadata_root="$(cd "$2" && pwd)"
+  metadata_root="$(cd "$(shell_path "$2")" && pwd)"
   shift 2
 fi
 if [[ "$#" -gt 0 ]]; then
@@ -64,6 +72,7 @@ fi
 package_dir="${PACKAGE_DIR:-}"
 clawpack_path=""
 if [[ "${packed_mode}" == "true" ]]; then
+  input_path="$(shell_path "${input_path}")"
   clawpack_path="$(cd "$(dirname "${input_path}")" && pwd)/$(basename "${input_path}")"
 else
   package_dir="${input_path}"
@@ -85,7 +94,7 @@ if [[ "${packed_mode}" == "true" && ! -f "${clawpack_path}" ]]; then
   exit 2
 fi
 
-clawhub_cli="${OPENCLAW_CLAWHUB_CLI:-}"
+clawhub_cli="$(shell_path "${OPENCLAW_CLAWHUB_CLI:-}")"
 if [[ -n "${clawhub_cli}" ]]; then
   if [[ "${clawhub_cli}" != /* || ! -x "${clawhub_cli}" ]]; then
     echo "OPENCLAW_CLAWHUB_CLI must be an absolute executable path" >&2
@@ -120,6 +129,11 @@ source_commit="${SOURCE_COMMIT:-$(git -C "${invocation_root}" rev-parse HEAD)}"
 source_ref="${SOURCE_REF:-$(git -C "${invocation_root}" symbolic-ref -q HEAD || true)}"
 clawhub_workdir="${CLAWDHUB_WORKDIR:-${CLAWHUB_WORKDIR:-${invocation_root}}}"
 manual_override_reason="${OPENCLAW_CLAWHUB_MANUAL_OVERRIDE_REASON:-}"
+package_family="${OPENCLAW_CLAWHUB_PACKAGE_FAMILY:-}"
+if [[ -n "${package_family}" && "${package_family}" != "bundle-plugin" ]]; then
+  echo "OPENCLAW_CLAWHUB_PACKAGE_FAMILY must be bundle-plugin when set." >&2
+  exit 2
+fi
 release_git_dir="${OPENCLAW_CLAWHUB_RELEASE_GIT_DIR:-}"
 release_tag="${OPENCLAW_CLAWHUB_RELEASE_TAG:-}"
 release_target_sha="${OPENCLAW_CLAWHUB_TARGET_SHA:-}"
@@ -140,7 +154,7 @@ if [[ "${release_binding_count}" == "3" ]]; then
   fi
 fi
 
-pack_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-clawhub-pack.XXXXXX")"
+pack_dir="$(mktemp -d "$(shell_path "${RUNNER_TEMP:-/tmp}")/openclaw-clawhub-pack.XXXXXX")"
 cleanup() {
   rm -rf "${pack_dir}"
 }
@@ -191,10 +205,11 @@ if [[ "${packed_mode}" == "false" ]]; then
     metadata_args=(--clawhub-metadata "${metadata_root}/${package_dir}")
   fi
   # Bash 3.2 treats an empty array as unset under nounset; metadata is optional.
+  # Preserve Bash's executable/shebang contract across the native Node wrapper.
   CLAWHUB_WORKDIR="${clawhub_workdir}" \
     OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${invocation_root}" \
     node "${repo_root}/scripts/lib/plugin-npm-package-manifest.mjs" --run "${package_dir}" ${metadata_args[@]+"${metadata_args[@]}"} -- \
-    "${pack_cmd[@]}" > "${pack_json}"
+    "${BASH}" -c 'exec "$@"' clawhub-pack "${pack_cmd[@]}" > "${pack_json}"
   pack_output="$(cat "${pack_json}")"
   printf '%s\n' "${pack_output}"
 
@@ -217,6 +232,7 @@ if (!parsed || typeof parsed.path !== "string" || parsed.path.trim() === "") {
 console.log(resolve(parsed.path));
 EOF
   )"
+  pack_path="$(shell_path "${pack_path}")"
 
   if [[ ! -f "${pack_path}" ]]; then
     echo "ClawPack tarball not found: ${pack_path}" >&2
@@ -229,7 +245,7 @@ fi
 echo "Resolved ClawPack: ${clawpack_path}"
 
 if [[ "${mode}" == "--pack" ]]; then
-  output_dir="${OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR:-}"
+  output_dir="$(shell_path "${OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR:-}")"
   if [[ -z "${output_dir}" ]]; then
     echo "OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR is required for --pack" >&2
     exit 2
@@ -297,6 +313,10 @@ else
 fi
 
 validate_packed_publish() {
+  local family_args=()
+  if [[ -n "${package_family}" ]]; then
+    family_args=(--family "${package_family}")
+  fi
   local dry_run_json
   dry_run_json="$(
     CLAWHUB_WORKDIR="${clawhub_workdir}" "${clawhub_timeout[@]}" "${clawhub_cli}" \
@@ -306,6 +326,7 @@ validate_packed_publish() {
       --source-repo "${source_repo}" \
       --source-commit "${source_commit}" \
       --source-path "${package_dir}" \
+      ${family_args[@]+"${family_args[@]}"} \
       --dry-run \
       --json
   )"
@@ -357,6 +378,10 @@ if [[ -n "${manual_override_reason}" ]]; then
     --manual-override-reason
     "${manual_override_reason}"
   )
+fi
+
+if [[ -n "${package_family}" ]]; then
+  publish_cmd+=(--family "${package_family}")
 fi
 
 printf 'Publish command: CLAWHUB_WORKDIR=%q' "${clawhub_workdir}"

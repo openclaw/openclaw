@@ -2,7 +2,6 @@ import {
   validateCronScratchGetParams,
   validateCronScratchSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { tryGetLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { cronScratchReadView } from "../../cron/job-read-view.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -33,7 +32,6 @@ export const cronScratchHandlers: GatewayRequestHandlers = {
             job,
             callerScope: readCronCallerScope(client),
             defaultAgentId: context.cron.getDefaultAgentId(),
-            legacyDefaultAgentId: tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
           })
         ) {
           throw new Error("Cron scratch owner changed before reply");

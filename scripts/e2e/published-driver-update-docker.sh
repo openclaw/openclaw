@@ -37,7 +37,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image openclaw-published-driver-update-e2e)"
 docker_e2e_build_or_reuse "$IMAGE_NAME" published-driver-update \
   "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
-DRIVER_ARGS=(-e GITHUB_EVENT_NAME)
+DRIVER_ARGS=(-e GITHUB_EVENT_NAME -e OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE)
 if [[ "$DRIVER_TAG" != */* && "$DRIVER_TAG" != . && "$DRIVER_TAG" != .. ]]; then
   driver_seed="$ROOT_DIR/.cache/published-driver-install/$DRIVER_TAG/driver.tar"
   if [ -f "$driver_seed" ]; then

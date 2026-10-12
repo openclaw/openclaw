@@ -26,8 +26,7 @@ import {
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  findMatchingApiKeyProfile,
-  findMatchingOAuthProfile,
+  findMatchingAuthProfile,
   itemProfileTarget,
   LEGACY_CODEX_PROFILE_ID,
   type CodexAuthCredential,
@@ -266,19 +265,14 @@ function authProfileConfigForCredential(
   credential: CodexAuthCredential,
   profileId: string,
 ): CodexAuthProfileConfig {
-  if (credential.kind === "api_key") {
-    return {
-      profileId,
-      provider: credential.provider,
-      mode: "api_key",
-      displayName: CODEX_IMPORT_DISPLAY_NAME,
-    };
-  }
-  const profile = credential.credential;
+  const profile: Pick<CodexAuthProfileConfig, "provider" | "email" | "displayName"> =
+    credential.kind === "oauth"
+      ? credential.credential
+      : { provider: credential.provider, displayName: CODEX_IMPORT_DISPLAY_NAME };
   return {
     profileId,
     provider: profile.provider,
-    mode: "oauth",
+    mode: credential.kind,
     ...(profile.email ? { email: profile.email } : {}),
     ...(profile.displayName ? { displayName: profile.displayName } : {}),
   };
@@ -519,10 +513,7 @@ async function applyCodexAuthItem(
       }
       const existing = effectiveStore.profiles[profileId];
       if (!ctx.overwrite && existing) {
-        const matchedProfileId =
-          credential.kind === "oauth"
-            ? findMatchingOAuthProfile(effectiveStore, credential.credential)
-            : findMatchingApiKeyProfile(effectiveStore, credential.provider, credential.key);
+        const matchedProfileId = findMatchingAuthProfile(effectiveStore, credential);
         if (matchedProfileId === profileId) {
           // A matching account cannot turn an expired or fenced profile into a successful login.
           unusable = existing.type === "oauth" && !hasUsableOAuthCredential(existing);

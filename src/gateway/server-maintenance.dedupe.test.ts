@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { createArtifactDownload } from "./artifact-download-grants.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 // Dedupe-record maintenance: TTL retention for active runs/queued sends and
@@ -6,6 +11,7 @@ import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 // sits at the max-lines cap; mocks are hoisted per file, so the module-mock
 // preamble is repeated while pure fixtures stay local to each block.
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
@@ -100,6 +106,58 @@ describe("gateway dedupe maintenance", () => {
     pruneExpiredDevicePairSetupCompletionsMock.mockReset().mockResolvedValue(0);
   });
 
+  it("releases an unused expired artifact grant while its connection stays open", async () => {
+    const clock = createGatewaySchedulerClock(1_000);
+    using now = vi.spyOn(Date, "now");
+    now.mockImplementation(() => clock.clock.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const deps = { ...createMaintenanceTimerDeps(), scheduler, isNixMode: true };
+    const controller = new AbortController();
+    const client: GatewayClient = {
+      connId: "unused-artifact",
+      connectionSignal: controller.signal,
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: "test", version: "test", platform: "test", mode: "test" },
+      },
+    };
+    deps.clients.add(client);
+    const release = vi.fn();
+    const read = vi.fn(async () => undefined);
+    const grant = createArtifactDownload({
+      client,
+      prepared: {
+        artifact: {
+          id: "unused-artifact",
+          type: "file",
+          title: "unused.txt",
+          download: { mode: "bytes" },
+        },
+        digest: "unused-artifact-digest",
+      },
+      assertCurrent: () => {},
+      read,
+      release,
+    });
+    const timers = startGatewayMaintenanceTimers(deps);
+    try {
+      await clock.advanceBy(0);
+      await clock.advanceTo(Date.parse(grant.expiresAt) - 1);
+      expect(release).not.toHaveBeenCalled();
+      await clock.advanceBy(60_000);
+      expect(controller.signal.aborted).toBe(false);
+      expect(release).toHaveBeenCalledOnce();
+      await clock.advanceBy(60_000);
+      expect(release).toHaveBeenCalledOnce();
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      await stopMaintenanceTimers(timers);
+      await scheduler.stop();
+    }
+  });
+
   it("keeps active exec approval dedupe aliases past the normal ttl", async () => {
     const { deps, now } = await createTimedMaintenanceScenario();
     const runId = "exec-approval-followup:req-active:nonce:retry-1";
@@ -125,28 +183,7 @@ describe("gateway dedupe maintenance", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("keeps queued chat dedupe entries past the normal ttl", async () => {
-    const { deps, now } = await createTimedMaintenanceScenario();
-    const runId = "queued-chat";
-    deps.chatQueuedTurns.set(runId, {
-      controller: new AbortController(),
-      sessionId: "session-main",
-      sessionKey: "agent:main:main",
-    });
-    deps.dedupe.set(`chat:${runId}`, {
-      ts: now - DEDUPE_TTL_MS - 1,
-      ok: true,
-      payload: { runId, status: "ok" },
-    });
-
-    const timers = startGatewayMaintenanceTimers(deps);
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.dedupe.has(`chat:${runId}`)).toBe(true);
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("keeps queued chat dedupe entries while trimming overflow", async () => {
+  it("keeps queued chat dedupe entries through ttl and overflow", async () => {
     const { deps, now } = await createTimedMaintenanceScenario();
     const runId = "queued-oldest";
     seedStableDedupeEntries(deps, now);
@@ -156,7 +193,7 @@ describe("gateway dedupe maintenance", () => {
       sessionKey: "agent:main:main",
     });
     deps.dedupe.set(`chat:${runId}`, {
-      ts: now - 10_000,
+      ts: now - DEDUPE_TTL_MS - 1,
       ok: true,
       payload: { runId, status: "ok" },
     });
@@ -212,7 +249,7 @@ describe("gateway dedupe maintenance", () => {
     seedStableDedupeEntries(deps, now);
     deps.chatAbortControllers.set("active-oldest", createActiveRun("agent:main:main", "agent"));
     deps.dedupe.set("agent:active-oldest", {
-      ts: now - 10_000,
+      ts: now - DEDUPE_TTL_MS - 1,
       ok: true,
       payload: { runId: "active-oldest", status: "accepted" },
     });

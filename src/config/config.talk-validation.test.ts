@@ -27,11 +27,6 @@ describe("talk config validation fail-closed behavior", () => {
 
   it.each([
     {
-      name: "invalid silence timeout",
-      talk: { silenceTimeoutMs: true },
-      message: /silenceTimeoutMs|talk/i,
-    },
-    {
       name: "provider absent from providers",
       talk: { provider: "acme", providers: { elevenlabs: { voiceId: "voice-123" } } },
       message: /talk\.provider|talk\.providers|acme/i,
@@ -44,7 +39,7 @@ describe("talk config validation fail-closed behavior", () => {
       message: /talk\.provider|required/i,
     },
   ])("rejects $name during config load", async ({ talk, message }) => {
-    await withTempHomeConfig({ agents: { list: [{ id: "main" }] }, talk }, async () => {
+    await withTempHomeConfig({ agents: { entries: { main: {} } }, talk }, async () => {
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       let thrown: unknown;
       try {

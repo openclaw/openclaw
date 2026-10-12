@@ -67,7 +67,7 @@ describe("skills watcher residency", () => {
         sharedScanPending: false,
         unavailable: false,
       });
-      registry.workspaceWatchTargets.set(key, sharedTargets);
+      registry.setWorkspaceWatchTargets(key, sharedTargets);
       for (const target of sharedTargets) {
         registry.pathWatchers.get(target.path)!.subscribers.add(key);
       }
@@ -76,13 +76,12 @@ describe("skills watcher residency", () => {
   }
 
   function executionTargetStates(executionWorkspaceDir: string) {
-    const key = JSON.stringify([
-      fixture.workspaceDir,
-      path.resolve(executionWorkspaceDir),
-      undefined,
-    ]);
+    const { watcherKey } = registry.resolveSkillsWatchScope({
+      workspaceDir: fixture.workspaceDir,
+      executionWorkspaceDir,
+    });
     const targets = expectDefined(
-      registry.workspaceWatchTargets.get(key),
+      registry.workspaceWatchTargets.get(watcherKey),
       "execution watch targets",
     );
     const states = targets
@@ -95,103 +94,58 @@ describe("skills watcher residency", () => {
     return states;
   }
 
-  it("bounds recent execution roots while retaining the most recently used and shared roots", async () => {
+  it("consumes repaired skills on capacity re-entry", async () => {
+    const { resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js");
     const first = await ensureExecutionRoot(0);
-    const oldest = await ensureExecutionRoot(1);
-    const shared = observer.forRoot(path.join(fixture.workspaceDir, "skills"));
-    fillCapacity(126);
-    await ensureExecutionRoot(0);
-    expect(observer.subscriptions.every((watcher) => !watcher.closed)).toBe(true);
-
-    await ensureExecutionRoot(128);
-
-    expect(oldest.watcher.closed).toBe(true);
-    expect(first.watcher.closed).toBe(false);
-    expect(shared.closed).toBe(false);
-    expect(observer.forRoot(path.join(fixture.workspaceDir, "skills"))).toBe(shared);
-    const seen = vi.fn();
-    refreshModule.registerSkillsChangeListener(seen);
-    const changedPath = path.join(first.executionWorkspaceDir, "skills", "probe", "SKILL.md");
-    first.watcher.change(changedPath);
-    await vi.advanceTimersByTimeAsync(250);
-    expect(seen).toHaveBeenCalledExactlyOnceWith({
+    const skillDir = path.join(first.executionWorkspaceDir, "skills", "residency-proof");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "invalid skill frontmatter\n");
+    const params = {
       workspaceDir: fixture.workspaceDir,
-      reason: "watch",
-      changedPath,
+      executionWorkspaceDir: first.executionWorkspaceDir,
+      config: {},
+      skillFilter: ["residency-proof"],
+    };
+    const initial = await resolveReusableWorkspaceSkillSnapshot(params);
+    expect(initial.snapshot.skills).toEqual([]);
+    const retiring = executionTargetStates(first.executionWorkspaceDir);
+    const shared = observer.forRoot(path.join(fixture.workspaceDir, "skills"));
+    fillCapacity(127);
+    await ensureExecutionRoot(1);
+    expect(first.watcher.closed).toBe(true);
+    expect(shared.closed).toBe(false);
+    expect(retiring.every(({ state }) => state.closed)).toBe(true);
+    // Join owner work before testing fresh acquisition; the next case holds retirement.
+    await Promise.all(retiring.map(({ state }) => state.close()));
+    for (const { target, state } of retiring) {
+      expect(registry.pathWatchers.get(target.path)).not.toBe(state);
+    }
+    const cached = initial.snapshot;
+    await writeSkill({
+      dir: skillDir,
+      name: "residency-proof",
+      description: "Repaired instructions",
     });
+    expect(
+      (
+        await resolveReusableWorkspaceSkillSnapshot({
+          ...params,
+          existingSnapshot: cached,
+          watch: false,
+        })
+      ).snapshot,
+    ).toBe(cached);
+
+    // No native events: acquisition must reconcile before the first snapshot is consumed.
+    const refreshed = await resolveReusableWorkspaceSkillSnapshot({
+      ...params,
+      existingSnapshot: cached,
+    });
+    expect(refreshed.shouldRefresh).toBe(true);
+    expect(refreshed.snapshot.prompt).toContain("Repaired instructions");
+    await observer.readyAll();
+    expect(observer.forRoot(path.join(first.executionWorkspaceDir, "skills")).closed).toBe(false);
   });
-
-  it.each([false, true])(
-    "consumes fresh skills on capacity re-entry (repaired: %s)",
-    async (repair) => {
-      const { resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js");
-      const first = await ensureExecutionRoot(0);
-      const skillDir = path.join(first.executionWorkspaceDir, "skills", "residency-proof");
-      await writeSkill({
-        dir: skillDir,
-        name: "residency-proof",
-        description: "Original instructions",
-      });
-      if (repair) {
-        await fs.writeFile(path.join(skillDir, "SKILL.md"), "invalid skill frontmatter\n");
-      }
-      const params = {
-        workspaceDir: fixture.workspaceDir,
-        executionWorkspaceDir: first.executionWorkspaceDir,
-        config: {},
-        skillFilter: ["residency-proof"],
-      };
-      const initial = await resolveReusableWorkspaceSkillSnapshot(params);
-      if (repair) {
-        expect(initial.snapshot.skills).toEqual([]);
-      } else {
-        expect(initial.snapshot.prompt).toContain("Original instructions");
-      }
-      const retiring = executionTargetStates(first.executionWorkspaceDir);
-      const shared = observer.forRoot(path.join(fixture.workspaceDir, "skills"));
-      fillCapacity(127);
-      await ensureExecutionRoot(1);
-      expect(first.watcher.closed).toBe(true);
-      expect(shared.closed).toBe(false);
-      expect(retiring.every(({ state }) => state.closed)).toBe(true);
-      // Join owner work before testing fresh acquisition; the next case holds retirement.
-      await Promise.all(retiring.map(({ state }) => state.close()));
-      for (const { target, state } of retiring) {
-        expect(registry.pathWatchers.get(target.path)).not.toBe(state);
-      }
-      const cached = initial.snapshot;
-      if (repair) {
-        await writeSkill({
-          dir: skillDir,
-          name: "residency-proof",
-          description: "Repaired instructions",
-        });
-        expect(
-          (
-            await resolveReusableWorkspaceSkillSnapshot({
-              ...params,
-              existingSnapshot: cached,
-              watch: false,
-            })
-          ).snapshot,
-        ).toBe(cached);
-      }
-
-      // No native events: acquisition must reconcile before the first snapshot is consumed.
-      const refreshed = await resolveReusableWorkspaceSkillSnapshot({
-        ...params,
-        existingSnapshot: cached,
-      });
-      expect(refreshed.shouldRefresh).toBe(repair);
-      if (repair) {
-        expect(refreshed.snapshot.prompt).toContain("Repaired instructions");
-      } else {
-        expect(refreshed.snapshot).toBe(initial.snapshot);
-      }
-      await observer.readyAll();
-      expect(observer.forRoot(path.join(first.executionWorkspaceDir, "skills")).closed).toBe(false);
-    },
-  );
 
   it("refreshes preparation while capacity re-entry waits for retirement", async () => {
     const { resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js");

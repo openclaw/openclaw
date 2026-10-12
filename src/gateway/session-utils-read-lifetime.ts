@@ -1,20 +1,110 @@
 import { captureSessionEntryRead } from "../config/sessions/session-accessor.sqlite-entry-read-lifetime.js";
+import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isOpenClawAgentDatabasePathCurrent } from "../state/openclaw-agent-db-identity.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
+import { omitInternalSessionEffectsEntries } from "./session-utils-store-selection.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+
+/** Full planning rows stay with their consumer; only the actor owns current effect metadata. */
+export async function withGatewaySessionEntryReadOnly<T>(
+  params: {
+    cfg: OpenClawConfig;
+    key: string;
+    agentId?: string;
+    env?: NodeJS.ProcessEnv;
+    assertActive?: () => void;
+    excludeInternalEffects?: boolean;
+    projection?: SessionEntryReadScope["projection"];
+  },
+  consume: (
+    loaded: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+    assertCurrent: () => void,
+  ) => Promise<T>,
+): Promise<T> {
+  const binding = captureIncognitoSessionSource({
+    agentId: params.agentId,
+    sessionKey: params.key,
+    env: params.env,
+  });
+  if (!binding) {
+    const loaded = await loadGatewaySessionEntryReadOnlyInWorker(params);
+    return consume(loaded, () => params.assertActive?.());
+  }
+  const { agentId, canonicalKey } = resolveSessionStoreIdentity({
+    cfg: params.cfg,
+    sessionKey: params.key,
+    agentId: params.agentId,
+  });
+  const owner = "kind" in binding ? binding : binding.actor;
+  captureIncognitoSessionSource({
+    agentId,
+    sessionKey: canonicalKey,
+    storePath: owner.path,
+    env: params.env,
+  });
+  const assertCurrent = () => {
+    params.assertActive?.();
+    binding.admissionSignal?.throwIfAborted();
+    if ("kind" in binding) {
+      binding.assertCurrent();
+    } else {
+      binding.actor.assertReadable();
+    }
+  };
+  const run = async () => {
+    assertCurrent();
+    const entry =
+      "kind" in binding
+        ? undefined
+        : (
+            await binding.actor.sessions.read(
+              { assertCurrent },
+              { sessionKey: canonicalKey },
+              binding.admissionSignal,
+            )
+          ).entry;
+    assertCurrent();
+    const store = entry ? { [canonicalKey]: entry } : {};
+    if (params.excludeInternalEffects) {
+      omitInternalSessionEffectsEntries(store, [canonicalKey]);
+    }
+    const result = await consume(
+      {
+        cfg: params.cfg,
+        agentId,
+        canonicalKey,
+        storePath: owner.path,
+        storeKeys: [canonicalKey],
+        store,
+        entry: store[canonicalKey],
+        legacyKey: undefined,
+        readSource: { agentId, path: owner.path },
+      },
+      assertCurrent,
+    );
+    assertCurrent();
+    return result;
+  };
+  return "kind" in binding ? run() : binding.actor.sessions.withSharedState(run);
+}
 
 /** Retain the selected row and physical owner through asynchronous metadata preparation. */
 export function retainGatewaySessionEntryReadOnly(
   sessionKey: string,
   agentId: string,
   allowMetadataChanges?: Parameters<typeof captureSessionEntryRead>[2],
+  cfg?: Parameters<typeof loadGatewaySessionEntryReadOnly>[2],
 ) {
   const options = { agentId, projection: "list" as const };
-  const selected = loadGatewaySessionEntryReadOnly(sessionKey, options);
+  const selected = loadGatewaySessionEntryReadOnly(sessionKey, options, cfg);
   let released = false;
   const sameRoute = () => {
-    const current = loadGatewaySessionEntryReadOnly(sessionKey, options);
+    const current = loadGatewaySessionEntryReadOnly(sessionKey, options, cfg);
     return (
       current.agentId === selected.agentId &&
       current.canonicalKey === selected.canonicalKey &&
@@ -32,7 +122,7 @@ export function retainGatewaySessionEntryReadOnly(
       isCurrentAtResponse: () =>
         !released &&
         sameRoute() &&
-        loadGatewaySessionEntryReadOnly(sessionKey, options).entry === undefined,
+        loadGatewaySessionEntryReadOnly(sessionKey, options, cfg).entry === undefined,
       release: () => {
         released = true;
       },

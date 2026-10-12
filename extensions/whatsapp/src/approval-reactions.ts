@@ -18,13 +18,13 @@ import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-rep
 import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
-import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
 import { listWhatsAppDeliveredMessageIdentities } from "./inbound/send-result.js";
+import { buildWhatsAppReactionTargetKey } from "./reaction-target.js";
 import { getOptionalWhatsAppRuntime } from "./runtime.js";
 
 const PERSISTENT_NAMESPACE = "whatsapp.approval-reactions";
@@ -53,11 +53,6 @@ type ResolvedWhatsAppApprovalReactionTarget = WhatsAppApprovalReactionResolution
   remoteJid: string;
 };
 
-const loadResolveApprovalOverGateway = createLazyRuntimeSurface(
-  () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
-  (runtime) => runtime.resolveApprovalOverGateway,
-);
-
 const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
   getOptionalWhatsAppRuntime,
   "whatsapp",
@@ -74,20 +69,6 @@ const whatsappApprovalReactionTargets =
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget: readApprovalReactionTargetRecord,
   });
-
-function buildReactionTargetKey(params: {
-  accountId: string;
-  remoteJid: string;
-  messageId: string;
-}) {
-  const accountId = params.accountId.trim();
-  const remoteJid = params.remoteJid.trim();
-  const messageId = params.messageId.trim();
-  if (!accountId || !remoteJid || !messageId) {
-    return null;
-  }
-  return `${accountId}:${remoteJid}:${messageId}`;
-}
 
 function reportApprovalBindingCorrelationMismatch(binding: {
   approvalId: string;
@@ -202,7 +183,7 @@ export async function registerWhatsAppApprovalReactionTarget(params: {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
 }): Promise<WhatsAppApprovalReactionTarget | null> {
-  const key = buildReactionTargetKey(params);
+  const key = buildWhatsAppReactionTargetKey(params);
   const approvalId = params.approvalId.trim();
   const allowedDecisions = listApprovalReactionBindings({
     allowedDecisions: params.allowedDecisions,
@@ -277,7 +258,7 @@ export async function unregisterWhatsAppApprovalReactionTarget(params: {
   remoteJid: string;
   messageId: string;
 }): Promise<void> {
-  const key = buildReactionTargetKey(params);
+  const key = buildWhatsAppReactionTargetKey(params);
   if (!key) {
     return;
   }
@@ -290,7 +271,7 @@ export async function resolveWhatsAppApprovalReactionTargetWithPersistence(param
   messageId: string;
   reactionKey: string;
 }): Promise<WhatsAppApprovalReactionResolution | null> {
-  const key = buildReactionTargetKey(params);
+  const key = buildWhatsAppReactionTargetKey(params);
   if (!key) {
     return null;
   }
@@ -424,7 +405,8 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     },
     approvers: getWhatsAppApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }),
     authorizeActorAction: (input) => whatsappApprovalAuth.authorizeActorAction(input),
-    loadResolver: loadResolveApprovalOverGateway,
+    loadResolver: async () =>
+      (await import("openclaw/plugin-sdk/approval-gateway-runtime")).resolveApprovalOverGateway,
     clearTarget: () =>
       unregisterWhatsAppApprovalReactionTarget({
         accountId: params.accountId,
@@ -447,5 +429,4 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
 
 export function clearWhatsAppApprovalReactionTargetsForTest(): void {
   whatsappApprovalReactionTargets.clearForTest();
-  loadResolveApprovalOverGateway.clear();
 }

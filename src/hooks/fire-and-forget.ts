@@ -1,5 +1,4 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-// Fire-and-forget hook helpers schedule hook work without blocking hot paths.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -22,7 +21,6 @@ type FireAndForgetHookState = {
   queue: FireAndForgetHookJob[];
 };
 
-/** Queue limits for bounded fire-and-forget hook execution. */
 type FireAndForgetBoundedHookOptions = {
   maxConcurrency?: number;
   maxQueue?: number;
@@ -51,7 +49,6 @@ export function formatHookErrorForLog(err: unknown): string {
   return truncateUtf16Safe(formatted || "unknown error", MAX_HOOK_LOG_MESSAGE_LENGTH);
 }
 
-/** Run a hook promise without awaiting it, logging rejection safely. */
 export function fireAndForgetHook(
   task: Promise<unknown>,
   label: string,
@@ -65,20 +62,17 @@ export function fireAndForgetHook(
 function runFireAndForgetHookJob(
   state: FireAndForgetHookState,
   { task, ...job }: FireAndForgetHookJob,
-  limits: { maxConcurrency: number },
+  maxConcurrency: number,
 ): void {
   // Pending observers need logging metadata, not the invoked factory's captured inputs.
   state.active += 1;
   let didLogTimeout = false;
-  const timeout =
-    job.timeoutMs > 0
-      ? setTimeout(() => {
-          // Timeout is informational only; the hook promise may still settle
-          // later, but the log should not double-report an eventual rejection.
-          didLogTimeout = true;
-          job.logger(`${job.label}: timed out after ${job.timeoutMs}ms`);
-        }, job.timeoutMs)
-      : undefined;
+  const timeout = setTimeout(() => {
+    // Timeout is informational only; the hook promise may still settle
+    // later, but the log should not double-report an eventual rejection.
+    didLogTimeout = true;
+    job.logger(`${job.label}: timed out after ${job.timeoutMs}ms`);
+  }, job.timeoutMs);
 
   void Promise.resolve()
     .then(task)
@@ -88,24 +82,19 @@ function runFireAndForgetHookJob(
       }
     })
     .finally(() => {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
+      clearTimeout(timeout);
       state.active -= 1;
-      drainFireAndForgetHookQueue(state, limits);
+      drainFireAndForgetHookQueue(state, maxConcurrency);
     });
 }
 
-function drainFireAndForgetHookQueue(
-  state: FireAndForgetHookState,
-  limits: { maxConcurrency: number },
-): void {
-  while (state.active < limits.maxConcurrency) {
+function drainFireAndForgetHookQueue(state: FireAndForgetHookState, maxConcurrency: number): void {
+  while (state.active < maxConcurrency) {
     const next = state.queue.shift();
     if (!next) {
       return;
     }
-    runFireAndForgetHookJob(state, next, limits);
+    runFireAndForgetHookJob(state, next, maxConcurrency);
   }
 }
 
@@ -136,5 +125,5 @@ export function fireAndForgetBoundedHook(
   }
 
   state.queue.push({ task, label, logger, timeoutMs });
-  drainFireAndForgetHookQueue(state, { maxConcurrency });
+  drainFireAndForgetHookQueue(state, maxConcurrency);
 }

@@ -56,7 +56,16 @@ function setup() {
     reason: "restart-unhealthy",
     before: { version: "2026.9.1" },
     after: { version: "2026.9.1" },
-    steps: [],
+    steps: [
+      {
+        name: "gateway verification",
+        command: "openclaw gateway status --deep",
+        cwd: stateDir,
+        durationMs: 1,
+        exitCode: 1,
+        failureFacts: [{ check: "readyz", code: "restart-unhealthy" }],
+      },
+    ],
     durationMs: 1,
     recovery: {
       serviceRestartSafe: true,

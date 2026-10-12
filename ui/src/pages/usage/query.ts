@@ -3,12 +3,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { extractQueryTerms } from "./helpers.ts";
 import type { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./types.ts";
 
-function neutralizeSpreadsheetFormulaCell(value: string): string {
-  return /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(value) ? `'${value}` : value;
-}
-
 function csvEscape(value: string, neutralizeFormulas = true): string {
-  const safeValue = neutralizeFormulas ? neutralizeSpreadsheetFormulaCell(value) : value;
+  const safeValue =
+    neutralizeFormulas && /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(value)
+      ? `'${value}`
+      : value;
   if (/[",\r\n]/.test(safeValue)) {
     return `"${safeValue.replaceAll('"', '""')}"`;
   }

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -55,6 +56,7 @@ promises.rm = async (target, options) => {
   ).href;
   let cronPreload: string | undefined;
   if (coldFailure) {
+    const preloadPath = state.statePath("cron-worker-failure.mjs");
     const failure =
       coldFailure === "read"
         ? `
@@ -75,7 +77,9 @@ DatabaseSync.prototype.prepare = function (sql, ...args) {
 `
         : `
 import { __setFsSafeTestHooksForTest } from ${JSON.stringify(import.meta.resolve("@openclaw/fs-safe/test-hooks"))};
-process.env.NODE_OPTIONS = (process.env.NODE_OPTIONS ?? "") + " --import=" + import.meta.url;
+for (const [name, option] of Object.entries(${JSON.stringify(withRuntimePreload({}, preloadPath))})) {
+  process.env[name] = [process.env[name], option].filter(Boolean).join(" ");
+}
 if (isMainThread) {
   __setFsSafeTestHooksForTest({
     beforeOpen(target) {
@@ -94,16 +98,19 @@ if (isMainThread) {
   const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
   const create = source.create.bind(source);
   const stagingUrl = resolveRuntimeProcessEntrypointUrl("sqliteSnapshotStaging").href;
-  const creation = vi.spyOn(source, "create").mockImplementation((filename, options, resource) => {
-    if (String(filename) !== stagingUrl) {
-      return create(filename, options, resource);
-    }
-    return create(
-      filename,
-      { ...options, execArgv: [...(options?.execArgv ?? []), "--import", stagingPreload] },
-      resource,
-    );
-  });
+  const creation = vi
+    .spyOn(source, "create")
+    .mockImplementation((filename, options, resource, taskPorts) => {
+      if (String(filename) !== stagingUrl) {
+        return create(filename, options, resource, taskPorts);
+      }
+      return create(
+        filename,
+        { ...options, execArgv: [...(options?.execArgv ?? []), "--import", stagingPreload] },
+        resource,
+        taskPorts,
+      );
+    });
   return {
     cronPreload,
     cronWorkerUrl: resolveRuntimeProcessEntrypointUrl("cronReadOnly").href,

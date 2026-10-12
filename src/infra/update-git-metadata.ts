@@ -17,10 +17,7 @@ export async function readGitBranchFetchTarget(
     readGit("config", "--get-all", `branch.${branch}.merge`),
   ]);
   const mergeRef = mergeRefs?.split("\n")[0];
-  if (remote && mergeRef) {
-    return { remote, mergeRef };
-  }
-  return null;
+  return remote && mergeRef ? { remote, mergeRef } : null;
 }
 
 function matchRefspec(pattern: string, ref: string): string | undefined {

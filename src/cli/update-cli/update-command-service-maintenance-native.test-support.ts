@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
+import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 const command = vi.hoisted(() => ({
@@ -74,7 +74,6 @@ vi.mock("./update-command-package.js", () => ({
     await params.beforeActivate?.();
     return { status: "ok", mode: "npm", root: params.root, steps: [], durationMs: 0 };
   },
-  preparePackageDoctorContext: () => undefined,
 }));
 vi.mock("../../infra/update-global.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-global.js")>()),
@@ -131,7 +130,7 @@ export async function runNativeMaintenanceUpdate(
     discoveredRoot: root,
     installKind: "package",
     servicePlan: serviceRoot ? { rootRedirect: null, serviceRoot } : undefined,
-    pkgOwnership: createFreeBsdPkgOwnershipInspection(),
+    pkgOwnership: createSystemPackageOwnershipInspection(),
   });
   command.admit.mockResolvedValue(run);
   command.target.mockResolvedValue({

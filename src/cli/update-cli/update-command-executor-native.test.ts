@@ -3,8 +3,13 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -26,6 +31,28 @@ const sourceImportArgs = resolveRuntimeWorkerUrl(
   : [];
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
+
+// The marker is written before the receipt; a settled operation may beat socket delivery.
+function fixtureReadyBeforeSettlement(marker: string, operation: PromiseLike<unknown>) {
+  const settled = Promise.resolve(operation).then(
+    () => {
+      expect(fs.existsSync(marker)).toBe(true);
+    },
+    (error: unknown) => {
+      if (!fs.existsSync(marker)) {
+        throw error;
+      }
+    },
+  );
+  return Promise.race([receipts.waitFor(marker, "ready"), settled]);
+}
 afterEach(() => vi.restoreAllMocks());
 
 it("nested native child retains a settled spawner until its descendant finishes", async () => {
@@ -145,7 +172,7 @@ it
   ] as const)(
   "composed native/config effects retain original authority: %s",
   { timeout: 60_000 },
-  async (fault, { onTestFailed }) => {
+  async (fault, { onTestFailed, signal }) => {
     const root = fs.realpathSync(dirs.make("native-composed-owner-"));
     const control = path.join(root, "control");
     fs.mkdirSync(control);
@@ -175,6 +202,7 @@ it
     fs.writeFileSync(plist, "previous-definition");
     const file = (name: string) => path.join(root, name);
     const receiver = `
+    ${fixtureReceiptClientSource(receipts.endpoint)}
     import fs from "node:fs";
     import {setTimeout} from "node:timers/promises";
     import * as json5 from ${JSON.stringify(import.meta.resolve("json5"))};
@@ -191,6 +219,7 @@ it
     try { await runGatewayServiceUpdateCommand("run","install",async()=>{
       fs.writeFileSync(root+"/ready.tmp",String(process.pid));
       fs.renameSync(root+"/ready.tmp",root+"/ready");
+      sendReceipt(root+"/ready","ready");
       await wait("proceed");
       const results={};
       const attempt=async(name,fn)=>{
@@ -200,13 +229,14 @@ it
       };
       const io=createConfigIO({configPath:root+"/openclaw.json",env:{...process.env,OPENCLAW_STATE_DIR:root,OPENCLAW_CONFIG_PATH:root+"/openclaw.json"},observe:false,shellEnvFallback:"defer"});
       await attempt("config",()=>io.writeConfigFile({gateway:{mode:"local",port:18789,auth:{mode:"token",token:"disposable-proof-token"}}},{observe:false,beforeCommit:async()=>{
-        if(fault==="config-precommit-replaced"){fs.writeFileSync(root+"/precommit","ready");await wait("publish");}
+        if(fault==="config-precommit-replaced"){fs.writeFileSync(root+"/precommit","ready");sendReceipt(root+"/precommit","ready");await wait("publish");}
         assertGatewayServiceUpdateCurrent();
       }}));
       await attempt("native",async()=>{const r=await execFileUtf8(process.execPath,["-e",${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(effect)},"owned")`)}]);if(r.code!==0)throw new Error(r.stderr);});
       await attempt("definition",()=>writeLaunchAgentPlist({env:{HOME:root,OPENCLAW_STATE_DIR:root,OPENCLAW_LAUNCHD_LABEL:${JSON.stringify(label)}},stdout:process.stdout,programArguments:[process.execPath,"next-definition"]}));
       fs.writeFileSync(root+"/done.tmp",JSON.stringify(results));
       fs.renameSync(root+"/done.tmp",root+"/done");
+      sendReceipt(root+"/done","ready");
       await wait("release");
     });}catch(e){process.stderr.write(e.message);process.exitCode=1;}
   `;
@@ -240,6 +270,7 @@ it
     let nativeOutput = "";
     onTestFailed(() => console.error(JSON.stringify({ fault, nativeOutput })));
     let leaf: number | undefined;
+    const spawnerExited = createDeferred();
     const work = withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(root);
       return withUpdateCommandExecutorChild<{
@@ -276,7 +307,10 @@ it
                   );
                 }
               });
-              child.once("exit", (code) => resolve({ code, stderr, cleanup: "normal" }));
+              child.once("exit", (code) => {
+                spawnerExited.resolve();
+                resolve({ code, stderr, cleanup: "normal" });
+              });
             },
           );
         }
@@ -302,10 +336,7 @@ it
       (error: unknown) => ({ error }),
     );
     try {
-      await vi.waitFor(() => expect(fs.existsSync(file("ready"))).toBe(true), {
-        timeout: 20_000,
-        interval: 25,
-      });
+      await withinTest(fixtureReadyBeforeSettlement(file("ready"), work), signal);
       leaf = Number(fs.readFileSync(file("ready"), "utf8"));
       const grant = JSON.parse(fs.readFileSync(file("binding"), "utf8"));
       expect(grant.originalParent.key).toBe(root);
@@ -330,24 +361,23 @@ it
       }
       if (fault === "spawner-killed") {
         process.kill(grant.spawner.executor.pid, "SIGKILL");
-        await vi.waitFor(
-          () => expect(pidAlive.isPidDefinitelyDead(grant.spawner.executor.pid)).toBe(true),
-          { timeout: 5000 },
-        );
+        await withinTest(spawnerExited.promise, signal);
+        expect(pidAlive.isPidDefinitelyDead(grant.spawner.executor.pid)).toBe(true);
         expect(createManagedHandoffLeaseStore().release(grant.spawner)).toBe(false);
       }
       fs.writeFileSync(file("proceed"), "go");
       if (fault === "config-precommit-replaced") {
-        await vi.waitFor(() => expect(fs.existsSync(file("precommit"))).toBe(true), {
-          timeout: 15_000,
-        });
+        await withinTest(fixtureReadyBeforeSettlement(file("precommit"), work), signal);
         revoke(root);
         fs.writeFileSync(file("publish"), "go");
       }
-      await vi.waitFor(() => expect(fs.existsSync(file("done"))).toBe(true), {
-        timeout: 20_000,
-        interval: 25,
-      });
+      // The killed spawner intentionally settles before the surviving receiver reports results.
+      await withinTest(
+        fault === "spawner-killed"
+          ? receipts.waitFor(file("done"), "ready")
+          : fixtureReadyBeforeSettlement(file("done"), work),
+        signal,
+      );
       const results = JSON.parse(fs.readFileSync(file("done"), "utf8"));
       const store = createManagedHandoffLeaseStore();
       expect(store.acquire(root, "unrelated-updater", { kind: "update" }).kind).toBe("busy");

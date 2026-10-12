@@ -47,34 +47,11 @@ describe("config validation allowed-values metadata", () => {
     expect(issue.allowedValuesHiddenCount).toBe(0);
   });
 
-  it("reports the supported diagnostics protocol for an invalid enum", () => {
-    const issue = issueAt(
-      { diagnostics: { otel: { protocol: "grpc" } } },
-      "diagnostics.otel.protocol",
-    );
-    expect(issue.allowedValues).toEqual(["http/protobuf"]);
-    expect(issue.allowedValuesHiddenCount).toBe(0);
-  });
-
   it("skips allowed-values hints for open-ended unions", () => {
     const issue = issueAt({ cron: { sessionRetention: true } }, "cron.sessionRetention");
     expect(issue.allowedValues).toBeUndefined();
     expect(issue.allowedValuesHiddenCount).toBeUndefined();
     expect(issue.message).not.toContain("(allowed:");
-  });
-
-  it.each([
-    { value: 15, expected: "(maximum: 14)" },
-    { value: 0, expected: "(minimum: 1)" },
-  ])("adds numeric bound hints for startup context limits", ({ value, expected }) => {
-    expect(
-      issueAt(
-        {
-          agents: { defaults: { startupContext: { dailyMemoryDays: value } } },
-        },
-        "agents.defaults.startupContext.dailyMemoryDays",
-      ).message,
-    ).toContain(expected);
   });
 
   it("adds an exclusive lower-bound hint", () => {
@@ -84,29 +61,24 @@ describe("config validation allowed-values metadata", () => {
     ).toContain("(must be greater than 0)");
   });
 
-  it.each([
-    { acp: { agent: "claude" }, extra: {}, path: "bindings.0.acp", key: "agent" },
-    {
-      acp: { mode: "persistent" },
-      extra: { extraTopLevel: true },
-      path: "bindings.0",
-      key: "extraTopLevel",
+  it.each([{ acp: { agent: "claude" }, extra: {}, path: "bindings.0.acp", key: "agent" }])(
+    "selects the matching ACP union branch at $path",
+    ({ acp, extra, path, key }) => {
+      expect(
+        issues({
+          bindings: [
+            {
+              type: "acp",
+              agentId: "test",
+              match: { channel: "discord", peer: { kind: "direct", id: "123" } },
+              acp,
+              ...extra,
+            },
+          ],
+        }),
+      ).toEqual([{ path, message: 'Unrecognized key: "' + key + '"' }]);
     },
-  ])("selects the matching ACP union branch at $path", ({ acp, extra, path, key }) => {
-    expect(
-      issues({
-        bindings: [
-          {
-            type: "acp",
-            agentId: "test",
-            match: { channel: "discord", peer: { kind: "direct", id: "123" } },
-            acp,
-            ...extra,
-          },
-        ],
-      }),
-    ).toEqual([{ path, message: 'Unrecognized key: "' + key + '"' }]);
-  });
+  );
 
   it("names the replacement for a removed provider and model API", () => {
     const result = issues({

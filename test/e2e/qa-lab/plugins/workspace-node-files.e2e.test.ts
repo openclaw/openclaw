@@ -138,12 +138,14 @@ describe("node workspace document access", () => {
           nodes: { commands: { allow: COMMANDS } },
         },
         agents: {
-          list: [
-            { id: "qa", default: true, workspace: state.workspaceDir },
-            { id: "local", workspace: state.path("local-workspace") },
-          ],
+          ownership: "explicit",
+          entries: {
+            qa: { workspace: state.workspaceDir },
+            local: { workspace: state.path("local-workspace") },
+          },
           defaults: {
             workspace: state.workspaceDir,
+            systemAgent: { agentId: "qa" },
             skipBootstrap: true,
             heartbeat: { every: "0m" },
           },

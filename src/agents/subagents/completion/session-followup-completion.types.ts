@@ -56,6 +56,6 @@ export interface FollowupCompletionOwner {
     assertCurrent?: () => void,
   ): Promise<FollowupSettlement>;
   take(timeoutMs?: number): Promise<FollowupReply | undefined>;
-  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): () => void;
+  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): void;
   close(error?: unknown): void;
 }

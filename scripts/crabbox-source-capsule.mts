@@ -283,9 +283,8 @@ export function prepareCrabboxSourceCapsule(options: {
     const entry = sourceStat(repoRoot, path);
     return entry.kind === "present" ? mirrorStatStamp(entry.stat) : entry.kind;
   }
-  // Capture before staging allocation and Git setup, not when each copy finally
-  // reaches the path. Recheck eligibility too: new or newly ignored files must
-  // not silently change the frozen policy's source set.
+  // Source observations select reusable mirror files; this invocation uses the
+  // captured eligibility policy even if the checkout is edited while copying.
   const observed = new Map<string, string>();
   for (const path of new Set(
     [...eligible].toSorted().concat([".crabboxignore", ".crabbox.yaml", "crabbox.yaml"]),
@@ -556,8 +555,7 @@ export function prepareCrabboxSourceCapsule(options: {
     function copySource(path: string) {
       const previous = cache?.files.get(path);
       if (retained.has(path) && previous) {
-        // The initial source observation selects reuse; the final source pass
-        // still rejects edits during freezing, including paths we did not copy.
+        // The initial source observation selects reuse for this invocation.
         frozen.set(path, {
           mode: previous.mode,
           blobPath: join(directory, path),
@@ -569,11 +567,6 @@ export function prepareCrabboxSourceCapsule(options: {
       }
       const entry = sourceStat(repoRoot, path);
       const source = entry.kind === "present" ? mirrorStatStamp(entry.stat) : entry.kind;
-      if (observed.has(path) && observed.get(path) !== source) {
-        throw new Error(
-          `source changed while freezing ${JSON.stringify(path)}; retry after edits finish`,
-        );
-      }
       observed.set(path, source);
       if (entry.kind !== "present" || entry.stat.isDirectory()) {
         return entry.kind;
@@ -582,18 +575,6 @@ export function prepareCrabboxSourceCapsule(options: {
       const sourcePath = join(repoRoot, path);
       if (info.isSymbolicLink()) {
         const bytes = readlinkSync(sourcePath, { encoding: "buffer" });
-        const after = sourceStat(repoRoot, path);
-        if (
-          after.kind !== "present" ||
-          !after.stat.isSymbolicLink() ||
-          after.stat.ino !== info.ino ||
-          !readlinkSync(sourcePath, { encoding: "buffer" }).equals(bytes) ||
-          mirrorStatStamp(after.stat) !== source
-        ) {
-          throw new Error(
-            `symlink changed while freezing ${JSON.stringify(path)}; retry after edits finish`,
-          );
-        }
         writeFrozen(path, bytes, "120000");
         return "present";
       }
@@ -605,6 +586,10 @@ export function prepareCrabboxSourceCapsule(options: {
       const fd = openSync(sourcePath, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         const opened = fstatSync(fd);
+        // Bind the descriptor to the admitted file before copying any bytes.
+        if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino) {
+          throw new Error(`source capsule file identity changed: ${JSON.stringify(path)}`);
+        }
         let operation = "mkdir";
         let output: number;
         try {
@@ -634,20 +619,7 @@ export function prepareCrabboxSourceCapsule(options: {
             }
             throw error;
           }
-          const after = sourceStat(repoRoot, path);
-          if (
-            !opened.isFile() ||
-            after.kind !== "present" ||
-            opened.ino !== info.ino ||
-            opened.ino !== after.stat.ino ||
-            mirrorStatStamp(opened) !== source ||
-            mirrorStatStamp(after.stat) !== source ||
-            opened.mode !== info.mode ||
-            opened.mode !== after.stat.mode ||
-            opened.size !== after.stat.size ||
-            opened.mtimeMs !== after.stat.mtimeMs ||
-            copied !== opened.size
-          ) {
+          if (copied !== opened.size) {
             throw new Error(
               `source changed while freezing ${JSON.stringify(path)}; retry after edits finish`,
             );
@@ -1094,42 +1066,6 @@ export function prepareCrabboxSourceCapsule(options: {
       copyFileSync(
         join(directory, ".git", "index"),
         join(directory, ".git", "mirror-candidate-index"),
-      );
-    }
-    for (const [path, source] of observed) {
-      if (stamp(path) !== source) {
-        throw new Error(
-          `source changed while freezing ${JSON.stringify(path)}; retry after edits finish`,
-        );
-      }
-    }
-    const localStage = relative(repoRoot, staging.root);
-    const localStagePrefix =
-      localStage &&
-      localStage !== ".." &&
-      !localStage.startsWith(`..${sep}`) &&
-      !isAbsolute(localStage)
-        ? `${localStage.split(sep).join("/")}/`
-        : undefined;
-    const finalEligible = git(repoRoot, [
-      "ls-files",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "-z",
-    ])
-      .split("\0")
-      .filter(Boolean)
-      // Unmarked repo-local staging is supported. Only this newly allocated
-      // generation is output rather than source; sibling edits still invalidate.
-      .filter((path) => !localStagePrefix || !path.startsWith(localStagePrefix));
-    if (
-      git(repoRoot, ["rev-parse", "HEAD"]).trim() !== sourceSha ||
-      git(repoRoot, ["ls-files", "-v", "--stage", "-z"]) !== trackedRecords ||
-      finalEligible.join("\0") !== eligiblePaths.join("\0")
-    ) {
-      throw new Error(
-        "source revision, index, or eligibility changed while freezing; retry after edits finish",
       );
     }
     // Preparation-only copies are no longer needed after the transport bundle

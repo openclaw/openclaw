@@ -63,7 +63,7 @@ describe("forced worker environment destruction", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    placementStore.markWorkspaceResultPending(claim);
+    await placementStore.markWorkspaceResultPending(claim);
     const owner = {
       sessionId: active.sessionId,
       environmentId: active.environmentId,
@@ -105,7 +105,7 @@ describe("forced worker environment destruction", () => {
       turnClaim: null,
       recoveryError: "Worker result abandoned by forced operator teardown",
     });
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(await placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
   });
 
@@ -318,8 +318,8 @@ describe("forced destruction across Gateway restart", () => {
         state: "draining",
         turnClaim: null,
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
-      expect(placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
       expect.soft(support.testState.store.get(environmentId)).toMatchObject({
         destroyRequestedAtMs: support.testState.nowMs,
         lastError: FORCED_WORKER_ABANDONMENT_ERROR,
@@ -354,7 +354,7 @@ describe("forced destruction across Gateway restart", () => {
         recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
         workspaceBaseManifestRef: active.workspaceBaseManifestRef,
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(destroy).toHaveBeenCalledOnce();
       expect(restartedService.get(environmentId)?.state).toBe("destroyed");
     },

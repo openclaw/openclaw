@@ -93,6 +93,7 @@ describe("crabline transport", () => {
         transportPolicy: {
           requireGroupMention: true,
           senderAllowlist: ["driver"],
+          topLevelReplies: true,
         },
         selection: createSelection(),
         state: createQaBusState(),
@@ -102,6 +103,7 @@ describe("crabline transport", () => {
         const gatewayConfig = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
         const telegramConfig = gatewayConfig.channels?.telegram;
         expect(telegramConfig).toMatchObject({
+          replyToMode: "off",
           allowFrom: [expect.stringMatching(/^[1-9]\d+$/u)],
           groupAllowFrom: [expect.stringMatching(/^[1-9]\d+$/u)],
           groupPolicy: "allowlist",

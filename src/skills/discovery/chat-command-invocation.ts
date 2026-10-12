@@ -4,6 +4,12 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { getChatCommands } from "../../auto-reply/commands-registry.data.js";
 import type { ExplicitSkillSelection, SkillCommandSpec } from "../types.js";
+import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
+import {
+  recordExplicitSkillSelectionFileHost,
+  resolveExplicitSkillSelectionFileHost,
+  resolveSkillCommandFileHost,
+} from "./skill-command-provenance.js";
 
 const MAX_EXPLICIT_SKILL_REFERENCES = 8;
 const MAX_EXPLICIT_SKILL_REFERENCE_CHARS = 512;
@@ -12,9 +18,14 @@ const MAX_EXPLICIT_SKILL_INSTRUCTION_CHARS = 1_000;
 export function skillCommandsToExplicitSelections(
   skills: readonly SkillCommandSpec[],
 ): ExplicitSkillSelection[] {
-  return skills.flatMap((skill) =>
-    skill.skillFile ? [{ name: skill.name, path: skill.skillFile }] : [],
-  );
+  return skills.flatMap((skill) => {
+    if (!skill.skillFile) {
+      return [];
+    }
+    const fileHost = resolveSkillCommandFileHost(skill);
+    const selection = { name: skill.name, path: skill.skillFile };
+    return [fileHost ? recordExplicitSkillSelectionFileHost(selection, fileHost) : selection];
+  });
 }
 
 export function mergeExplicitSkillSelections(
@@ -22,7 +33,10 @@ export function mergeExplicitSkillSelections(
 ): ExplicitSkillSelection[] | undefined {
   const merged = new Map<string, ExplicitSkillSelection>();
   for (const selection of groups.flatMap((group) => group ?? [])) {
-    merged.set(`${selection.name}\0${selection.path}`, selection);
+    merged.set(
+      `${selection.name}\0${selection.path}\0${resolveExplicitSkillSelectionFileHost(selection) ?? ""}`,
+      selection,
+    );
   }
   return merged.size > 0 ? [...merged.values()] : undefined;
 }
@@ -53,23 +67,19 @@ export function listReservedChatSlashCommandNames(extraNames: string[] = []): Se
 
 // Skill commands allow spaces/underscores in names but compare through dash-normalized lookup.
 function normalizeSkillCommandLookup(value: string): string {
-  return (normalizeOptionalLowercaseString(value) ?? "").replace(/[\s_]+/g, "-");
+  return normalizeLowercaseStringOrEmpty(value).replace(/[\s_]+/g, "-");
 }
 
 function findSkillCommand(
   skillCommands: SkillCommandSpec[],
   rawName: string,
 ): SkillCommandSpec | undefined {
-  const trimmed = rawName.trim();
-  if (!trimmed) {
+  const normalized = normalizeSkillCommandLookup(rawName);
+  if (!normalized) {
     return undefined;
   }
-  const lowered = normalizeOptionalLowercaseString(trimmed) ?? "";
-  const normalized = normalizeSkillCommandLookup(trimmed);
   return skillCommands.find(
     (entry) =>
-      normalizeOptionalLowercaseString(entry.name) === lowered ||
-      normalizeOptionalLowercaseString(entry.skillName) === lowered ||
       normalizeSkillCommandLookup(entry.name) === normalized ||
       normalizeSkillCommandLookup(entry.skillName) === normalized,
   );
@@ -101,7 +111,7 @@ export function hasSkillReferenceCandidate(text: string): boolean {
 export function resolveSkillCommandInvocation(params: {
   commandBodyNormalized: string;
   skillCommands: SkillCommandSpec[];
-}): { command: SkillCommandSpec; args?: string; inline?: boolean } | null {
+}): { command: SkillCommandSpec; args?: string } | null {
   const match = params.commandBodyNormalized.trim().match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
   if (!match) {
     return null;
@@ -192,11 +202,19 @@ export function expandExplicitSkillReferences(params: {
   if (available.length === 0) {
     return { body: params.text, skills: [] };
   }
-  const referenceLines = available.map((skill) =>
-    skill.modelVisible === false && skill.skillFile
-      ? `- ${skill.skillName} (SKILL.md: ${skill.skillFile})`
-      : `- ${skill.skillName}`,
-  );
+  const referenceLines = available.map((skill) => {
+    if (skill.modelVisible !== false || !skill.skillFile) {
+      return `- ${skill.skillName}`;
+    }
+    const readPath = resolveSkillReadPath(
+      {
+        name: skill.skillName,
+        filePath: skill.skillFile,
+      },
+      resolveSkillCommandFileHost(skill),
+    );
+    return `- ${skill.skillName} (SKILL.md: ${readPath})`;
+  });
   // The reference-count cap alone does not bound operator-provided names or paths.
   // Keep both each item and the complete injected prefix within fixed prompt budgets.
   if (referenceLines.some((line) => line.length > MAX_EXPLICIT_SKILL_REFERENCE_CHARS)) {

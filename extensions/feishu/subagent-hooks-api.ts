@@ -1,4 +1,3 @@
-// Feishu API module exposes the plugin public contract.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 

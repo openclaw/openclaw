@@ -244,7 +244,7 @@ struct GatewayConnectionDashboardIdentityTests {
                 try #require(held.value, "A fresh profile snapshot must reach dashboard reconciliation")
                 switch action {
                 case "closed": originalWindow.performClose(nil)
-                case "switched": await manager._testSwitchTarget(otherTarget, in: original)
+                case "switched": _ = await manager.switchTarget(otherTarget, in: original)?.value
                 case "other-retired":
                     other.suspendEndpoint.setValue(true)
                     await other.connection.shutdown()

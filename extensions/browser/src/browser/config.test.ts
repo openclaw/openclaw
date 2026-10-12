@@ -251,6 +251,20 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "chrome")?.cdpPort).toBe(18798);
   });
 
+  it.each([
+    { label: "managed", pinned: { cdpUrl: "http://127.0.0.1:18799", attachOnly: true } },
+    {
+      label: "existing-session",
+      pinned: { driver: "existing-session" as const, cdpUrl: "http://127.0.0.1:18799" },
+    },
+  ])("does not assign an implicit extension relay a $label profile's cdpUrl port", ({ pinned }) => {
+    const resolved = resolveBrowserConfig({
+      profiles: { pinned: { ...pinned, color: "#00AA00" } },
+    });
+
+    expect(resolveProfile(resolved, "chrome")?.cdpPort).toBe(18798);
+  });
+
   it("rejects implicit extension relays that exhaust the reserved port band", () => {
     const profiles: NonNullable<BrowserConfig["profiles"]> = Object.fromEntries(
       Array.from({ length: 8 }, (_, index) => [
@@ -764,12 +778,12 @@ describe("browser config", () => {
       name: "resolves browser SSRF policy when configured",
       config: {
         ssrfPolicy: {
-          allowPrivateNetwork: true,
+          dangerouslyAllowPrivateNetwork: true,
           allowRfc2544BenchmarkRange: true,
           allowIpv6UniqueLocalRange: true,
           allowedHostnames: [" localhost ", " *.trusted.example ", ""],
         },
-      } as unknown as BrowserConfig,
+      },
       expected: {
         dangerouslyAllowPrivateNetwork: true,
         allowRfc2544BenchmarkRange: true,
@@ -785,11 +799,6 @@ describe("browser config", () => {
     {
       name: "supports explicit strict mode by disabling private network access",
       config: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } },
-      expected: { dangerouslyAllowPrivateNetwork: false },
-    },
-    {
-      name: "preserves legacy explicit strict mode from allowPrivateNetwork=false",
-      config: { ssrfPolicy: { allowPrivateNetwork: false } } as unknown as BrowserConfig,
       expected: { dangerouslyAllowPrivateNetwork: false },
     },
     {

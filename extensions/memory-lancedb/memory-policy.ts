@@ -210,6 +210,16 @@ export function cleanMemorySearchResults(results: MemorySearchResult[]): MemoryS
   return results.filter(({ entry }) => isRecallableMemoryText(entry.text));
 }
 
+export function projectMemorySearchResult({ entry, score }: MemorySearchResult) {
+  return {
+    id: entry.id,
+    text: entry.text,
+    category: entry.category,
+    importance: entry.importance,
+    score,
+  };
+}
+
 export function formatRecalledMemoryForModel(
   text: string,
   maxChars: number = DEFAULT_RECALL_MAX_CHARS,

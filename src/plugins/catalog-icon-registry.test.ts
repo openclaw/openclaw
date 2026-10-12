@@ -16,6 +16,15 @@ describe("ClawHub catalog icon registry", () => {
     );
     expect(resolveClawHubCatalogIconUrl("https://cdn.example.com/other.svg")).toBeUndefined();
     expect(resolveClawHubCatalogIconUrl("http://cdn.example.com/insecure.svg")).toBeUndefined();
+    for (const invalid of [
+      "https://[invalid/icon.svg",
+      "https://user:password@cdn.example.com/icon.svg",
+      "https://cdn.example.com/icon.svg#fragment",
+      `${" ".repeat(2048)}https://cdn.example.com/icon.svg`,
+    ]) {
+      registerClawHubCatalogIconUrls([invalid]);
+      expect(resolveClawHubCatalogIconUrl(invalid)).toBeUndefined();
+    }
   });
 
   it("retains the latest 1024 registered URLs without promoting reads", () => {

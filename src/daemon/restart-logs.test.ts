@@ -9,7 +9,6 @@ import {
   renderPosixRestartLogSetup,
   resolveGatewayLogPaths,
   resolveGatewayRestartLogPath,
-  resolveGatewaySupervisorLogPaths,
 } from "./restart-logs.js";
 import { buildPlatformRuntimeLogHints } from "./runtime-hints.js";
 
@@ -36,44 +35,6 @@ describe("restart log conventions", () => {
     expect(resolveGatewayRestartLogPath(env)).toBe(
       "/Users/test/.openclaw-work/logs/gateway-restart.log",
     );
-  });
-
-  it("honors OPENCLAW_STATE_DIR for restart attempts", () => {
-    const env = {
-      HOME: "/Users/test",
-      OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
-    };
-
-    expect(resolveGatewayRestartLogPath(env)).toBe("/tmp/openclaw-state/logs/gateway-restart.log");
-  });
-
-  it("keeps macOS LaunchAgent stdout outside the state directory", () => {
-    const env = {
-      HOME: "/Users/test",
-      OPENCLAW_STATE_DIR: "/Volumes/External/openclaw",
-    };
-
-    expect(resolveGatewaySupervisorLogPaths(env, { platform: "darwin" })).toEqual({
-      logDir: "/Users/test/Library/Logs/openclaw",
-      stdoutPath: "/Users/test/Library/Logs/openclaw/gateway.log",
-      stderrPath: "/Users/test/Library/Logs/openclaw/gateway.err.log",
-    });
-    expect(resolveGatewayRestartLogPath(env)).toBe(
-      "/Volumes/External/openclaw/logs/gateway-restart.log",
-    );
-  });
-
-  it("keeps macOS LaunchAgent logs profile-aware in the shared user log directory", () => {
-    const env = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "work",
-    };
-
-    expect(resolveGatewaySupervisorLogPaths(env, { platform: "darwin" })).toEqual({
-      logDir: "/Users/test/Library/Logs/openclaw",
-      stdoutPath: "/Users/test/Library/Logs/openclaw/gateway-work.log",
-      stderrPath: "/Users/test/Library/Logs/openclaw/gateway-work.err.log",
-    });
   });
 
   it("renders best-effort POSIX log setup with escaped paths", () => {

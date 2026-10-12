@@ -4,7 +4,7 @@ import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import type { PluginRuntime } from "../runtime-api.js";
-import { readRemoteMediaResponse } from "./attachments.test-helpers.js";
+import { buildMSTeamsGraphMessageUrl, resolveMSTeamsAdvertisedMedia } from "./attachments.js";
 import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
 import { encodeGraphShareId } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
@@ -34,35 +34,6 @@ const saveMediaBufferMock = vi.fn(
     size: Buffer.byteLength(PNG_BUFFER),
     contentType: contentType ?? CONTENT_TYPE_IMAGE_PNG,
   }),
-);
-const readRemoteMediaBufferMock = vi.fn(
-  async (params: {
-    url: string;
-    maxBytes?: number;
-    filePathHint?: string;
-    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  }) => {
-    const fetchFn = params.fetchImpl ?? fetch;
-    const res = await fetchFn(params.url, { redirect: "manual" });
-    return readRemoteMediaResponse(res, params);
-  },
-);
-const saveRemoteMediaMock = vi.fn(
-  async (params: {
-    url: string;
-    maxBytes?: number;
-    filePathHint?: string;
-    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  }) => {
-    const fetched = await readRemoteMediaBufferMock(params);
-    return await saveMediaBufferMock(
-      fetched.buffer,
-      fetched.contentType,
-      "inbound",
-      params.maxBytes,
-      params.filePathHint,
-    );
-  },
 );
 const saveResponseMediaMock = vi.fn(
   async (
@@ -94,8 +65,6 @@ const runtimeStub = {
   },
   channel: {
     media: {
-      readRemoteMediaBuffer: readRemoteMediaBufferMock,
-      saveRemoteMedia: saveRemoteMediaMock,
       saveResponseMedia: saveResponseMediaMock,
       saveMediaBuffer: saveMediaBufferMock,
     },
@@ -174,22 +143,9 @@ describe("msteams graph attachments", () => {
     ssrfMock?.mockRestore();
     ssrfMock = mockPinnedHostnameResolution();
     detectMimeMock.mockClear();
-    readRemoteMediaBufferMock.mockClear();
-    saveRemoteMediaMock.mockClear();
     saveResponseMediaMock.mockClear();
     saveMediaBufferMock.mockClear();
     setMSTeamsRuntime(runtimeStub);
-  });
-
-  it("streams non-image hosted content through the response saver", async () => {
-    const { media } = await downloadGraphMediaWithMockOptions({
-      hostedContents: [{ id: "hosted-1", contentType: CONTENT_TYPE_APPLICATION_PDF }],
-      onUnhandled: (url) =>
-        url.endsWith("/hostedContents/hosted-1/$value") ? createPdfResponse() : undefined,
-    });
-    expect(media.media).toHaveLength(1);
-    expect(saveResponseMediaMock).toHaveBeenCalledOnce();
-    expect(saveMediaBufferMock).toHaveBeenCalled();
   });
 
   it("merges SharePoint reference attachments with hosted content", async () => {
@@ -321,5 +277,203 @@ describe("msteams graph attachments", () => {
       { kind: "image", contentType: "image/png", sourceId: "hosted-oversized" },
     ]);
     expect(saveResponseMediaMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+const TEST_HOST = "x";
+const createUrlForHost = (host: string, pathSegment: string) => `https://${host}/${pathSegment}`;
+const createTestUrl = (pathSegment: string) => createUrlForHost(TEST_HOST, pathSegment);
+const TEST_URL_PDF = createTestUrl("x.pdf");
+const CONTENT_TYPE_TEXT_HTML = "text/html";
+type GraphMessageUrlParams = Parameters<typeof buildMSTeamsGraphMessageUrl>[0];
+const withLabel = <T extends object>(label: string, fields: T): T & { label: string } => ({
+  label,
+  ...fields,
+});
+const buildAttachment = <T extends Record<string, unknown>>(contentType: string, props: T) => ({
+  contentType,
+  ...props,
+});
+const createHtmlAttachment = (content: string) =>
+  buildAttachment(CONTENT_TYPE_TEXT_HTML, { content });
+const DEFAULT_CHANNEL_TEAM_ID = "team-id";
+const DEFAULT_CHANNEL_ID = "chan-id";
+const createChannelGraphMessageUrlParams = (
+  params: Pick<GraphMessageUrlParams, "messageId" | "threadRootMessageId">,
+) => ({
+  conversationType: "channel" as const,
+  teamAadGroupId: DEFAULT_CHANNEL_TEAM_ID,
+  channelId: DEFAULT_CHANNEL_ID,
+  ...params,
+});
+const GRAPH_CHANNEL_MESSAGES_ROOT =
+  "https://graph.microsoft.com/v1.0/teams/team-id/channels/chan-id/messages";
+
+const ADVERTISED_MEDIA_CASES = [
+  withLabel("returns no facts without attachments", {
+    attachments: undefined,
+    expected: [],
+  }),
+
+  withLabel("recognizes Teams download-info images", {
+    attachments: [
+      {
+        contentType: "application/vnd.microsoft.teams.file.download.info",
+        content: { downloadUrl: "https://x.test/download", fileType: "png" },
+      },
+    ],
+    expected: [{ kind: "image" }],
+  }),
+];
+
+const GRAPH_MESSAGE_URL_CASES = [
+  withLabel("builds a channel top-level message URL", {
+    params: createChannelGraphMessageUrlParams({
+      messageId: "123",
+    }),
+    expectedUrl: `${GRAPH_CHANNEL_MESSAGES_ROOT}/123`,
+  }),
+
+  withLabel("builds a chat message URL", {
+    params: {
+      conversationType: "groupChat" as const,
+      conversationId: "19:chat@thread.v2",
+      messageId: "456",
+    } satisfies GraphMessageUrlParams,
+    expectedUrl: "https://graph.microsoft.com/v1.0/chats/19%3Achat%40thread.v2/messages/456",
+  }),
+];
+
+describe("msteams attachment helpers", () => {
+  describe("resolveMSTeamsAdvertisedMedia", () => {
+    it.each(ADVERTISED_MEDIA_CASES)("$label", ({ attachments, expected }) => {
+      expect(resolveMSTeamsAdvertisedMedia(attachments)).toEqual(expected);
+    });
+
+    it("aligns Graph hosted-content image URLs with their fallback resource id", () => {
+      const hostedUrl =
+        "https://graph.microsoft.com/v1.0/chats/chat/messages/message/hostedContents/hosted%2D1/$value";
+      expect(
+        resolveMSTeamsAdvertisedMedia([createHtmlAttachment(`<img src="${hostedUrl}" />`)]),
+      ).toEqual([{ kind: "image", sourceId: "hosted-1" }]);
+    });
+
+    it("counts advertised files without URLs and ignores mention-only HTML", () => {
+      expect(
+        resolveMSTeamsAdvertisedMedia([{ contentType: "application/pdf", name: "report.pdf" }]),
+      ).toEqual([{ kind: "document" }]);
+      expect(
+        resolveMSTeamsAdvertisedMedia([
+          { contentType: "text/html", content: "<div><at>Bot</at> hello</div>" },
+        ]),
+      ).toEqual([]);
+    });
+
+    it("does not count HTML references separately from files or cards", () => {
+      expect(
+        resolveMSTeamsAdvertisedMedia([
+          createHtmlAttachment('<attachment id="file-1"></attachment>'),
+          {
+            id: "file-1",
+            contentType: CONTENT_TYPE_APPLICATION_PDF,
+            contentUrl: TEST_URL_PDF,
+          },
+        ]),
+      ).toEqual([{ kind: "document", sourceId: "file-1" }]);
+
+      expect(
+        resolveMSTeamsAdvertisedMedia([
+          createHtmlAttachment('<attachment id="card-1"></attachment>'),
+          {
+            id: "card-1",
+            contentType: "application/vnd.microsoft.card.adaptive",
+            content: { type: "AdaptiveCard" },
+          },
+        ]),
+      ).toEqual([]);
+    });
+
+    it("does not count CID image references separately from their attachment", () => {
+      expect(
+        resolveMSTeamsAdvertisedMedia([
+          createHtmlAttachment('<img src="cid:image-1" />'),
+          {
+            id: "image-1",
+            contentType: "image/png",
+            contentUrl: "https://x.test/image.png",
+          },
+        ]),
+      ).toEqual([{ kind: "image", sourceId: "image-1" }]);
+    });
+
+    it("counts repeated inline URLs once while keeping data images per occurrence", () => {
+      const repeatedUrl = "https://example.com/repeated.png";
+      expect(
+        resolveMSTeamsAdvertisedMedia([
+          {
+            contentType: "text/html",
+            content: `<img src="${repeatedUrl}"><img src="${repeatedUrl}">`,
+          },
+        ]),
+      ).toEqual([{ kind: "image", sourceId: repeatedUrl }]);
+
+      const dataUrl = "data:image/png;base64,AQ==";
+      expect(
+        resolveMSTeamsAdvertisedMedia([
+          {
+            contentType: "text/html",
+            content: `<img src="${dataUrl}"><img src="${dataUrl}">`,
+          },
+        ]),
+      ).toEqual([{ kind: "image" }, { kind: "image" }]);
+    });
+  });
+
+  describe("buildMSTeamsGraphMessageUrl", () => {
+    it.each(GRAPH_MESSAGE_URL_CASES)("$label", ({ params, expectedUrl }) => {
+      expect(buildMSTeamsGraphMessageUrl(params)).toBe(expectedUrl);
+    });
+
+    it("fails closed when a canonical channel identifier is missing", () => {
+      expect(
+        buildMSTeamsGraphMessageUrl({
+          conversationType: "channel",
+          messageId: "message-id",
+          channelId: DEFAULT_CHANNEL_ID,
+        }),
+      ).toBeUndefined();
+      expect(
+        buildMSTeamsGraphMessageUrl({
+          conversationType: "channel",
+          teamAadGroupId: DEFAULT_CHANNEL_TEAM_ID,
+          channelId: DEFAULT_CHANNEL_ID,
+        }),
+      ).toBeUndefined();
+    });
+
+    it("treats a matching thread root and message ID as a top-level message", () => {
+      expect(
+        buildMSTeamsGraphMessageUrl({
+          ...createChannelGraphMessageUrlParams({
+            messageId: "root-id",
+            threadRootMessageId: "root-id",
+          }),
+        }),
+      ).toBe(`${GRAPH_CHANNEL_MESSAGES_ROOT}/root-id`);
+    });
+
+    it("encodes every channel path identifier", () => {
+      expect(
+        buildMSTeamsGraphMessageUrl({
+          conversationType: "channel",
+          teamAadGroupId: "team/id",
+          channelId: "channel id",
+          messageId: "reply/id",
+          threadRootMessageId: "root id",
+        }),
+      ).toBe(
+        "https://graph.microsoft.com/v1.0/teams/team%2Fid/channels/channel%20id/messages/root%20id/replies/reply%2Fid",
+      );
+    });
   });
 });

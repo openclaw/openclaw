@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
 import type { createHookRunner } from "../plugins/hooks.js";
@@ -7,11 +8,64 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
-/** The tracked startup tail owns both observers until their original work settles. */
+// Startup only needs orphan marking; keep resume and delivery runtime out of the pre-channel path.
+const loadMainSessionRestartRecoveryMarkingModule = createLazyRuntimeModule(
+  () => import("../agents/main-session-recovery/main-session-restart-recovery-marking.js"),
+);
+
+/** Mark predecessors before channels admit work, independently of plugin registration. */
+export async function markGatewayStartupMainSessionOrphans(
+  params: {
+    gatewayPluginConfigAtStart: OpenClawConfig;
+    isRestartRecoverySuppressed: () => boolean;
+    scheduler: { signal: AbortSignal };
+    startupTrace?: GatewayStartupTrace;
+    log: { warn: (message: string) => void };
+  },
+  startupCheckedStorePaths: Set<string>,
+): Promise<void> {
+  await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
+    try {
+      if (params.scheduler.signal.aborted || params.isRestartRecoverySuppressed()) {
+        return;
+      }
+      const { markStartupOrphanedMainSessionsForRecovery } = await measureStartup(
+        params.startupTrace,
+        "sidecars.main-session-recovery-load",
+        loadMainSessionRestartRecoveryMarkingModule,
+      );
+      if (params.scheduler.signal.aborted || params.isRestartRecoverySuppressed()) {
+        return;
+      }
+      await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
+        markStartupOrphanedMainSessionsForRecovery({
+          cfg: params.gatewayPluginConfigAtStart,
+          startupCheckedStorePaths,
+        }),
+      );
+    } catch (err) {
+      params.log.warn(
+        `main-session startup orphan marking failed before channel startup: ${String(err)}`,
+      );
+    }
+  });
+}
+
+type SubagentRegistryActivation = (
+  resolveGatewayContext: GatewayContextResolver,
+) => void | Promise<void>;
+
+/** The tracked post-ready tail owns recovery and observers until their original work settles. */
 export async function runGatewayStartupObservers(params: {
   registry: PluginRegistry;
+  resolveGatewayContext: GatewayContextResolver;
+  loadSubagentRegistryActivation: () =>
+    | SubagentRegistryActivation
+    | Promise<SubagentRegistryActivation>;
   signal: AbortSignal;
   port: number;
   config: OpenClawConfig;
@@ -32,13 +86,39 @@ export async function runGatewayStartupObservers(params: {
   refreshLatestUpdateRestartSentinel: () => Promise<unknown>;
 }): Promise<void> {
   await params.waitForPostReadyWork?.();
-  if (params.isClosing?.()) {
+  if (params.signal.aborted || params.isClosing?.()) {
     return;
   }
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-  if (params.isClosing?.()) {
+  try {
+    await runWithGatewayIndependentRootWorkAdmission(
+      async () => {
+        await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
+          // Restored wakes start their admission budget at dispatch. Join reader startup
+          // first, including maintenance that shares compute with foreground admission.
+          const { prewarmGatewaySessionHistory } = await import("./server-history-prewarm.js");
+          await prewarmGatewaySessionHistory(params.config, {
+            includeMaintenance: true,
+            isCancelled: () => params.signal.aborted || params.isClosing?.() === true,
+          });
+          const activateSubagentRegistry = await params.loadSubagentRegistryActivation();
+          if (!params.signal.aborted && params.isClosing?.() !== true) {
+            await activateSubagentRegistry(params.resolveGatewayContext);
+          }
+        });
+      },
+      "startup:subagent-recovery",
+      params.signal,
+    );
+  } catch (err) {
+    if (!params.signal.aborted && !params.isClosing?.()) {
+      params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);
+    }
+  }
+  if (params.signal.aborted || params.isClosing?.()) {
+    return;
+  }
+  await nextTurn();
+  if (params.signal.aborted || params.isClosing?.()) {
     return;
   }
   const sentinelRefresh = runWithGatewayIndependentRootWorkAdmission(
@@ -55,7 +135,7 @@ export async function runGatewayStartupObservers(params: {
     params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
   });
   try {
-    sweepSessionStateWatchNotices();
+    await sweepSessionStateWatchNotices();
     const hookRunner = await params.createHookRunner(params.registry, { logger: params.logHooks });
     if (params.isClosing?.() || !hookRunner.hasHooks("gateway_start")) {
       return;

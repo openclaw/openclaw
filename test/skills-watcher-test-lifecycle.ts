@@ -20,8 +20,35 @@ type SkillsWatchRegistry = Pick<
   "pathWatchers" | "workspaceWatchOwners"
 >;
 
-// A test's vi.resetModules() replaces these exports; keep every generation the runner saw.
-const generations = new Map<RefreshModule["closeSkillsWatchers"], SkillsWatchRegistry>();
+type SkillsWatcherTestLifecycle = {
+  generations: Map<RefreshModule["closeSkillsWatchers"], SkillsWatchRegistry>;
+  beforeModuleReset: (() => void) | undefined;
+};
+
+const SKILLS_WATCHER_TEST_LIFECYCLE = Symbol.for("openclaw.skillsWatcherTestLifecycle");
+const lifecycleStore = globalThis as typeof globalThis & {
+  [SKILLS_WATCHER_TEST_LIFECYCLE]?: SkillsWatcherTestLifecycle;
+};
+
+function createLifecycle(): SkillsWatcherTestLifecycle {
+  const state: SkillsWatcherTestLifecycle = {
+    generations: new Map(),
+    beforeModuleReset: undefined,
+  };
+  const nativeResetModules = vi.resetModules;
+  vi.resetModules = () => {
+    state.beforeModuleReset?.();
+    return nativeResetModules();
+  };
+  return state;
+}
+
+// Runner/helper re-evaluation must share custody and preserve the installed reset hook.
+const lifecycle = (lifecycleStore[SKILLS_WATCHER_TEST_LIFECYCLE] ??= createLifecycle());
+
+export function setSkillsWatcherCaptureBeforeReset(capture: (() => void) | undefined): void {
+  lifecycle.beforeModuleReset = capture;
+}
 
 function realExports(
   node: EvaluatedModuleNode | undefined,
@@ -54,7 +81,7 @@ export function rememberSkillsWatcherGenerations(
         | undefined;
       const { pathWatchers, workspaceWatchOwners } = registry ?? {};
       if (pathWatchers instanceof Map && workspaceWatchOwners instanceof Map) {
-        generations.set(close, { pathWatchers, workspaceWatchOwners });
+        lifecycle.generations.set(close, { pathWatchers, workspaceWatchOwners });
       }
       break;
     }
@@ -63,8 +90,8 @@ export function rememberSkillsWatcherGenerations(
 
 /** Closes every remembered generation's open watchers and returns their live entry count. */
 export async function closeLeakedSkillsWatchers(): Promise<number> {
-  const remembered = [...generations];
-  generations.clear();
+  const remembered = [...lifecycle.generations];
+  lifecycle.generations.clear();
   let leaked = 0;
   const failures: unknown[] = [];
   for (const [close, registry] of remembered) {

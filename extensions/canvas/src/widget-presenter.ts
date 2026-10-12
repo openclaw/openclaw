@@ -21,7 +21,6 @@ async function selectCanvasNode(
   });
 }
 
-/** Creates the Canvas-owned presenter for hosted widget documents. */
 export function createCanvasWidgetPresenter(nodesRuntime: PluginRuntime["nodes"]): WidgetPresenter {
   return {
     target: "node_panel",

@@ -1,11 +1,9 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
-  uiConversationMatches,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryResult, ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -54,7 +52,17 @@ type ChatHistoryPaneRequests = {
   subscriptionGeneration: number;
   subscriptionReady?: Promise<boolean>;
   subscriptionError?: string;
-  pendingSubscriptionReleases: Set<SessionMessageSubscription>;
+  subscriptionRetry?: AbortController;
+  syncRetries: Map<
+    "subscription" | "history",
+    {
+      client: ChatState["client"];
+      sessions: ChatState["sessions"];
+      connectionEpoch: number;
+      sessionKey: string;
+      agentId?: string;
+    }
+  >;
   historyLoad: ChatHistoryLoadState;
   acceptedHistory?: Extract<ChatHistoryLoadState, { phase: "committed" }>;
   initialSnapshotHydration?: InitialChatSnapshotHydration;
@@ -79,12 +87,44 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
       historyVersion: 0,
       branchVersion: 0,
       subscriptionGeneration: 0,
-      pendingSubscriptionReleases: new Set(),
+      syncRetries: new Map(),
       historyLoad: { phase: "idle" },
     };
     chatHistoryPaneRequests.set(owner, requests);
   }
   return requests;
+}
+
+export function setChatHistoryRetrying(
+  state: ChatState,
+  source: "subscription" | "history",
+  retrying: boolean,
+): void {
+  const requests = chatHistoryRequests(state);
+  if (retrying) {
+    requests.syncRetries.set(source, {
+      client: state.client,
+      sessions: state.sessions,
+      connectionEpoch: state.connectionEpoch,
+      sessionKey: state.sessionKey,
+      agentId: resolveUiSelectedSessionAgentId(state),
+    });
+  } else if (!requests.syncRetries.delete(source)) {
+    return;
+  }
+  state.historyRecoveryChanged?.();
+}
+
+export function isChatHistoryRetrying(state: ChatState): boolean {
+  return [...chatHistoryRequests(state).syncRetries.values()].some(
+    (retry) =>
+      state.connected &&
+      retry.client === state.client &&
+      retry.sessions === state.sessions &&
+      retry.connectionEpoch === state.connectionEpoch &&
+      retry.sessionKey === state.sessionKey &&
+      retry.agentId === resolveUiSelectedSessionAgentId(state),
+  );
 }
 
 export function retireInitialChatSnapshot(state: ChatState): void {
@@ -137,13 +177,11 @@ export function waitForInitialChatSnapshot(state: ChatHistoryHost): Promise<bool
       }
       resolve(current);
     };
-    hydration.complete = () => finish(true);
+    const complete = () => finish(true);
+    hydration.complete = complete;
     hydration.cancel = () => finish(false);
-    const timer = setTimeout(() => finish(true), remaining);
-    void hydration.promise.then(
-      () => finish(true),
-      () => finish(true),
-    );
+    const timer = setTimeout(complete, remaining);
+    void hydration.promise.then(complete, complete);
   });
   return hydration.wait;
 }
@@ -263,14 +301,7 @@ export function isInitialChatHistoryUnavailable(state: ChatState): boolean {
     : load.phase !== "committed" && load.startup;
 }
 
-type ChatHistoryRequestOwnership = {
-  version: number;
-  sessions: ChatState["sessions"];
-  client: GatewayBrowserClient;
-  connectionEpoch: number;
-  sessionKey: string;
-  agentId?: string;
-};
+type ChatHistoryRequestOwnership = ReturnType<typeof beginHistoryRequest>;
 
 export function beginHistoryRequest(
   state: ChatState,
@@ -278,7 +309,7 @@ export function beginHistoryRequest(
   connectionEpoch: number,
   sessionKey: string,
   agentId?: string,
-): ChatHistoryRequestOwnership {
+) {
   return {
     version: ++chatHistoryRequests(state).historyVersion,
     sessions: state.sessions,
@@ -342,12 +373,4 @@ export function setChatError(
   if (requestUpdate) {
     state.requestUpdate?.();
   }
-}
-
-export function chatScopedEventSessionMatches(
-  state: ChatState,
-  sessionKey: string,
-  agentId?: string | null,
-): boolean {
-  return uiConversationMatches(state, state.sessionKey, sessionKey, agentId);
 }

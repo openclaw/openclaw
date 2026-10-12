@@ -66,6 +66,16 @@ private struct SlashPanelHeightKey: PreferenceKey {
     }
 }
 
+/// Evaluates part of the composer in its own body. Debug builds keep every nested `some View` temporary on
+/// the stack, and the whole composer evaluated in one body nearly fills the 1 MB main-thread stack of a device.
+struct ChatComposerSection<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        self.content()
+    }
+}
+
 struct OpenClawChatComposerPresentationOwner: Equatable {
     let viewModelID: ObjectIdentifier
     let session: OpenClawChatViewModel.SessionSnapshot
@@ -275,7 +285,7 @@ struct OpenClawChatComposer: View {
     }
 
     private var styledComposer: some View {
-        self.composerContent
+        ChatComposerSection { self.composerContent }
             .padding(composerPadding)
             .background { self.composerBackground }
     }
@@ -569,7 +579,6 @@ struct OpenClawChatComposer: View {
                 if let voiceNoteControl, !voiceNoteControl.isTalkActive {
                     OpenClawVoiceNoteButton(
                         control: voiceNoteControl,
-                        compact: false,
                         isComposerEnabled: self.isComposerEnabled,
                         isAttachmentInputEnabled: self.isAttachmentInputEnabled)
                 }
@@ -621,7 +630,7 @@ struct OpenClawChatComposer: View {
     }
 
     private var editor: some View {
-        self.editorContent
+        ChatComposerSection { self.editorContent }
             .overlay(alignment: .top) {
                 if self.isSlashPopoverPresented {
                     self.slashCommandPanel
@@ -889,7 +898,10 @@ struct OpenClawChatComposer: View {
                 onHistoryUp: {
                     !self.isSlashPopoverPresented && self.inputModel?.recallPreviousInput(caretOnFirstLine: $0) == true
                 },
-                onHistoryDown: { !self.isSlashPopoverPresented && self.inputModel?.recallNextInput() == true })
+                onHistoryDown: { !self.isSlashPopoverPresented && self.inputModel?.recallNextInput() == true },
+                onPasteImageAttachment: self.isAttachmentInputEnabled
+                    ? { self.viewModel.addImageAttachment(data: $0, fileName: $1, mimeType: $2) }
+                    : nil)
                 .padding(.horizontal, self.cleanFieldTextInset)
                 .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
                 .onChange(of: self.viewModel.input) { _, _ in
@@ -1258,7 +1270,7 @@ extension OpenClawChatComposer {
                     .strokeBorder(Color.white.opacity(self.sendButtonBorderOpacity), lineWidth: 1)
                     .frame(width: self.sendButtonVisualSize, height: self.sendButtonVisualSize))
             .contentShape(Rectangle())
-            .accessibilityLabel(self.sendButtonAccessibilityLabel)
+            .accessibilityLabel(Text(verbatim: "Send message"))
             .accessibilityIdentifier("chat-send-message")
             .disabled(!self.canSendMessage)
         }

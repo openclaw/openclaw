@@ -64,8 +64,6 @@ describe("resolveCodexNativeSearchActivation", () => {
   });
 
   it("activates for direct openai when auth exists", () => {
-    // Direct OpenAI needs bridgeable auth before OpenClaw can suppress the
-    // managed web-search tool in favor of Codex native search.
     const result = resolveCodexNativeSearchActivation({
       config: {
         ...baseConfig,
@@ -84,17 +82,6 @@ describe("resolveCodexNativeSearchActivation", () => {
 
     expect(result.state).toBe("native_active");
     expect(result.codexMode).toBe("cached");
-  });
-
-  it("falls back to managed_only when direct openai auth is missing", () => {
-    const result = resolveCodexNativeSearchActivation({
-      config: baseConfig,
-      modelProvider: "openai",
-      modelApi: "openai-chatgpt-responses",
-    });
-
-    expect(result.state).toBe("managed_only");
-    expect(result.inactiveReason).toBe("codex_auth_missing");
   });
 
   it("activates for api-compatible openai-chatgpt-responses providers without separate Codex auth", () => {
@@ -146,12 +133,11 @@ describe("resolveCodexNativeSearchActivation", () => {
       config: {
         ...baseConfig,
         agents: {
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               tools: { deny: ["web_search"] },
             },
-          ],
+          },
         },
       },
       agentId: "main",
@@ -169,12 +155,11 @@ describe("resolveCodexNativeSearchActivation", () => {
       config: {
         ...baseConfig,
         agents: {
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               tools: { deny: ["group:web"] },
             },
-          ],
+          },
         },
       },
       sessionKey: "agent:main:main",
@@ -391,11 +376,11 @@ describe("Codex native web-search payload helpers", () => {
 });
 
 describe("isCodexNativeWebSearchRelevant", () => {
-  it("treats a default model with model-level openai-chatgpt-responses api as relevant", () => {
+  it("treats a default model with model-level openai-chatgpt-responses api as relevant", async () => {
     // Provider-level APIs can be generic while individual models opt into the
     // ChatGPT Responses shape that supports native web_search.
     expect(
-      isCodexNativeWebSearchRelevant({
+      await isCodexNativeWebSearchRelevant({
         config: {
           agents: {
             defaults: {

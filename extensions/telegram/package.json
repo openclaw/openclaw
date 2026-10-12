@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/telegram",
-  "version": "2026.9.7",
+  "version": "2026.9.9",
   "private": true,
   "description": "OpenClaw Telegram channel plugin",
   "type": "module",
@@ -13,13 +13,30 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*"
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.9.9"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "openclaw": {
+    "compat": {
+      "pluginApi": ">=2026.9.9"
+    },
     "extensions": [
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "build": {
+      "workerEntries": [
+        "./src/telegram-ingress-worker.runtime.ts"
+      ]
+    },
     "setupFeatures": {
       "configPromotion": true
     },
@@ -48,6 +65,12 @@
         "https://openclaw.ai"
       ],
       "markdownCapable": true,
+      "doctorCapabilities": {
+        "dmAllowFromMode": "topOnly",
+        "groupModel": "sender",
+        "groupAllowFromFallbackToAllowFrom": true,
+        "warnOnEmptyGroupSenderAllowlist": true
+      },
       "setup": {
         "fields": [
           {

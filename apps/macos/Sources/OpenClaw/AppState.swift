@@ -84,7 +84,7 @@ final class AppState {
     #endif
     private var configWatcher: ConfigFileWatcher?
     private var lastConfigFingerprint: Data?
-    private var lastObservedGatewayConfig: GatewayConfigSnapshot = .empty
+    private var lastObservedGatewayConfig: [GatewayConfigField: Data] = [:]
     private var lastObservedGatewayFingerprint: Data?
     private var dirtyGatewayConfigFields: Set<GatewayConfigField> = []
     private var conflictedGatewayConfigFields: Set<GatewayConfigField> = []
@@ -100,7 +100,7 @@ final class AppState {
     @ObservationIgnored private var computerControlHostGeneration: UInt64 = 0
 
     var isPaused: Bool {
-        didSet { self.ifNotPreview { AppDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) } }
+        didSet { self.persistPreference(self.isPaused, key: pauseDefaultsKey) }
     }
 
     var launchAtLogin: Bool {
@@ -118,22 +118,19 @@ final class AppState {
     }
 
     var onboardingSeen: Bool {
-        didSet { self.ifNotPreview { AppDefaults.standard.set(self.onboardingSeen, forKey: onboardingSeenKey) }
-        }
+        didSet { self.persistPreference(self.onboardingSeen, key: onboardingSeenKey) }
     }
 
     var debugPaneEnabled: Bool {
         didSet {
-            self.ifNotPreview { AppDefaults.standard.set(self.debugPaneEnabled, forKey: debugPaneEnabledKey) }
+            self.persistPreference(self.debugPaneEnabled, key: debugPaneEnabledKey)
             CanvasManager.shared.refreshDebugStatus()
         }
     }
 
     var swabbleEnabled: Bool {
         didSet {
-            self.ifNotPreview {
-                AppDefaults.standard.set(self.swabbleEnabled, forKey: swabbleEnabledKey)
-            }
+            self.persistPreference(self.swabbleEnabled, key: swabbleEnabledKey)
             self.refreshVoiceWake()
         }
     }
@@ -158,9 +155,7 @@ final class AppState {
     }
 
     var iconAnimationsEnabled: Bool {
-        didSet { self.ifNotPreview { AppDefaults.standard.set(
-            self.iconAnimationsEnabled,
-            forKey: iconAnimationsEnabledKey) } }
+        didSet { self.persistPreference(self.iconAnimationsEnabled, key: iconAnimationsEnabledKey) }
     }
 
     var showDockIcon: Bool {
@@ -174,17 +169,13 @@ final class AppState {
 
     var nativeExperienceEnabled: Bool {
         didSet {
-            self.ifNotPreview {
-                AppDefaults.standard.set(self.nativeExperienceEnabled, forKey: nativeExperienceEnabledKey)
-            }
+            self.persistPreference(self.nativeExperienceEnabled, key: nativeExperienceEnabledKey)
         }
     }
 
     var voiceWakeMicID: String {
         didSet {
-            self.ifNotPreview {
-                AppDefaults.standard.set(self.voiceWakeMicID, forKey: voiceWakeMicKey)
-            }
+            self.persistPreference(self.voiceWakeMicID, key: voiceWakeMicKey)
             if self.swabbleEnabled, !self.talkEnabled { self.refreshVoiceWake() }
             if self.voiceRuntime.isActive, self.talkEnabled {
                 Task { [runtime = self.voiceRuntime.talkRuntime] in await runtime.inputDeviceSelectionDidChange() }
@@ -193,35 +184,27 @@ final class AppState {
     }
 
     var voiceWakeMicName: String {
-        didSet { self.ifNotPreview { AppDefaults.standard.set(self.voiceWakeMicName, forKey: voiceWakeMicNameKey) } }
+        didSet { self.persistPreference(self.voiceWakeMicName, key: voiceWakeMicNameKey) }
     }
 
     var voiceWakeLocaleID: String {
         didSet {
-            self.ifNotPreview {
-                AppDefaults.standard.set(self.voiceWakeLocaleID, forKey: voiceWakeLocaleKey)
-            }
+            self.persistPreference(self.voiceWakeLocaleID, key: voiceWakeLocaleKey)
             if self.swabbleEnabled { self.refreshVoiceWake() }
         }
     }
 
     var voiceWakeAdditionalLocaleIDs: [String] {
-        didSet { self.ifNotPreview { AppDefaults.standard.set(
-            self.voiceWakeAdditionalLocaleIDs,
-            forKey: voiceWakeAdditionalLocalesKey) } }
+        didSet { self.persistPreference(self.voiceWakeAdditionalLocaleIDs, key: voiceWakeAdditionalLocalesKey) }
     }
 
     var voicePushToTalkEnabled: Bool {
-        didSet { self.ifNotPreview { AppDefaults.standard.set(
-            self.voicePushToTalkEnabled,
-            forKey: voicePushToTalkEnabledKey) } }
+        didSet { self.persistPreference(self.voicePushToTalkEnabled, key: voicePushToTalkEnabledKey) }
     }
 
     var voiceWakeTriggersTalkMode: Bool {
         didSet {
-            self.ifNotPreview {
-                AppDefaults.standard.set(self.voiceWakeTriggersTalkMode, forKey: voiceWakeTriggersTalkModeKey)
-            }
+            self.persistPreference(self.voiceWakeTriggersTalkMode, key: voiceWakeTriggersTalkModeKey)
             if self.swabbleEnabled { self.refreshVoiceWake() }
         }
     }
@@ -230,9 +213,7 @@ final class AppState {
 
     var talkEnabled: Bool {
         didSet {
-            self.ifNotPreview {
-                AppDefaults.standard.set(self.talkEnabled, forKey: talkEnabledKey)
-            }
+            self.persistPreference(self.talkEnabled, key: talkEnabledKey)
             self.applyTalkEnabled()
         }
     }
@@ -243,17 +224,13 @@ final class AppState {
 
     var talkPhaseSoundsEnabled: Bool {
         didSet {
-            self.ifNotPreview {
-                AppDefaults.standard.set(self.talkPhaseSoundsEnabled, forKey: talkPhaseSoundsEnabledKey)
-            }
+            self.persistPreference(self.talkPhaseSoundsEnabled, key: talkPhaseSoundsEnabledKey)
         }
     }
 
     var talkShiftToStopEnabled: Bool {
         didSet {
-            self.ifNotPreview {
-                AppDefaults.standard.set(self.talkShiftToStopEnabled, forKey: talkShiftToStopEnabledKey)
-            }
+            self.persistPreference(self.talkShiftToStopEnabled, key: talkShiftToStopEnabledKey)
             if self.voiceRuntime.isActive {
                 self.voiceRuntime.interruptMonitor.setEnabled(self.talkShiftToStopEnabled && self.talkEnabled)
             }
@@ -273,7 +250,7 @@ final class AppState {
     }
 
     var iconOverride: IconOverrideSelection {
-        didSet { self.ifNotPreview { AppDefaults.standard.set(self.iconOverride.rawValue, forKey: iconOverrideKey) } }
+        didSet { self.persistPreference(self.iconOverride.rawValue, key: iconOverrideKey) }
     }
 
     var isWorking: Bool = false
@@ -291,7 +268,7 @@ final class AppState {
 
     var connectionMode: ConnectionMode {
         didSet {
-            self.ifNotPreview { AppDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }
+            self.persistPreference(self.connectionMode.rawValue, key: connectionModeKey)
             if oldValue != self.connectionMode {
                 self.markGatewayConfigDirty([.mode])
             }
@@ -318,30 +295,28 @@ final class AppState {
     }
 
     var canvasEnabled: Bool {
-        didSet { self.ifNotPreview { AppDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
+        didSet { self.persistPreference(self.canvasEnabled, key: canvasEnabledKey) }
     }
 
     var quickChatEnabled: Bool {
-        didSet { self.ifNotPreview { AppDefaults.standard.set(self.quickChatEnabled, forKey: quickChatEnabledKey) } }
+        didSet { self.persistPreference(self.quickChatEnabled, key: quickChatEnabledKey) }
     }
 
     var cookieSyncEnabled: Bool {
         didSet {
-            self.ifNotPreview { AppDefaults.standard.set(self.cookieSyncEnabled, forKey: cookieSyncEnabledKey) }
+            self.persistPreference(self.cookieSyncEnabled, key: cookieSyncEnabledKey)
         }
     }
 
     var cookieSyncIntoProfile: String {
         didSet {
-            self.ifNotPreview {
-                AppDefaults.standard.set(self.cookieSyncIntoProfile, forKey: cookieSyncIntoProfileKey)
-            }
+            self.persistPreference(self.cookieSyncIntoProfile, key: cookieSyncIntoProfileKey)
         }
     }
 
     var cookieSyncDomains: [String] {
         didSet {
-            self.ifNotPreview { AppDefaults.standard.set(self.cookieSyncDomains, forKey: cookieSyncDomainsKey) }
+            self.persistPreference(self.cookieSyncDomains, key: cookieSyncDomainsKey)
         }
     }
 
@@ -354,9 +329,7 @@ final class AppState {
 
     var peekabooBridgeEnabled: Bool {
         didSet {
-            self.ifNotPreview {
-                AppDefaults.standard.set(self.peekabooBridgeEnabled, forKey: peekabooBridgeEnabledKey)
-            }
+            self.persistPreference(self.peekabooBridgeEnabled, key: peekabooBridgeEnabledKey)
             self.applyComputerControlHostState()
         }
     }
@@ -380,17 +353,13 @@ final class AppState {
                     await PeekabooBridgeHostCoordinator.shared.setEnabled(false)
                     guard generation == self.computerControlHostGeneration else { return }
                     await CuaDriverHostCoordinator.shared.setEnabled(true)
-                case .peekaboo:
-                    if launchPlan.allowsCuaComputerControl {
+                case .peekaboo, .cua:
+                    if provider == .cua || launchPlan.allowsCuaComputerControl {
                         await CuaDriverHostCoordinator.shared.setEnabled(false)
                     }
                     guard generation == self.computerControlHostGeneration else { return }
                     await PeekabooBridgeHostCoordinator.shared.setEnabled(
-                        peekabooBridgeEnabled && computerControlEnabled)
-                case .cua:
-                    await CuaDriverHostCoordinator.shared.setEnabled(false)
-                    guard generation == self.computerControlHostGeneration else { return }
-                    await PeekabooBridgeHostCoordinator.shared.setEnabled(false)
+                        provider == .peekaboo && peekabooBridgeEnabled && computerControlEnabled)
                 }
             }
             self.computerControlHostReconciliationTask = task
@@ -399,7 +368,7 @@ final class AppState {
 
     var remoteTarget: String {
         didSet {
-            self.ifNotPreview { AppDefaults.standard.set(self.remoteTarget, forKey: remoteTargetKey) }
+            self.persistPreference(self.remoteTarget, key: remoteTargetKey)
             if oldValue != self.remoteTarget {
                 self.markGatewayConfigDirty([.remoteTarget, .remoteUrl, .remoteHostKeyPolicy])
             }
@@ -453,7 +422,7 @@ final class AppState {
 
     var remoteIdentity: String {
         didSet {
-            self.ifNotPreview { AppDefaults.standard.set(self.remoteIdentity, forKey: remoteIdentityKey) }
+            self.persistPreference(self.remoteIdentity, key: remoteIdentityKey)
             if oldValue != self.remoteIdentity {
                 self.markGatewayConfigDirty([.remoteIdentity])
             }
@@ -462,11 +431,11 @@ final class AppState {
     }
 
     var remoteProjectRoot: String {
-        didSet { self.ifNotPreview { AppDefaults.standard.set(self.remoteProjectRoot, forKey: remoteProjectRootKey) } }
+        didSet { self.persistPreference(self.remoteProjectRoot, key: remoteProjectRootKey) }
     }
 
     var remoteCliPath: String {
-        didSet { self.ifNotPreview { AppDefaults.standard.set(self.remoteCliPath, forKey: remoteCliPathKey) } }
+        didSet { self.persistPreference(self.remoteCliPath, key: remoteCliPathKey) }
     }
 
     init(
@@ -483,10 +452,9 @@ final class AppState {
             (isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration())
         self.gatewayConfigSaver = gatewayConfigSaver
         self.voiceEnvironment = voiceEnvironment
-        let onboardingSeen = AppDefaults.standard.bool(forKey: onboardingSeenKey)
         self.isPaused = AppLaunchRuntimePlan.current.resolvePaused(AppDefaults.standard.bool(forKey: pauseDefaultsKey))
         self.launchAtLogin = false
-        self.onboardingSeen = onboardingSeen
+        self.onboardingSeen = AppDefaults.standard.bool(forKey: onboardingSeenKey)
         self.debugPaneEnabled = AppDefaults.standard.bool(forKey: debugPaneEnabledKey)
         self.nativeExperienceEnabled = AppDefaults.standard.bool(forKey: nativeExperienceEnabledKey)
         let savedVoiceWake = AppDefaults.standard.bool(forKey: swabbleEnabledKey)
@@ -513,8 +481,6 @@ final class AppState {
         self.talkEnabled = AppDefaults.standard.bool(forKey: talkEnabledKey)
         self.talkPhaseSoundsEnabled = Self.loadEnabledPreference(key: talkPhaseSoundsEnabledKey)
         self.talkShiftToStopEnabled = Self.loadEnabledPreference(key: talkShiftToStopEnabledKey)
-        self.seamColorHex = nil
-        self.profileAccentHex = nil
         self.heartbeatsEnabled = Self.loadEnabledPreference(key: heartbeatsEnabledKey)
         if let storedOverride = AppDefaults.standard.string(forKey: iconOverrideKey),
            let selection = IconOverrideSelection(rawValue: storedOverride)
@@ -572,7 +538,9 @@ final class AppState {
         self.remoteCliPath = AppDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
         self.canvasEnabled = AppDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
         self.quickChatEnabled = AppDefaults.standard.object(forKey: quickChatEnabledKey) as? Bool ?? true
-        (self.cookieSyncEnabled, self.cookieSyncIntoProfile, self.cookieSyncDomains) = Self.loadCookieSyncDefaults()
+        self.cookieSyncEnabled = AppDefaults.standard.object(forKey: cookieSyncEnabledKey) as? Bool ?? false
+        self.cookieSyncIntoProfile = AppDefaults.standard.string(forKey: cookieSyncIntoProfileKey) ?? "imported"
+        self.cookieSyncDomains = AppDefaults.standard.stringArray(forKey: cookieSyncDomainsKey) ?? []
         self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
         self.peekabooBridgeEnabled = AppLaunchRuntimePlan.current.resolvePeekabooBridgeEnabled(
             AppDefaults.standard.object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true)
@@ -593,9 +561,6 @@ final class AppState {
 
         if !self.isPreview {
             self.activateVoice()
-        }
-
-        if !self.isPreview {
             self.reconcilePreferredGatewayRouteBinding()
         }
         self.isInitializing = false
@@ -624,15 +589,8 @@ final class AppState {
     }
 
     private static func remoteHost(from urlString: String?) -> String? {
-        guard let raw = urlString?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty,
-              let url = URL(string: raw),
-              let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !host.isEmpty
-        else {
-            return nil
-        }
-        return host
+        guard let raw = urlString?.trimmedNonEmpty else { return nil }
+        return URL(string: raw)?.host?.trimmedNonEmpty
     }
 
     private static func sshTunnelGatewayUrl(existingUrl: String?, expectedRemoteHost: String?) -> String {
@@ -662,9 +620,9 @@ final class AppState {
     private static func updateGatewayString(
         _ dictionary: inout [String: Any],
         key: String,
-        value: String?) -> Bool
+        value: String) -> Bool
     {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             guard dictionary[key] != nil else { return false }
             dictionary.removeValue(forKey: key)
@@ -693,57 +651,40 @@ extension AppState {
         self.remoteTokenUnsupported = unsupported
     }
 
-    private static func updatedRemoteGatewayConfig(
+    static func updatedRemoteGatewayConfig(
         current: [String: Any],
         draft: RemoteGatewayConfigDraft) -> (remote: [String: Any], changed: Bool)
     {
         var remote = current
         var changed = false
 
-        if draft.dirtyFields.contains(.remoteTransport) {
-            changed = Self.updateGatewayString(&remote, key: "transport", value: draft.transport.rawValue) || changed
+        func update(_ field: GatewayConfigField, key: String, value: String) {
+            guard draft.dirtyFields.contains(field) else { return }
+            changed = Self.updateGatewayString(&remote, key: key, value: value) || changed
         }
+
+        update(.remoteTransport, key: "transport", value: draft.transport.rawValue)
         switch draft.transport {
         case .direct:
-            if draft.dirtyFields.contains(.remoteUrl) {
-                // Reconciliation needs the incomplete draft too, or it mistakes the
-                // unchanged disk URL for a saved edit. gatewayDraftCanPersist gates writes.
-                let url = GatewayRemoteConfig.normalizeGatewayUrlString(draft.remoteUrl) ?? draft.remoteUrl
-                changed = Self.updateGatewayString(&remote, key: "url", value: url) || changed
-            }
-
+            // Reconciliation needs the incomplete draft too, or it mistakes the
+            // unchanged disk URL for a saved edit. gatewayDraftCanPersist gates writes.
+            let url = GatewayRemoteConfig.normalizeGatewayUrlString(draft.remoteUrl) ?? draft.remoteUrl
+            update(.remoteUrl, key: "url", value: url)
         case .ssh:
             let existingTarget = CommandResolver.normalizeSSHTargetInput(remote["sshTarget"] as? String ?? "")
             let sanitizedTarget = CommandResolver.normalizeSSHTargetInput(draft.remoteTarget)
             let expectedRemoteHost = CommandResolver.parseSSHTarget(sanitizedTarget)?.host ?? draft.remoteHost
-            if draft.dirtyFields.contains(.remoteUrl) {
-                let existingUrl = (remote["url"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                let desiredUrl = Self.sshTunnelGatewayUrl(
-                    existingUrl: existingUrl,
-                    expectedRemoteHost: expectedRemoteHost)
-                changed = Self.updateGatewayString(&remote, key: "url", value: desiredUrl) || changed
-            }
-            if draft.dirtyFields.contains(.remoteTarget) {
-                changed = Self.updateGatewayString(&remote, key: "sshTarget", value: sanitizedTarget) || changed
-            }
-            if draft.dirtyFields.contains(.remoteIdentity) {
-                changed = Self.updateGatewayString(
-                    &remote,
-                    key: "sshIdentity",
-                    value: draft.remoteIdentity) || changed
-            }
-            if draft.dirtyFields.contains(.remoteHostKeyPolicy), existingTarget != sanitizedTarget {
-                changed = Self.updateGatewayString(
-                    &remote,
-                    key: "sshHostKeyPolicy",
-                    value: "strict") || changed
+            let desiredUrl = Self.sshTunnelGatewayUrl(
+                existingUrl: remote["url"] as? String,
+                expectedRemoteHost: expectedRemoteHost)
+            update(.remoteUrl, key: "url", value: desiredUrl)
+            update(.remoteTarget, key: "sshTarget", value: sanitizedTarget)
+            update(.remoteIdentity, key: "sshIdentity", value: draft.remoteIdentity)
+            if existingTarget != sanitizedTarget {
+                update(.remoteHostKeyPolicy, key: "sshHostKeyPolicy", value: "strict")
             }
         }
-
-        if draft.dirtyFields.contains(.remoteToken) {
-            changed = Self.updateGatewayString(&remote, key: "token", value: draft.remoteToken) || changed
-        }
+        update(.remoteToken, key: "token", value: draft.remoteToken)
 
         return (remote, changed)
     }
@@ -783,26 +724,22 @@ extension AppState {
         return try? JSONSerialization.data(withJSONObject: comparableRoot, options: [.sortedKeys])
     }
 
-    private static func gatewayConfigSnapshot(_ root: [String: Any]) -> GatewayConfigSnapshot {
+    private static func gatewayConfigSnapshot(_ root: [String: Any]) -> [GatewayConfigField: Data] {
         let gateway = root["gateway"] as? [String: Any]
         let remote = gateway?["remote"] as? [String: Any]
-        var values: [GatewayConfigField: GatewayConfigValue] = [:]
+        var values: [GatewayConfigField: Data] = [:]
         for field in GatewayConfigField.allCases {
             let value = if let remoteKey = field.remoteKey {
                 remote?[remoteKey]
             } else {
                 gateway?["mode"]
             }
-            guard let value else {
-                values[field] = .missing
-                continue
-            }
-            let data = try? JSONSerialization.data(
+            guard let value else { continue }
+            values[field] = try? JSONSerialization.data(
                 withJSONObject: ["value": value],
                 options: [.sortedKeys])
-            values[field] = data.map(GatewayConfigValue.json) ?? .missing
         }
-        return GatewayConfigSnapshot(values: values)
+        return values
     }
 
     private func gatewayConfigDraft() -> GatewayConfigSyncDraft {
@@ -944,7 +881,7 @@ extension AppState {
     func applyConfigOverrides(_ root: [String: Any]) {
         let gatewayFingerprint = Self.gatewayRoutingFingerprint(root)
         if gatewayFingerprint != self.lastObservedGatewayFingerprint {
-            self.advanceGatewayRoutingGeneration()
+            self.gatewayRoutingGeneration &+= 1
             self.lastObservedGatewayFingerprint = gatewayFingerprint
         }
         let previousSelection = self.gatewaySelectionSnapshot()
@@ -1112,10 +1049,7 @@ extension AppState {
 
     private static func loadChime(key: String, fallback: VoiceWakeChime) -> VoiceWakeChime {
         guard let data = AppDefaults.standard.data(forKey: key) else { return fallback }
-        if let decoded = try? JSONDecoder().decode(VoiceWakeChime.self, from: data) {
-            return decoded
-        }
-        return fallback
+        return (try? JSONDecoder().decode(VoiceWakeChime.self, from: data)) ?? fallback
     }
 
     private func storeChime(_ chime: VoiceWakeChime, key: String) {
@@ -1127,6 +1061,11 @@ extension AppState {
 // MARK: - App state helpers
 
 extension AppState {
+    private func persistPreference(_ value: Any, key: String) {
+        guard !self.isPreview else { return }
+        AppDefaults.standard.set(value, forKey: key)
+    }
+
     private func ifNotPreview(_ action: () -> Void) {
         guard !self.isPreview else { return }
         action()
@@ -1211,7 +1150,7 @@ extension AppState {
 
     private func syncGatewayConfigIfNeeded() {
         guard !self.isApplyingGatewayConfig else { return }
-        self.advanceGatewayRoutingGeneration()
+        self.gatewayRoutingGeneration &+= 1
         guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return }
         self.setGatewayConfigSyncState(.pending)
 
@@ -1238,15 +1177,11 @@ extension AppState {
     private func setGatewayConfigSyncState(_ state: GatewayConfigSyncState) {
         guard self.gatewayConfigSyncState != state else { return }
         self.gatewayConfigSyncState = state
-        self.advanceGatewayRoutingGeneration()
+        self.gatewayRoutingGeneration &+= 1
         guard !self.isPreview, state != .pending else { return }
         // Failed persistence must retire the old endpoint; recovery must publish
         // the newly canonical route. Requests also re-check this state directly.
         Task { await GatewayEndpointStore.shared.refresh() }
-    }
-
-    private func advanceGatewayRoutingGeneration() {
-        self.gatewayRoutingGeneration &+= 1
     }
 
     static func gatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
@@ -1529,14 +1464,6 @@ extension AppState {
 }
 
 extension AppState {
-    private static func loadCookieSyncDefaults() -> (Bool, String, [String]) {
-        let defaults = AppDefaults.standard
-        return (
-            defaults.object(forKey: cookieSyncEnabledKey) as? Bool ?? false,
-            defaults.string(forKey: cookieSyncIntoProfileKey) ?? "imported",
-            defaults.stringArray(forKey: cookieSyncDomainsKey) ?? [])
-    }
-
     static func resolveActiveComputerPresenceEnabled(defaults: UserDefaults = AppDefaults.standard) -> Bool {
         defaults.bool(forKey: activeComputerPresenceEnabledKey)
     }
@@ -1592,15 +1519,6 @@ extension AppState {
 #if DEBUG
 @MainActor
 extension AppState {
-    static func _testUpdatedRemoteGatewayConfig(
-        current: [String: Any],
-        draft: RemoteGatewayConfigDraft) -> [String: Any]
-    {
-        self.updatedRemoteGatewayConfig(
-            current: current,
-            draft: draft).remote
-    }
-
     func _testEnableGatewayConfigSync() {
         self.gatewayConfigSyncEnabledForTesting = true
     }

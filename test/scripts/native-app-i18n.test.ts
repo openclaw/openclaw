@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -12,11 +13,14 @@ import {
   isConditionalBranchIdentifier,
   NATIVE_I18N_LOCALES,
   parseNativeI18nCommand,
-  serializeNativeI18nInventory,
   syncNativeLocale,
   type NativeI18nEntry,
   validateNativeLocaleArtifact,
 } from "../../scripts/native-app-i18n.ts";
+import {
+  parseNativeI18nInventory,
+  serializeNativeI18nInventory,
+} from "../../scripts/native-i18n-inventory.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -80,7 +84,7 @@ describe("native app i18n inventory", () => {
     ]);
   });
 
-  it("serializes each complete entry on one line", () => {
+  it("serializes one extraction site per line in contiguous source-file clusters", () => {
     const entries = [
       {
         id: "native.android.fixture",
@@ -90,6 +94,12 @@ describe("native app i18n inventory", () => {
           { kind: "xml-string", path: "apps/android/res/values/strings.xml" },
           { kind: "ui-call", path: "apps/android/src/Fixture.kt" },
         ],
+      },
+      {
+        id: "native.android.retry",
+        source: "Retry",
+        surface: "android",
+        sites: [{ kind: "ui-call", path: "apps/android/src/Fixture.kt" }],
       },
       {
         id: "native.apple.fixture",
@@ -107,13 +117,96 @@ describe("native app i18n inventory", () => {
     const serialized = serializeNativeI18nInventory(contextualEntries);
     const lines = serialized.trimEnd().split("\n");
 
-    expect(JSON.parse(serialized)).toEqual({ version: 2, entries });
-    expect(lines).toHaveLength(entries.length + 5);
-    expect(lines.slice(3, -2)).toEqual([
-      `    ${JSON.stringify(entries[0])},`,
-      `    ${JSON.stringify(entries[1])}`,
-    ]);
+    const sites = [
+      {
+        path: "apps/android/res/values/strings.xml",
+        kind: "xml-string",
+        surface: "android",
+        id: "native.android.fixture",
+        source: 'A quoted "label"\nwith two lines',
+      },
+      {
+        path: "apps/ios/Sources/Fixture.swift",
+        kind: "ui-call",
+        surface: "apple",
+        id: "native.apple.fixture",
+        source: "Settings",
+      },
+      {
+        path: "apps/android/src/Fixture.kt",
+        kind: "ui-call",
+        surface: "android",
+        id: "native.android.fixture",
+        source: 'A quoted "label"\nwith two lines',
+      },
+      {
+        path: "apps/android/src/Fixture.kt",
+        kind: "ui-call",
+        surface: "android",
+        id: "native.android.retry",
+        source: "Retry",
+      },
+    ];
+    expect(JSON.parse(serialized)).toEqual({ version: 3, sites });
+    expect(lines).toHaveLength(sites.length + 5);
+    expect(lines.slice(3, -2)).toEqual(
+      sites.map(
+        (site, index) => `    ${JSON.stringify(site)}${index === sites.length - 1 ? "" : ","}`,
+      ),
+    );
+    expect(serialized).not.toContain("sourceContext");
+    expect(parseNativeI18nInventory(serialized)).toEqual(entries);
     expect(serialized.endsWith("\n")).toBe(true);
+  });
+
+  it("merges independent source-file edits into a fresh combined baseline", async () => {
+    const sourceFile = (name: string, strings: string[]) => ({
+      repoPath: `apps/macos/Sources/OpenClaw/${name}.swift`,
+      surface: "apple" as const,
+      source: strings.map((source) => `Text(${JSON.stringify(source)})`).join("\n"),
+    });
+    const base = [
+      sourceFile("MainView", ["Welcome", "Retry"]),
+      sourceFile("ConnectionView", ["Connection", "Retry"]),
+      sourceFile("OverviewView", ["Overview", "Status"]),
+      sourceFile("SettingsView", ["Settings", "Preferences"]),
+    ];
+    const branchA = sourceFile("SidebarFilters", ["Retry", "Group by", "Project"]);
+    const branchB = sourceFile("SidebarHovercard", ["Retry", "Group chat", "Project"]);
+    const serialize = (sources: typeof base) =>
+      serializeNativeI18nInventory(collectNativeI18nEntriesFromSources(sources));
+    const directory = tempDirs.make("openclaw-native-i18n-merge-");
+    const basePath = path.join(directory, "base.json");
+    const oursPath = path.join(directory, "ours.json");
+    const theirsPath = path.join(directory, "theirs.json");
+    await Promise.all([
+      writeFile(basePath, serialize(base)),
+      writeFile(oursPath, serialize([...base, branchA])),
+      writeFile(theirsPath, serialize([...base, branchB])),
+    ]);
+    const merged = spawnSync("git", ["merge-file", "-p", oursPath, basePath, theirsPath], {
+      encoding: "utf8",
+    });
+    expect(merged.status, merged.stderr || merged.stdout).toBe(0);
+    expect(merged.stdout).toBe(serialize([...base, branchA, branchB]));
+  });
+
+  it("rejects stale or inconsistent inventories with a baseline repair hint", () => {
+    const row = {
+      path: "Fixture.swift",
+      kind: "ui-call",
+      surface: "apple",
+      id: "retry",
+      source: "Retry",
+    };
+    for (const raw of [
+      JSON.stringify({ version: 2, entries: [] }),
+      JSON.stringify({ version: 3, sites: [row, { ...row, source: "Cancel" }] }),
+    ]) {
+      expect(() => parseNativeI18nInventory(raw)).toThrow(
+        /^invalid native app i18n inventory: .+; run `pnpm native:i18n:baseline`$/,
+      );
+    }
   });
 
   it("carries bounded nearby owner code without changing stable inventory data", () => {
@@ -286,7 +379,7 @@ describe("native app i18n inventory", () => {
         ].join("\n"),
       ),
     );
-    const { catalog } = buildMacosCatalog({}, { version: 2, entries }, []);
+    const { catalog } = buildMacosCatalog({}, entries, []);
     expect(Object.keys(catalog.strings ?? {})).toEqual(["Expires in %lld minutes"]);
     expect(catalog.strings?.["Expires in %lld minutes"]?.localizations?.en?.stringUnit?.value).toBe(
       "Expires in %lld minutes",

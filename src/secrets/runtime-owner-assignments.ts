@@ -189,17 +189,16 @@ function createDegradedOwner(
   };
 }
 
-function associateAssignmentFailureOwners(params: {
-  assignments: SecretAssignment[];
-  error: unknown;
-  config: OpenClawConfig;
-  forceColdRefKeys?: ReadonlySet<string>;
-}): void {
-  const validationFailures = getSecretAssignmentValidationFailures(params.error);
+function associateAssignmentFailureOwners(
+  allAssignments: SecretAssignment[],
+  error: unknown,
+  params: { options: SecretResolutionOptions; forceColdRefKeys?: ReadonlySet<string> },
+): void {
+  const validationFailures = getSecretAssignmentValidationFailures(error);
   const validationFailureRefKeys = new Set(validationFailures.map((failure) => failure.refKey));
   const validationFailureOwnerKeys = new Set(
     validationFailures.flatMap((failure) =>
-      params.assignments
+      allAssignments
         .filter(
           (assignment) =>
             assignment.ownerKind === failure.ownerKind &&
@@ -213,28 +212,27 @@ function associateAssignmentFailureOwners(params: {
   const sharedReason =
     validationFailures.length > 0
       ? "resolved secret value was invalid"
-      : describeSecretResolutionError(params.error);
+      : describeSecretResolutionError(error);
   const authStoreProviderUnconfigured =
-    isProviderScopedSecretResolutionError(params.error) &&
-    params.error.code === "SECRET_PROVIDER_NOT_CONFIGURED";
+    isProviderScopedSecretResolutionError(error) && error.code === "SECRET_PROVIDER_NOT_CONFIGURED";
   if (!sharedReason && !authStoreProviderUnconfigured) {
     return;
   }
-  const owners = groupAssignmentsByOwner(params.assignments).flatMap((assignments) => {
+  const owners = groupAssignmentsByOwner(allAssignments).flatMap((assignments) => {
     if (assignments[0]?.ownerKind === "unknown") {
       return [];
     }
     const failureMatched = assignments.some((assignment) =>
       validationFailures.length > 0
         ? validationFailureOwnerKeys.has(assignmentOwnerKey(assignment))
-        : assignmentMatchesResolutionFailure(assignment, params.error),
+        : assignmentMatchesResolutionFailure(assignment, error),
     );
     if (!failureMatched) {
       return [];
     }
     const reason = resolveOwnerFailureReason({
       assignments,
-      error: params.error,
+      error,
       fallback: sharedReason,
     });
     if (!reason) {
@@ -248,7 +246,7 @@ function associateAssignmentFailureOwners(params: {
           ownerKind: degradedOwner.ownerKind,
           ownerId: degradedOwner.ownerId,
           refs: assignments.map((assignment) => assignment.ref),
-          config: params.config,
+          config: params.options.config,
           contractDigest: assignmentOwnerContractDigest(assignments),
           forceColdRefKeys: params.forceColdRefKeys,
         }),
@@ -258,25 +256,23 @@ function associateAssignmentFailureOwners(params: {
     ];
   });
   const failureRefs = new Map(
-    params.assignments
+    allAssignments
       .filter((assignment) =>
         validationFailures.length > 0
           ? validationFailureRefKeys.has(secretRefKey(assignment.ref))
-          : assignmentMatchesResolutionFailure(assignment, params.error),
+          : assignmentMatchesResolutionFailure(assignment, error),
       )
       .map((assignment) => [secretRefKey(assignment.ref), assignment.ref] as const),
   );
   const providerFailure =
-    validationFailures.length === 0 && isProviderScopedSecretResolutionError(params.error)
-      ? params.error
-      : null;
+    validationFailures.length === 0 && isProviderScopedSecretResolutionError(error) ? error : null;
   const providerRefPrefix = providerFailure
     ? `${providerFailure.source}:${providerFailure.provider}:`
     : null;
   const ownerKeys = new Set(
     owners.map((owner) => `${owner.source}\0${owner.ownerKind}\0${owner.ownerId}`),
   );
-  const collectedOwnerKeys = new Set(params.assignments.map(assignmentOwnerKey));
+  const collectedOwnerKeys = new Set(allAssignments.map(assignmentOwnerKey));
   const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
   const activeAuthOwnerIds = listAuthProfileSecretOwnerIds(activeSnapshot?.authStores ?? []);
   const activeCoOwners = (activeSnapshot?.secretOwners ?? []).flatMap((owner) => {
@@ -329,7 +325,7 @@ function associateAssignmentFailureOwners(params: {
           ownerKind: owner.ownerKind,
           ownerId: owner.ownerId,
           refs,
-          config: params.config,
+          config: params.options.config,
           contractDigest: owner.contractDigest,
           forceColdRefKeys: params.forceColdRefKeys,
         }),
@@ -338,7 +334,7 @@ function associateAssignmentFailureOwners(params: {
       },
     ];
   });
-  associateSecretResolutionErrorOwners(params.error, [...owners, ...activeCoOwners]);
+  associateSecretResolutionErrorOwners(error, [...owners, ...activeCoOwners]);
 }
 
 /** Emits the canonical warning for one isolated runtime secret owner. */
@@ -369,12 +365,7 @@ async function resolveStrictAssignments(params: {
     applyResolvedAssignments({ assignments: params.assignments, resolved });
     return resolved;
   } catch (error) {
-    associateAssignmentFailureOwners({
-      assignments: params.assignments,
-      error,
-      config: params.options.config,
-      forceColdRefKeys: params.forceColdRefKeys,
-    });
+    associateAssignmentFailureOwners(params.assignments, error, params);
     throw error;
   }
 }
@@ -450,12 +441,7 @@ export async function resolveAndApplySecretAssignments(params: {
       }
     >();
     for (const failure of resolution.failures) {
-      associateAssignmentFailureOwners({
-        assignments: pendingOwners.flat(),
-        error: failure.error,
-        config: params.options.config,
-        forceColdRefKeys: params.forceColdRefKeys,
-      });
+      associateAssignmentFailureOwners(pendingOwners.flat(), failure.error, params);
       const matchingOwners = pendingOwners.filter((assignments) =>
         assignments.some((assignment) =>
           assignmentMatchesResolutionFailure(assignment, failure.error),
@@ -512,12 +498,7 @@ export async function resolveAndApplySecretAssignments(params: {
           resolvedValues.set(refKey, structuredClone(resolution.resolved.get(refKey)));
         }
       } catch (error) {
-        associateAssignmentFailureOwners({
-          assignments: readyAssignments,
-          error,
-          config: params.options.config,
-          forceColdRefKeys: params.forceColdRefKeys,
-        });
+        associateAssignmentFailureOwners(readyAssignments, error, params);
         throw error;
       }
     }

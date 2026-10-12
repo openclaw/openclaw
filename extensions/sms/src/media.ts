@@ -4,7 +4,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   formatInboundMediaUnavailableText,
   toInboundMediaFactsWithMetadata,
-  type InboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
@@ -112,11 +111,6 @@ type PrepareHostedSmsMediaParams = {
   captionByteLength?: number;
 };
 
-type PreparedHostedSmsMedia = {
-  url: string;
-  cleanup: () => Promise<void>;
-};
-
 function normalizeBasePath(path: string): string {
   const withLeadingSlash = path.trim().startsWith("/") ? path.trim() : `/${path.trim()}`;
   return withLeadingSlash === "/" ? "" : withLeadingSlash.replace(/\/+$/u, "");
@@ -134,12 +128,7 @@ function toHostedStoreRoutePath(path: string): string {
 export function resolveSmsHostedMediaRoute(params: {
   webhookPath: string;
   publicWebhookUrl: string;
-}): {
-  localRoutePath: string;
-  publicBaseUrl: string;
-  publicRoutePath: string;
-  publicSearch: string;
-} {
+}) {
   if (!params.publicWebhookUrl.trim()) {
     throw new Error("MMS send requires channels.sms.publicWebhookUrl.");
   }
@@ -216,9 +205,7 @@ function createHostedSmsMediaCleanup(
   };
 }
 
-export async function prepareHostedSmsMedia(
-  params: PrepareHostedSmsMediaParams,
-): Promise<PreparedHostedSmsMedia> {
+export async function prepareHostedSmsMedia(params: PrepareHostedSmsMediaParams) {
   const route = resolveSmsHostedMediaRoute({
     webhookPath: params.account.webhookPath,
     publicWebhookUrl: params.account.publicWebhookUrl,
@@ -389,7 +376,7 @@ export async function materializeSmsInboundMedia(params: {
   mediaRuntime: { media: Pick<PluginRuntime["channel"]["media"], "saveRemoteMedia"> };
   abortSignal?: AbortSignal;
   log?: { warn?: (message: string) => void };
-}): Promise<{ body: string; media: InboundMediaFacts[]; cleanup: () => Promise<void> }> {
+}) {
   const savedPaths: string[] = [];
   const cleanup = createInboundMediaCleanup(savedPaths);
   const declaredUnavailableCount = params.msg.unavailableMediaCount ?? 0;

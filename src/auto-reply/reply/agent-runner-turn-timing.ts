@@ -72,6 +72,24 @@ export function createAgentTurnTimingTracker(options: { profilerEnabled?: boolea
         : ["runId", "sessionId", "sessionKey", "outcome", "error"],
   });
   return {
+    observe(observer?: () => (() => void) | undefined) {
+      try {
+        const finish = observer?.();
+        return finish
+          ? {
+              [Symbol.dispose]() {
+                try {
+                  finish();
+                } catch {
+                  // Timing observers cannot change the work they observe.
+                }
+              },
+            }
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    },
     measure: timing.measure,
     measureSync: timing.measureSync,
     logIfSlow(params: AgentTurnTerminalLogParams) {

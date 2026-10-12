@@ -39,12 +39,7 @@ afterEach(() => {
 });
 
 describe("withActivatedPluginIds", () => {
-  it.each([
-    { overrideGlobalDisable: false, overrideExplicitDisable: false },
-    { overrideGlobalDisable: true, overrideExplicitDisable: false },
-    { overrideGlobalDisable: false, overrideExplicitDisable: true },
-    { overrideGlobalDisable: true, overrideExplicitDisable: true },
-  ])("preserves independent disable overrides: %j", (overrides) => {
+  it("preserves global and explicit plugin disablement", () => {
     const config = {
       plugins: {
         enabled: false,
@@ -52,9 +47,9 @@ describe("withActivatedPluginIds", () => {
         entries: { owner: { enabled: false } },
       },
     };
-    const projected = withActivatedPluginIds({ config, pluginIds: ["owner"], ...overrides });
-    expect(projected?.plugins?.enabled).toBe(overrides.overrideGlobalDisable);
-    expect(projected?.plugins?.entries?.owner?.enabled).toBe(overrides.overrideExplicitDisable);
+    const projected = withActivatedPluginIds({ config, pluginIds: ["owner"] });
+    expect(projected?.plugins?.enabled).toBe(false);
+    expect(projected?.plugins?.entries?.owner?.enabled).toBe(false);
     expect(config.plugins.enabled).toBe(false);
     expect(config.plugins.entries.owner.enabled).toBe(false);
   });

@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import { expect, test, vi } from "vitest";
-import { getRegistryWorktree, listRegistryWorktrees } from "../agents/worktrees/registry.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import {
+  getRegistryWorktree,
+  listRegistryWorktrees,
+} from "../agents/worktrees/registry.test-support.js";
+import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -23,17 +28,18 @@ import {
   createGitWorkspace,
 } from "./server.sessions.create.projects.test-support.js";
 import {
-  setupSessionCreateTestHarness,
+  setupSessionCreateHandlerTestHarness,
   chatSendOwner,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
+import * as sessionStoreWorker from "./session-utils-store-worker.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import { sessionStoreEntry, directSessionReq } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 let gitWorkspaceTemplate: string;
-const { createSessionStoreDir } = setupSessionCreateTestHarness(async (makeTempDir) => {
+const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness(async (makeTempDir) => {
   gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
 });
 
@@ -210,7 +216,7 @@ test("sessions.create rejects a replaced required spawn parent before child crea
   const { createGatewaySession } = await import("./session-create-service.js");
   const parentMutationStarted = createDeferredCore();
   const replaceParent = createDeferredCore();
-  const replacing = runExclusiveSessionLifecycleMutation({
+  const replacing = runExclusiveSessionLifecycleMutation("create", {
     scope: storePath,
     identities: [parentSessionKey, parent.sessionId],
     run: async () => {
@@ -224,6 +230,7 @@ test("sessions.create rejects a replaced required spawn parent before child crea
   });
   await parentMutationStarted.promise;
 
+  const lifecycleAdmission = createDeferredCore();
   const creating = createGatewaySession({
     cfg: getRuntimeConfig(),
     agentId: "main",
@@ -232,9 +239,19 @@ test("sessions.create rejects a replaced required spawn parent before child crea
     spawnDepth: 1,
     commandSource: "test",
     creation: { via: "spawn", actor: { type: "agent", id: "main" } },
+    onPhase: (phase) => {
+      if (phase === "lifecycleAdmission") {
+        lifecycleAdmission.resolve();
+      }
+    },
   });
 
   try {
+    await awaitGateBeforeSettlement(
+      lifecycleAdmission.promise,
+      creating,
+      "Session creation settled before lifecycle admission",
+    );
     replaceParent.resolve();
     await replacing;
     const created = await creating;
@@ -297,44 +314,6 @@ test("sessions.create commits no session after delegated authority closes", asyn
   }
 });
 
-test("sessions.create commits no child after its bound Gateway is replaced", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:dashboard:gateway-replacement-race";
-  const admitted = {};
-  const replacement = {};
-  let current = admitted;
-  const firstGuard = createDeferredCore();
-  const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
-  const creating = directSessionReq(
-    "sessions.create",
-    { agentId: "main", key: sessionKey },
-    {
-      sessionMutationAuthorization: {
-        assertCurrent: () => {
-          if (current !== admitted) {
-            throw new Error("current gateway instance binding was replaced");
-          }
-          firstGuard.resolve();
-        },
-        assertTargetCurrent: vi.fn(),
-      },
-    },
-  );
-
-  try {
-    await firstGuard.promise;
-    current = replacement;
-    releaseWriter.resolve();
-    await heldWriter;
-
-    await expect(creating).rejects.toThrow("current gateway instance binding was replaced");
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
-  } finally {
-    releaseWriter.resolve();
-    await Promise.allSettled([heldWriter, creating]);
-  }
-});
-
 test("sessions.create commits no child after its worker turn closes", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:worker-turn-race";
@@ -360,7 +339,7 @@ test("sessions.create commits no child after its worker turn closes", async () =
     ],
     ["starting", "active", { activeOwnerEpoch: 7 }],
   ] as const) {
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: placement.sessionId,
       from,
       to,
@@ -376,7 +355,15 @@ test("sessions.create commits no child after its worker turn closes", async () =
     runId: "worker-run",
     owner: { kind: "worker", environmentId: "worker-environment", ownerEpoch: 7 },
   });
-  const firstGuard = createDeferredCore();
+  const readStarted = createDeferredCore();
+  const readEntry = sessionStoreWorker.loadGatewaySessionEntryReadOnlyInWorker;
+  const lookup = vi
+    .spyOn(sessionStoreWorker, "loadGatewaySessionEntryReadOnlyInWorker")
+    .mockImplementation((input) => {
+      const reading = readEntry(input);
+      readStarted.resolve();
+      return reading;
+    });
   const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
   const creating = directSessionReq(
     "sessions.create",
@@ -387,24 +374,26 @@ test("sessions.create commits no child after its worker turn closes", async () =
           if (!placements.validateTurnClaim(turnClaim)) {
             throw new Error("worker turn authority changed");
           }
-          firstGuard.resolve();
         },
         assertTargetCurrent: vi.fn(),
       },
     },
   );
 
+  const rejected = expect(creating).rejects.toThrow("worker turn authority changed");
+
   try {
-    await firstGuard.promise;
+    await awaitGateBeforeSettlement(readStarted.promise, creating, "Session read was not queued");
     await placements.releaseTurn(turnClaim);
     releaseWriter.resolve();
     await heldWriter;
 
-    await expect(creating).rejects.toThrow("worker turn authority changed");
+    await rejected;
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
   } finally {
     releaseWriter.resolve();
     await Promise.allSettled([heldWriter, creating]);
+    lookup.mockRestore();
   }
 });
 
@@ -469,11 +458,11 @@ test("sessions.create removes a provisioned worktree when authority closes befor
   let authorityCurrent = true;
   let allocatedWorktree: { id: string; path: string } | undefined;
   let allocatedDirectoryExists = false;
-  const createWorktree = managedWorktrees.createWithOutcome.bind(managedWorktrees);
+  const createWorktree = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
   const createSpy = vi
-    .spyOn(managedWorktrees, "createWithOutcome")
-    .mockImplementation(async (params) => {
-      const outcome = await createWorktree(params);
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+    .mockImplementation(async function (this: ManagedWorktreeService, params) {
+      const outcome = await createWorktree(this, params);
       allocatedWorktree = outcome.record;
       allocatedDirectoryExists = (await fs.stat(outcome.record.path)).isDirectory();
       authorityCurrent = false;

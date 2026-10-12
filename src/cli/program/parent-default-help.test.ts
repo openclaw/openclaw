@@ -1,23 +1,20 @@
 // Parent default help tests cover parent command help fallback behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 import { applyParentDefaultHelpAction, isParentDefaultHelpAction } from "./parent-default-help.js";
 
 describe("applyParentDefaultHelpAction (#73077)", () => {
   let originalExitCode: NodeJS.Process["exitCode"];
-  let originalSuppressHelpBanner: string | undefined;
+  let originalEnv: ReturnType<typeof captureEnv>;
   beforeEach(() => {
     originalExitCode = process.exitCode;
-    originalSuppressHelpBanner = process.env.OPENCLAW_SUPPRESS_HELP_BANNER;
+    originalEnv = captureEnv(["OPENCLAW_SUPPRESS_HELP_BANNER"]);
     process.exitCode = undefined;
   });
   afterEach(() => {
     process.exitCode = originalExitCode;
-    if (originalSuppressHelpBanner === undefined) {
-      delete process.env.OPENCLAW_SUPPRESS_HELP_BANNER;
-    } else {
-      process.env.OPENCLAW_SUPPRESS_HELP_BANNER = originalSuppressHelpBanner;
-    }
+    originalEnv.restore();
   });
 
   function buildParent(): Command {

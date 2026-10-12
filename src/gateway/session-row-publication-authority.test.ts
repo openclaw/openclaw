@@ -190,7 +190,7 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
         );
       } finally {
         detach();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
         projection.dispose();
         subagentRuns.delete("publication-child");
       }

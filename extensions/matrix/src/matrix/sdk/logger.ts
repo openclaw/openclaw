@@ -5,16 +5,19 @@ import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 
-type Logger = Pick<ConsoleLogger, "trace" | "debug" | "info" | "warn" | "error">;
+type LogLevel = "debug" | "info" | "warn" | "error";
 
-export function noop(): void {
-  // no-op
-}
+export function noop(): void {}
 
 let forceConsoleLogging = false;
+let serviceQuiet = false;
 
 export function setMatrixConsoleLogging(enabled: boolean): void {
   forceConsoleLogging = enabled;
+}
+
+export function setMatrixLogServiceQuiet(quiet: boolean): void {
+  serviceQuiet = quiet;
 }
 
 function resolveRuntimeLogger(module: string): RuntimeLogger | null {
@@ -35,65 +38,29 @@ function formatMessage(module: string, messageOrObject: unknown[]): string {
   return redactSensitiveText(`[${module}] ${format(...messageOrObject)}`);
 }
 
-export class ConsoleLogger {
-  private emit(
-    level: "debug" | "info" | "warn" | "error",
-    module: string,
-    ...messageOrObject: unknown[]
-  ): void {
-    const runtimeLogger = resolveRuntimeLogger(module);
-    const message = formatMessage(module, messageOrObject);
-    if (runtimeLogger) {
-      if (level === "debug") {
-        runtimeLogger.debug?.(message);
-        return;
-      }
+export function emitMatrixLog(level: LogLevel, module: string, messageOrObject: unknown[]): void {
+  const runtimeLogger = resolveRuntimeLogger(module);
+  const message = formatMessage(module, messageOrObject);
+  if (runtimeLogger) {
+    if (level === "debug") {
+      runtimeLogger.debug?.(message);
+    } else {
       runtimeLogger[level](message);
-      return;
     }
+  } else {
     console[level](message);
-  }
-
-  trace(module: string, ...messageOrObject: unknown[]): void {
-    this.emit("debug", module, ...messageOrObject);
-  }
-
-  debug(module: string, ...messageOrObject: unknown[]): void {
-    this.emit("debug", module, ...messageOrObject);
-  }
-
-  info(module: string, ...messageOrObject: unknown[]): void {
-    this.emit("info", module, ...messageOrObject);
-  }
-
-  warn(module: string, ...messageOrObject: unknown[]): void {
-    this.emit("warn", module, ...messageOrObject);
-  }
-
-  error(module: string, ...messageOrObject: unknown[]): void {
-    this.emit("error", module, ...messageOrObject);
   }
 }
 
-let activeLogger: Logger = new ConsoleLogger();
+function emitServiceLog(level: LogLevel, module: string, ...messageOrObject: unknown[]): void {
+  if (serviceQuiet) {
+    return;
+  }
+  emitMatrixLog(level, module, messageOrObject);
+}
 
 export const LogService = {
-  setLogger(logger: Logger): void {
-    activeLogger = logger;
-  },
-  trace(module: string, ...messageOrObject: unknown[]): void {
-    activeLogger.trace(module, ...messageOrObject);
-  },
-  debug(module: string, ...messageOrObject: unknown[]): void {
-    activeLogger.debug(module, ...messageOrObject);
-  },
-  info(module: string, ...messageOrObject: unknown[]): void {
-    activeLogger.info(module, ...messageOrObject);
-  },
-  warn(module: string, ...messageOrObject: unknown[]): void {
-    activeLogger.warn(module, ...messageOrObject);
-  },
-  error(module: string, ...messageOrObject: unknown[]): void {
-    activeLogger.error(module, ...messageOrObject);
-  },
+  debug: emitServiceLog.bind(null, "debug"),
+  info: emitServiceLog.bind(null, "info"),
+  warn: emitServiceLog.bind(null, "warn"),
 };

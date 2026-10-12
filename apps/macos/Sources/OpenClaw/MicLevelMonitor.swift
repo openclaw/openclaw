@@ -16,6 +16,11 @@ actor MicLevelMonitor {
     private let minimumLevelDelta = 0.02
 
     func start(onLevel: @MainActor @Sendable @escaping (Double) -> Void) async throws {
+        guard AppLaunchRuntimePlan.current.allowsActivation ||
+            AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        else {
+            throw Self.inputError("Microphone permission required; relaunch without --no-activate and retry")
+        }
         if self.engine != nil {
             self.update = onLevel
             return
@@ -25,19 +30,13 @@ actor MicLevelMonitor {
         self.lastUpdate = .now
         self.lastPublishedLevel = self.smoothedLevel
         guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
-            throw NSError(
-                domain: "MicLevelMonitor",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "No usable audio input device available"])
+            throw Self.inputError("No usable audio input device available")
         }
         let engine = AVAudioEngine()
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0, format.sampleRate > 0 else {
-            throw NSError(
-                domain: "MicLevelMonitor",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "No audio input available"])
+            throw Self.inputError("No audio input available")
         }
         self.captureGeneration &+= 1
         let generation = self.captureGeneration
@@ -56,6 +55,10 @@ actor MicLevelMonitor {
         }
         self.engine = engine
         self.update = onLevel
+    }
+
+    private static func inputError(_ message: String) -> NSError {
+        NSError(domain: "MicLevelMonitor", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     func stop() async {

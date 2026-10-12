@@ -1924,7 +1924,7 @@ tcc_summary() {
   pb="$(peekaboo_bin)"
   [[ -n "$pb" ]] || { printf 'peekaboo CLI unavailable\n'; return 4; }
   if ! permissions_json="$($pb permissions status --all-sources --bridge-socket "$BRIDGE_SOCKET" --json 2>/dev/null)"; then
-    printf 'TCC: unknown (permission probe failed)\n'
+    printf 'TCC: unknown (permission check failed)\n'
     return 4
   fi
   if ! jq -e '
@@ -1939,7 +1939,7 @@ tcc_summary() {
       (.name | type) == "string" and (.isGranted | type) == "boolean"
     )
   ' <<<"$permissions_json" >/dev/null 2>&1; then
-    printf 'TCC: unknown (permission probe returned invalid status)\n'
+    printf 'TCC: unknown (permission check returned invalid status)\n'
     return 4
   fi
   missing="$(jq -r '[.data.sources[]? | select(.isSelected == true) | .permissions[]? | select(.isGranted != true) | .name] | unique | join(", ")' <<<"$permissions_json")"

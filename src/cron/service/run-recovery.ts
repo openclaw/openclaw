@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
@@ -10,11 +9,7 @@ import {
   isCronRunReceiptOwnerStale,
 } from "../store/run-receipt-store.js";
 import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
-import type {
-  CronRunRecoveryPreparation,
-  CronRunRecoveryResult,
-} from "../store/run-recovery.types.js";
-import { resolveFailureAlert } from "./failure-alerts.js";
+import type { CronRunRecoveryResult } from "../store/run-recovery.types.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import type { CronServiceState } from "./state.js";
 
@@ -67,21 +62,11 @@ async function observeRecoveryProposals(
       result.type === command.type &&
       result.observation.kind === "schema-uninitialized")
   ) {
-    const assertSchemaCurrent = () => {
-      context.admission.assertCurrent();
+    await runOpenClawStateWorkerOperation(context, (scope) => {
       assertCurrent();
-    };
-    const { createSqliteWorkerWriteAdmission } = await import("../../infra/sqlite-worker-store.js");
-    await runOpenClawStateWorkerOperation(
-      context,
-      (scope) => scope.execute({ type: "cron.initializeRunReceipts", input: {} }),
-      {
-        assertCurrent: assertSchemaCurrent,
-        createAdmission: createSqliteWorkerWriteAdmission(assertSchemaCurrent, [
-          context.admission.databasePath,
-        ]),
-      },
-    );
+      // Shutdown may race schema initialization after this preflight check.
+      return scope.execute({ type: "cron.initializeRunReceipts", input: {} });
+    });
     assertCurrent();
     result = await executeExistingOpenClawStateRead({}, command);
     assertCurrent();
@@ -115,7 +100,7 @@ async function repairRecoveryProposal(
   proposal: CronRunRecoveryProposal,
   mode: "startup" | "reclaim",
   assertOwnerCurrent: () => void,
-  publish: (result: CronRunRecoveryResult) => void,
+  publish: (result: CronRunRecoveryResult) => void | Promise<void>,
 ): Promise<void> {
   const input = {
     storeKey: cronStoreKey(state.deps.storePath),
@@ -123,6 +108,7 @@ async function repairRecoveryProposal(
     mode,
   };
   let retired = false;
+  let recoveryResult: CronRunRecoveryResult | undefined;
   try {
     await runCronRuntimeMutation({
       context,
@@ -136,44 +122,27 @@ async function repairRecoveryProposal(
           throw error;
         }
       },
-      prepare(routing) {
-        if (routing.id !== proposal.jobId) {
-          throw new Error("Cron recovery policy differs from its admitted job");
-        }
-        const receiptIsStale = () =>
-          proposal.receipt
-            ? isCronRunReceiptOwnerStale(proposal.receipt, state.deps.nowMs())
-            : true;
-        const cronConfig = structuredClone(state.deps.cronConfig);
-        const value: CronRunRecoveryPreparation = {
-          proposedReceiptIsStale: receiptIsStale(),
-          nowMs: state.deps.nowMs(),
-          cronConfig,
-          failureAlert: resolveFailureAlert({ deps: { cronConfig } }, routing),
-        };
-        return {
-          value,
-          assertCurrent() {
-            if (
-              value.proposedReceiptIsStale !== receiptIsStale() ||
-              !isDeepStrictEqual(value.cronConfig, state.deps.cronConfig) ||
-              !isDeepStrictEqual(value.failureAlert, resolveFailureAlert(state, routing))
-            ) {
-              throw new Error("Cron recovery policy or receipt ownership changed before commit");
-            }
-          },
-        };
+      // A config reload may race recovery; current rows still decide what is repaired.
+      snapshot: {
+        nowMs: state.deps.nowMs(),
+        cronConfig: structuredClone(state.deps.cronConfig),
+        proposedReceiptIsStale: proposal.receipt
+          ? isCronRunReceiptOwnerStale(proposal.receipt, state.deps.nowMs())
+          : true,
       },
       publish(outcome) {
         if (outcome.result.kind === "repaired") {
           noteCronJobsStoreCommit(input.storeKey);
         }
-        publish(outcome.result);
+        recoveryResult = outcome.result;
         for (const entry of outcome.logs) {
           state.deps.log[entry.level](entry.fields, entry.message);
         }
       },
     });
+    if (recoveryResult) {
+      await publish(recoveryResult);
+    }
   } catch (error) {
     if (retired) {
       throw new RetiredCronRecoveryError();
@@ -190,7 +159,10 @@ export async function recoverCronRunProposals(
     mode?: "startup" | "reclaim";
     signal?: AbortSignal;
     isCurrent?: () => boolean;
-    onRecovery: (proposal: CronRunRecoveryProposal, result: CronRunRecoveryResult) => void;
+    onRecovery: (
+      proposal: CronRunRecoveryProposal,
+      result: CronRunRecoveryResult,
+    ) => void | Promise<void>;
   },
 ): Promise<void> {
   const context = captureOpenClawStateWorkerContext();
@@ -204,7 +176,7 @@ export async function recoverCronRunProposals(
       const proposal = target.receipt ? target : current;
       const result = observedRecoveryResult(state, proposal, current);
       if (result) {
-        options.onRecovery(proposal, result);
+        await options.onRecovery(proposal, result);
       } else {
         repairs.push(proposal);
       }

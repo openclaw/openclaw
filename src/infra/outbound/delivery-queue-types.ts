@@ -22,6 +22,8 @@ import type { DeliveryMirror } from "./mirror.js";
 import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSessionContext } from "./session-context.js";
 
+export const FINAL_TEXT_RECOVERY_MAX_ATTEMPTS = 2;
+
 /** Serializable owner callback for a durable queue entry. */
 export type DurableDeliveryCompletion =
   | {
@@ -46,20 +48,17 @@ export type DurableDeliveryCompletion =
       sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
     };
 
-export type QueuedRenderedMessageBatchPlan = RenderedMessageBatchPlan;
-
 export function hasActiveDeliveryOwner(entry: DeliveryQueueEntryState, now: number): boolean {
-  return (
-    (typeof entry.completionRetention === "object" ||
-      entry.completionRetention === "permanent" ||
-      entry.requiresProducerClaim === true) &&
-    (entry.recoveryState === "producer_claimed" ||
-      ((entry.recoveryState === "send_attempt_started" ||
-        entry.recoveryState === "unknown_after_send") &&
-        entry.requiresProducerClaim === true)) &&
-    typeof entry.availableAt === "number" &&
-    entry.availableAt > now
-  );
+  if (typeof entry.availableAt !== "number" || !(entry.availableAt > now)) {
+    return false;
+  }
+  return entry.requiresProducerClaim === true
+    ? entry.recoveryState === "producer_claimed" ||
+        entry.recoveryState === "send_attempt_started" ||
+        entry.recoveryState === "unknown_after_send"
+    : (typeof entry.completionRetention === "object" ||
+        entry.completionRetention === "permanent") &&
+        entry.recoveryState === "producer_claimed";
 }
 
 export type QueuedReplyPayloadSendingHook = {
@@ -77,10 +76,13 @@ export type QueuedDeliveryPayload = {
   accountId?: string;
   queuePolicy?: "required" | "best_effort";
   requireUnknownSendReconciliation?: boolean;
+  retryAmbiguousFinalText?: true;
+  /** Current failed attempt had a typed transport error and no accepted message. */
+  ambiguousTransportError?: true;
   requiresProducerClaim?: boolean;
   preparedBatch?: PreparedOutboundBatch;
   payloads?: ReplyPayload[];
-  renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
+  renderedBatchPlan?: RenderedMessageBatchPlan;
   threadId?: string | number | null;
   reply?: OutboundReplyFacts;
   formatting?: OutboundDeliveryFormattingOptions;
@@ -127,24 +129,15 @@ export type DeliveryFailureSettlement = {
   terminals?: readonly IndexedOutboundAuditTerminal[];
 } & ({ outcome: "unknown" } | { outcome: "failed"; rejectionError?: string });
 
-export type QueuedDelivery = Omit<QueuedDeliveryPayload, "preparedBatch" | "payloads"> & {
-  preparedBatch: PreparedOutboundBatch;
-  id: string;
-  enqueuedAt: number;
-  retryCount: number;
-  attemptCount: number;
-  availableAt?: number;
-  producerClaimId?: string;
-  lastAttemptAt?: number;
-  lastError?: string;
-  platformSendAttemptId?: string;
-  platformSendStartedAt?: number;
-  effectiveReplyToId?: string | null;
-  recoveryState?:
-    | "producer_claimed"
-    | "send_attempt_started"
-    | "unknown_after_send"
-    | "settlement_pending";
-  settlement?: DeliveryFailureSettlement;
-  retainOnFailure?: true;
-};
+export type QueuedDelivery = Omit<QueuedDeliveryPayload, "preparedBatch" | "payloads"> &
+  Omit<DeliveryQueueEntryState, "attemptCount" | "recoveryState" | "acknowledgedAt"> & {
+    preparedBatch: PreparedOutboundBatch;
+    attemptCount: number;
+    effectiveReplyToId?: string | null;
+    recoveryState?:
+      | "producer_claimed"
+      | "send_attempt_started"
+      | "unknown_after_send"
+      | "settlement_pending";
+    settlement?: DeliveryFailureSettlement;
+  };

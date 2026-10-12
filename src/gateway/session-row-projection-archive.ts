@@ -13,7 +13,7 @@ export function isColdArchivedSessionRow(row: records.Row) {
 export function createSessionRowProjectionArchive(params: {
   rows: ReadonlyMap<string, records.Row>;
   dirty: Set<string>;
-  enqueue: (id: string, change?: SessionRowChange) => void;
+  invalidateTranscript: (id: string) => void;
   put: (row: records.Row) => void;
   release: (id: string) => void;
   invalidateFacts: (row: records.Row) => void;
@@ -22,8 +22,7 @@ export function createSessionRowProjectionArchive(params: {
   referenced: NonNullable<Parameters<typeof records.readSessionRowLineage>[4]>;
 }) {
   const materialized = new Set<string>();
-  const readPins = new Map<symbol, ReadonlySet<string>>();
-  const pinCounts = new Map<string, number>();
+  const readPins = new Set<ReadonlySet<string>>();
   let limit = DEFAULT_ARCHIVED_MATERIALIZED_ROWS;
   function demote(row: records.Row): records.Row {
     const id = records.identity(row);
@@ -42,17 +41,9 @@ export function createSessionRowProjectionArchive(params: {
       if (materialized.size <= limit) {
         break;
       }
-      if (!pinCounts.has(id)) {
+      if (![...readPins].some((pins) => pins.has(id))) {
         demote(params.rows.get(id)!);
       }
-    }
-  }
-  function unpin(id: string) {
-    const count = pinCounts.get(id)!;
-    if (count === 1) {
-      pinCounts.delete(id);
-    } else {
-      pinCounts.set(id, count - 1);
     }
   }
   function markRelated(
@@ -76,7 +67,7 @@ export function createSessionRowProjectionArchive(params: {
           params.referenced,
         );
         if (
-          records.sameParents(current.parents, lineage.parents) &&
+          isDeepStrictEqual(current.parents, lineage.parents) &&
           isDeepStrictEqual(current.entry, lineage.entry)
         ) {
           continue;
@@ -104,15 +95,7 @@ export function createSessionRowProjectionArchive(params: {
       const id = records.identity(row);
       params.put(row);
       params.dirty.add(id);
-      params.enqueue(id);
       return undefined;
-    },
-    isCurrentMaterialization(row: records.Row) {
-      const current = params.rows.get(records.identity(row));
-      return (
-        records.ready(current) &&
-        (current.entry.archivedAt === undefined || current.materialized === row.materialized)
-      );
     },
     invalidateRows(
       change: Extract<SessionRowChange, { all: true }>,
@@ -125,7 +108,11 @@ export function createSessionRowProjectionArchive(params: {
         }
         if (catalogOnly && row.entry?.archivedAt === undefined) {
           if (!params.dirty.has(records.identity(row))) {
-            row.pendingDatabaseFacts = row.retainedDatabaseFacts;
+            row.pendingDatabaseFacts = records.isPreparedSessionRowDatabaseFacts(
+              row.retainedDatabaseFacts,
+            )
+              ? row.retainedDatabaseFacts
+              : undefined;
           }
         } else {
           row.pendingDatabaseFacts = undefined;
@@ -142,7 +129,13 @@ export function createSessionRowProjectionArchive(params: {
           continue;
         }
         params.dirty.add(records.identity(row));
-        params.enqueue(records.identity(row), change);
+        if (
+          typeof change.scope !== "string" ||
+          change.factsInvalidated ||
+          ((change.scope === "config" || change.scope === "catalog") && row.entry?.fallbackNotice)
+        ) {
+          params.invalidateTranscript(records.identity(row));
+        }
       }
     },
     setPageSize: (size: number) => {
@@ -151,37 +144,17 @@ export function createSessionRowProjectionArchive(params: {
     },
     // Disjoint prepared pages retain their own rows across worker and placement yields.
     retainRows(this: void) {
-      const token = Symbol("archived session rows");
-      readPins.set(token, new Set());
+      let pins: ReadonlySet<string> = new Set();
+      readPins.add(pins);
       return {
         update(ids: readonly string[]) {
-          const previous = readPins.get(token);
-          if (!previous) {
-            return;
-          }
-          const next = new Set(ids);
-          for (const id of previous) {
-            if (!next.has(id)) {
-              unpin(id);
-            }
-          }
-          for (const id of next) {
-            if (!previous.has(id)) {
-              pinCounts.set(id, (pinCounts.get(id) ?? 0) + 1);
-            }
-          }
-          readPins.set(token, next);
+          readPins.delete(pins);
+          pins = new Set(ids);
+          readPins.add(pins);
           trim();
         },
         release() {
-          const ids = readPins.get(token);
-          if (!ids) {
-            return;
-          }
-          readPins.delete(token);
-          for (const id of ids) {
-            unpin(id);
-          }
+          readPins.delete(pins);
           trim();
         },
       };
@@ -190,14 +163,12 @@ export function createSessionRowProjectionArchive(params: {
     clear() {
       materialized.clear();
       readPins.clear();
-      pinCounts.clear();
     },
-    describe(initial: records.Row | undefined) {
-      if (initial?.entry?.archivedAt === undefined) {
-        return initial;
+    describe(row: records.Row | undefined) {
+      if (row?.entry?.archivedAt === undefined) {
+        return row;
       }
-      const row = initial;
-      if (records.ready(row) && row.entry.archivedAt !== undefined) {
+      if (records.ready(row)) {
         const id = records.identity(row);
         materialized.delete(id);
         materialized.add(id);

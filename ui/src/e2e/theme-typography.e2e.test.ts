@@ -322,6 +322,8 @@ suite.define(() => {
               match: { path: "notes.txt" },
               response: {
                 file: {
+                  previewKind: "text",
+                  contentEncoding: "utf8",
                   content: COMPOSER_LIGATURE_SEQUENCE,
                   hash: "a".repeat(64),
                   kind: "read",
@@ -462,7 +464,9 @@ suite.define(() => {
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
     await expectChrome(chatColor);
     await page.locator(".chat-pane__nav-toggle").first().click();
-    await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+    await page
+      .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
+      .click();
     await page.locator(".new-session-page__message").waitFor();
     await expectChrome(chatColor);
 

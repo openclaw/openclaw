@@ -4,10 +4,13 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
+import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
 export function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
-  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
+  return options.path === undefined
+    ? resolveOpenClawStateSqlitePath(options.env ?? process.env)
+    : normalizeDatabasePath(path.resolve(options.path));
 }
 
 export function existingPathOrUndefined(pathname: string): string | undefined {
@@ -24,12 +27,12 @@ export function existingPathOrUndefined(pathname: string): string | undefined {
 
 /** Resolve the directory that contains the shared state SQLite file. */
 export function resolveOpenClawStateSqliteDir(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "state");
+  return path.dirname(resolveOpenClawStateSqlitePath(env));
 }
 
 /** Resolve the shared state SQLite file path. */
 export function resolveOpenClawStateSqlitePath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "state", "openclaw.sqlite");
+  return normalizeDatabasePath(path.join(resolveStateDir(env), "state", "openclaw.sqlite"));
 }
 
 /** Resolve the state owner directory for a canonical or explicit shared database path. */

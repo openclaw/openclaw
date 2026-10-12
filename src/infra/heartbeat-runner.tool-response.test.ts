@@ -1,6 +1,9 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../agents/failover/user-copy.js";
+import {
+  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+} from "../agents/failover/user-copy.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/reply-payload.js";
 import { normalizeReplyPayloadDirectives } from "../auto-reply/reply/reply-delivery.js";
@@ -141,43 +144,36 @@ afterEach(() => {
 
 describe("runHeartbeatOnce heartbeat response tool", () => {
   it("commits private monitor scratch without delivering it", async () => {
-    await withHeartbeat(async ({ replySpy, run, sendTelegram }) => {
+    await withHeartbeat(async ({ sessionKey, storePath, replySpy, run, sendTelegram }) => {
       const jobId = await seedHeartbeatScratchForTest({ content: "old scratch" });
       const reply = createHeartbeatToolResponsePayload({
         outcome: "progress",
         notify: false,
         summary: "Updated monitor context.",
         scratch: "new private scratch",
+        nextCheck: "next scheduled heartbeat",
       });
       expect(JSON.stringify(reply)).not.toContain("new private scratch");
       replySpy.mockResolvedValue(normalizeReplyPayloadDirectives({ payload: reply }).payload);
-      expect((await run({ source: "manual" })).status).toBe("ran");
+      expect((await run({ source: "manual", reason: "operator check" })).status).toBe("ran");
       expect(sendTelegram).not.toHaveBeenCalled();
       expect(readCronJobScratchState(resolveCronJobsStorePath(), jobId).scratch?.content).toBe(
         "new private scratch",
       );
-    });
-  });
-
-  it("rejects a scratch proposal when its responding run fails", async () => {
-    await withHeartbeat(async ({ replySpy, sendTelegram, run }) => {
-      const jobId = await seedHeartbeatScratchForTest({ content: "last successful scratch" });
-      const before = readCronJobScratchState(resolveCronJobsStorePath(), jobId);
-      replySpy.mockImplementationOnce(async (_ctx, options) => {
-        setHeartbeatAgentTurnStatus(options, "failed");
-        return createHeartbeatToolResponsePayload({
-          outcome: "progress",
-          notify: false,
-          summary: "Progress before failure.",
-          scratch: "uncommitted proposal",
-        });
+      expect(
+        await claimHeartbeatOutcomeForRun({
+          agentId: "main",
+          sessionKey,
+          storePath,
+          runId: "user-run",
+        }),
+      ).toMatchObject({
+        outcome: "progress",
+        summary: "Updated monitor context.",
+        nextCheck: "next scheduled heartbeat",
+        wakeSource: "manual",
+        wakeReason: "operator check",
       });
-      sendTelegram.mockReset();
-      expect(await run({ source: "manual" })).toEqual({
-        status: "failed",
-        reason: "agent-runner-failure",
-      });
-      expect(readCronJobScratchState(resolveCronJobsStorePath(), jobId)).toEqual(before);
     });
   });
 
@@ -239,33 +235,6 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       });
       expect((await run({ source: "manual" })).status).toBe("ran");
       expect(readCronJobScratchState(cronStorePath, monitor.jobId)).toEqual({ currentRevision: 0 });
-    });
-  });
-
-  it("persists a meaningful quiet outcome for the base session", async () => {
-    await withHeartbeat(async ({ sessionKey, storePath, replySpy, run }) => {
-      replySpy.mockResolvedValue(
-        createHeartbeatToolResponsePayload({
-          outcome: "progress",
-          notify: false,
-          summary: "Deployment completed; smoke test pending.",
-          nextCheck: "next scheduled heartbeat",
-        }),
-      );
-      await run({ source: "manual", reason: "operator check" });
-      expect(
-        await claimHeartbeatOutcomeForRun({
-          agentId: "main",
-          sessionKey,
-          storePath,
-          runId: "user-run",
-        }),
-      ).toMatchObject({
-        outcome: "progress",
-        summary: "Deployment completed; smoke test pending.",
-        wakeSource: "manual",
-        wakeReason: "operator check",
-      });
     });
   });
 
@@ -352,22 +321,56 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     );
   });
 
-  it("delivers marked operator notices during message-tool mode", async () => {
-    await withHeartbeat(async ({ cfg, replySpy, run, expectSend }) => {
-      cfg.messages = { visibleReplies: "message_tool" };
-      const notice =
-        "The backend needs operator attention; the literal notify=false flag is documented.";
-      replySpy.mockResolvedValue(markReplyPayloadForSourceSuppressionDelivery({ text: notice }));
-      expect((await run()).status).toBe("ran");
-      expect(replySpy.mock.calls[0]?.[1]?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expectSend(notice);
-    });
-  });
+  it.each([
+    { source: undefined, work: "monitor", heartbeatCopy: true },
+    { source: "interval", work: "cron", heartbeatCopy: false },
+    { source: "interval", work: "exec-and-cron", heartbeatCopy: false },
+    { source: "manual", work: "background-task", heartbeatCopy: false },
+    { source: "exec-event", work: "scheduled-task", heartbeatCopy: true },
+  ] as const)(
+    "delivers failure copy for selected $work work after a $source wake",
+    async ({ source, work, heartbeatCopy }) => {
+      await withHeartbeat(async ({ sessionKey, replySpy, run, expectSend }) => {
+        if (work === "cron" || work === "exec-and-cron") {
+          enqueueSystemEvent("Cron: scheduled reminder", { sessionKey, contextKey: "cron:job" });
+        }
+        if (work === "exec-and-cron" || work === "scheduled-task") {
+          enqueueSystemEvent("exec finished: queued task", { sessionKey });
+        }
+        if (work === "background-task") {
+          enqueueSystemEvent("Background task completed", { sessionKey, contextKey: "task:job" });
+        }
+        replySpy.mockImplementationOnce(async (_ctx, options) => {
+          setHeartbeatAgentTurnStatus(options, "failed");
+          return { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true };
+        });
+        expect(
+          await run({
+            source,
+            ...(work === "scheduled-task"
+              ? { tasks: [{ jobId: "scheduled", name: "Periodic check", prompt: "Check status" }] }
+              : {}),
+          }),
+        ).toEqual({ status: "failed", reason: "agent-runner-failure" });
+        expectSend(
+          heartbeatCopy ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+        );
+        expect(replySpy.mock.calls[0]?.[1]).toMatchObject({
+          isHeartbeat: true,
+          useHeartbeatFailureCopy: heartbeatCopy,
+        });
+      });
+    },
+  );
 
   it("retains failed work and dedupe state until a later successful notification", async () => {
     await withHeartbeat(
       async ({ sessionKey, storePath, replySpy, sendTelegram, run, expectSend }) => {
-        enqueueSystemEvent("exec finished: retryable deployment check", { sessionKey });
+        enqueueSystemEvent("exec finished: retryable deployment check", {
+          sessionKey,
+          contextKey: "exec:deployment-check",
+          deliveryContext: { channel: "telegram", to: TELEGRAM_GROUP },
+        });
         const inspectedEvents = peekSystemEventEntries(sessionKey);
         replySpy.mockImplementationOnce(async (_ctx, options) => {
           setHeartbeatAgentTurnStatus(options, "failed");
@@ -377,9 +380,8 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
           status: "failed",
           reason: "agent-runner-failure",
         });
-        expectSend(
-          "⚠️ The background check did not complete.\n\nTroubleshooting: run `openclaw logs --follow` in a terminal.",
-        );
+        expectSend(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+        expect(replySpy.mock.calls[0]?.[1]?.useHeartbeatFailureCopy).toBe(false);
         expect(peekSystemEventEntries(sessionKey)).toEqual(inspectedEvents);
         expect(readSessionStoreForTest(storePath)[sessionKey]).toMatchObject(previousHeartbeat);
         replySpy.mockImplementationOnce(async (_ctx, options) => {
@@ -403,6 +405,8 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   it("keeps an unmarked failed run private while retaining inspected work", async () => {
     await withHeartbeat(
       async ({ sessionKey, replySpy, sendTelegram, run }) => {
+        const jobId = await seedHeartbeatScratchForTest({ content: "last successful scratch" });
+        const before = readCronJobScratchState(resolveCronJobsStorePath(), jobId);
         enqueueSystemEvent("exec finished: private retryable failure", { sessionKey });
         const inspectedEvents = peekSystemEventEntries(sessionKey);
         replySpy.mockImplementation(async (_ctx, options) => {
@@ -412,6 +416,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
             notify: true,
             summary: "Public tool summary.",
             notificationText: "Public tool notification.",
+            scratch: "uncommitted proposal",
           });
           reply.mediaUrl = "https://example.test/public.png";
           return [
@@ -420,6 +425,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
           ];
         });
         expect(await run()).toEqual({ status: "failed", reason: "agent-runner-failure" });
+        expect(readCronJobScratchState(resolveCronJobsStorePath(), jobId)).toEqual(before);
         expect(sendTelegram).not.toHaveBeenCalled();
         expect(peekSystemEventEntries(sessionKey)).toEqual(inspectedEvents);
         expect(getLastHeartbeatEvent()).toMatchObject({
