@@ -192,8 +192,9 @@ fn install_at(
         let package_root = prefix.join("tools/openclaw");
         std::fs::create_dir_all(&package_root).map_err(|error| error.to_string())?;
         let mut command = Command::new(&runtime.bun);
+        // This private root has no dev dependencies; Bun rejects --production with --trust.
         command
-            .args(["add", "--exact", "--production", "--trust"])
+            .args(["add", "--exact", "--trust"])
             .arg(format!("openclaw@{version}"))
             .current_dir(&package_root)
             .env("OPENCLAW_PACKAGE_BUN_LAUNCHER", &runtime.bun);
