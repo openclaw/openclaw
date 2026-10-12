@@ -103,14 +103,18 @@ export async function runMemorySetupFlow(
   }
 
   let providerIds: string[];
+  let previousProvider: string;
   try {
     const [
       { loadManifestContractSnapshot, listAvailableManifestContractValues },
       { resolveConfiguredGenericEmbeddingProviderId },
+      { resolveMemorySearchProviderId },
     ] = await Promise.all([
       import("../plugins/manifest-contract-eligibility.js"),
       import("../plugins/embedding-provider-config.js"),
+      import("../agents/memory-search.js"),
     ]);
+    previousProvider = resolveMemorySearchProviderId(config.memory?.search?.provider);
     const ids = new Set<string>(["openai-compatible"]);
     if (config.plugins?.enabled !== false) {
       const snapshot = loadManifestContractSnapshot({ config });
@@ -158,10 +162,7 @@ export async function runMemorySetupFlow(
   const selected = await prompter.select({
     message: "Embedding provider",
     options: providerIds.map((id) => ({ value: id, label: id })),
-    initialValue:
-      previous?.provider && providerIds.includes(previous.provider)
-        ? previous.provider
-        : providerIds[0],
+    initialValue: providerIds.includes(previousProvider) ? previousProvider : providerIds[0],
   });
   let adapter: EmbeddingProviderAdapter | undefined;
   try {
@@ -182,7 +183,7 @@ export async function runMemorySetupFlow(
     return config;
   }
 
-  const sameProvider = selected === previous?.provider;
+  const sameProvider = selected === previousProvider;
   const initialModel = (sameProvider ? previous?.model : undefined) || adapter.defaultModel || "";
   const model = (
     await prompter.text({

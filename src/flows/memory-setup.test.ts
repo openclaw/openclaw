@@ -187,47 +187,54 @@ describe("memory setup", () => {
     expect(mocks.get).not.toHaveBeenCalled();
   });
 
-  it("probes one selected provider without indexing, closes it, and preserves unrelated settings", async () => {
-    const close = vi.fn(async () => {});
-    const embed = vi.fn(async () => [1, 0]);
-    const chosen = adapter("remote-a", {
-      id: "remote-a",
-      model: "embed-default",
-      embed,
-      embedBatch: vi.fn(),
-      close,
-    });
-    mocks.get.mockReturnValue(chosen);
-    const config: OpenClawConfig = {
-      memory: {
-        citations: "on",
-        search: {
-          enabled: false,
-          provider: "remote-a",
-          model: "old",
-          query: { maxResults: 7 },
-          remote: { baseUrl: "https://same.example", batch: { enabled: false } },
+  it.each(["remote-a", "openai", "auto", undefined])(
+    "preserves the existing destination for provider %s",
+    async (previousProvider) => {
+      const selected = previousProvider === "remote-a" ? "remote-a" : "openai";
+      const close = vi.fn(async () => {});
+      const embed = vi.fn(async () => [1, 0]);
+      const chosen = adapter(selected, {
+        id: selected,
+        model: "embed-default",
+        embed,
+        embedBatch: vi.fn(),
+        close,
+      });
+      mocks.get.mockReturnValue(chosen);
+      const config: OpenClawConfig = {
+        memory: {
+          citations: "on",
+          search: {
+            enabled: false,
+            provider: previousProvider,
+            model: "old",
+            query: { maxResults: 7 },
+            remote: { baseUrl: "https://same.example", batch: { enabled: false } },
+          },
         },
-      },
-      agents: { entries: { worker: { memory: { search: { provider: "remote-b" } } } } },
-    };
-    const result = await runMemorySetupFlow(config, prompter({ texts: ["embed-default"] }));
-    expect(result).not.toBe(config);
-    expect(result.memory?.search).toMatchObject({
-      enabled: true,
-      provider: "remote-a",
-      model: "embed-default",
-      query: { maxResults: 7 },
-      remote: { baseUrl: "https://same.example", batch: { enabled: false } },
-    });
-    expect(result.agents).toBe(config.agents);
-    expect(chosen.create).toHaveBeenCalledOnce();
-    expect(embed).toHaveBeenCalledWith(
-      "ping",
-      expect.objectContaining({ inputType: "query", signal: expect.any(AbortSignal) }),
-    );
-    expect(close).toHaveBeenCalledOnce();
-  });
+        agents: { entries: { worker: { memory: { search: { provider: "remote-b" } } } } },
+      };
+      const result = await runMemorySetupFlow(
+        config,
+        prompter({ texts: ["embed-default"], selects: [selected, "existing"] }),
+      );
+      expect(result).not.toBe(config);
+      expect(result.memory?.search).toMatchObject({
+        enabled: true,
+        provider: selected,
+        model: "embed-default",
+        query: { maxResults: 7 },
+        remote: { baseUrl: "https://same.example", batch: { enabled: false } },
+      });
+      expect(result.agents).toBe(config.agents);
+      expect(chosen.create).toHaveBeenCalledOnce();
+      expect(embed).toHaveBeenCalledWith(
+        "ping",
+        expect.objectContaining({ inputType: "query", signal: expect.any(AbortSignal) }),
+      );
+      expect(close).toHaveBeenCalledOnce();
+    },
+  );
 
   it("persists a SecretRef but passes only its resolved value to the probe", async () => {
     const ref = { source: "env" as const, provider: "default", id: "EMBED_KEY" };
