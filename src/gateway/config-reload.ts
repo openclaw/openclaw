@@ -277,6 +277,11 @@ export function startGatewayConfigReloader(
         installRecords: PluginInstallRecords;
       }
     | undefined;
+  // Accepted restart candidates advance the diff baseline before the process
+  // replacement applies them. Keep what the process still runs until then.
+  let deferredRestartRuntimeBaseline:
+    | { compareConfig: OpenClawConfig; installRecords: PluginInstallRecords }
+    | undefined;
   const pluginDrain = createConfigPluginDrainTracker({
     signal: lifecycle.signal,
     onWorkSettled: () => schedule(),
@@ -475,6 +480,7 @@ export function startGatewayConfigReloader(
         onRuntimeCommitted?.();
         opts.onRuntimeConfigCommitted?.(plan, runtimeConfig);
         committedRuntimeConfig = runtimeConfig;
+        deferredRestartRuntimeBaseline = undefined;
         acceptedSourceSnapshot = undefined;
         currentConfig = runtimeConfig;
         currentCompareConfig = nextCompareConfig;
@@ -546,9 +552,27 @@ export function startGatewayConfigReloader(
         return completeApplication(completed.runtime);
       }
     }
+    const followUp = resolveConfigWriteFollowUp(pluginLifecycle ? undefined : afterWrite);
+    // An exact revert to the running config needs no restart. Acceptance lets the
+    // restart coordinator retire config-owned debt and keep explicit restart intent.
+    const revertsDeferredRestart =
+      deferredRestartRuntimeBaseline !== undefined &&
+      !pluginLifecycle &&
+      followUp.mode === "auto" &&
+      opts.canRetireDeferredRestart?.() !== false &&
+      diffConfigPaths(
+        withPluginInstallRecords({}, deferredRestartRuntimeBaseline.installRecords),
+        nextPluginInstallConfig,
+      ).length === 0 &&
+      diffGatewayReloadPaths(
+        deferredRestartRuntimeBaseline.compareConfig,
+        nextCompareConfig,
+        listConfigReloadRefinementPrefixes(),
+      ).length === 0;
+    const runtimeUnchanged = changedPaths.length === 0 || revertsDeferredRestart;
     let publishedSource: { rollback: () => Promise<void>; commit?: () => void } | undefined;
     const publishSource =
-      changedPaths.length === 0 && !pluginLifecycle && opts.onEffectiveConfigUnchanged
+      runtimeUnchanged && !pluginLifecycle && opts.onEffectiveConfigUnchanged
         ? async () => {
             publishedSource ??= await opts.onEffectiveConfigUnchanged!(
               nextConfig,
@@ -633,7 +657,10 @@ export function startGatewayConfigReloader(
       }
       notifyCommitted();
     };
-    if (changedPaths.length === 0 && !pluginLifecycle) {
+    if (runtimeUnchanged && !pluginLifecycle) {
+      if (revertsDeferredRestart) {
+        opts.log.info("config matches the running Gateway; deferred config restart not required");
+      }
       await commitReloadBaseline();
       pluginDrain.applied();
       publishedSource?.commit?.();
@@ -651,7 +678,6 @@ export function startGatewayConfigReloader(
       opts.log.info(`skills snapshot invalidated by config change (${skillsChangedPath})`);
     }
 
-    const followUp = resolveConfigWriteFollowUp(pluginLifecycle ? undefined : afterWrite);
     opts.log.info(
       changedPaths.length > 0
         ? `config change detected; evaluating reload (${changedPaths.join(", ")})`
@@ -692,8 +718,13 @@ export function startGatewayConfigReloader(
     }
     if (plan.restartGateway) {
       await opts.onConfigChange?.(plan, nextConfig);
+      const runtimeBaseline = deferredRestartRuntimeBaseline ?? {
+        compareConfig: currentCompareConfig,
+        installRecords: currentPluginInstallRecords,
+      };
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
+      deferredRestartRuntimeBaseline = runtimeBaseline;
       // The accepted restart owns snapshot republication at next startup.
       settleCandidateApplications(candidate, "restart-pending");
       return completeApplication();
@@ -714,6 +745,7 @@ export function startGatewayConfigReloader(
     await checkpoint();
     await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
     await commitReloadBaseline();
+    deferredRestartRuntimeBaseline = undefined;
     settleRuntimeApplication(applicationStatus ?? "applied");
     const runtime =
       typeof applicationStatus === "object" && applicationStatus.status === "applied"

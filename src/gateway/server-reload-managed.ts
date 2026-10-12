@@ -378,6 +378,7 @@ export function startManagedGatewayConfigReloader(
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,
+    canRetireDeferredRestart: () => params.sharedGatewaySessionGenerationState.required === null,
     onConfigCandidateObserved: () => {
       // Every writer must expose persisted revisions before runtime acceptance.
       invalidateConfigGetResponseCache();

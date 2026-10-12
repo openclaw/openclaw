@@ -81,6 +81,8 @@ export type GatewayConfigReloaderOptions = {
   onConfigRevisionApplied?: (hash: string) => void;
   /** Reads the same restart owner that fences publication of the applied revision. */
   hasOutstandingGatewayRestart?: () => boolean;
+  /** False while a deferred restart holds state only that restart can settle. */
+  canRetireDeferredRestart?: () => boolean;
   /** Retires rejected lifecycle work after any newer config transaction is accepted. */
   onConfigAccepted?: (
     nextConfig: OpenClawConfig,
