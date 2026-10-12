@@ -28,7 +28,10 @@ import {
   readClawInstallRecordFromDatabase,
   readClawOrphanWorkspaceInDatabase,
 } from "./provenance-read.kernel.js";
-import type { ClawRemovalJournalWorkerInput } from "./removal-journal-contract.js";
+import {
+  serializeClawRemovalJournal,
+  type ClawRemovalJournalWorkerInput,
+} from "./removal-journal-contract.js";
 
 export function mutateClawRemovalJournalInWorker(
   database: OpenClawStateDatabase,
@@ -69,7 +72,7 @@ export function mutateClawRemovalJournalInWorker(
       const previous = readAgentDeletionJournalInDatabase({ db }, request.agentId);
       if (
         digestClawValue(install ?? null) !== request.expectedInstallDigest ||
-        digestClawValue(previous ?? null) !== request.expectedJournalDigest
+        digestClawValue(serializeClawRemovalJournal(previous)) !== request.expectedJournalDigest
       ) {
         throw new Error(
           "Claw install or deletion journal changed before mutation; preview removal again.",
@@ -132,7 +135,7 @@ export function mutateClawRemovalJournalInWorker(
       }
       deferSqliteWorkerCommitReceipt(db, {
         nonce: input.nonce,
-        journal,
+        journal: serializeClawRemovalJournal(journal),
       });
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: { nonce: input.nonce } });
       assertLease();

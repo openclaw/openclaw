@@ -1,4 +1,5 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { SessionGroupSettings } from "./custom-groups.ts";
 
@@ -31,6 +32,7 @@ export function captureBootRoster(
       ...state.result,
       sessions: state.result.sessions
         .filter((session) => !session.incognito && !isIncognitoSessionKey(session.key))
+        .slice(0, SIDEBAR_SESSION_ROSTER_LIMIT)
         .map(({ incognito: _incognito, ...session }) => session),
     },
   };

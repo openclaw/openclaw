@@ -212,9 +212,10 @@ describe("Gateway context cache remote proof", () => {
             windows: caches.contextWindowCache.size,
           };
         })(),
-        sharedBare: contextModule.lookupContextTokens("shared-model", {
+        sharedBare: contextModule.resolveContextTokensForModel({
+          model: "shared-model",
           allowAsyncLoad: false,
-          skipRuntimeConfigLoad: true,
+          cfg: {},
         }),
         providerA: contextModule.resolveContextTokensForModel({
           cfg: warmConfig,

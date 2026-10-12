@@ -509,9 +509,9 @@ export const deviceBootstrapOperations = {
       return 0;
     }
     return write(({ db }) =>
-      withDevicePairingMutationAdmission(() => ({
-        value: pruneExpiredDevicePairSetupCompletionsInDatabase(db, input.nowMs),
-      })),
+      withDevicePairingMutationAdmission(() =>
+        pruneExpiredDevicePairSetupCompletionsInDatabase(db, input.nowMs),
+      ),
     );
   },
   "bootstrap.clear": devicePairingMutation(clearDeviceBootstrapTokens),

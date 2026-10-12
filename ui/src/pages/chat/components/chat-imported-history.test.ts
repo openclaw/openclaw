@@ -5,10 +5,11 @@ import { projectImportedMessageForDisplay } from "../../../lib/chat/imported-mes
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { extractText, extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import {
   prepareChatMessageRender,
-  renderMessageActionButtons,
+  MessageActions,
   resolveMessageActionDetails,
 } from "./chat-message-markdown.ts";
 
@@ -87,7 +88,7 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
       const writeText = vi.fn().mockResolvedValue(undefined);
       vi.stubGlobal("navigator", { clipboard: { writeText } });
       expect(details?.markdown).toBe(body);
-      render(renderMessageActionButtons(details!, { onReply }), container);
+      render(solidContent(MessageActions, { details, options: { onReply } }), container);
       container.querySelector<HTMLButtonElement>(".chat-copy-btn")!.click();
       await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(body));
     }

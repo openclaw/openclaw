@@ -472,10 +472,13 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await expect.poll(() => workspaceMenu.count()).toBe(0);
         await page.setViewportSize({ width: 390, height: 844 });
+        // The preceding chip click leaves the pointer inside the sliding drawer.
+        await page.mouse.move(389, 843);
         const drawerToggle = page
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first();
         // Keep keyboard navigation free of hover tooltips while the drawer slides in.
+        await page.mouse.move(389, 843);
         await drawerToggle.press("Enter");
         for (const trigger of [chip, workspace]) {
           if (trigger === workspace) {

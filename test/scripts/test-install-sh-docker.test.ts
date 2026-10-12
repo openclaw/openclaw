@@ -9,6 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -77,6 +78,37 @@ function extractInstallE2eInstallerFunction(): string {
     throw new Error("install E2E installer function was not found");
   }
   return script.slice(start, end);
+}
+
+function scanInstallE2eTranscript(text: string, limits: Record<string, string> = {}) {
+  const root = tempDirs.make("openclaw-install-e2e-transcript-");
+  const file = join(root, "session.jsonl");
+  writeFileSync(file, text);
+  const script = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+  const marker = `node - <<'NODE' "$jsonl" "$@" || scan_status="$?"\n`;
+  const start = script.indexOf(marker);
+  const source = script.slice(start + marker.length, script.indexOf("\nNODE", start));
+  const errors: string[] = [];
+  try {
+    runInNewContext(source, {
+      Buffer,
+      require: createRequire(import.meta.url),
+      console: { error: (message: string) => errors.push(message) },
+      process: {
+        argv: ["node", "-", file, "exec|bash"],
+        env: limits,
+        exit: (code: number) => {
+          throw new ScriptExit(code);
+        },
+      },
+    });
+    return { code: 0, errors };
+  } catch (error) {
+    if (error instanceof ScriptExit) {
+      return { code: error.status, errors };
+    }
+    throw error;
+  }
 }
 
 function extractNonrootInstallerStep(): string {
@@ -1419,6 +1451,24 @@ printf 'status=%s\\n' "$status"
 });
 
 describe("install-sh E2E runner", () => {
+  it("scans bounded completed transcripts and excludes oversized or partial records", () => {
+    const tool = JSON.stringify({ type: "tool_use", name: "exec", input: {} });
+    expect(scanInstallE2eTranscript(`unparseable\n${tool}\n`).code).toBe(0);
+    expect(scanInstallE2eTranscript(tool).code).toBe(0);
+    expect(
+      scanInstallE2eTranscript(tool, { OPENCLAW_INSTALL_E2E_SESSION_SCAN_BYTES: "20" }),
+    ).toMatchObject({
+      code: 1,
+      errors: expect.arrayContaining(["Transcript scan stopped after 20 bytes"]),
+    });
+    expect(
+      scanInstallE2eTranscript(`${tool}\n`, { OPENCLAW_INSTALL_E2E_SESSION_LINE_BYTES: "20" }),
+    ).toMatchObject({
+      code: 1,
+      errors: expect.arrayContaining(["Skipped 1 oversized transcript line(s)"]),
+    });
+  });
+
   it("does not execute a partial installer after a bounded download fails", () => {
     const fixture = runInstallE2eInstallerFixture({
       curlExitCode: 28,
