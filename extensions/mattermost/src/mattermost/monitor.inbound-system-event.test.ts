@@ -18,16 +18,13 @@ import {
   createTestInboundDebounceFlush,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createRuntimeEnv as testRuntime } from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { registerMattermostBlockProgressTests } from "./monitor.block-progress.test-support.js";
+import { registerMattermostIngressDebounceTests } from "./monitor.ingress-debounce.test-support.js";
 import { monitorMattermostProvider } from "./monitor.js";
 import { registerMattermostPreviewDeliveryTests } from "./monitor.preview-delivery.test-support.js";
 import { registerMattermostPreviewPolicyTests } from "./monitor.preview-policy.test-support.js";
@@ -584,51 +581,30 @@ describe("mattermost inbound user posts", () => {
     });
   });
 
-  it("changes Mattermost delay at collector admission without replacing the socket", async () => {
-    const cfg = { ...testConfig, messages: { inbound: { debounceMs: 0 } } };
-    setRuntimeConfigSnapshot(cfg, cfg);
-    mockState.dispatchInboundMessage.mockResolvedValue(undefined);
-    mockState.runtimeCore = createRuntimeCore(cfg, undefined, {
-      createInboundDebouncer,
-      resolveInboundDebounceMs,
-    });
-    const socket = new FakeWebSocket();
-    const abort = new AbortController();
-    const socketFactory = vi.fn(() => socket);
-    const monitor = monitorMattermostProvider({
-      config: cfg,
-      runtime: testRuntime(),
-      abortSignal: abort.signal,
-      webSocketFactory: socketFactory,
-    });
-    await vi.waitFor(() => expect(socket.openListenerCount).toBeGreaterThan(0));
-    socket.emitOpen();
-    const bodies = () =>
-      mockState.dispatchInboundMessage.mock.calls.map(([params]) => params.ctx.BodyForAgent);
-    const publish = (debounceMs: number) => {
-      const current = { ...cfg, messages: { inbound: { byChannel: { mattermost: debounceMs } } } };
-      setRuntimeConfigSnapshot(current, current);
-    };
-    try {
-      await emitMattermostChannelPost(socket, { id: "debounce-1", message: "immediate" });
-      await vi.waitFor(() => expect(bodies()).toEqual(["immediate"]));
-      publish(500);
-      await emitMattermostChannelPost(socket, { id: "debounce-2", message: "buffered" });
-      await new Promise((resolve) => {
-        setTimeout(resolve, 50);
+  registerMattermostIngressDebounceTests({
+    testConfig,
+    createRuntimeCore,
+    mockState,
+    startTransport: (config, abort, ready) => {
+      const socket = new FakeWebSocket();
+      const socketFactory = vi.fn(() => {
+        ready();
+        return socket;
       });
-      expect(bodies()).toEqual(["immediate"]);
-      publish(0);
-      await vi.waitFor(() => expect(bodies()).toEqual(["immediate", "buffered"]));
-      await emitMattermostChannelPost(socket, { id: "debounce-3", message: "after disable" });
-      await vi.waitFor(() => expect(bodies()).toEqual(["immediate", "buffered", "after disable"]));
-      expect(socketFactory).toHaveBeenCalledTimes(1);
-    } finally {
-      abort.abort();
-      socket.emitClose(1000);
-      await monitor;
-      clearRuntimeConfigSnapshot();
-    }
+      const monitor = monitorMattermostProvider({
+        config,
+        runtime: testRuntime(),
+        abortSignal: abort.signal,
+        webSocketFactory: socketFactory,
+      });
+      return {
+        monitor,
+        open: () => socket.emitOpen(),
+        close: () => socket.emitClose(1000),
+        connectionCount: () => socketFactory.mock.calls.length,
+        post: (post) => emitMattermostChannelPost(socket, post),
+      };
+    },
   });
 
   it("accounts for abandoned dispatches and honors retry backoff after restart", async () => {
@@ -693,7 +669,7 @@ describe("mattermost inbound user posts", () => {
             id: "post-abandon-retry",
             attempts,
             lastAttemptAt: expect.any(Number),
-            lastError: "turn-abandoned",
+            lastError: "Mattermost dispatch failed before adoption",
           }),
         ]);
         observed = pending[0];
