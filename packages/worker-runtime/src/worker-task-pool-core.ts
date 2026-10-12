@@ -197,7 +197,7 @@ export class WorkerTaskPoolCore<Input, Output> {
   private enqueue(
     input: WorkerTaskInput<Input>,
     options: OwnedWorkerTaskOptions<Input>,
-    owned = false,
+    owned: boolean,
     inputBytes = options.inputBytes ?? 0,
   ): Task<Input, Output> {
     // A Promise executor would let the task's timer/abort closures retain input too.
