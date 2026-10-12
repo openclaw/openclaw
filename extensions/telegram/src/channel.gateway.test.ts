@@ -583,6 +583,61 @@ describe("telegramPlugin gateway startup", () => {
       expect(getOrCreateAccountThrottler(token)).toBe(first);
       await releaseAccountThrottler(token);
     });
+
+    it("releases the stopped account's throttler when the token leaves the config", async () => {
+      const runtime = installTelegramRuntime();
+      const oldToken = "123456:bad-token";
+      const prevCfg = createTelegramConfig("ops");
+      runtime.config.current = () => createTelegramConfig("ops", { botToken: "654321:new-token" });
+      const first = getOrCreateAccountThrottler(oldToken);
+      const account = telegramPlugin.config.resolveAccount(prevCfg, "ops");
+      const stopAccount = telegramPlugin.gateway?.stopAccount;
+      if (!stopAccount) {
+        throw new Error("expected Telegram stopAccount gateway handler");
+      }
+
+      await stopAccount(createStartAccountContext({ account, cfg: prevCfg }));
+
+      expect(getOrCreateAccountThrottler(oldToken)).not.toBe(first);
+    });
+
+    it("releases the stopped account's throttler when the account is removed", async () => {
+      const runtime = installTelegramRuntime();
+      const oldToken = "123456:bad-token";
+      const prevCfg = createTelegramConfig("ops");
+      runtime.config.current = () =>
+        ({
+          channels: { telegram: { accounts: { other: { botToken: "789:other-token" } } } },
+        }) as OpenClawConfig;
+      const first = getOrCreateAccountThrottler(oldToken);
+      const account = telegramPlugin.config.resolveAccount(prevCfg, "ops");
+      const stopAccount = telegramPlugin.gateway?.stopAccount;
+      if (!stopAccount) {
+        throw new Error("expected Telegram stopAccount gateway handler");
+      }
+
+      await stopAccount(createStartAccountContext({ account, cfg: prevCfg }));
+
+      expect(getOrCreateAccountThrottler(oldToken)).not.toBe(first);
+    });
+
+    it("keeps the stopped account's throttler while the token stays configured", async () => {
+      const runtime = installTelegramRuntime();
+      const token = "123456:bad-token";
+      const cfg = createTelegramConfig("ops");
+      runtime.config.current = () => cfg;
+      const first = getOrCreateAccountThrottler(token);
+      const account = telegramPlugin.config.resolveAccount(cfg, "ops");
+      const stopAccount = telegramPlugin.gateway?.stopAccount;
+      if (!stopAccount) {
+        throw new Error("expected Telegram stopAccount gateway handler");
+      }
+
+      await stopAccount(createStartAccountContext({ account, cfg }));
+
+      expect(getOrCreateAccountThrottler(token)).toBe(first);
+      await releaseAccountThrottler(token);
+    });
   });
 
   it("deletes cached startup botInfo when logout clears the account token", async () => {
