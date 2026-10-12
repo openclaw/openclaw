@@ -11,10 +11,9 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   ChatComposerPersistence,
   admitStoredChatComposerQueueItemResult,
-  loadChatComposerSnapshot,
+  loadChatComposerState,
   persistChatComposerState,
 } from "./composer-persistence.ts";
-import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
 const state = (account = "account-a", gatewayUrl = "wss://gateway.example") => ({
   client: { recoveryScope: account, recoveryScopeReady: true },
@@ -31,17 +30,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-it("separates snapshot identity for matching session IDs across gateways and accounts", () => {
-  const first = resolveChatSnapshotKey(state(), { sessionKey: state().sessionKey });
-  expect(resolveChatSnapshotKey(state("account-b"), { sessionKey: state().sessionKey })).not.toBe(
-    first,
-  );
-  expect(
-    resolveChatSnapshotKey(state("account-a", "wss://other.example"), {
-      sessionKey: state().sessionKey,
-    }),
-  ).not.toBe(first);
-});
 it("never exposes or overwrites another account's text draft and queue", () => {
   const alice = state();
   expect(persistChatComposerState(alice)).toBe(true);
@@ -53,10 +41,10 @@ it("never exposes or overwrites another account's text draft and queue", () => {
     ),
   ).toBe("admitted");
   const bob = state("account-b");
-  expect(loadChatComposerSnapshot(bob, bob.sessionKey)).toBeNull();
+  expect(loadChatComposerState(bob, bob.sessionKey).snapshot).toBeNull();
   bob.chatMessage = "Bob draft";
   expect(persistChatComposerState(bob)).toBe(true);
-  expect(loadChatComposerSnapshot(alice, alice.sessionKey)).toMatchObject({
+  expect(loadChatComposerState(alice, alice.sessionKey).snapshot).toMatchObject({
     draft: "private draft",
     queue: [{ id: "alice" }],
   });
@@ -78,7 +66,7 @@ it("holds legacy unowned text for review instead of assigning it to the next log
       },
     }),
   );
-  expect(loadChatComposerSnapshot(host, host.sessionKey)).toBeNull();
+  expect(loadChatComposerState(host, host.sessionKey).snapshot).toBeNull();
   expect(readChatOutboxRecovery(host).entries).toEqual([
     expect.objectContaining({
       session: expect.objectContaining({
@@ -110,7 +98,7 @@ it("restores account text and attachment drafts before any connection", async ()
     selectedChatSessionIncognito: false,
     requestUpdate: () => restored(),
   };
-  expect(loadChatComposerSnapshot(host, host.sessionKey)?.draft).toBe("private draft");
+  expect(loadChatComposerState(host, host.sessionKey).snapshot?.draft).toBe("private draft");
   vi.spyOn(durableStore, "prepareDurableComposerRecovery").mockResolvedValue({
     status: "ready",
     entries: [],
@@ -149,10 +137,10 @@ it("keeps offline queue under its captured account through recovery and account 
     }),
   ).toBe("admitted");
   host.connected = true;
-  expect(loadChatComposerSnapshot(host, host.sessionKey)).toBeNull();
+  expect(loadChatComposerState(host, host.sessionKey).snapshot).toBeNull();
   host.client.recoveryScope = "account-b";
   host.client.recoveryScopeReady = true;
-  expect(loadChatComposerSnapshot(host, host.sessionKey)).toBeNull();
+  expect(loadChatComposerState(host, host.sessionKey).snapshot).toBeNull();
   expect(
     admitStoredChatComposerQueueItemResult(host, captured, {
       id: "late",
@@ -160,9 +148,9 @@ it("keeps offline queue under its captured account through recovery and account 
       createdAt: 2,
     }),
   ).toBe("storage-failed");
-  expect(loadChatComposerSnapshot(state(), host.sessionKey)?.queue.map((item) => item.id)).toEqual([
-    "offline",
-  ]);
+  expect(
+    loadChatComposerState(state(), host.sessionKey).snapshot?.queue.map((item) => item.id),
+  ).toEqual(["offline"]);
 });
 
 it("retired offline admission cannot revive drafts or queue from a remembered client", () => {
@@ -174,7 +162,7 @@ it("retired offline admission cannot revive drafts or queue from a remembered cl
   expect(persistChatComposerState(host)).toBe(true);
   const captured = captureChatOutboxAdmission(host, host.sessionKey);
   client.retireOfflineRecoveryScope();
-  expect(loadChatComposerSnapshot(host, host.sessionKey)).toBeNull();
+  expect(loadChatComposerState(host, host.sessionKey).snapshot).toBeNull();
   expect(persistChatComposerState(host)).toBe(false);
   expect(
     admitStoredChatComposerQueueItemResult(host, captured, {
@@ -183,5 +171,5 @@ it("retired offline admission cannot revive drafts or queue from a remembered cl
       createdAt: 1,
     }),
   ).toBe("storage-failed");
-  expect(loadChatComposerSnapshot(state(), host.sessionKey)?.draft).toBe("private draft");
+  expect(loadChatComposerState(state(), host.sessionKey).snapshot?.draft).toBe("private draft");
 });

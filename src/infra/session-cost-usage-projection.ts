@@ -121,19 +121,57 @@ const countCalendarDays = (
   return Math.floor((endDayMs - startDayMs) / (24 * 60 * 60 * 1000)) + 1;
 };
 
-function includeRemainingRollupScans(
-  rows: Iterable<SessionCostUsageRollupRow>,
-  pricingFingerprint: string,
-  initialLatest: number,
-): number | undefined {
-  let latest = initialLatest;
-  for (const row of rows) {
-    const entry = decodeUsageCostRollupEnvelope(row.valueJson, pricingFingerprint);
-    if (entry) {
-      latest = Math.max(latest, entry.scannedAt);
+function createRollupProjectionReader(
+  params: UsageCostRollupRowSource & { pricingFingerprint: string },
+) {
+  let latestScan = 0;
+  const readEnvelope = (row: SessionCostUsageRollupRow | undefined) => {
+    const envelope = row
+      ? decodeUsageCostRollupEnvelope(row.valueJson, params.pricingFingerprint)
+      : undefined;
+    if (envelope) {
+      latestScan = Math.max(latestScan, envelope.scannedAt);
     }
-  }
-  return latest || undefined;
+    return envelope;
+  };
+  return {
+    async read<Request extends { file: UsageCostTranscriptFile }>(
+      filePath: string,
+      requests: readonly Request[],
+      freshnessFile?: UsageCostTranscriptFile,
+    ) {
+      const row = params.readRow(filePath);
+      const envelope = readEnvelope(row);
+      // Aggregate freshness precedes body reads; session freshness follows decoding.
+      const fresh = freshnessFile
+        ? isUsageCostRollupFresh({ checkpoint: envelope?.checkpoint, file: freshnessFile })
+        : undefined;
+      const usable = envelope
+        ? requests.filter(({ file }) =>
+            canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file }),
+          )
+        : [];
+      const entry =
+        row && usable.length > 0
+          ? decodeUsageCostRollup(
+              row.valueJson,
+              params.pricingFingerprint,
+              await params.readBody(row),
+            )
+          : undefined;
+      const invalidBody = Boolean(row && usable.length > 0 && !entry);
+      if (invalidBody && row) {
+        params.onInvalidBody(row.key);
+      }
+      return { fresh, entry, requests: usable, invalidBody };
+    },
+    refreshedAt() {
+      for (const row of params.remainingRows) {
+        readEnvelope(row);
+      }
+      return latestScan || undefined;
+    },
+  };
 }
 
 export async function projectCostUsageSummary(
@@ -143,7 +181,6 @@ export async function projectCostUsageSummary(
     startMs: number;
     endMs: number;
     dayBucket?: UsageDailyBucket;
-    refreshing: boolean;
   },
 ): Promise<CostUsageSummary> {
   const daily = new Map<string, CostUsageTotals>();
@@ -151,37 +188,14 @@ export async function projectCostUsageSummary(
   const formatDay = createUsageDayKeyFormatter(params.dayBucket);
   let cachedFiles = 0;
   let staleFiles = 0;
-  let latestScan = 0;
+  const reader = createRollupProjectionReader(params);
   // Keep file order and per-bucket additions: folding per-file totals changes rounding.
   for (const file of params.files) {
-    const row = params.readRow(file.filePath);
-    const envelope = row
-      ? decodeUsageCostRollupEnvelope(row.valueJson, params.pricingFingerprint)
-      : undefined;
-    if (envelope) {
-      latestScan = Math.max(latestScan, envelope.scannedAt);
-    }
-    const fresh = isUsageCostRollupFresh({ checkpoint: envelope?.checkpoint, file });
-    if (!fresh) {
+    const { fresh, entry, invalidBody } = await reader.read(file.filePath, [{ file }], file);
+    if (!fresh || invalidBody) {
       staleFiles += 1;
     }
-    if (
-      !row ||
-      !envelope ||
-      !canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file })
-    ) {
-      continue;
-    }
-    const entry = decodeUsageCostRollup(
-      row.valueJson,
-      params.pricingFingerprint,
-      await params.readBody(row),
-    );
     if (!entry) {
-      params.onInvalidBody(row.key);
-      if (fresh) {
-        staleFiles += 1;
-      }
       continue;
     }
     cachedFiles += 1;
@@ -194,19 +208,8 @@ export async function projectCostUsageSummary(
       totals,
     });
   }
-  const refreshedAt = includeRemainingRollupScans(
-    params.remainingRows,
-    params.pricingFingerprint,
-    latestScan,
-  );
+  const refreshedAt = reader.refreshedAt();
   fillMissingDays(daily, params.startMs, params.endMs, formatDay);
-  const status = params.refreshing
-    ? "refreshing"
-    : staleFiles > 0
-      ? cachedFiles > 0
-        ? "partial"
-        : "stale"
-      : "fresh";
   return {
     updatedAt: Date.now(),
     days: countCalendarDays(params.startMs, params.endMs, formatDay),
@@ -215,7 +218,7 @@ export async function projectCostUsageSummary(
     ),
     totals,
     cacheStatus: {
-      status,
+      status: staleFiles === 0 ? "fresh" : cachedFiles > 0 ? "partial" : "stale",
       cachedFiles,
       pendingFiles: staleFiles,
       staleFiles,
@@ -233,7 +236,6 @@ export async function projectSessionCostSummaries(
     endMs?: number;
     includeUntimestamped?: boolean;
     dayBucket?: UsageDailyBucket;
-    refreshing: boolean;
   },
 ): Promise<{
   summaries: Array<SessionCostSummary | null>;
@@ -265,29 +267,10 @@ export async function projectSessionCostSummaries(
     (params.startMs === undefined && params.endMs === undefined);
   const formatDay = createUsageDayKeyFormatter(params.dayBucket);
   let cachedFiles = 0;
-  let latestScan = 0;
+  const reader = createRollupProjectionReader(params);
   for (const [filePath, requests] of requestsByPath) {
-    const row = params.readRow(filePath);
-    const envelope = row
-      ? decodeUsageCostRollupEnvelope(row.valueJson, params.pricingFingerprint)
-      : undefined;
-    if (!envelope || !row) {
-      continue;
-    }
-    latestScan = Math.max(latestScan, envelope.scannedAt);
-    const usableRequests = requests.filter(({ file }) =>
-      canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file }),
-    );
-    if (usableRequests.length === 0) {
-      continue;
-    }
-    const entry = decodeUsageCostRollup(
-      row.valueJson,
-      params.pricingFingerprint,
-      await params.readBody(row),
-    );
+    const { entry, requests: usableRequests } = await reader.read(filePath, requests);
     if (!entry) {
-      params.onInvalidBody(row.key);
       continue;
     }
     for (const { index, session, file } of usableRequests) {
@@ -304,7 +287,7 @@ export async function projectSessionCostSummaries(
           formatDay,
         }),
         computedAt: entry.scannedAt,
-        ...(!fresh ? { refreshing: params.refreshing, staleSince: file.mtimeMs } : {}),
+        ...(!fresh ? { refreshing: false, staleSince: file.mtimeMs } : {}),
       };
     }
   }
@@ -317,22 +300,11 @@ export async function projectSessionCostSummaries(
   return {
     summaries,
     cacheStatus: {
-      status:
-        staleSessionFiles.size === 0
-          ? "fresh"
-          : params.refreshing
-            ? "refreshing"
-            : cachedFiles > 0
-              ? "partial"
-              : "stale",
+      status: staleSessionFiles.size === 0 ? "fresh" : cachedFiles > 0 ? "partial" : "stale",
       cachedFiles,
       pendingFiles: staleSessionFiles.size,
       staleFiles: staleSessionFiles.size,
-      refreshedAt: includeRemainingRollupScans(
-        params.remainingRows,
-        params.pricingFingerprint,
-        latestScan,
-      ),
+      refreshedAt: reader.refreshedAt(),
     },
     staleSessionFiles: [...staleSessionFiles],
   };

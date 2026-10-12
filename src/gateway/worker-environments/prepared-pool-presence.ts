@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.js";
-import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   readWorkerProjectPreparation,
   type WorkerProviderPreparedIntent,
@@ -16,6 +14,17 @@ const HUMAN_PRESENCE_RETIRE_AFTER_MS = 15 * 60 * 1_000;
 const REPOSITORY_REF_REFRESH_INTERVAL_MS = 60_000;
 const PRESENCE_RESERVE_EXPIRY_MS = Number.MAX_SAFE_INTEGER;
 
+export function matchingPreparedPoolPresenceDemand(
+  record: WorkerEnvironmentRecord,
+  demand: PreparedPoolPresenceDemand | undefined,
+): PreparedPoolPresenceDemand | undefined {
+  return demand?.profileId === record.profileId &&
+    demand.preparationKey === record.preparation?.key &&
+    demand.project.key === readWorkerProjectSnapshot(record.profileSnapshot.project)?.key
+    ? demand
+    : undefined;
+}
+
 export function isSupersededPresenceReserve(
   record: WorkerEnvironmentRecord,
   demand: PreparedPoolPresenceDemand | undefined,
@@ -27,12 +36,7 @@ export function isSupersededPresenceReserve(
   ) {
     return false;
   }
-  return (
-    !demand ||
-    record.profileId !== demand.profileId ||
-    record.preparation.key !== demand.preparationKey ||
-    readWorkerProjectSnapshot(record.profileSnapshot.project)?.key !== demand.project.key
-  );
+  return !matchingPreparedPoolPresenceDemand(record, demand);
 }
 
 export type PreparedPoolPresenceOptions = {
@@ -72,7 +76,6 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
   let humanPresent = false;
   let humanPresenceObserved = false;
   let humanPresenceChangedAtMs = now();
-  let version = 0;
   let loaded = false;
   let loading: Promise<void> | undefined;
   let demand: PreparedPoolPresenceDemand | undefined;
@@ -80,10 +83,7 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
   const current = () => signal.throwIfAborted();
   const policy = () => {
     const source = options.resolveHumanPresenceDemand?.();
-    if (!source || !options.presenceDemandStore) {
-      return undefined;
-    }
-    return { ...source, retireAfterMs: HUMAN_PRESENCE_RETIRE_AFTER_MS };
+    return source && options.presenceDemandStore ? { ...source } : undefined;
   };
   const read = async () => {
     if (!loaded) {
@@ -98,22 +98,9 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
     }
     return demand;
   };
-  const write = async (
-    value: PreparedPoolPresenceDemand | null,
-    expectedVersion: number,
-    assertPolicyCurrent?: () => void,
-  ) => {
-    const assertCurrent = () => {
-      current();
-      assertPolicyCurrent?.();
-      if (version !== expectedVersion) {
-        throw new Error("Authenticated human presence changed during prepared-pool maintenance");
-      }
-    };
-    assertCurrent();
-    demand = await options.presenceDemandStore!.write(value, assertCurrent);
+  const write = async (value: PreparedPoolPresenceDemand | null) => {
+    demand = await options.presenceDemandStore!.write(value, current);
     loaded = true;
-    assertCurrent();
   };
   const matches = (
     state: PreparedPoolPresenceDemand,
@@ -125,27 +112,17 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
     state.requestedRef === (source.repository.ref ?? null);
 
   const maintain = async () => {
-    const expectedVersion = version;
     let state = await read();
     current();
-    if (expectedVersion !== version) {
-      throw new Error("Authenticated human presence changed during prepared-pool maintenance");
-    }
     const source = policy();
     if (!source) {
       if (state) {
-        await write(null, expectedVersion);
+        await write(null);
       }
       return undefined;
     }
-    const assertPolicyCurrent = () => {
-      current();
-      if (!isDeepStrictEqual(policy(), source)) {
-        throw new Error("Human-presence repository policy changed during preparation");
-      }
-    };
     if (state && !matches(state, source)) {
-      await write(null, expectedVersion);
+      await write(null);
       state = undefined;
       refResolvedAtMs = undefined;
     }
@@ -155,12 +132,21 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
         state = {
           ...state,
           revision: state.revision + 1,
-          retireAtMs: absentAtMs + source.retireAfterMs,
+          retireAtMs: absentAtMs + HUMAN_PRESENCE_RETIRE_AFTER_MS,
         };
-        await write(state, expectedVersion, assertPolicyCurrent);
+        await write(state);
       }
       return state;
     }
+    const config = options.getConfig().cloudWorkers;
+    const profile = config?.profiles?.[source.profileId];
+    if (!profile) {
+      throw new Error("Human-presence worker profile changed during preparation");
+    }
+    const limits = {
+      target: profile.readyWorkers ?? 1,
+      maxTotal: config?.preparedPool?.maxTotal ?? 4,
+    };
     const previous = state;
     const retained =
       previous &&
@@ -178,10 +164,6 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
       signal,
     });
     current();
-    if (expectedVersion !== version) {
-      throw new Error("Authenticated human presence changed during repository preparation");
-    }
-    assertPolicyCurrent();
     const project = readWorkerProjectSnapshot(intent.profileSnapshot.project);
     const preparation = readWorkerProjectPreparation(intent.profileSnapshot.project);
     if (!project || !("source" in project) || !preparation) {
@@ -196,20 +178,10 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
       lastPresentAtMs: now(),
       retireAtMs: null,
     };
-    await write(state, expectedVersion, assertPolicyCurrent);
+    await write(state);
     if (!retained) {
       refResolvedAtMs = resolutionStartedAtMs;
     }
-    const config = options.getConfig().cloudWorkers;
-    const profile = config?.profiles?.[source.profileId];
-    const providerId = profile && normalizeCapabilityProviderId(profile.provider);
-    if (!profile || !providerId || providerId !== intent.providerId) {
-      throw new Error("Human-presence worker profile changed during preparation");
-    }
-    const limits = {
-      target: profile.readyWorkers ?? 1,
-      maxTotal: config?.preparedPool?.maxTotal ?? 4,
-    };
     const slots = store.preparedCapacity({
       profileId: source.profileId,
       projectKey: project.key,
@@ -219,7 +191,7 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
       const admitted = await store.ensurePreparedIntent({
         intent: {
           ...deriveEnvironmentIntent(`prepared:${randomUUID()}`),
-          providerId,
+          providerId: intent.providerId,
           profileId: source.profileId,
           profileSnapshot: intent.profileSnapshot,
           preparation: {
@@ -233,8 +205,7 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
         ...limits,
         assertCurrent: () => {
           current();
-          assertPolicyCurrent();
-          if (expectedVersion !== version || !humanPresent) {
+          if (!humanPresent) {
             throw new Error("Authenticated human presence changed before reserve admission");
           }
           options.assertIntentCurrent(source.profileId, intent);
@@ -261,17 +232,12 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
       }
       return demand;
     },
-    matchesCurrentPolicy: (state: PreparedPoolPresenceDemand) => {
-      const source = policy();
-      return Boolean(source && matches(state, source));
-    },
     set: (present: boolean) => {
       humanPresenceObserved = true;
       if (humanPresent !== present) {
         humanPresent = present;
         humanPresenceChangedAtMs = now();
         refResolvedAtMs = undefined;
-        version += 1;
       }
       return options.schedule();
     },

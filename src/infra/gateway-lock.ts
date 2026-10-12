@@ -21,15 +21,24 @@ import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { hasErrnoCode } from "./errno.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
+  classifyGatewayLockProcessNamespace,
+  describeGatewayLockHolder,
+  GATEWAY_OWNER_HEARTBEAT_STALE_MS,
+  GatewayLockNamespaceError,
   type GatewayLockRole,
   type LockPayload,
   parseGatewayLockPayload,
+  readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
 import {
   readGatewayLockProcessCmdline,
   readGatewayLockProcessStartTime,
 } from "./gateway-lock-process.js";
-import { acquireGatewayOwnerLease, type GatewayOwnerLease } from "./gateway-owner-lease.js";
+import {
+  acquireGatewayOwnerLease,
+  assertGatewayOwnerLeaseStopped,
+  type GatewayOwnerLease,
+} from "./gateway-owner-lease.js";
 import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import {
@@ -92,6 +101,8 @@ export type GatewayLockOptions = {
   sleep?: (ms: number) => Promise<void>;
   lockDir?: string;
   role?: GatewayLockRole;
+  assertCurrent?: () => void;
+  onWait?: (message: string) => void;
   /** Transfer a relocated Doctor root only after the target exclusion is held. */
   relocatedMaintenanceOwner?: GatewayLockHandle;
   listenerMode?: "foreground" | "supervised";
@@ -128,7 +139,12 @@ function resolveGatewayOwnerStatusSync(
   platform: NodeJS.Platform,
   readCmdline?: (pid: number) => string[] | null,
   readStartTime?: (pid: number) => number | null,
-  opts: { trustUnknownCmdlineOwner?: boolean; deadlineMs?: number; signal?: AbortSignal } = {},
+  opts: {
+    trustUnknownCmdlineOwner?: boolean;
+    deadlineMs?: number;
+    signal?: AbortSignal;
+    lockPath?: string;
+  } = {},
 ): LockOwnerStatus {
   const remainingTimeoutMs = () => {
     opts.signal?.throwIfAborted();
@@ -140,6 +156,10 @@ function resolveGatewayOwnerStatusSync(
     return Math.max(1, Math.min(CMDLINE_EXEC_TIMEOUT_MS, Math.ceil(remaining)));
   };
   remainingTimeoutMs();
+  const namespace = classifyGatewayLockProcessNamespace(payload?.processNamespace, opts.lockPath);
+  if (namespace !== "same") {
+    return namespace;
+  }
   const role = payload?.role ?? "gateway";
   if (!isPidAlive(pid)) {
     return "dead";
@@ -176,15 +196,13 @@ function resolveGatewayOwnerStatusSync(
       : "alive";
   }
   // Embedded agents cover every state-writing command; maintenance roles require
-  // their exact command. Gateway classification also recognizes retitled processes.
+  // an OpenClaw command. Gateway classification also recognizes retitled processes.
   const command =
-    role === "agent-embedded"
+    role === "agent-embedded" || role === "sqlite-maintenance"
       ? undefined
-      : role === "sqlite-maintenance"
-        ? "doctor"
-        : role === "skill-workshop-apply"
-          ? "skills"
-          : "gateway";
+      : role === "skill-workshop-apply"
+        ? "skills"
+        : "gateway";
   const identity = classifyOpenClawArgv(
     args,
     command ? { command, ...identityOptions } : identityOptions,
@@ -253,6 +271,12 @@ function shouldReclaimGatewayLock(params: {
   readProcessCmdline?: (pid: number) => string[] | null;
   readProcessStartTime?: (pid: number) => number | null;
 }): boolean {
+  if (
+    classifyGatewayLockProcessNamespace(params.payload?.processNamespace, params.lockPath) ===
+    "unknown"
+  ) {
+    throw new GatewayLockNamespaceError(params.payload ?? {}, params.lockPath);
+  }
   const ownerPid = params.payload?.pid;
   const ownerStatus = ownerPid
     ? resolveGatewayOwnerStatusSync(
@@ -261,6 +285,7 @@ function shouldReclaimGatewayLock(params: {
         params.platform,
         params.readProcessCmdline,
         params.readProcessStartTime,
+        { lockPath: params.lockPath },
       )
     : "unknown";
   if (ownerPid) {
@@ -359,13 +384,20 @@ async function readVerifiedGatewayLockIdentity(
   ) {
     return undefined;
   }
+  if (
+    opts.requireInspection &&
+    classifyGatewayLockProcessNamespace(payload.processNamespace, lockPath) === "unknown"
+  ) {
+    const error = new GatewayLockNamespaceError(payload, lockPath);
+    throw new GatewayLockError(error.message, error);
+  }
   const ownerStatus = await resolveGatewayOwnerStatus(
     payload.pid,
     payload,
     opts.platform ?? process.platform,
     opts.readProcessCmdline,
     opts.readProcessStartTime,
-    { trustUnknownCmdlineOwner: false, deadlineMs, signal: opts.signal },
+    { trustUnknownCmdlineOwner: false, deadlineMs, signal: opts.signal, lockPath },
   );
   assertActive();
   // Discovery may omit an unverifiable owner; mutation preflight must preserve unknown.
@@ -410,17 +442,22 @@ async function assertHistoricalGatewayOwnerStopped(
     if (!payload) {
       continue;
     }
+    if (classifyGatewayLockProcessNamespace(payload.processNamespace, lockPath) === "unknown") {
+      throw new GatewayLockNamespaceError(payload, lockPath);
+    }
     const owner = await resolveGatewayOwnerStatus(
       payload.pid,
       payload,
       opts.platform ?? process.platform,
       opts.readProcessCmdline,
       opts.readProcessStartTime,
-      { trustUnknownCmdlineOwner: false },
+      { trustUnknownCmdlineOwner: false, lockPath },
     );
     if (owner !== "dead") {
       throw new GatewayStateOwnerContentionError(
         path.join(paths.stateDir, "state", "openclaw.sqlite"),
+        undefined,
+        describeGatewayLockHolder(payload, lockPath, owner === "alive" ? "live" : "unknown"),
       );
     }
   }
@@ -449,12 +486,18 @@ export async function acquireGatewayLock(
   }
   const now = opts.now ?? performance.now.bind(performance);
   const startedAt = now();
+  const heartbeatWaitMs = GATEWAY_OWNER_HEARTBEAT_STALE_MS + 5_000;
+  const heartbeatDeadlineMs = startedAt + heartbeatWaitMs;
   const timeoutMs = resolveTimerTimeoutMs(
     opts.timeoutMs,
-    role === "gateway" ? GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS : 0,
+    role === "gateway"
+      ? GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS
+      : role === "sqlite-maintenance"
+        ? heartbeatWaitMs
+        : 0,
     0,
   );
-  const deadlineMs = opts.lifecycleDeadlineMs ?? startedAt + timeoutMs;
+  const deadlineMs = Math.min(opts.lifecycleDeadlineMs ?? Infinity, startedAt + timeoutMs);
   const startTime = (
     opts.readProcessStartTime ??
     ((pid) =>
@@ -471,6 +514,7 @@ export async function acquireGatewayLock(
     configPath: paths.configPath,
     stateDir: paths.stateDir,
     role,
+    processNamespace: readGatewayLockProcessNamespace(),
     ...(role === "gateway" ? { cronOwnerProjection: "dynamic-default-v1" as const } : {}),
     ...(typeof opts.port === "number" &&
     Number.isInteger(opts.port) &&
@@ -499,6 +543,7 @@ export async function acquireGatewayLock(
         now,
         sleep: opts.sleep,
         acquire: async () => {
+          opts.assertCurrent?.();
           const owner = acquireGatewayStateOwner({
             databasePath,
             payload,
@@ -510,8 +555,14 @@ export async function acquireGatewayLock(
               projection = previousOwner.retainProjection();
             }
             await assertHistoricalGatewayOwnerStopped(paths, opts, projection);
-            await previousOwner?.release();
-            owner.assertCurrent();
+            await owner.run(() =>
+              assertGatewayOwnerLeaseStopped(env, owner, role === "sqlite-maintenance"),
+            );
+            if (previousOwner) {
+              // Policy reads borrow the newly acquired custody before releasing the old root.
+              owner.run(() => opts.assertCurrent?.());
+              await previousOwner.release();
+            }
             return owner;
           } catch (error) {
             projection?.release();
@@ -521,7 +572,26 @@ export async function acquireGatewayLock(
           }
         },
         shouldRetry: (error) => {
-          if (!(error instanceof GatewayStateOwnerContentionError)) {
+          if (
+            error instanceof GatewayLockNamespaceError &&
+            (role === "gateway" || role === "sqlite-maintenance")
+          ) {
+            const remaining = Math.min(deadlineMs, heartbeatDeadlineMs) - now();
+            if (remaining <= 0) {
+              return false;
+            }
+            if (!waited) {
+              (opts.onWait ?? log.warn)(
+                `Waiting for the previous Gateway's owner heartbeat to expire before reclaiming state (up to ${Math.ceil(remaining / 1000)} seconds). ${error.message}`,
+              );
+            }
+            waited = true;
+            return { delayMs: Math.min(5_000, remaining) };
+          }
+          if (
+            role === "sqlite-maintenance" ||
+            !(error instanceof GatewayStateOwnerContentionError)
+          ) {
             return false;
           }
           if (!waited && deadlineMs > startedAt && role === "gateway") {
@@ -534,15 +604,14 @@ export async function acquireGatewayLock(
         },
       }));
   } catch (error) {
-    const waitHint =
-      waited && role === "gateway"
-        ? `; waited ${Math.round(now() - startedAt)}ms for Gateway state ownership`
-        : "";
-    const message = `failed to acquire gateway state ownership${waitHint}`;
+    opts.assertCurrent?.();
+    const message = `failed to acquire gateway state ownership${waited ? `; waited ${Math.round(now() - startedAt)}ms for Gateway state ownership` : ""}`;
     const detail =
       error instanceof GatewayStateOwnerContentionError
         ? `${message}: ${error.message}. Stop the Gateway or wait for the current OpenClaw operation to finish, then retry.`
-        : message;
+        : error instanceof GatewayLockNamespaceError
+          ? error.message
+          : message;
     throw new GatewayLockError(detail, error);
   }
   if (waited && role === "gateway") {
@@ -576,6 +645,7 @@ export async function acquireGatewayLock(
       : undefined;
   let ownerLease: GatewayOwnerLease | undefined;
   try {
+    assertStateOwnerCurrent(opts.assertCurrent);
     // Shipped Gateways discover this PID sidecar before starting. Synchronous
     // schema work retains the same fs-safe owner through its final reference.
     const shouldReclaim = (previous: LockPayload | null) =>

@@ -49,6 +49,7 @@ export const ConfigApplyParamsSchema = closedObject(ConfigApplyLikeParamProperti
 export const ConfigPatchParamsSchema = closedObject({
   ...ConfigApplyLikeParamProperties,
   replacePaths: Type.Optional(Type.Array(NonEmptyString, { maxItems: 256 })),
+  response: Type.Optional(Type.Literal("summary")),
 });
 
 /** Empty request payload for fetching the generated config schema. */
@@ -122,12 +123,71 @@ const GitUpdateStatusSchema = Type.Union([
 ]);
 
 const ImmutableGenerationSha = Type.String({ pattern: "^[a-f0-9]{40}$" });
+const ImmutableOperationId = Type.String({ format: "uuid" });
 
 /** Recorded installation facts; preparation does not authorize activation. */
 const UpdateImmutableInstallSchema = closedObject({
   root: NonEmptyString,
   currentSha: ImmutableGenerationSha,
   currentPath: NonEmptyString,
+  activationEnabled: Type.Optional(Type.Boolean()),
+  releaseRetention: Type.Optional(
+    closedObject({
+      version: Type.Literal(1),
+      mode: Type.Literal("inspect"),
+      keepVerifiedGenerations: Type.Literal(3),
+      pins: Type.Array(closedObject({ sha: ImmutableGenerationSha, identity: NonEmptyString })),
+      generations: Type.Array(
+        closedObject({
+          sha: ImmutableGenerationSha,
+          path: NonEmptyString,
+          identity: NonEmptyString,
+          buildDigest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+          publishedRevision: Type.Integer({ minimum: 0 }),
+          verifiedRevision: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+        }),
+      ),
+    }),
+  ),
+  activation: Type.Optional(
+    closedObject({
+      operationId: ImmutableOperationId,
+      phase: Type.Union([
+        Type.Literal("prepared"),
+        Type.Literal("draining"),
+        Type.Literal("stopping"),
+        Type.Literal("stopped"),
+        Type.Literal("publishing"),
+        Type.Literal("starting"),
+        Type.Literal("verifying"),
+        Type.Literal("rollback-stopping"),
+        Type.Literal("rollback-publishing"),
+        Type.Literal("rollback-starting"),
+        Type.Literal("rolled-back"),
+        Type.Literal("recovery-required"),
+      ]),
+      previousSha: ImmutableGenerationSha,
+      candidateSha: ImmutableGenerationSha,
+      failure: Type.Optional(NonEmptyString),
+      recoveryCommand: Type.Optional(NonEmptyString),
+    }),
+  ),
+  lastActivation: Type.Optional(
+    closedObject({
+      operationId: ImmutableOperationId,
+      outcome: Type.Union([Type.Literal("succeeded"), Type.Literal("rolled-back")]),
+      selectedSha: ImmutableGenerationSha,
+      verifiedAtMs: Type.Integer({ minimum: 0 }),
+      gateway: Type.Optional(
+        closedObject({
+          pid: Type.Integer({ minimum: 1 }),
+          bootId: NonEmptyString,
+          version: NonEmptyString,
+          buildId: NonEmptyString,
+        }),
+      ),
+    }),
+  ),
   prepared: Type.Optional(
     closedObject({
       sha: ImmutableGenerationSha,

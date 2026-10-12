@@ -270,14 +270,11 @@ export function resolveInteractiveMigrationSelection(
     : selectedItemIds;
 }
 
-function isMigrationSelectionToggleValue(value: string): boolean {
-  return (
-    value === MIGRATION_SELECTION_TOGGLE_ALL_ON || value === MIGRATION_SELECTION_TOGGLE_ALL_OFF
-  );
-}
-
 function selectedMigrationItemValues(selectedValues: readonly string[]): string[] {
-  return selectedValues.filter((value) => !isMigrationSelectionToggleValue(value));
+  return selectedValues.filter(
+    (value) =>
+      value !== MIGRATION_SELECTION_TOGGLE_ALL_ON && value !== MIGRATION_SELECTION_TOGGLE_ALL_OFF,
+  );
 }
 
 function resolveMigrationSelectionBulkToggleValues(

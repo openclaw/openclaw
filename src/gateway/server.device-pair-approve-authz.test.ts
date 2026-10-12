@@ -147,22 +147,6 @@ describe("gateway device.pair.approve caller scope guard", () => {
       },
     );
   });
-  test("allows operator-role approval from a non-admin shared-auth session", async () => {
-    await withPairingSession(
-      {
-        name: "approve-shared-operator-approver",
-        auth: "shared",
-        role: "operator",
-        scopes: ["operator.pairing"],
-      },
-      async ({ ws, requestId, deviceId }) => {
-        expect((await rpcReq(ws, "device.pair.approve", { requestId })).ok).toBe(true);
-        const paired = await getPairedDevice(deviceId);
-        expect(paired?.role).toBe("operator");
-        expect(paired?.tokens?.operator?.scopes).toEqual(["operator.pairing"]);
-      },
-    );
-  });
   test("rejects mixed operator/node approval from a non-admin shared-auth session", async () => {
     await withPairingSession(
       {

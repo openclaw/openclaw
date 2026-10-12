@@ -5,6 +5,7 @@ import {
   resolveGatewayToolOperatorSelection,
   withoutGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getCanonicalGatewayContextResolver,
@@ -275,7 +276,7 @@ export function resolveInProcessGatewayDispatch(
     method === "agent" ? options?.settleWakeReplay?.assertCurrent : undefined;
   const isHostOwnedAgentRun =
     method === "agent" && Boolean(options?.agentRunTracking || assertSettleWakeCurrent);
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const assertCallerCurrent = captureGatewayToolCallerAssertion(method);
   const transfersCreatedInput =
     method === "sessions.create" &&
     options?.sessionCreation?.via === "spawn" &&
@@ -283,16 +284,21 @@ export function resolveInProcessGatewayDispatch(
     assertCallerCurrent !== undefined &&
     options.agentToolCaller?.agentId === caller.agentId &&
     options.agentToolCaller.sessionKey === caller.sessionKey;
-  const assertInvocationCurrent = () => {
-    selection?.assertCurrent();
-    runtimeParticipant?.assertCurrent();
-    assertSettleWakeCurrent?.();
-    if (!isHostOwnedAgentRun || !operatorRunAuthority) {
-      inheritedOperatorAuthority?.signal.throwIfAborted();
-      inheritedOperatorAuthority?.assertCurrent?.();
-    }
-    operatorRunAuthority?.assertCurrent();
-  };
+  const assertInvocationCurrent = composeSessionSourceAssertion([
+    selection?.assertCurrent,
+    runtimeParticipant?.assertCurrent,
+    assertSettleWakeCurrent,
+    !isHostOwnedAgentRun || !operatorRunAuthority
+      ? composeSessionSourceAssertion(
+          [inheritedOperatorAuthority?.assertCurrent],
+          (assertSource) => {
+            inheritedOperatorAuthority?.signal.throwIfAborted();
+            assertSource();
+          },
+        )
+      : undefined,
+    operatorRunAuthority?.assertCurrent,
+  ]);
   assertInvocationCurrent();
   if (!isHostOwnedAgentRun) {
     assertCallerCurrent?.(method);
@@ -476,25 +482,26 @@ export function resolveInProcessGatewayDispatch(
     }
     bindInProcessSubagentResume(client.internal, resume);
   }
-  const assertSourceCurrent = () => {
-    operatorRunAuthority?.assertCurrent();
-    if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
-      throw new Error(
-        `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
-      );
-    }
-  };
+  const assertSourceCurrent = composeSessionSourceAssertion(
+    [operatorRunAuthority?.assertCurrent],
+    (assertSource) => {
+      assertSource();
+      if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
+        throw new Error(
+          `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
+        );
+      }
+    },
+  );
   return {
     assertSourceCurrent,
     assertInvocationCurrent,
-    assertContextCurrent: () => {
-      selection?.assertCurrent();
-      runtimeParticipant?.assertCurrent();
-      assertSourceCurrent();
-      if (method !== "agent") {
-        assertCallerCurrent?.(method);
-      }
-    },
+    assertContextCurrent: composeSessionSourceAssertion([
+      selection?.assertCurrent,
+      runtimeParticipant?.assertCurrent,
+      assertSourceCurrent,
+      method !== "agent" ? assertCallerCurrent : undefined,
+    ]),
     ...(transfersCreatedInput ? { assertCreatedInputSourceCurrent: assertSourceCurrent } : {}),
     client,
     context,

@@ -1,13 +1,14 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it, vi } from "vitest";
-import { buildDiscordActivityCustomId } from "../component-custom-id.js";
-import type { sendDiscordComponentMessage } from "../send.components.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sendDiscordComponentMessage } from "../send.components.js";
 import { createDiscordSendReceipt } from "../send.receipt.js";
 import { createDiscordWidgetPresenter } from "./presenter.js";
 import {
   createActivityTestConfig,
   createActivityTestRuntime,
 } from "./test-helpers.test-support.js";
+
+vi.mock("../send.components.js", () => ({ sendDiscordComponentMessage: vi.fn() }));
 
 type WidgetPresenter = Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[0];
 type WidgetPresenterContext = Parameters<WidgetPresenter["availability"]>[0];
@@ -48,6 +49,14 @@ async function present(
 }
 
 describe("Discord Activity widget presenter", () => {
+  beforeEach(() => {
+    vi.mocked(sendDiscordComponentMessage).mockReset().mockResolvedValue(sendResult());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("matches only configured Discord channel routes", async () => {
     const presenter = createDiscordWidgetPresenter(createActivityTestRuntime());
 
@@ -90,84 +99,9 @@ describe("Discord Activity widget presenter", () => {
     });
   });
 
-  it.each([
-    [80, true],
-    [81, false],
-  ])("enforces the title limit for %i emoji", async (count, ok) => {
-    const presenter = createDiscordWidgetPresenter(createActivityTestRuntime(), {
-      sendComponentMessage: (async (..._args: Parameters<typeof sendDiscordComponentMessage>) =>
-        sendResult()) as unknown as typeof sendDiscordComponentMessage,
-    });
-
-    await expect(
-      presenter.present({
-        context: discordContext(),
-        document: { kind: "html", html: "<p>ok</p>" },
-        title: "🦞".repeat(count),
-      }),
-    ).resolves.toMatchObject({ ok });
-  });
-
-  it("stores the canonical document before posting a fixed launch button", async () => {
-    const runtime = createActivityTestRuntime();
-    const createWidget = vi.spyOn(runtime.store, "createWidget");
-    const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) =>
-      sendResult(),
-    );
-    const canonicalHtml = '<!doctype html><html><body data-owner="core">Canonical</body></html>';
-    const presenter = createDiscordWidgetPresenter(runtime, {
-      sendComponentMessage: send as unknown as typeof sendDiscordComponentMessage,
-      now: () => 7,
-    });
-
-    const result = await present(presenter, discordContext(), canonicalHtml);
-    expect(result).toMatchObject({
-      ok: true,
-      value: {
-        kind: "message",
-        receipt: { primaryPlatformMessageId: "1000000000000000001" },
-      },
-    });
-    const widgetIdPromise = createWidget.mock.results[0]?.value;
-    if (!widgetIdPromise) {
-      throw new Error("expected widget creation");
-    }
-    const widgetId = await widgetIdPromise;
-    const stored = await runtime.store.lookupWidget(widgetId);
-    expect(stored).toMatchObject({
-      html: canonicalHtml,
-      title: "Status",
-      channelId: "987654321",
-      accountId: "default",
-      createdAt: 7,
-      deliveredMessageId: "1000000000000000001",
-    });
-    expect(send.mock.calls[0]?.[1]).toEqual({
-      text: "Status",
-      blocks: [
-        {
-          type: "actions",
-          buttons: [
-            {
-              label: "Open widget",
-              style: "secondary",
-              internalCustomId: buildDiscordActivityCustomId(widgetId ?? ""),
-            },
-          ],
-        },
-      ],
-    });
-    expect(send.mock.calls[0]?.[2]).toMatchObject({
-      accountId: "default",
-      allowedMentions: { parse: [] },
-    });
-  });
-
   it("resolves provider-prefixed current-channel targets", async () => {
-    const send = vi.fn(async () => sendResult());
-    const presenter = createDiscordWidgetPresenter(createActivityTestRuntime(), {
-      sendComponentMessage: send as unknown as typeof sendDiscordComponentMessage,
-    });
+    const send = vi.mocked(sendDiscordComponentMessage);
+    const presenter = createDiscordWidgetPresenter(createActivityTestRuntime());
     const context = discordContext({
       nativeChannelId: undefined,
       currentMessagingTarget: "discord:channel:987654321",
@@ -193,11 +127,8 @@ describe("Discord Activity widget presenter", () => {
     });
     await runtime.store.markWidgetDelivered(existingId, "1000000000000000000");
     const failure = new Error("send failed");
-    const presenter = createDiscordWidgetPresenter(runtime, {
-      sendComponentMessage: vi.fn(async () => {
-        throw failure;
-      }) as unknown as typeof sendDiscordComponentMessage,
-    });
+    vi.mocked(sendDiscordComponentMessage).mockRejectedValueOnce(failure);
+    const presenter = createDiscordWidgetPresenter(runtime);
 
     await expect(present(presenter)).rejects.toBe(failure);
     await expect(
@@ -208,14 +139,11 @@ describe("Discord Activity widget presenter", () => {
   it("keeps a delivered widget when later component bookkeeping fails", async () => {
     const runtime = createActivityTestRuntime();
     const delivery = sendResult();
-    const presenter = createDiscordWidgetPresenter(runtime, {
-      sendComponentMessage: vi.fn(
-        async (...args: Parameters<typeof sendDiscordComponentMessage>) => {
-          await args[2].onDeliveryResult?.(delivery);
-          throw new Error("component registry failed");
-        },
-      ) as unknown as typeof sendDiscordComponentMessage,
+    vi.mocked(sendDiscordComponentMessage).mockImplementationOnce(async (...args) => {
+      await args[2].onDeliveryResult?.(delivery);
+      throw new Error("component registry failed");
     });
+    const presenter = createDiscordWidgetPresenter(runtime);
 
     await expect(present(presenter)).resolves.toMatchObject({ ok: true });
     await expect(
@@ -229,11 +157,7 @@ describe("Discord Activity widget presenter", () => {
     vi.spyOn(runtime.store, "markWidgetDelivered").mockRejectedValueOnce(
       new Error("state unavailable"),
     );
-    const presenter = createDiscordWidgetPresenter(runtime, {
-      sendComponentMessage: vi.fn(async () =>
-        sendResult(),
-      ) as unknown as typeof sendDiscordComponentMessage,
-    });
+    const presenter = createDiscordWidgetPresenter(runtime);
 
     await expect(present(presenter)).rejects.toThrow(
       "Discord widget was delivered, but its delivery state could not be saved",

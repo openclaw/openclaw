@@ -4,17 +4,17 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as gitExec from "../../infra/git-exec.js";
 import * as gitWorker from "../../infra/git-worker.js";
-import * as commandExec from "../../process/exec.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import * as allocation from "./allocation.js";
 import * as worktreeGit from "./git.js";
+import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
 import {
-  getRegistryWorktree,
-  getRegistryWorktreeProvisionedChunk,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
 } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import * as runLease from "./run-lease.js";
 import { ManagedWorktreeService, WorktreeSnapshotError } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
@@ -129,12 +129,12 @@ beforeEach(async () => {
     }
     return result;
   });
-  const runCommand = commandExec.runCommandWithTimeout;
-  vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-    if (argv[0] === "git" && argv[argv.indexOf("worktree") + 1] === "remove") {
+  const executeGit = gitExec.executeGitCommand;
+  vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+    if (args[0] === "worktree" && args[1] === "remove") {
       events.push("checkout-removed");
     }
-    return await runCommand(argv, options);
+    return await executeGit(cwd, args, options);
   });
 });
 

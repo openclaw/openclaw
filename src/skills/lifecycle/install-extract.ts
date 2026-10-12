@@ -4,15 +4,13 @@ import { sha256File } from "../../infra/directory-durability.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { root as fsSafeRoot } from "../../infra/fs-safe.js";
 
-type ArchiveExtractResult = { stdout: string; stderr: string; code: number | null };
-
 export async function extractSkillDownloadArchive(params: {
   archivePath: string;
   archiveType: string;
   targetDir: string;
   stripComponents?: number;
   timeoutMs: number;
-}): Promise<ArchiveExtractResult> {
+}) {
   const { archivePath, archiveType, targetDir, stripComponents, timeoutMs } = params;
   const kind =
     archiveType === "zip"

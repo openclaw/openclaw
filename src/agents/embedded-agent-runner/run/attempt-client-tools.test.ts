@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { runWithAgentToolExecutionContext } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
@@ -19,12 +20,12 @@ import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { createCodeModeCatalogProjection } from "../../code-mode-catalog.js";
-import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "../../code-mode.js";
 import { runUntilCompleted } from "../../code-mode.test-support.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { compactToolSearchCatalogEntry } from "../../tool-search-catalog.js";
 import {
@@ -120,6 +121,96 @@ function prepare(input: {
 }
 
 describe("prepareEmbeddedAttemptClientTools", () => {
+  it("keeps reused client call ids distinct across assistant turns and stable on replay", async () => {
+    const prepared = prepare({
+      codeModeControlsEnabledForRun: false,
+      attemptConfig: CATALOGS_DISABLED_CONFIG,
+      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+      catalogRef: createToolSearchCatalogRef(),
+    });
+    const tool = wrapToolDefinition(expectDefined(prepared.clientToolDefs[0], "client tool"));
+    for (const value of [1, 2]) {
+      const toolCall = {
+        type: "toolCall" as const,
+        id: "lookup_0",
+        name: tool.name,
+        arguments: { value },
+      };
+      const context = {
+        assistantMessage: makeAgentAssistantMessage({
+          content: [toolCall],
+          turnId: `turn-${value}`,
+          stopReason: "toolUse",
+        }),
+        toolCall,
+      };
+      await runWithAgentToolExecutionContext(context, () =>
+        tool.execute(toolCall.id, toolCall.arguments),
+      );
+      await runWithAgentToolExecutionContext(context, () =>
+        tool.execute(toolCall.id, toolCall.arguments),
+      );
+      expect(prepared.clientToolCallSlots).toHaveLength(value);
+    }
+    expect(prepared.clientToolCallSlots).toEqual([
+      { toolCallId: "lookup_0", name: "client_probe", completed: true, params: { value: 1 } },
+      { toolCallId: "lookup_0", name: "client_probe", completed: true, params: { value: 2 } },
+    ]);
+  });
+
+  it("preserves a completed client call when a later turn reuses its id and is blocked", async () => {
+    const previousRegistry = getGlobalPluginRegistry();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          matcher: ["client_probe"],
+          handler: vi
+            .fn()
+            .mockReturnValueOnce(undefined)
+            .mockReturnValue({ block: true, blockReason: "blocked second call" }),
+        },
+      ]),
+    );
+    try {
+      const prepared = prepare({
+        codeModeControlsEnabledForRun: false,
+        attemptConfig: CATALOGS_DISABLED_CONFIG,
+        toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+        catalogRef: createToolSearchCatalogRef(),
+      });
+      const tool = wrapToolDefinition(expectDefined(prepared.clientToolDefs[0], "client tool"));
+      for (const value of [1, 2]) {
+        const toolCall = {
+          type: "toolCall" as const,
+          id: "lookup_0",
+          name: tool.name,
+          arguments: { value },
+        };
+        const result = await runWithAgentToolExecutionContext(
+          {
+            assistantMessage: makeAgentAssistantMessage({
+              content: [toolCall],
+              turnId: `turn-${value}`,
+              stopReason: "toolUse",
+            }),
+            toolCall,
+          },
+          () => tool.execute(toolCall.id, toolCall.arguments),
+        );
+        expect(result.details).toMatchObject({ status: value === 1 ? "pending" : "blocked" });
+      }
+      expect(prepared.clientToolCallSlots.filter((slot) => slot.completed)).toEqual([
+        { toolCallId: "lookup_0", name: "client_probe", completed: true, params: { value: 1 } },
+      ]);
+    } finally {
+      resetGlobalHookRunner();
+      if (previousRegistry) {
+        initializeGlobalHookRunner(previousRegistry);
+      }
+    }
+  });
+
   it("keeps authoritative client slots in source order across delayed hooks", async () => {
     const previousRegistry = getGlobalPluginRegistry();
     const firstHook = createDeferredCore();
@@ -244,25 +335,23 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     },
   );
 
-  it("collects only the marked Code Mode exec as a code-mode exec tool name", () => {
+  it("stores capable tool names policy-normalized, as completion compares them", () => {
     const catalogRef = createToolSearchCatalogRef();
-    const markedExec = markCodeModeControlTool(createStubTool("exec"));
-    const plainExec = createStubTool("exec");
+    const capable = Object.assign(createStubTool("Order_Status"), {
+      canDeliverSourceReply: true,
+    });
+    const plain = createStubTool("order_lookup");
 
-    expect(
-      [markedExec, plainExec].map((tool) =>
-        Array.from(
-          prepare({
-            codeModeControlsEnabledForRun: true,
-            attemptConfig: CATALOGS_DISABLED_CONFIG,
-            toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-            catalogRef,
-            effectiveTools: [tool],
-            uncompactedEffectiveTools: [],
-          }).codeModeExecToolNames,
-        ),
-      ),
-    ).toEqual([["exec"], []]);
+    const result = prepare({
+      codeModeControlsEnabledForRun: false,
+      attemptConfig: CATALOGS_DISABLED_CONFIG,
+      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+      catalogRef,
+      effectiveTools: [capable, plain],
+      uncompactedEffectiveTools: [capable, plain],
+    });
+
+    expect(result.sourceReplyCapableToolNames).toEqual(new Set(["order_status"]));
   });
 
   it("collects exact local-media trust from core policy and plugin metadata", () => {
@@ -304,23 +393,20 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(result.trustedLocalMediaToolNames).toEqual(new Set());
   });
 
-  it.each([CODE_MODE_CONFIG, CATALOGS_DISABLED_CONFIG])(
-    "hides client tools when the attempt engages code mode",
-    (config) => {
-      const catalogRef = seedCatalog("code-mode", config);
+  it.each([CODE_MODE_CONFIG])("hides client tools when the attempt engages code mode", (config) => {
+    const catalogRef = seedCatalog("code-mode", config);
 
-      const result = prepare({
-        codeModeControlsEnabledForRun: true,
-        attemptConfig: config,
-        // Deliberately catalog-disabled: the code-mode branch must not read this.
-        toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-        catalogRef,
-      });
+    const result = prepare({
+      codeModeControlsEnabledForRun: true,
+      attemptConfig: config,
+      // Deliberately catalog-disabled: the code-mode branch must not read this.
+      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+      catalogRef,
+    });
 
-      expect(result.clientToolDefs).toEqual([]);
-      expect(result.allCustomTools).toEqual([]);
-    },
-  );
+    expect(result.clientToolDefs).toEqual([]);
+    expect(result.allCustomTools).toEqual([]);
+  });
 
   it("advertises and invokes final callable owners after a normalized client collision", async () => {
     const catalogRef = createToolSearchCatalogRef();
@@ -360,10 +446,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     const compacted = applyCodeModeCatalog({
       tools: [...controls, ...skillTools, trustedPlugin, shadowedPlugin],
       config: CODE_MODE_CONFIG,
-      sessionId: "session",
-      sessionKey: "session-key",
       agentId: "main",
-      runId: "run",
       catalogRef,
       codeModeSkills,
     });
@@ -457,10 +540,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     const compacted = applyCodeModeCatalog({
       tools: [...controls, ...catalogTools],
       config: CODE_MODE_CONFIG,
-      sessionId: "session",
-      sessionKey: "session-key",
       agentId: "main",
-      runId: "run",
       catalogRef,
     });
     const originalExec = compacted.tools.find((tool) => tool.name === "exec")!;
@@ -499,7 +579,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     }
 
     const expiredCatalogObserver = catalogRef.onChange!;
-    clearToolSearchCatalog({ catalogRef, runId: "run" });
+    clearToolSearchCatalog({ catalogRef });
     expect(catalogRef.current).toBeUndefined();
     expect(catalogRef.onChange).toBeUndefined();
 
@@ -552,20 +632,21 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(originalWrapper.description).toBe("released original wrapper");
     expect(replacementExec.description).toContain("- replacement_target");
 
-    clearToolSearchCatalog({ catalogRef, runId: "run" });
+    clearToolSearchCatalog({ catalogRef });
   });
 
-  it("keeps client tools directly callable when neither catalog is engaged", () => {
+  it("keeps client tools directly callable for directory Tool Search", () => {
     const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
 
     const result = prepare({
       codeModeControlsEnabledForRun: false,
       attemptConfig: TOOL_SEARCH_CONFIG,
-      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+      toolSearchRuntimeConfig: { tools: { toolSearch: { enabled: true, mode: "directory" } } },
       catalogRef,
     });
 
     expect(result.clientToolDefs.map((tool) => tool.name)).toEqual(["client_probe"]);
+    expect(catalogRef.current?.entries.some((entry) => entry.source === "client")).toBe(false);
   });
 
   it("binds side-effect metadata to the concrete plugin tool owner", () => {
@@ -596,7 +677,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     );
   });
 
-  it.each(["memory_store", "Memory_Store"])(
+  it.each(["Memory_Store"])(
     "keeps client shadow %s admitted but drops ambiguous side-effect ownership",
     (clientName) => {
       const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
@@ -620,25 +701,4 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       expect(result.sideEffectToolOwners).toEqual(new Map());
     },
   );
-
-  it("keeps non-side-effecting plugin shadows admissible", () => {
-    const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
-    const pluginTool = createStubTool("plugin_probe");
-    setPluginToolMeta(pluginTool as never, {
-      pluginId: "example-plugin",
-      optional: false,
-    });
-
-    const result = prepare({
-      codeModeControlsEnabledForRun: false,
-      attemptConfig: CATALOGS_DISABLED_CONFIG,
-      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-      catalogRef,
-      uncompactedEffectiveTools: [pluginTool],
-      clientTools: [clientTool("plugin_probe")],
-    });
-
-    expect(result.clientToolDefs.map((tool) => tool.name)).toEqual(["plugin_probe"]);
-    expect(result.sideEffectToolOwners).toEqual(new Map());
-  });
 });

@@ -26,7 +26,7 @@ describe("plugin retirement session-store ownership", () => {
         const oldPath = state.path("old-custom", "sessions.json");
         const newPath = state.path("new-custom", "sessions.json");
         const cfg: OpenClawConfig = {
-          agents: { list: [{ id: "main", default: true }] },
+          agents: { entries: { main: {} } },
           session: { store: oldPath },
         };
         setRuntimeConfigSnapshot(cfg, cfg);
@@ -82,6 +82,7 @@ describe("plugin retirement session-store ownership", () => {
           release.resolve();
           await Promise.all([call, retirement]);
           expect(loadSessionEntry(scope(oldPath))?.pluginExtensions).toEqual({
+            ...(mode === "clear-command" ? { fixture: { value: "old" } } : {}),
             other: { value: "preserve" },
           });
           expect(loadSessionEntry(scope(newPath))?.pluginExtensions).toEqual({

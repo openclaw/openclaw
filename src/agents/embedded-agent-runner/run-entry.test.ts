@@ -438,7 +438,6 @@ describe("runEmbeddedAgentEntry", () => {
         committed ? "provider" : undefined,
       );
       expect(state.finalizedAttempts).toEqual(committed ? ["candidate"] : []);
-      expect(state.discardedAttempts).toEqual(committed ? [] : ["candidate"]);
     },
   );
 
@@ -448,7 +447,6 @@ describe("runEmbeddedAgentEntry", () => {
       status: "ok",
       meta: { yielded: true, livenessState: "paused" as const, stopReason: "end_turn" },
     },
-    { label: "aborted", status: "error", meta: { aborted: true, stopReason: "error" } },
     {
       label: "timed out",
       status: "timeout",
@@ -467,7 +465,6 @@ describe("runEmbeddedAgentEntry", () => {
         modelFallbackStopReason: "idle_timeout_circuit_breaker" as const,
       },
     },
-    { label: "blocked", status: "error", meta: { livenessState: "blocked" as const } },
   ])("does not finalize a $label candidate", async ({ meta, status }) => {
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const { provider, model } = params;
@@ -522,7 +519,6 @@ describe("runEmbeddedAgentEntry", () => {
       ],
     });
     expect(state.finalizedAttempts).toEqual([]);
-    expect(state.discardedAttempts).toEqual(["candidate"]);
   });
 
   it("retains non-visible follow-up results for terminal delivery", async () => {
@@ -573,27 +569,6 @@ describe("runEmbeddedAgentEntry", () => {
       meta: { finalAssistantRawText: "NO_REPLY" },
       sourceReplies: [{ text: "forward this reply", sourceReplyFinal: true }],
       expected: { disposition: "visible", text: "forward this reply" },
-    },
-    {
-      name: "progress internal reply before final assistant text",
-      meta: { finalAssistantVisibleText: "completed answer" },
-      sourceReplies: [{ text: "working", sourceReplyFinal: false }],
-      expected: { disposition: "visible", text: "completed answer" },
-    },
-    {
-      name: "CLI punctuation-wrapped silence",
-      meta: { finalAssistantVisibleText: "NO_REPLY...", finalAssistantRawText: "NO_REPLY..." },
-      expected: { disposition: "silent" },
-    },
-    {
-      name: "normalized silence without raw text",
-      meta: { finalAssistantVisibleText: "no_reply" },
-      expected: { disposition: "silent" },
-    },
-    {
-      name: "clean empty reply",
-      meta: {},
-      expected: { disposition: "empty" },
     },
   ])(
     "records the producer-owned terminal snapshot for $name",

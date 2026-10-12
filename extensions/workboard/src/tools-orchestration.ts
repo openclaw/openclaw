@@ -7,7 +7,6 @@ import type { WorkboardStore } from "./store.js";
 import {
   cardIdField,
   createWorkboardCardMutations,
-  requireScopedCard,
   claimTokenField,
   strictObject,
   workspaceField,
@@ -30,7 +29,8 @@ export function createWorkboardOrchestrationTools(params: {
   ownerId: string;
 }): AnyAgentTool[] {
   const { store, ownerId } = params;
-  const { scopedCardMutation, claimedCardMutation } = createWorkboardCardMutations(store, ownerId);
+  const { readScopedCardToolParams, scopedCardMutation, claimedCardMutation } =
+    createWorkboardCardMutations(store, ownerId);
   return [
     {
       name: "workboard_boards",
@@ -149,13 +149,8 @@ export function createWorkboardOrchestrationTools(params: {
         token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
       }),
       execute: async (_toolCallId, rawParams) => {
-        const record = asNonArrayRecord(rawParams);
-        const id = readStringParam(record, "id", { required: true });
-        const token = typeof record.token === "string" ? record.token : undefined;
-        await requireScopedCard(store, id, ownerId, token);
-        return jsonResult({
-          card: redactClaimToken(await store.specify(id, record, { ownerId, token: record.token })),
-        });
+        const { record, id, scope } = await readScopedCardToolParams(asNonArrayRecord(rawParams));
+        return jsonResult({ card: redactClaimToken(await store.specify(id, record, scope)) });
       },
     },
     {
@@ -190,11 +185,8 @@ export function createWorkboardOrchestrationTools(params: {
         ),
       }),
       execute: async (_toolCallId, rawParams) => {
-        const record = asNonArrayRecord(rawParams);
-        const id = readStringParam(record, "id", { required: true });
-        const token = typeof record.token === "string" ? record.token : undefined;
-        await requireScopedCard(store, id, ownerId, token);
-        const result = await store.decompose(id, record, { ownerId, token: record.token });
+        const { record, id, scope } = await readScopedCardToolParams(asNonArrayRecord(rawParams));
+        const result = await store.decompose(id, record, scope);
         return jsonResult({
           parent: redactClaimToken(result.parent),
           children: result.children.map(redactClaimToken),

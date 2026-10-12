@@ -463,7 +463,7 @@ def checkout_harness(sha):
     node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
     evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh")
     platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py")
-    upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
+    upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs", "scripts/lib/canonical-json.mjs", "scripts/lib/upgrade-survivor-policy.mjs", "scripts/lib/upgrade-survivor-scenarios.json")
     # Preflight imports these siblings by file-relative paths.
     preflight_scripts = (
         "scripts/ci-build-manifest.mjs",
@@ -478,7 +478,10 @@ def checkout_harness(sha):
         "scripts/changed-lanes.mts",
         "scripts/lib/merge-head-diff-base.mjs",
     )
-    linux_node_scripts = (*upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh")
+    linux_node_scripts = (
+        *upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh",
+        "scripts/stage-openclaw-bun.sh", "scripts/lib/openclaw-bun.json",
+    )
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)
     harness = os.path.join(workspace, ".ci-harness")

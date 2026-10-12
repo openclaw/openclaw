@@ -178,8 +178,12 @@ describe("gateway multi-instance e2e", () => {
 
           await managerClient.request("cron.list", { includeDisabled: true });
 
-          // A separate scheduler process advances the row while the passive Gateway
-          // retains its snapshot. Two Gateways must not share a state directory.
+          // Cron custody is exclusive even when scheduling is disabled. Hand the
+          // database to the offline scheduler only after the Gateway has stopped;
+          // stale in-memory service snapshots are covered by shared-store-runtime.test.ts.
+          await managerClient.stopAndWait();
+          managerClient = undefined;
+          await manager.stopGateway();
           const scheduler = spawnSync(
             process.execPath,
             [
@@ -223,6 +227,8 @@ try {
           expect(before.state.lastRunAtMs).toEqual(expect.any(Number));
           expect(before.state.lastStatus).toBe("ok");
 
+          await manager.startGateway();
+          managerClient = await connectGatewayStatusClient(manager);
           await managerClient.request("cron.update", {
             id: target.id,
             patch: { description: "updated through passive Gateway" },

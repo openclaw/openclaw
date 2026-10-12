@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
@@ -22,9 +22,10 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { recoverGatewaySession } from "./session-recovery-service.js";
 import {
@@ -44,10 +45,25 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
+const titleGeneration = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../auto-reply/reply/conversation-label-generator.js").generateConversationLabelWithFallback
+  >(),
+);
+
+// Recovery owns identity and continuation; title model behavior has separate boundary coverage.
+vi.mock("../auto-reply/reply/conversation-label-generator.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/conversation-label-generator.js")>()),
+  generateConversationLabelWithFallback: titleGeneration,
+}));
+
+// Reverse hook order joins accepted fixture work before draining global owners.
+afterEach(() => drainGlobalSingletonLifecycleState());
+
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+beforeEach(() => {
+  titleGeneration.mockReset().mockResolvedValue("Recovered session");
 });
 
 function recoveryWorkerPlacement(params: {
@@ -200,6 +216,7 @@ test("sessions.recover settles its active placement before archiving a real sess
     cancelSessionWork: vi.fn(async () => {}),
     placements: {
       get: () => placement,
+      getAsync: async () => placement,
       waitForTurnClaimRelease: vi.fn(async () => {}),
     },
     loadSessionRuntime: async () => ({
@@ -280,11 +297,13 @@ test("sessions.recover settles its active placement before archiving a real sess
     archivedAt: expect.any(Number),
     worktree: { id: worktree.id },
   });
-  expect(managedWorktrees.findLiveByOwner("session", sourceKey)).toMatchObject({
+  expect(await managedWorktrees.findLiveByOwner("session", sourceKey)).toMatchObject({
     id: worktree.id,
     ownerId: sourceKey,
   });
-  expect(managedWorktrees.findLiveByOwner("session", recovered.payload?.key ?? "")).toBeUndefined();
+  expect(
+    await managedWorktrees.findLiveByOwner("session", recovered.payload?.key ?? ""),
+  ).toBeUndefined();
   expect(
     loadSessionEntry({
       agentId: "main",
@@ -347,6 +366,7 @@ test.each(["before-interrupt", "before-drain"] as const)(
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         get: () => placement,
+        getAsync: async () => placement,
         waitForTurnClaimRelease: async () => {
           if (phase === "before-drain") {
             await wait();
@@ -510,6 +530,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
         modelSelectionLocked: true,
         pinnedAt: 1,
         sandbox: "required",
+        communication: { send: "never", receive: "ask" },
         spawnedCwd: "/tmp/recovered-worktree",
         mainRestartRecovery: {
           cycleId: "cycle-tombstoned",
@@ -555,7 +576,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
   });
   const successorKey = recovered.payload?.key ?? "";
   const successorSessionId = recovered.payload?.sessionId ?? "";
-  expect(concurrentRetry).toMatchObject({
+  expect(concurrentRetry, JSON.stringify(concurrentRetry)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -571,6 +592,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     previousSessionId: sourceSessionId,
     providerOverride: "openai",
     sandbox: "required",
+    communication: { send: "never", receive: "ask" },
     spawnedCwd: "/tmp/recovered-worktree",
   });
   const archivedSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
@@ -608,7 +630,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     agentId: "main",
     key: sourceKey,
   });
-  expect(repeated).toMatchObject({
+  expect(repeated, JSON.stringify(repeated)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -696,8 +718,11 @@ test.each([
       context: {
         getRuntimeConfig: () =>
           identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
+        getCommittedRuntimeConfig: () =>
+          identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
       },
     };
+    prepareGatewayRecipientProfile(request.client);
     type RecoveryPayload = { key: string; continuation: { status: string } };
     const recovered = await directSessionReq<RecoveryPayload>(
       "sessions.recover",

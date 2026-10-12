@@ -43,7 +43,7 @@ function createWorkspace(): { workspace: string; cfg: OpenClawConfig } {
   );
   return {
     workspace,
-    cfg: { agents: { list: [{ id: "main", workspace }] } },
+    cfg: { agents: { entries: { main: { workspace } } } },
   };
 }
 

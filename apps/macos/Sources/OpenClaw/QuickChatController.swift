@@ -668,17 +668,6 @@ final class QuickChatController: NSObject {
             !self.isMenuActive
     }
 
-    private func captureFocusedAppText() {
-        self.invalidateRecentsFetch()
-        self.model.captureFocusedAppText()
-    }
-
-    private func grantMissingPermissions() {
-        self.invalidateRecentsFetch()
-        self.stopDictation()
-        self.model.grantMissingPermissions()
-    }
-
     private func presentRecentSessionsMenu(rows: [SessionRow]) {
         let items = QuickChatRecentMenuLogic.items(
             rows: rows,
@@ -773,47 +762,33 @@ extension QuickChatController {
         QuickChatView(
             model: self.model,
             replyBinding: self.replyBinding,
-            onDismiss: { [weak self] in self?.dismiss() },
-            onSendAccepted: { [weak self] openChat in
-                self?.handleSendAccepted(openChat: openChat)
-            },
-            onShowAgentPicker: { [weak self] in
-                self?.showAgentPicker()
-            },
-            onShowModelMenu: { [weak self] in
-                self?.showModelMenu()
-            },
-            onShowRecentSessions: { [weak self] in
-                self?.showRecentSessionsPicker()
-            },
-            onToggleReply: { [weak self] in
-                self?.toggleReply()
-            },
-            onToggleDictation: { [weak self] in
-                self?.toggleDictation()
-            },
-            onStopDictation: { [weak self] in
-                self?.stopDictation()
-            },
-            onCaptureTextContext: { [weak self] in
-                self?.captureFocusedAppText()
-            },
-            onShowCaptureMenu: { [weak self] in
-                self?.showCaptureMenu()
-            },
-            onGrantPermissions: { [weak self] in
-                self?.grantMissingPermissions()
-            },
-            onPasteReply: { [weak self] in
-                self?.pasteReplyToFrontmostApp()
-            },
-            onContentHeightChange: { [weak self] height in
-                self?.updateContentHeight(height)
-            },
-            onTextViewReady: { [weak self] textView in
-                self?.textView = textView
-                self?.focusEditor()
-            })
+            onAction: { [weak self] action in self?.handleAction(action) })
+    }
+
+    private func handleAction(_ action: QuickChatView.Action) {
+        switch action {
+        case .dismiss: self.dismiss()
+        case .showAgentPicker: self.showAgentPicker()
+        case .showModelMenu: self.showModelMenu()
+        case .showRecentSessions: self.showRecentSessionsPicker()
+        case .toggleReply: self.toggleReply()
+        case .toggleDictation: self.toggleDictation()
+        case .stopDictation: self.stopDictation()
+        case .captureTextContext:
+            self.invalidateRecentsFetch()
+            self.model.captureFocusedAppText()
+        case .showCaptureMenu: self.showCaptureMenu()
+        case .grantPermissions:
+            self.invalidateRecentsFetch()
+            self.stopDictation()
+            self.model.grantMissingPermissions()
+        case .pasteReply: self.pasteReplyToFrontmostApp()
+        case let .sendAccepted(openChat): self.handleSendAccepted(openChat: openChat)
+        case let .contentHeightChanged(height): self.updateContentHeight(height)
+        case let .textViewReady(textView):
+            self.textView = textView
+            self.focusEditor()
+        }
     }
 }
 

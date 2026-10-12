@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { expressionBuilder, type SelectQueryBuilder } from "kysely";
+import { expressionBuilder, type Compilable, type SelectQueryBuilder } from "kysely";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -180,7 +180,8 @@ export function selectProfileDisplayEntries(db: DatabaseSync, ids?: string[]) {
     .selectFrom("user_profiles")
     .select([
       ...userProfileDisplaySelection,
-      ...(hasEnsuredUserProfileRoleSchema(db) || tableHasColumn(db, "user_profiles", "role")
+      ...((hasProfileRoleColumn(getAdmittedSqliteSchemaFacts(db)) ??
+      (hasEnsuredUserProfileRoleSchema(db) || tableHasColumn(db, "user_profiles", "role")))
         ? (["role"] as const)
         : []),
     ]);
@@ -196,10 +197,15 @@ function normalizeUserProfileAvatarMime(value: string | null): UserProfileAvatar
 export function selectResolvedUserProfile<T extends Pick<UserProfileRow, "merged_into">>(
   db: DatabaseSync,
   profileId: string,
-  query: SelectQueryBuilder<UserProfilesDatabase, "user_profiles", T>,
+  query:
+    | SelectQueryBuilder<UserProfilesDatabase, "user_profiles", T>
+    | ((profileId: string) => Compilable<T>),
 ): T | undefined {
   return readResolvedUserProfile(profileId, (id) =>
-    executeSqliteQueryTakeFirstSync(db, query.where("id", "=", id)),
+    executeSqliteQueryTakeFirstSync(
+      db,
+      typeof query === "function" ? query(id) : query.where("id", "=", id),
+    ),
   );
 }
 
@@ -263,7 +269,9 @@ export function selectResolvedUserProfileMetadataById(
   db: DatabaseSync,
   profileId: string,
 ): UserProfileMetadataRow | undefined {
-  if (!hasEnsuredUserProfileRoleSchema(db)) {
+  if (
+    !(hasProfileRoleColumn(getAdmittedSqliteSchemaFacts(db)) ?? hasEnsuredUserProfileRoleSchema(db))
+  ) {
     return selectResolvedUserProfileById(db, profileId);
   }
   return readResolvedUserProfile(profileId, metadataReader(db));
@@ -295,21 +303,28 @@ export function formatUserProfileAvatarEtag(sha256: string, mime: UserProfileAva
   return `"${sha256}-${mime.slice("image/".length)}"`;
 }
 
-const avatarRoleColumns = new WeakMap<SqliteSchemaFacts, boolean>();
+const profileRoleColumns = new WeakMap<SqliteSchemaFacts, boolean>();
+
+export function hasProfileRoleColumn(schema: SqliteSchemaFacts | undefined) {
+  const sql = schema?.tableSql.get("user_profiles");
+  if (!schema || !sql) {
+    return undefined;
+  }
+  let hasRole = profileRoleColumns.get(schema);
+  if (hasRole === undefined) {
+    hasRole = parseSqliteTableDefinition(sql, "user_profiles").columns.has("role");
+    profileRoleColumns.set(schema, hasRole);
+  }
+  return hasRole;
+}
 
 function selectProfileAvatarMetadata(db: DatabaseSync, profileId: string) {
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (!schema) {
     throw new Error("Profile avatar reads require admitted schema facts");
   }
-  const sql = schema.tableSql.get("user_profiles");
-  if (!sql) {
+  if (!schema.tableSql.get("user_profiles")) {
     return undefined;
-  }
-  let hasRole = avatarRoleColumns.get(schema);
-  if (hasRole === undefined) {
-    hasRole = parseSqliteTableDefinition(sql, "user_profiles").columns.has("role");
-    avatarRoleColumns.set(schema, hasRole);
   }
   return selectResolvedUserProfile(
     db,
@@ -318,7 +333,7 @@ function selectProfileAvatarMetadata(db: DatabaseSync, profileId: string) {
       .selectFrom("user_profiles")
       .select([...userProfileDisplaySelection, "created_at"])
       .select((eb) => [
-        hasRole ? "role" : eb.val<string | null>(null).as("role"),
+        hasProfileRoleColumn(schema) ? "role" : eb.val<string | null>(null).as("role"),
         eb.fn<number | null>("length", ["avatar"]).as("avatar_byte_length"),
       ]),
   );

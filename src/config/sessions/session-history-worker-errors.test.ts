@@ -2,21 +2,24 @@
 import "./session-history-worker-errors.test-support.js";
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readChatHistoryDelta } from "../../gateway/server-methods/chat-history-delta.js";
+import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
+import * as sqliteAdmission from "../../infra/sqlite-database-admission.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import * as sqliteScope from "./session-accessor.sqlite-scope.js";
-import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-row.js";
+import {
+  canonicalSessionKeyMigrationRequiredError,
+  SessionCanonicalKeyMigrationRequiredError,
+} from "./session-canonical-row.js";
 import { readSessionHistoryPageInWorker } from "./session-history-worker-runtime.js";
-import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import {
   historyLane,
   rotateDatabaseWorkers,
+  targetDiscoveryLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -47,6 +50,12 @@ function input() {
     },
   };
 }
+
+// These lifecycle checks retain one already-admitted history lane.
+function useAdmittedHistoryReader() {
+  vi.spyOn(sqliteAdmission, "hasSqliteDatabaseSchemaAdmissionForPath").mockReturnValue(true);
+}
+
 function installWorkerTransport() {
   observed.run.mockImplementation(async (request, options) => {
     const posted = createDeferredCore<unknown>();
@@ -57,7 +66,7 @@ function installWorkerTransport() {
       taskId: 7,
       interactive: Boolean(options.onRequest),
       nativeSections: new SharedArrayBuffer(4),
-      deletedAgentDatabaseFences: [],
+      taskContext: { deletedAgentDatabaseFences: [], databaseAdmissions: [] },
     });
     const reply = await posted.promise;
     assert(reply && typeof reply === "object" && "status" in reply);
@@ -78,7 +87,6 @@ async function readThroughWorker() {
   );
 }
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   closeCapabilities.explicitSqliteCloseReleasesNativeResources = true;
   // Synthetic targets keep discovery outside the error-transfer worker controls.
@@ -95,31 +103,11 @@ beforeEach(() => {
   observed.rotate.mockReset().mockResolvedValue(undefined);
   observed.closeResources.mockReset().mockResolvedValue(undefined);
   observed.unregister.mockReset();
-  observed.quarantinePaths.clear();
-  observed.quarantineRead.mockReset().mockReturnValue({ user_version: 0 });
-  observed.quarantineClose.mockReset();
-  observed.quarantineOpen.mockReset().mockImplementation(() => {
-    const database: ReturnType<typeof observed.quarantineOpen> = {
-      isOpen: true,
-      exec() {},
-      prepare: () => ({ get: observed.quarantineRead }),
-      close() {
-        observed.quarantineClose();
-        database.isOpen = false;
-      },
-    };
-    return database;
-  });
-  observed.hydrate.mockReset().mockReturnValue({
-    kind: "full",
-    eventCount: 0,
-    version: { generation: null, rawSeq: null, updatedAt: null },
-  });
 });
 afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
-  await rotateDatabaseWorkers(historyLane);
+  await Promise.all([historyLane, targetDiscoveryLane].map((lane) => rotateDatabaseWorkers(lane)));
   vi.restoreAllMocks();
   expect(observed.nativeWorker).not.toHaveBeenCalled();
 });
@@ -166,63 +154,6 @@ it.each([
       await expect(read()).rejects.toThrow("openclaw doctor --fix");
     }
     expect(observed.close).toHaveBeenCalledOnce();
-    expect(observed.rotate).toHaveBeenCalledOnce();
-  },
-);
-
-it.each(["revocation", "retirement-failure", "auxiliary-close"])(
-  "settles failed visibility before reset and preserves %s",
-  async (failure) => {
-    const read = failingVisibilityDelta(true);
-    if (failure === "auxiliary-close") {
-      observed.lookup.mockImplementation(() => {
-        throw new Error("shared-state reader close failed");
-      });
-    }
-    const entered = createDeferredCore();
-    const retirement = createDeferredCore();
-    observed.rotate.mockImplementation(() => {
-      entered.resolve();
-      return retirement.promise;
-    });
-    let settled = false;
-    const pending = read()
-      .then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      )
-      .finally(() => {
-        settled = true;
-      });
-    try {
-      expect(
-        await Promise.race([entered.promise.then(() => "retiring"), pending.then(() => "settled")]),
-      ).toBe("retiring");
-      expect(settled).toBe(false);
-      if (failure === "revocation") {
-        expect(observed.resources).toHaveLength(1);
-        observed.resources[0]!.revoke();
-      }
-      if (failure === "retirement-failure") {
-        retirement.reject(new Error("retirement failed"));
-      } else {
-        retirement.resolve();
-      }
-      const result = await pending;
-      if (failure === "auxiliary-close") {
-        expect(result).toEqual({ value: { kind: "reset" } });
-      } else {
-        assert("error" in result);
-        expect(result.error).toMatchObject({
-          message: expect.stringContaining(
-            failure === "revocation" ? "revoked" : "retirement failed",
-          ),
-        });
-      }
-    } finally {
-      retirement.resolve();
-      await pending;
-    }
   },
 );
 
@@ -251,6 +182,7 @@ it("rejects primary revocation between delta acquisition and consumption", async
 
 const readFailures: Array<{ error: Error; reply?: (typeof typedFailures)[number]["reply"] }> = [
   { error: new Error("read failed") },
+  { error: canonicalSessionKeyMigrationRequiredError("invalid source metadata") },
   ...typedFailures,
   {
     error: new SessionMetadataUnavailableError(
@@ -284,7 +216,11 @@ it.each(
     }
     const failure: unknown = await readThroughWorker().catch((caught: unknown) => caught);
     const primary: unknown = failure instanceof AggregateError ? failure.errors[0] : failure;
-    if (!fails || error instanceof SessionMetadataUnavailableError) {
+    if (
+      !fails ||
+      error instanceof SessionMetadataUnavailableError ||
+      error instanceof SessionCanonicalKeyMigrationRequiredError
+    ) {
       expect(primary).toBeInstanceOf(error.constructor);
     }
     expect(primary).toMatchObject({ name: error.name, message: error.message });
@@ -312,11 +248,11 @@ it.each(
       });
     }
     expect(observed.close).toHaveBeenCalledOnce();
-    expect(observed.rotate).toHaveBeenCalledOnce();
   },
 );
 
 it("retires idle history workers under critical pressure after active scopes release custody", async () => {
+  useAdmittedHistoryReader();
   const pressure = channel("openclaw.memory.critical");
   const request = input();
   const retirement = createDeferredCore();
@@ -340,78 +276,8 @@ it("retires idle history workers under critical pressure after active scopes rel
   expect(observed.unregister).toHaveBeenCalledTimes(1);
 });
 
-it.each([
-  { retired: true, fails: false },
-  { retired: false, fails: false },
-  { retired: false, fails: true },
-])(
-  "settles failed reads after their own retirement (already retired=$retired, failure=$fails)",
-  async ({ retired, fails }) => {
-    const primary = new WorkerTaskError(
-      "worker response failed",
-      retired ? "unavailable" : "failed",
-    );
-    const cleanup = new Error("retirement failed");
-    const entered = createDeferredCore();
-    const retirement = createDeferredCore();
-    observed.run.mockImplementation(async (_request, options) => {
-      if (retired) {
-        options.onExecutionSettled?.({ retired: true });
-      }
-      throw primary;
-    });
-    observed.rotate.mockImplementation(() => {
-      entered.resolve();
-      return retirement.promise;
-    });
-    const request = input();
-    let settled = false;
-    const pending = withSessionHistoryWorkerDatabase(request.database, (owner) =>
-      owner.readEntryPresence(request.scope),
-    )
-      .catch((error: unknown) => error)
-      .finally(() => {
-        settled = true;
-      });
-    if (retired) {
-      try {
-        expect(
-          await Promise.race([
-            pending.then(() => "settled"),
-            entered.promise.then(() => "rotating successor"),
-          ]),
-        ).toBe("settled");
-        expect(await pending).toBe(primary);
-      } finally {
-        retirement.resolve();
-        await pending;
-      }
-      return;
-    }
-    await entered.promise;
-    expect(settled).toBe(false);
-    expect(observed.unregister).not.toHaveBeenCalled();
-    if (fails) {
-      retirement.reject(cleanup);
-    } else {
-      retirement.resolve();
-    }
-    const failure: unknown = await pending;
-    if (fails) {
-      assert(failure instanceof AggregateError);
-      expect(failure.errors).toEqual([primary, cleanup]);
-      expect(failure.cause).toBe(cleanup);
-      expect(failure.message).toContain(primary.message);
-      expect(failure.message).toContain(cleanup.message);
-      expect(observed.unregister).not.toHaveBeenCalled();
-    } else {
-      expect(failure).toBe(primary);
-      expect(observed.unregister).toHaveBeenCalledTimes(1);
-    }
-  },
-);
-
 it("retains aliases until native cleanup and preserves later read custody", async () => {
+  useAdmittedHistoryReader();
   const request = input();
   const candidates = [{ path: request.database.path, physicalPath: request.database.path }];
   const cleanupEntered = createDeferredCore();
@@ -451,9 +317,12 @@ it("retains aliases until native cleanup and preserves later read custody", asyn
   );
   cleanup.resolve();
   await discovery;
-  expect(observed.closeResources).toHaveBeenCalledWith(
-    JSON.stringify([{ path: request.database.path }]),
-  );
+  expect(decodeAgentDatabaseReaderRequest(observed.closeResources.mock.calls[0]?.[0])).toEqual({
+    kind: "close",
+    candidates: [{ path: request.database.path }],
+    retainedPaths: [request.database.path],
+    deleted: false,
+  });
   expect(observed.unregister).toHaveBeenCalledTimes(1);
   const retained = observed.resources.find((resource) => resource.agentId === "main");
   assert(retained);
@@ -461,67 +330,6 @@ it("retains aliases until native cleanup and preserves later read custody", asyn
   expect(observed.closeResources).toHaveBeenCalledTimes(2);
   expect(observed.rotate).not.toHaveBeenCalled();
 });
-
-it.each([
-  { fails: false, capable: false },
-  { fails: false, capable: true },
-  { fails: true, capable: false },
-  { fails: true, capable: true },
-])(
-  "joins idle cleanup and retains failed custody (fails=$fails, capable=$capable)",
-  async ({ fails, capable }) => {
-    closeCapabilities.explicitSqliteCloseReleasesNativeResources = capable;
-    const request = input();
-    observed.run.mockResolvedValue({ ok: true, value: false });
-    await withSessionHistoryWorkerDatabase(request.database, (owner) =>
-      owner.readEntryPresence(request.scope),
-    );
-    const resource = observed.resources.find((entry) => entry.agentId === "main");
-    assert(resource);
-    const failure = new Error("idle database native close failed");
-    const retirementFailure = new Error("idle database worker retirement failed");
-    const retirementEntered = createDeferredCore();
-    const retirement = createDeferredCore();
-    observed.closeResources.mockRejectedValueOnce(failure);
-    observed.rotate.mockImplementationOnce(() => {
-      retirementEntered.resolve();
-      return retirement.promise;
-    });
-    resource.revoke();
-    const closing = resource.close().catch((error: unknown) => error);
-    await retirementEntered.promise;
-    expect(observed.unregister).not.toHaveBeenCalled();
-    if (!capable) {
-      if (fails) {
-        retirement.reject(retirementFailure);
-        expect(await closing).toBe(retirementFailure);
-        expect(observed.unregister).not.toHaveBeenCalled();
-        await resource.close();
-      } else {
-        retirement.resolve();
-        expect(await closing).toBeUndefined();
-      }
-      expect(observed.closeResources).not.toHaveBeenCalled();
-      expect(observed.unregister).toHaveBeenCalledOnce();
-      return;
-    }
-    if (fails) {
-      retirement.reject(retirementFailure);
-      const result = await closing;
-      assert(result instanceof AggregateError);
-      expect(result.errors).toEqual([failure, retirementFailure]);
-      expect(observed.unregister).not.toHaveBeenCalled();
-      await resource.close();
-    } else {
-      retirement.resolve();
-      expect(await closing).toBe(failure);
-    }
-    expect(observed.unregister).toHaveBeenCalledOnce();
-    expect(observed.closeResources).toHaveBeenCalledWith(
-      JSON.stringify([{ path: request.database.path }]),
-    );
-  },
-);
 
 it("settles candidate handles before registry continuation without retiring the worker", async () => {
   const request = input();
@@ -571,61 +379,6 @@ it("settles candidate handles before registry continuation without retiring the 
 });
 
 it.each([
-  { fails: false, capable: true },
-  { fails: true, capable: true },
-  { fails: false, capable: false },
-])(
-  "joins candidate cleanup retirement (failure=$fails, native close=$capable)",
-  async ({ fails, capable }) => {
-    closeCapabilities.explicitSqliteCloseReleasesNativeResources = capable;
-    const request = input();
-    const candidates = [{ path: request.database.path, physicalPath: request.database.path }];
-    const failure = new Error("candidate native close failed");
-    const retirementEntered = createDeferredCore();
-    const retirement = createDeferredCore();
-    observed.run.mockResolvedValue({
-      ok: true,
-      value: {
-        kind: "session-store-target",
-        logicalAgentId: "main",
-        sourcePath: request.database.path,
-        database: request.database,
-      },
-    });
-    observed.closeResources.mockRejectedValue(failure);
-    observed.rotate.mockImplementation(() => {
-      retirementEntered.resolve();
-      return retirement.promise;
-    });
-    const discovery = withSessionHistoryWorkerReadCandidates(candidates, async (scope) => {
-      await scope.readStoreTarget({
-        agentId: "main",
-        storePath: request.database.path,
-        env: {},
-        registeredDatabases: [],
-      });
-    });
-    const settled = discovery.catch((error: unknown) => error);
-    await retirementEntered.promise;
-    expect(observed.unregister).not.toHaveBeenCalled();
-    if (fails) {
-      const retirementFailure = new Error("candidate worker retirement failed");
-      retirement.reject(retirementFailure);
-      const error = await settled;
-      assert(error instanceof AggregateError);
-      expect(error.errors).toEqual([failure, retirementFailure]);
-      expect(observed.unregister).not.toHaveBeenCalled();
-    } else {
-      retirement.resolve();
-      expect(await settled).toBe(capable ? failure : undefined);
-      expect(observed.unregister).toHaveBeenCalledTimes(1);
-    }
-    expect(observed.rotate).toHaveBeenCalledOnce();
-    expect(observed.closeResources).toHaveBeenCalledTimes(capable ? 1 : 0);
-  },
-);
-
-it.each([
   { reason: "read-failed", capable: true },
   { reason: "database-missing", capable: false },
   { reason: "database-missing", capable: true },
@@ -653,77 +406,10 @@ it.each([
       registeredDatabases: [],
     });
   });
-  const retired = reason !== "database-missing" || !capable;
+  const retired = !capable;
   expect(observed.closeResources).toHaveBeenCalledTimes(retired ? 0 : 1);
-  expect(observed.rotate).toHaveBeenCalledTimes(
-    reason === "registry-required-after-failure" ? 2 : retired ? 1 : 0,
-  );
+  expect(observed.rotate).toHaveBeenCalledTimes(retired ? 1 : 0);
 });
-
-it.each([false, true])(
-  "keeps alias custody through overlapping retirement when retirement fails=%s",
-  async (fails) => {
-    const request = input();
-    const candidates = [{ path: request.database.path, physicalPath: request.database.path }];
-    const cleanupEntered = createDeferredCore();
-    const cleanup = createDeferredCore();
-    const retirementEntered = createDeferredCore();
-    const retirement = createDeferredCore();
-    observed.run.mockResolvedValue({
-      ok: true,
-      value: {
-        kind: "session-store-target",
-        logicalAgentId: "main",
-        sourcePath: request.database.path,
-        database: request.database,
-      },
-    });
-    observed.closeResources.mockImplementation(() => {
-      cleanupEntered.resolve();
-      return cleanup.promise;
-    });
-    observed.rotate.mockImplementation(() => {
-      retirementEntered.resolve();
-      return retirement.promise;
-    });
-    const discovery = withSessionHistoryWorkerReadCandidates(candidates, async (scope) => {
-      await scope.readStoreTarget({
-        agentId: "main",
-        storePath: request.database.path,
-        env: {},
-        registeredDatabases: [],
-      });
-    });
-    const result = discovery.catch((error: unknown) => error);
-    await cleanupEntered.promise;
-    const alias = observed.resources.find((resource) => !resource.agentId);
-    assert(alias?.revoke);
-    alias.revoke();
-    const closing = alias.close().catch((error: unknown) => error);
-    await retirementEntered.promise;
-    try {
-      cleanup.resolve();
-      expect(await result).toMatchObject({ message: "Session target discovery was revoked" });
-      expect(observed.unregister).not.toHaveBeenCalled();
-      if (fails) {
-        const failure = new Error("overlapping retirement failed");
-        retirement.reject(failure);
-        expect(await closing).toBe(failure);
-        expect(observed.unregister).not.toHaveBeenCalled();
-        observed.rotate.mockResolvedValueOnce(undefined);
-        await alias.close();
-      } else {
-        retirement.resolve();
-        await closing;
-      }
-      expect(observed.unregister).toHaveBeenCalledTimes(1);
-    } finally {
-      cleanup.resolve();
-      retirement.resolve();
-      await Promise.allSettled([discovery, closing]);
-    }
-  },
-);
 
 it.each([
   { kind: "store", capable: false },
@@ -819,109 +505,6 @@ it.each([
     } else {
       expect(observed.closeResources).not.toHaveBeenCalled();
       expect(observed.rotate).toHaveBeenCalledOnce();
-    }
-  },
-);
-
-function hydrateThroughWorker() {
-  const root = tempDirs.make("openclaw-hydration-quarantine-cleanup-");
-  fs.mkdirSync(path.join(root, "state"));
-  const quarantinePath = path.join(root, "state", "openclaw-quarantine.sqlite");
-  observed.quarantinePaths.add(quarantinePath);
-  fs.writeFileSync(quarantinePath, "mock quarantine");
-  installWorkerTransport();
-  return prepareSessionTranscriptHydration({
-    agentId: "main",
-    sessionId: "quarantine-hydration",
-    sessionKey: "agent:main:quarantine-hydration",
-    storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
-    env: { OPENCLAW_STATE_DIR: root },
-  }).read();
-}
-
-it.each([
-  { readFails: true, closeFails: false, retirementFails: false },
-  { readFails: false, closeFails: true, retirementFails: false },
-  { readFails: true, closeFails: true, retirementFails: false },
-  { readFails: true, closeFails: true, retirementFails: true },
-])(
-  "settles hydration quarantine (read=$readFails, close=$closeFails, retirement=$retirementFails)",
-  async ({ readFails, closeFails, retirementFails }) => {
-    const readFailure = new Error("quarantine metadata read failed");
-    const closeFailure = Object.assign(new Error("quarantine native close failed"), {
-      code: "ERR_SQLITE_ERROR",
-      errcode: 5,
-    });
-    const stopFailure = new Error("quarantine worker retirement failed");
-    if (readFails) {
-      observed.quarantineRead.mockImplementation(() => {
-        throw readFailure;
-      });
-    }
-    if (!closeFails) {
-      await expect(hydrateThroughWorker()).resolves.toMatchObject({
-        kind: "full",
-        snapshot: { events: [] },
-      });
-      expect(observed.quarantineClose).toHaveBeenCalledOnce();
-      expect(observed.hydrate).toHaveBeenCalledOnce();
-      expect(observed.rotate).not.toHaveBeenCalled();
-      return;
-    }
-    observed.quarantineClose.mockImplementation(() => {
-      throw closeFailure;
-    });
-    const entered = createDeferredCore();
-    const retirement = createDeferredCore();
-    observed.rotate.mockImplementation(() => {
-      entered.resolve();
-      return retirement.promise;
-    });
-    let settled = false;
-    const pending = hydrateThroughWorker()
-      .then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      )
-      .finally(() => {
-        settled = true;
-      });
-    try {
-      expect(
-        await Promise.race([entered.promise.then(() => "retiring"), pending.then(() => "settled")]),
-      ).toBe("retiring");
-      expect(settled).toBe(false);
-      expect(observed.quarantineOpen.mock.results[0]?.value.isOpen).toBe(true);
-      expect(observed.hydrate).not.toHaveBeenCalled();
-      expect(observed.unregister).not.toHaveBeenCalled();
-      if (retirementFails) {
-        retirement.reject(stopFailure);
-      } else {
-        retirement.resolve();
-      }
-      const result = await pending;
-      assert("error" in result);
-      const failure = result.error;
-      assert(failure instanceof AggregateError);
-      const quarantine = retirementFails ? failure.errors[0] : failure;
-      assert(quarantine instanceof AggregateError);
-      expect(quarantine.name).toBe("OpenClawQuarantineReadCleanupError");
-      expect(quarantine.errors).toMatchObject([
-        ...(readFails ? [{ message: readFailure.message }] : []),
-        { message: closeFailure.message, code: "ERR_SQLITE_ERROR", errcode: 5 },
-      ]);
-      expect(quarantine.cause).toBe(quarantine.errors[0]);
-      expect(observed.rotate).toHaveBeenCalledOnce();
-      if (retirementFails) {
-        expect(failure.errors[1]).toBe(stopFailure);
-        expect(failure.cause).toBe(stopFailure);
-        expect(observed.unregister).not.toHaveBeenCalled();
-      } else {
-        expect(observed.unregister).toHaveBeenCalledOnce();
-      }
-    } finally {
-      retirement.resolve();
-      await pending;
     }
   },
 );

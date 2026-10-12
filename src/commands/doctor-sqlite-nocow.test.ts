@@ -2,11 +2,13 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifecycle.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { isSqlitePathOnBtrfs, setSqliteDirectoryNoCow } from "../infra/sqlite-wal-filesystem.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -38,7 +40,8 @@ let fixture: ReturnType<typeof createDoctorNoCowToolFixture>;
 const nativeStatfs = fs.statfsSync;
 
 beforeEach(() => {
-  root = tempDirs.make("openclaw-nocow-");
+  // The real socket fixture must fit sockaddr_un even with a deeply nested TMPDIR.
+  root = tempDirs.make("openclaw-nocow-", process.platform === "win32" ? undefined : "/tmp");
   directory = path.join(root, "state");
   fs.mkdirSync(directory);
   sqlitePath = path.join(directory, "openclaw.sqlite");
@@ -78,7 +81,7 @@ async function repair(assertCurrent = () => {}) {
 
 describe("Doctor btrfs NOCOW", () => {
   it.skipIf(process.platform !== "linux")(
-    "rewrites shared and agent stores after the real Doctor maintenance scope drains",
+    "rewrites shared and agent stores after Doctor drains native and admission descriptors",
     async () => {
       await withOpenClawTestState(
         { scenario: "external-service", label: "doctor-nocow-owner" },
@@ -112,7 +115,7 @@ describe("Doctor btrfs NOCOW", () => {
                 loadPersistedAuthProfileStore(path.dirname(agent.path));
               }
               const preflight = await prepareDoctorDatabasePreflight({
-                cfg: { agents: { list: [{ id: "main" }, { id: "secondary" }] } },
+                cfg: { agents: { entries: { main: {}, secondary: {} } } },
               });
               expect(preflight.agentDatabaseMigrationDiscovery?.discovery.targets).toHaveLength(3);
               return inspectDoctorSqliteNoCow([state.path, ...agents.map((agent) => agent.path)])
@@ -163,6 +166,55 @@ describe("Doctor btrfs NOCOW", () => {
           }
         },
       );
+    },
+  );
+
+  it.skipIf(process.platform !== "linux")(
+    "keeps admission descriptors when an unknown native handle blocks NOCOW repair",
+    async () => {
+      seedDatabase();
+      const admitted = openNodeSqliteDatabase(sqlitePath);
+      try {
+        admitSqliteSchema(admitted);
+      } finally {
+        admitted.close();
+      }
+      const unknown = new DatabaseSync(sqlitePath);
+      unknown.exec("BEGIN IMMEDIATE");
+      const identity = fs.statSync(sqlitePath);
+      const sourceDescriptors = () =>
+        fs
+          .readdirSync("/proc/self/fd")
+          .flatMap((entry) => {
+            try {
+              const descriptor = Number(entry);
+              const file = fs.fstatSync(descriptor);
+              return file.dev === identity.dev && file.ino === identity.ino ? [descriptor] : [];
+            } catch {
+              return [];
+            }
+          })
+          .toSorted((left, right) => left - right);
+      const descriptors = sourceDescriptors();
+      expect(descriptors.length).toBeGreaterThanOrEqual(2);
+      const native =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const fakeTools = vi.mocked(spawnSync).getMockImplementation()!;
+      vi.mocked(spawnSync).mockImplementation((command, args, options) =>
+        command === "fuser"
+          ? native.spawnSync(command, args, options)
+          : fakeTools(command, args, options),
+      );
+      try {
+        expect((await repair()).join("\n")).toContain("store files are open");
+        expect(sourceDescriptors()).toEqual(descriptors);
+        expect(unknown.isTransaction).toBe(true);
+        expect(fs.statSync(sqlitePath).ino).toBe(identity.ino);
+        expect(fixture.exchanges).toBe(0);
+      } finally {
+        unknown.exec("ROLLBACK");
+        unknown.close();
+      }
     },
   );
 

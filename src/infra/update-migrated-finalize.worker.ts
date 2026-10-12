@@ -52,14 +52,15 @@ import {
   POST_CORE_UPDATE_RESULT_PATH_ENV,
 } from "./update-post-core-context.js";
 import {
-  createManagedUpdateRequesterAuthority,
-  createManagedUpdateRequesterContinuationAuthority,
+  createDelegatedUpdateRequesterAuthority,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
-import { adoptUpdateRun, getUpdateRun } from "./update-run-ledger.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
+import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
+import type { UpdateRunRecord, UpdateRunStep } from "./update-run-record.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 import { isOmittedUpdateTimeout } from "./update-timeout-provenance.js";
 
 async function finalizeMigratedUpdate(): Promise<void> {
@@ -247,14 +248,9 @@ async function runDelegatedPostCore(input: UpdatePostCoreInput): Promise<void> {
       input.runId,
       input.root,
       async (fence) => {
-        const requesterAuthority = input.requester?.authorizationSource?.startsWith("profile:")
-          ? await createManagedUpdateRequesterContinuationAuthority(input.requester, {
-              runId: input.runId,
-              executor: fence,
-            })
-          : input.requester
-            ? await createManagedUpdateRequesterAuthority(input.requester)
-            : undefined;
+        const requesterAuthority = input.requester
+          ? await createDelegatedUpdateRequesterAuthority(input.requester, input.runId, fence)
+          : undefined;
         const { updateCommand } = await import("../cli/update-cli/update-command.js");
         fence.assertCurrent();
         if (requesterAuthority?.isCurrent() === false) {
@@ -291,14 +287,9 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
     input.runId,
     input.root,
     async (fence, commandAuthority) => {
-      const requester = input.requester?.authorizationSource?.startsWith("profile:")
-        ? await createManagedUpdateRequesterContinuationAuthority(input.requester, {
-            runId: input.runId,
-            executor: fence,
-          })
-        : input.requester
-          ? await createManagedUpdateRequesterAuthority(input.requester)
-          : undefined;
+      const requester = input.requester
+        ? await createDelegatedUpdateRequesterAuthority(input.requester, input.runId, fence)
+        : undefined;
       const assertCurrent = () => {
         try {
           fence.assertCurrent();
@@ -374,6 +365,58 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
   );
 }
 
+/**
+ * Time the handoff from receipts the previous driver already wrote, so an
+ * installed driver that predates this step still yields its start: its last
+ * completed row starts the handoff, and this fresh driver ends it before
+ * resuming verification. Timing never changes the update outcome.
+ */
+function recordDriverHandoff(
+  run: NonNullable<UpdateCommandOptions["run"]>,
+  result: UpdateRunResult,
+  adopted: UpdateRunRecord,
+  bufferedSteps: readonly UpdateRunStep[],
+): void {
+  try {
+    const steps = [...adopted.steps, ...bufferedSteps];
+    let previous: UpdateRunStep | undefined;
+    for (const step of steps) {
+      if (
+        step.endedAtMs !== undefined &&
+        !step.step.startsWith("driver:") &&
+        step.endedAtMs > (previous?.endedAtMs ?? 0)
+      ) {
+        previous = step;
+      }
+    }
+    if (previous?.endedAtMs === undefined) {
+      return;
+    }
+    const endedAtMs = Date.now();
+    const startedAtMs = Math.min(previous.endedAtMs, endedAtMs);
+    const adoptedAtMs = steps.find((step) => step.step === "driver:adopted")?.endedAtMs;
+    const step = {
+      name: "update-driver-handoff",
+      command: "openclaw update",
+      cwd: result.root ?? "",
+      durationMs: endedAtMs - startedAtMs,
+      exitCode: 0,
+      diagnostics: [
+        `Handoff began after "${previous.step}"` +
+          (adoptedAtMs === undefined
+            ? "."
+            : `; the fresh driver adopted the run after ${Math.max(0, adoptedAtMs - startedAtMs)}ms.`),
+      ],
+    };
+    result.steps.push(step);
+    for (const row of updateRunStepsFromResultStep(step)) {
+      recordUpdateRunStep(run.runId, { ...row, startedAtMs, endedAtMs }, { env: run.env });
+    }
+  } catch {
+    // Handoff timing is diagnostic; finalization proceeds without it.
+  }
+}
+
 async function finalizeInput(
   input: MigratedUpdateFinalizationInput,
   executorFence: UpdateRecoveryFence,
@@ -383,15 +426,14 @@ async function finalizeInput(
   if (
     !transferredRun ||
     "executorFence" in transferredRun ||
-    (!input.recoveryHandoff &&
-      input.params.rollbackBlockedReason !== "state-migrated-no-rollback" &&
+    (input.params.rollbackBlockedReason !== "state-migrated-no-rollback" &&
       input.params.rollbackBlockedReason !== "rollback-state-unverified")
   ) {
     throw new Error("Update finalization requires its migrated update run.");
   }
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
   executorFence.assertCurrent();
-  adoptUpdateRun(runIdentity.runId, { env: runIdentity.env });
+  const adopted = adoptUpdateRun(runIdentity.runId, { env: runIdentity.env });
   // Parent closures cannot cross JSON. The fresh runtime retains identity checks
   // under its validated original native update lineage.
   const run: NonNullable<UpdateCommandOptions["run"]> = {
@@ -399,13 +441,12 @@ async function finalizeInput(
     executorFence,
     ...(descriptor
       ? {
-          requesterAuthority: descriptor.requester.authorizationSource?.startsWith("profile:")
-            ? await createManagedUpdateRequesterContinuationAuthority(
-                descriptor.requester,
-                { runId: runIdentity.runId, executor: executorFence },
-                runIdentity.env,
-              )
-            : await createManagedUpdateRequesterAuthority(descriptor.requester, runIdentity.env),
+          requesterAuthority: await createDelegatedUpdateRequesterAuthority(
+            descriptor.requester,
+            runIdentity.runId,
+            executorFence,
+            runIdentity.env,
+          ),
         }
       : {}),
   };
@@ -425,6 +466,7 @@ async function finalizeInput(
       await recordUpdateRunStepAsync(run.runId, step, { env, context, assertCurrent });
     }
   }
+  recordDriverHandoff(run, input.params.result, adopted, input.bufferedSteps);
   const stopped = input.params.preManagedServiceStop;
   if (input.windowsTaskAutoStartSuspended && !stopped?.serviceEnv) {
     throw new Error("Transferred Windows task suspension is missing its stopped service owner.");

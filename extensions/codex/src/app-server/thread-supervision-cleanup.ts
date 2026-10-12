@@ -23,44 +23,34 @@ export function withPendingSupervisionCleanup(
 export async function cleanPendingSupervisionArtifacts(
   client: CodexAppServerClient,
   pending: CodexAppServerPendingSupervisionBranch,
-): Promise<{ remaining: string[] }> {
+): Promise<string[]> {
   const remaining: string[] = [];
   for (const threadId of pending.cleanupThreadIds ?? []) {
-    if (!(await archiveSupervisionArtifact(client, threadId))) {
+    try {
+      await client.request(
+        "thread/archive",
+        { threadId },
+        { timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS },
+      );
+    } catch (error) {
+      const message = formatErrorMessage(error).toLowerCase();
+      if (
+        message.includes("no rollout found for thread id") ||
+        message.includes("thread not found") ||
+        message.includes("already archived")
+      ) {
+        continue;
+      }
+      await unsubscribeCodexThreadBestEffort(client, {
+        threadId,
+        timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+      });
+      embeddedAgentLog.warn("failed to archive temporary Codex supervision thread", {
+        threadId,
+        error,
+      });
       remaining.push(threadId);
     }
   }
-  return { remaining };
-}
-
-async function archiveSupervisionArtifact(
-  client: CodexAppServerClient,
-  threadId: string,
-): Promise<boolean> {
-  try {
-    await client.request(
-      "thread/archive",
-      { threadId },
-      { timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS },
-    );
-    return true;
-  } catch (error) {
-    const message = formatErrorMessage(error).toLowerCase();
-    if (
-      message.includes("no rollout found for thread id") ||
-      message.includes("thread not found") ||
-      message.includes("already archived")
-    ) {
-      return true;
-    }
-    await unsubscribeCodexThreadBestEffort(client, {
-      threadId,
-      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-    });
-    embeddedAgentLog.warn("failed to archive temporary Codex supervision thread", {
-      threadId,
-      error,
-    });
-    return false;
-  }
+  return remaining;
 }

@@ -1,22 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWindowsPowerShellExePath } from "./windows-install-roots.js";
-import {
-  readWindowsProcessAncestorsSync,
-  readWindowsProcessStartTimeSync,
-} from "./windows-process-start.js";
+import { readWindowsProcessStartTimeSync } from "./windows-process-start.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
-const nativeKoffiMock = vi.hoisted(() => vi.fn());
-
-vi.mock("node:module", async (importOriginal) => {
-  const original = await importOriginal<typeof import("node:module")>();
-  return {
-    createRequire: (url: string | URL) => {
-      const require = original.createRequire(url);
-      return (id: string) => (id === "koffi" ? nativeKoffiMock() : require(id));
-    },
-  };
-});
+const nativeIdentity = vi.hoisted(() => vi.fn());
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
+  readProcessIdentity: nativeIdentity,
+}));
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -26,7 +17,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 describe("readWindowsProcessStartTimeSync", () => {
   beforeEach(() => {
     spawnSyncMock.mockReset();
-    nativeKoffiMock.mockReset().mockImplementation(() => {
+    nativeIdentity.mockReset().mockImplementation(() => {
       throw new Error("native binding unavailable");
     });
   });
@@ -146,203 +137,66 @@ describe("readWindowsProcessStartTimeSync", () => {
 });
 
 describe("native Windows process start identity", () => {
-  const openProcess = vi.fn();
-  const getProcessTimes = vi.fn();
-  const closeHandle = vi.fn();
-  const load = vi.fn();
   const expectedTime = Date.parse("2026-07-13T07:20:49.123Z");
-
   beforeEach(() => {
-    vi.resetModules();
     vi.stubGlobal("process", { ...process, platform: "win32" });
     spawnSyncMock.mockReset().mockReturnValue({ status: 0, stdout: "2026-07-13T07:20:49.123Z" });
-    openProcess.mockReset().mockReturnValue(17n);
-    closeHandle.mockReset().mockReturnValue(1);
-    getProcessTimes.mockReset().mockImplementation((_handle: bigint, creation: Buffer) => {
-      creation.writeBigUInt64LE(116444736000000000n + BigInt(expectedTime) * 10000n + 9999n);
-      return 1;
+    nativeIdentity.mockReset().mockReturnValue({
+      pid: 123,
+      parentPid: 1,
+      startTimeMicros: expectedTime * 1000 + 999,
+      startTimeResolutionMicros: 1,
+      exited: false,
     });
-    load.mockReset().mockReturnValue({
-      func: (signature: string) => {
-        if (signature.includes("OpenProcess(")) {
-          return openProcess;
-        }
-        if (signature.includes("GetProcessTimes(")) {
-          return getProcessTimes;
-        }
-        if (signature.includes("CloseHandle(")) {
-          return closeHandle;
-        }
-        throw new Error(`Unexpected native function: ${signature}`);
-      },
-    });
-    nativeKoffiMock.mockReset().mockReturnValue({ load });
   });
-
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
-  it("reads fresh kernel identities without shell startup and closes every query handle", async () => {
-    const { readWindowsProcessStartTimeSync: read } = await import("./windows-process-start.js");
-    expect(read(123)).toBe(expectedTime);
-    getProcessTimes.mockImplementationOnce((_handle: bigint, creation: Buffer) => {
-      creation.writeBigUInt64LE(116444736000000000n + BigInt(expectedTime + 1) * 10000n);
-      return 1;
-    });
-    expect(read(123)).toBe(expectedTime + 1);
-    getProcessTimes.mockImplementationOnce((_handle: bigint, creation: Buffer) => {
-      creation.writeBigUInt64LE(116444735999999999n);
-      return 1;
-    });
-    expect(read(123)).toBe(-1);
-    expect(openProcess.mock.calls).toEqual([
-      [0x1000, 0, 123],
-      [0x1000, 0, 123],
-      [0x1000, 0, 123],
-    ]);
-    expect(closeHandle.mock.calls).toEqual([[17n], [17n], [17n]]);
-    expect(load).toHaveBeenCalledTimes(1);
+  it("preserves millisecond precision and refreshes foreign process identities", () => {
+    expect(readWindowsProcessStartTimeSync(123)).toBe(expectedTime);
+    nativeIdentity.mockReturnValue({ startTimeMicros: (expectedTime + 1) * 1000, exited: false });
+    expect(readWindowsProcessStartTimeSync(123)).toBe(expectedTime + 1);
     expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 
-  it.each(["unavailable", "throws", "zero timestamp", "open denied"])(
-    "falls back after a native query is %s without leaking its handle",
-    async (failure) => {
-      if (failure === "open denied") {
-        openProcess.mockReturnValue(null);
-      } else {
-        getProcessTimes.mockImplementation(() => {
-          if (failure === "throws") {
-            throw new Error("native query failed");
-          }
-          return failure === "zero timestamp" ? 1 : 0;
-        });
-      }
-      const { readWindowsProcessStartTimeSync: read } = await import("./windows-process-start.js");
-      expect(read(123)).toBe(expectedTime);
-      expect(closeHandle.mock.calls).toEqual(failure === "open denied" ? [] : [[17n]]);
-      expect(spawnSyncMock).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("keeps sealed helpers independent of installed native packages", async () => {
-    vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
-    const { readWindowsProcessStartTimeSync: read } = await import("./windows-process-start.js");
-    expect(read(123)).toBe(expectedTime);
-    expect(nativeKoffiMock).not.toHaveBeenCalled();
-    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([0, -1, 1.5, 0x1_0000_0000, Number.MAX_SAFE_INTEGER, Number.NaN, Infinity])(
-    "rejects PID %s before native DWORD conversion or a shell query",
-    async (pid) => {
-      const { readWindowsProcessStartTimeSync: read } = await import("./windows-process-start.js");
-      expect(read(pid)).toBeNull();
-      expect(nativeKoffiMock).not.toHaveBeenCalled();
+  it.each([null, { exited: true }])(
+    "does not recover absent or exited owners with a shell",
+    (value) => {
+      nativeIdentity.mockReturnValue(value);
+      expect(readWindowsProcessStartTimeSync(123)).toBeNull();
       expect(spawnSyncMock).not.toHaveBeenCalled();
     },
   );
 
-  it.each([600, 1000])(
-    "charges %sms native initialization to the fallback deadline",
-    async (elapsed) => {
-      vi.useFakeTimers();
-      nativeKoffiMock.mockImplementationOnce(() => {
-        vi.advanceTimersByTime(elapsed);
-        throw new Error("native loader unavailable");
-      });
-      const { readWindowsProcessStartTimeSync: read } = await import("./windows-process-start.js");
-      expect(read(123, 1000)).toBe(elapsed === 1000 ? null : expectedTime);
-      if (elapsed === 1000) {
-        expect(spawnSyncMock).not.toHaveBeenCalled();
-      } else {
-        expect(spawnSyncMock.mock.calls[0]?.[2]).toMatchObject({ timeout: 400 });
-      }
-      // A failed load must not make later lock-owner identity reads permanently unavailable.
-      expect(read(123, 1000)).toBe(expectedTime);
-      expect(getProcessTimes).toHaveBeenCalledTimes(1);
+  it("keeps sealed helpers independent of installed native packages", () => {
+    vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
+    expect(readWindowsProcessStartTimeSync(123)).toBe(expectedTime);
+    expect(nativeIdentity).not.toHaveBeenCalled();
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([0, -1, 1.5, 0x1_0000_0000, Number.MAX_SAFE_INTEGER, Number.NaN, Infinity])(
+    "rejects PID %s before native conversion or shell query",
+    (pid) => {
+      expect(readWindowsProcessStartTimeSync(pid)).toBeNull();
+      expect(nativeIdentity).not.toHaveBeenCalled();
+      expect(spawnSyncMock).not.toHaveBeenCalled();
     },
   );
-});
 
-describe("readWindowsProcessAncestorsSync", () => {
-  const child = { pid: 41, parentPid: 40, startedAt: "639000000000000030" };
-  const parent = { pid: 40, parentPid: 39, startedAt: "639000000000000020" };
-  const grandparent = { pid: 39, parentPid: 0, startedAt: "639000000000000010" };
-
-  beforeEach(() => spawnSyncMock.mockReset());
-
-  it("reads the chain with one bounded native query and no application environment", () => {
-    spawnSyncMock.mockReturnValue({
-      status: 0,
-      stdout: JSON.stringify([child, parent, grandparent]),
+  it.each([600, 1000])("charges %sms native initialization to the fallback deadline", (elapsed) => {
+    vi.useFakeTimers();
+    nativeIdentity.mockImplementation(() => {
+      vi.advanceTimersByTime(elapsed);
+      throw new Error("native unavailable");
     });
-    expect(
-      readWindowsProcessAncestorsSync(41, 32, 700, {
-        SYSTEMROOT: "D:\\Native",
-        NODE_OPTIONS: "--synthetic-injection",
-      }),
-    ).toEqual({ pids: [40, 39], complete: true });
-    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
-    expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(
-      "D:\\Native\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-    );
-    expect(spawnSyncMock.mock.calls[0]?.[2]).toMatchObject({
-      timeout: 700,
-      maxBuffer: 1024 * 1024,
-      env: { SYSTEMROOT: "D:\\Native" },
-    });
-  });
-
-  it.each([
-    {
-      name: "reused grandparent within the same millisecond",
-      rows: [child, parent, { ...grandparent, startedAt: "639000000000000021" }],
-      expected: [40],
-    },
-    {
-      name: "unobservable parent creation time",
-      rows: [child, { ...parent, startedAt: null }, grandparent],
-      expected: [],
-    },
-    { name: "missing parent", rows: [child, grandparent], expected: [] },
-    {
-      name: "duplicate process identity",
-      rows: [child, parent, grandparent, { ...grandparent, startedAt: "639000000000000021" }],
-      expected: [],
-    },
-  ])("stops at $name", ({ rows, expected }) => {
-    spawnSyncMock.mockReturnValue({ status: 0, stdout: JSON.stringify(rows) });
-    expect(readWindowsProcessAncestorsSync(41, 32, 700)).toEqual({
-      pids: expected,
-      complete: false,
-    });
-  });
-
-  it("bounds the walk and never repeats an ancestor from a cyclic snapshot", () => {
-    spawnSyncMock.mockReturnValue({
-      status: 0,
-      stdout: JSON.stringify([
-        child,
-        { ...parent, startedAt: child.startedAt },
-        { ...grandparent, parentPid: 40, startedAt: child.startedAt },
-      ]),
-    });
-    expect(readWindowsProcessAncestorsSync(41, 1, 700)).toEqual({ pids: [40], complete: false });
-    expect(readWindowsProcessAncestorsSync(41, 32, 700)).toEqual({
-      pids: [40, 39],
-      complete: false,
-    });
-  });
-
-  it.each([
-    { status: null, error: new Error("timeout"), stdout: "" },
-    { status: 0, stdout: "not JSON" },
-  ])("does not invent ancestry after an unavailable query", (result) => {
-    spawnSyncMock.mockReturnValue(result);
-    expect(readWindowsProcessAncestorsSync(41, 32, 700)).toEqual({ pids: [], complete: false });
-    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    expect(readWindowsProcessStartTimeSync(123, 1000)).toBe(elapsed === 1000 ? null : expectedTime);
+    if (elapsed === 1000) {
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+    } else {
+      expect(spawnSyncMock.mock.calls[0]?.[2]).toMatchObject({ timeout: 400 });
+    }
   });
 });

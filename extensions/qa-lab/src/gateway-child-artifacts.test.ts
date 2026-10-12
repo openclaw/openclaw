@@ -166,9 +166,12 @@ console.log(JSON.stringify({ scratch, cache }));
     expect(JSON.parse(result.stdout)).toEqual({ targetClosed: true, siblingUsable: true });
   }, 120_000);
 
-  it.each(["agent", "shared"] as const)(
+  it.each([
+    ["agent", "tempRoot: Agent database close failed"],
+    ["shared", "tempRoot: close failed"],
+  ] as const)(
     "retains runtime on %s close failure, removes staging, and permits cleanup retry",
-    async (failedStore) => {
+    async (failedStore, expectedDiagnostic) => {
       const tempRoot = await dirs.makeTempDir("qa-cleanup-store-failure-");
       runtimeRoots.push(tempRoot);
       const stagedBundledPluginsRoot = await dirs.makeTempDir("qa-cleanup-store-plugins-");
@@ -199,7 +202,7 @@ console.log(JSON.stringify({ scratch, cache }));
         stagedBundledPluginsRoot,
       }).catch((error: unknown) => error);
       expect(outcome).toBeInstanceOf(AggregateError);
-      expect(inspect(outcome, { depth: null })).toContain("tempRoot: close failed");
+      expect(inspect(outcome, { depth: null })).toContain(expectedDiagnostic);
       expect(inspect(outcome, { depth: null })).not.toMatch(
         /synthetic-close-secret|synthetic-close-cause/,
       );

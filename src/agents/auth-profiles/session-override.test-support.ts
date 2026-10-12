@@ -26,8 +26,8 @@ const authStoreMocks = vi.hoisted(() => {
     routeResolutions: new Map(),
     store: { version: 1, profiles: {} },
   };
-  const ensureAuthProfileStore = vi.fn(() => state.store);
-  const hasAnyAuthProfileStoreSource = vi.fn(() => state.hasSource);
+  const ensureAuthProfileStoreAsync = vi.fn(async () => state.store);
+  const hasAnyAuthProfileStoreSourceAsync = vi.fn(() => state.hasSource);
   const isProfileInCooldown = vi.fn((_store: AuthProfileStore, _profileId: string) => false);
   const resolveProviderModelRoutes = vi.fn(
     ({ provider, modelId }: { provider: string; modelId?: string }) =>
@@ -35,16 +35,16 @@ const authStoreMocks = vi.hoisted(() => {
   );
   return {
     state,
-    ensureAuthProfileStore,
-    hasAnyAuthProfileStoreSource,
+    ensureAuthProfileStoreAsync,
+    hasAnyAuthProfileStoreSourceAsync,
     isProfileInCooldown,
     resolveProviderModelRoutes,
     reset() {
       state.hasSource = false;
       state.routeResolutions.clear();
       state.store = { version: 1, profiles: {} };
-      ensureAuthProfileStore.mockReset().mockImplementation(() => state.store);
-      hasAnyAuthProfileStoreSource.mockReset().mockImplementation(() => state.hasSource);
+      ensureAuthProfileStoreAsync.mockReset().mockImplementation(async () => state.store);
+      hasAnyAuthProfileStoreSourceAsync.mockReset().mockImplementation(() => state.hasSource);
       isProfileInCooldown
         .mockReset()
         .mockImplementation((_store: AuthProfileStore, _profileId: string) => false);
@@ -63,10 +63,15 @@ vi.mock("./store.js", async (importOriginal) => ({
   getRuntimeAuthProfileStoreSnapshot: () => authStoreMocks.state.store,
   findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
     authStoreMocks.state.store.profiles[profileId],
-  hasAnyAuthProfileStoreSource: authStoreMocks.hasAnyAuthProfileStoreSource,
 }));
+vi.mock("./source-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./source-check.js")>()),
+  hasAnyAuthProfileStoreSourceAsync: authStoreMocks.hasAnyAuthProfileStoreSourceAsync,
+}));
+// mock-isolation: Session override cases use the fixture store without loading host credentials.
 vi.mock("./store-runtime.js", () => ({
-  ensureAuthProfileStore: authStoreMocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: authStoreMocks.ensureAuthProfileStoreAsync,
+  loadAuthProfileStoreForRuntimeAsync: async () => authStoreMocks.state.store,
 }));
 
 vi.mock("./usage.js", () => ({
@@ -81,8 +86,7 @@ vi.mock("../../plugins/provider-model-routes.js", () => ({
   resolveProviderModelRoutes: authStoreMocks.resolveProviderModelRoutes,
 }));
 
-export const { clearSessionAuthProfileOverride, resolveSessionAuthSelection } =
-  await import("./session-override.js");
+export const { resolveSessionAuthSelection } = await import("./session-override.js");
 export { authStoreMocks };
 
 afterEach(() => {

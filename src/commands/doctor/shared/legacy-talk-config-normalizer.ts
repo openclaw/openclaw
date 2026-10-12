@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { defineLegacyConfigMigration, getRecord } from "../../../config/legacy.shared.js";
+import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { normalizeTalkRealtimeConfig, normalizeTalkSection } from "../../../config/talk.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 
@@ -79,9 +79,8 @@ function prepareVoiceCallTalkInheritance(raw: Record<string, unknown>) {
   };
 }
 
-export const LEGACY_TALK_VOICE_CALL_INHERITANCE = defineLegacyConfigMigration({
+export const LEGACY_TALK_VOICE_CALL_INHERITANCE: LegacyConfigMigrationSpec = {
   id: "talk.voice-call-realtime-inheritance",
-  describe: "Persist inherited Voice Call realtime settings under Talk",
   legacyRules: [
     {
       path: ["plugins", "entries", "voice-call", "config", "realtime"],
@@ -96,4 +95,4 @@ export const LEGACY_TALK_VOICE_CALL_INHERITANCE = defineLegacyConfigMigration({
       changes.push(...prepared.changes);
     }
   },
-});
+};

@@ -22,6 +22,14 @@ const modelRunStartupPolicy: CliCommandCatalogEntry["policy"] = {
     options?.gateway === true && options.local !== true ? "validate" : "run",
 };
 
+const serviceInstallStartupPolicy: CliCommandCatalogEntry["policy"] = {
+  configGuard: ({ options }) =>
+    options?.expectedRuntimePin !== undefined || options?.restoreServiceCli !== undefined
+      ? "defer"
+      : "run",
+  networkProxy: "bypass",
+};
+
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
@@ -116,6 +124,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never" },
   },
+  ...[
+    ["agents", "add"],
+    ["agents", "team", "create"],
+  ].map((commandPath): CliCommandCatalogEntry => ({
+    commandPath,
+    exact: true,
+    policy: { configGuard: "defer", loadPlugins: "never" },
+  })),
   ...["unbind", "set-identity", "delete"].map((subcommand): CliCommandCatalogEntry => ({
     commandPath: ["agents", subcommand],
     exact: true,
@@ -172,7 +188,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "gateway-status" },
   },
-  ...["call", "suspend", "resume"].map((subcommand): CliCommandCatalogEntry => ({
+  {
+    commandPath: ["gateway", "call"],
+    exact: true,
+    policy: PASSIVE_STARTUP_POLICY,
+  },
+  ...["suspend", "resume"].map((subcommand): CliCommandCatalogEntry => ({
     commandPath: ["gateway", subcommand],
     exact: true,
     policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
@@ -190,7 +211,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", networkProxy: "bypass" },
     route: { id: "gateway-health" },
   },
-  ...["install", "probe", "start"].map((subcommand): CliCommandCatalogEntry => ({
+  { commandPath: ["gateway", "install"], exact: true, policy: serviceInstallStartupPolicy },
+  ...["probe", "start"].map((subcommand): CliCommandCatalogEntry => ({
     commandPath: ["gateway", subcommand],
     exact: true,
     policy: { networkProxy: "bypass" },
@@ -242,9 +264,20 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["config", "unset"],
     exact: true,
-    policy: { configGuard: "run", ensureCliPath: false, networkProxy: "bypass" },
+    policy: {
+      configGuard: "defer",
+      loadPlugins: "never",
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
     route: { id: "config-unset" },
   },
+  ...["set", "patch"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["config", subcommand],
+    exact: true,
+    // The command acquires state ownership before config validation can write ancillary state.
+    policy: { configGuard: "defer", loadPlugins: "never", networkProxy: "bypass" },
+  })),
   {
     commandPath: ["models"],
     exact: true,
@@ -307,6 +340,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["cron"], policy: { configGuard: "skip", networkProxy: "bypass" } },
   { commandPath: ["dashboard"], policy: { networkProxy: "bypass" } },
   { commandPath: ["daemon"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["daemon", "install"], exact: true, policy: serviceInstallStartupPolicy },
   ...["status", "stop", "restart", "uninstall"].map((subcommand): CliCommandCatalogEntry => ({
     commandPath: ["daemon", subcommand],
     exact: true,
@@ -322,10 +356,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["worktrees"],
     policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
-  },
-  {
-    commandPath: ["fleet"],
-    policy: { loadPlugins: "never", networkProxy: "bypass" },
   },
   {
     commandPath: ["doctor"],

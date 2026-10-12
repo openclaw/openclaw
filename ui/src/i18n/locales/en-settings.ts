@@ -3,6 +3,47 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  talkPage: {
+    intro: "Configure realtime voice providers, models, and speaker voices.",
+    voiceSection: {
+      title: "Realtime voice",
+      description:
+        "Continuous speech conversations with your agent. The pickers below write talk.realtime settings; the full form further down covers everything else.",
+    },
+    status: {
+      title: "Status",
+      ready: "Ready",
+      notReady: "Not configured",
+      unavailable: "Unavailable",
+      unavailableHint: "Connect to the Gateway to check realtime voice readiness.",
+      activeProvider: "Active provider: {provider}",
+      noProvider: "No realtime voice provider is configured yet.",
+    },
+    provider: {
+      title: "Provider",
+      description: "Auto picks the first provider with working credentials.",
+      auto: "Auto",
+    },
+    model: {
+      title: "Model",
+      description: "Realtime voice model for browser Talk sessions.",
+      default: "Provider default",
+      defaultNamed: "Default ({model})",
+    },
+    voice: {
+      title: "Speaker voice",
+      description: "Voice used for spoken replies. GPT-Live locks the voice once a call starts.",
+      default: "Provider default",
+      unsupported: "unsupported",
+      unsupportedDefault:
+        "This saved voice is unavailable for the selected route. Provider default will be used.",
+    },
+    gptLive: {
+      title: "GPT-Live",
+      hint: "Released browser/Gateway-owned WebRTC tries OAuth first and falls back to a Platform API key. Direct backend sockets and unlisted or private routes require Platform API-key access. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
+      ready: "Ready",
+    },
+  },
   configForm: {
     sections: {
       env: {
@@ -411,7 +452,7 @@ const enSettings = {
       noImage: "No image",
       coldOnly: "Cold only",
       captureUnsupportedHint:
-        "Workers use an existing compatible snapshot when one is available and otherwise provision cold. Each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on this profile to stop capture attempts.",
+        "Workers use an existing compatible snapshot when one is available and otherwise provision cold. Capture attempts are skipped until warmImages.refreshAfter has elapsed since the refusal. Set settings.warmImage: false on this profile to stop capture attempts.",
       pending: "Pending",
       created: "Created {age}",
       lastUsed: "Last used {age}",
@@ -1350,14 +1391,63 @@ const enSettings = {
       theme: "Theme",
       chooseTheme: "Choosing a different theme resets its fonts and accent colors.",
       themeUnavailable: "{id} is unavailable. Using Claw until the theme becomes available again.",
+      background: {
+        title: "Background",
+        hint: "Choose the artwork behind your workspace. This changes only your view.",
+        source: "Artwork",
+        presentation: "Style",
+        faded: "Faded",
+        fadedHint: "Fades into a quiet reading area.",
+        "full-bleed": "Full bleed",
+        "full-bleedHint": "Edge-to-edge artwork with text contrast protected.",
+        placementOffHint: "Both pages are off. Adjust the preview above, then enable a page here.",
+        noneHint: "None keeps both pages plain without removing your saved image or choices.",
+        visibilityZeroHint: "At 0%, the artwork is hidden. Increase visibility to show it again.",
+        none: "None",
+        theme: "Theme artwork",
+        custom: "Custom image",
+        themeChoice: "Theme",
+        customChoice: "Image",
+        choose: "Choose image…",
+        replace: "Replace…",
+        remove: "Remove",
+        imageAlt: "Your background image",
+        formats: "JPEG, PNG, WebP · up to 8 MiB",
+        newSession: "New session page",
+        sessions: "Conversations",
+        visibility: "Image visibility",
+        visibilityHint: "Adjust to preview. Esc to dismiss.",
+
+        browserOnly: "Saved in this browser. Connect with a personal profile to upload an image.",
+        profileRequired: "Connect with a personal profile to save a custom image.",
+        readOnly: "Image uploads require permission to edit your profile.",
+        uploading: "Preparing your image…",
+        removing: "Removing your image…",
+        saved: "Background image saved.",
+        saveFailed: "Could not save your background. Check your connection and try again.",
+        removed: "Background image removed.",
+        unavailable:
+          "Your background image could not be loaded. Choose another image or try again.",
+        invalidFile: "Choose a JPEG, PNG, or WebP image within the upload size limit.",
+        conflict: "Your background changed elsewhere. Check the current selection and try again.",
+        private: "Only your view · saved to your profile.",
+      },
       typography: "Typography",
       fonts: {
         ui: "Interface",
         chat: "Chat prose",
+        terminal: "Terminal font",
+        terminalDefault: "JetBrains Mono + Nerd Font symbols",
+        terminalHint:
+          "Bundled JetBrains Mono + Nerd Font symbols by default. To override, enter a monospace font installed on this computer. Missing fonts use the default; saved in this browser.",
+        terminalLigatures:
+          "The terminal currently renders characters individually; programming ligatures are not supported.",
+        terminalInvalid: "Enter one font family name, without quotes, commas, or CSS declarations.",
+        terminalReset: "Use default",
         themeDefault: "Theme default",
         themeFace: "{theme} · {face}",
         system: "System",
-        previewCaption: "OpenClaw · A little clarity goes a long way",
+        brandedPreviewCaption: "{brand} · A little clarity goes a long way",
         previewProse:
           "Good typography makes room for the conversation. Choose a face that feels comfortable to read.",
         previewCode: 'const greeting = "Hello, world!";',
@@ -1407,6 +1497,23 @@ const enSettings = {
       inlineHintBefore: "Click",
       inlineHintAfter:
         "to add one browser-local tweakcn theme. In tweakcn, use Share and paste the copied link here.",
+      tabIcon: {
+        title: "Browser tab icon",
+        source: "Source",
+        sourceLabel: "Browser tab icon source",
+        default: "Default",
+        agent: "Agent avatar",
+        shape: "Shape",
+        shapeLabel: "Agent avatar shape",
+        square: "Square",
+        rounded: "Rounded corners",
+        circle: "Circle",
+        lobsterdex: "Lobsterdex",
+        lobster: "Lobster",
+        empty: "No lobsters unlocked in this browser yet.",
+        localCollection: "Unlocked in this browser. Your collection is not synced.",
+        unavailable: "This lobster is not unlocked in this browser. Using Default until it is.",
+      },
       textSize: "Text size",
     },
     chatPrefs: {
@@ -1418,7 +1525,7 @@ const enSettings = {
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
       showTaskProgress: "Show task progress cards",
       showTaskProgressHint:
-        "Show task progress in the chat composer. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
+        "Show task progress in chat Details and embedded composers. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
       openLinksExternally: "Open links outside OpenClaw",
       openLinksExternallyHint: "Use your browser instead of the OpenClaw built-in browser.",
       openLinksExternallyStorage: "Saved in this browser only.",
@@ -1745,6 +1852,7 @@ const enSettings = {
 export const registerSettingsEnglish = Object.assign(
   () => {
     Object.assign(en.agentTools, enSettings.agentTools);
+    Object.assign(en.talkPage, enSettings.talkPage);
     Object.assign(en.configForm.sections, enSettings.configForm.sections);
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;

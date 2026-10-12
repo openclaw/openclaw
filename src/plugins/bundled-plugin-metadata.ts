@@ -114,12 +114,15 @@ export function listBundledPluginMetadata(params?: {
           })
         : manifestResult.manifest.channelConfigs;
 
+    const packageName = trimBundledPluginString(packageJson?.name);
+    const packageVersion = trimBundledPluginString(packageJson?.version);
+    const packageDescription = trimBundledPluginString(packageJson?.description);
     entries.push({
       dirName,
       idHint: deriveBundledPluginIdHint({
         entryPath: sourceEntry,
         manifestId: manifestResult.manifest.id,
-        packageName: trimBundledPluginString(packageJson?.name),
+        packageName,
         hasMultipleExtensions: extensions.length > 1,
       }),
       source: {
@@ -129,15 +132,9 @@ export function listBundledPluginMetadata(params?: {
       ...(setupSource ? { setupSource } : {}),
       ...(publicSurfaceArtifacts ? { publicSurfaceArtifacts } : {}),
       ...(runtimeSidecarArtifacts ? { runtimeSidecarArtifacts } : {}),
-      ...(trimBundledPluginString(packageJson?.name)
-        ? { packageName: trimBundledPluginString(packageJson?.name) }
-        : {}),
-      ...(trimBundledPluginString(packageJson?.version)
-        ? { packageVersion: trimBundledPluginString(packageJson?.version) }
-        : {}),
-      ...(trimBundledPluginString(packageJson?.description)
-        ? { packageDescription: trimBundledPluginString(packageJson?.description) }
-        : {}),
+      ...(packageName ? { packageName } : {}),
+      ...(packageVersion ? { packageVersion } : {}),
+      ...(packageDescription ? { packageDescription } : {}),
       ...(packageManifest ? { packageManifest } : {}),
       manifest: {
         ...manifestResult.manifest,

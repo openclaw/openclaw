@@ -1,12 +1,17 @@
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import {
+  readExecRequestOwners,
+  withExecRequestOwners,
+} from "../../../infra/exec-request-context.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { recordSessionCreated } from "../../../sessions/session-created.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
 import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
+import { prepareNativeDelegatedToolPolicy } from "../../delegated-tool-policy.js";
 import {
   runSpawnPipeline,
   summarizeSpawnError,
@@ -63,7 +68,11 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
-  const assertActive = ctx.assertActive;
+  let assertDelegationCurrent: (() => void) | undefined;
+  const assertActive = () => {
+    ctx.assertActive?.();
+    assertDelegationCurrent?.();
+  };
   const promptedAt = Date.now();
   const task = params.task;
   const label = params.label?.trim() || "";
@@ -75,40 +84,32 @@ export async function spawnSubagentDirect(
     return requestResolution.result;
   }
   const {
-    request: {
-      taskName,
-      spawnMode,
-      cleanup,
-      expectsCompletionMessage,
-      completionRequesterSessionId,
-      completionRequesterLifecycleRevision,
-    },
-    runtime: {
-      hookRunner,
-      cfg,
-      runTimeoutSeconds,
-      contextMode,
-      requesterInternalKey,
-      ownership,
-      requesterAgentId,
-      targetAgentId,
-    },
-    swarm: {
-      config: swarmConfig,
-      groupId: swarmGroupId,
-      schedulerGroupKey: swarmSchedulerGroupKey,
-      launchReplayKey: swarmLaunchReplayKey,
-      soleImplicitMember,
-      reservationPending,
-      reservation: swarmReservation,
-    },
-    admission: {
-      resolve: resolveAdmission,
-      initial: admission,
-      reservation: admissionReservation,
-      childDepth,
-      maxSpawnDepth,
-    },
+    taskName,
+    spawnMode,
+    cleanup,
+    expectsCompletionMessage,
+    completionRequesterSessionId,
+    completionRequesterLifecycleRevision,
+    hookRunner,
+    cfg,
+    runTimeoutSeconds,
+    contextMode,
+    requesterInternalKey,
+    ownership,
+    requesterAgentId,
+    targetAgentId,
+    swarmConfig,
+    swarmGroupId,
+    swarmSchedulerGroupKey,
+    swarmLaunchReplayKey,
+    soleImplicitMember,
+    reservationPending,
+    swarmReservation,
+    resolveAdmission,
+    admission,
+    admissionReservation,
+    childDepth,
+    maxSpawnDepth,
     childIdem,
   } = requestResolution.resolved;
   let threadBindingReady = false;
@@ -124,7 +125,16 @@ export async function spawnSubagentDirect(
   let provisionalCleanupOpen = true;
   let contextEnginePreparation: PreparedContextEngineSubagentSpawn | undefined;
   try {
-    assertActive?.();
+    const delegation = prepareNativeDelegatedToolPolicy({
+      config: cfg,
+      requesterAgentId,
+      targetAgentId,
+      requesterSessionKey: requesterInternalKey,
+      context: ctx,
+    });
+    const delegatedToolPolicy = delegation.policy;
+    assertDelegationCurrent = delegation.assertCurrent;
+    assertActive();
     if (reservationPending && !swarmReservation?.isCurrent()) {
       return { status: "error", error: "Collector FIFO reservation is no longer current" };
     }
@@ -137,7 +147,7 @@ export async function spawnSubagentDirect(
     }
     const childPlan = await resolveSubagentChildPlan({
       request: params,
-      ctx,
+      ctx: { ...ctx, assertActive },
       cfg,
       requesterInternalKey,
       requesterAgentId,
@@ -165,6 +175,11 @@ export async function spawnSubagentDirect(
     } = childPlan.resolved;
     let { childSessionOrigin } = childPlan.resolved;
     const { resolvedModel, thinkingOverride } = plan;
+    const sessionError = (error: string): SpawnSubagentResult => ({
+      status: "error",
+      error,
+      childSessionKey,
+    });
     const initialSession = await createInitialSubagentSession({
       assertActive,
       cfg,
@@ -185,17 +200,15 @@ export async function spawnSubagentDirect(
       admissionPatch: admission.childSessionPatch,
       inheritedToolAllowlist: ctx.inheritedToolAllowlist,
       inheritedToolDenylist: ctx.inheritedToolDenylist,
+      inheritedToolPolicySource: ctx.inheritedToolPolicySource,
+      delegatedToolPolicy,
       modelPatch: plan.initialSessionPatch,
       swarmGroupId,
       collect: params.collect === true,
       outputSchema: params.outputSchema,
     });
     if (initialSession.status === "error") {
-      return {
-        status: "error",
-        error: initialSession.error,
-        childSessionKey,
-      };
+      return sessionError(initialSession.error);
     }
     let provisionalSessionIdentity = {
       expectedSessionId: initialSession.entry?.sessionId,
@@ -238,11 +251,7 @@ export async function spawnSubagentDirect(
     });
     if (preparedSpawnContext.status === "error") {
       await cleanupCreatedSession();
-      return {
-        status: "error",
-        error: preparedSpawnContext.error,
-        childSessionKey,
-      };
+      return sessionError(preparedSpawnContext.error);
     }
     const childEntry = preparedSpawnContext.childEntry ?? initialSession.entry;
     if (childEntry) {
@@ -271,11 +280,7 @@ export async function spawnSubagentDirect(
       });
       if (bindResult.status === "error") {
         await cleanupCreatedSession();
-        return {
-          status: "error",
-          error: bindResult.error,
-          childSessionKey,
-        };
+        return sessionError(bindResult.error);
       }
       threadBindingReady = true;
       hasBoundThreadDeliveryOrigin = hasDeliveryTargetFields(bindResult.deliveryOrigin);
@@ -527,6 +532,7 @@ export async function spawnSubagentDirect(
       },
     };
     const pipelineResult = await runSpawnPipeline({
+      ...withExecRequestOwners({}, readExecRequestOwners(ctx)),
       adapter,
       assertActive,
       admissionReservation,

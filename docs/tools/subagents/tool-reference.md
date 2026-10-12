@@ -14,10 +14,10 @@ to fork the current transcript. Thread-bound spawns follow
 `threadBindings.defaultSpawnContext`, which defaults to `fork`. Pass
 `context: "isolated"` explicitly when the child must start with clean context.
 
-| Mode       | When to use it                                                                                                                         | Behavior                                                                                |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `isolated` | Fresh research, independent implementation, slow tool work, or anything that can be briefed in the task text                           | Creates a clean child transcript. Default for non-thread spawns; keeps token use lower. |
-| `fork`     | Work that depends on the current conversation, prior tool results, or nuanced instructions already present in the requester transcript | Branches the requester transcript into the child session before the child starts.       |
+| Mode       | When to use it                                                                                                                          | Behavior                                                                                |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `isolated` | Fresh research, independent implementation, slow tool work, or anything that can be briefed in the task text                            | Creates a clean child transcript. Default for non-thread spawns; keeps token use lower. |
+| `fork`     | Work that depends on the current conversation, prior tool results, or detailed instructions already present in the requester transcript | Branches the requester transcript into the child session before the child starts.       |
 
 Use `fork` sparingly. It is for context-sensitive delegation, not a
 replacement for writing a clear task prompt.
@@ -46,6 +46,20 @@ Channel/group, provider, sandbox, and per-agent allow/deny policies can
 still remove the tool after the profile stage. Use `/tools` from the same
 session to confirm the effective tool list.
 
+Senders restricted by a channel, group, or per-sender tool policy may start only
+hidden helpers of the same agent. `visible: true` and another `agentId` are
+refused, including for ACP spawns. Hidden helpers inherit the restricted tools,
+workspace, and session root; they cannot select another `cwd`, project, or managed
+worktree. ACP additionally refuses a spawn when it cannot enforce the inherited
+tools or filesystem restrictions; use `runtime: "subagent"` in that case.
+Ordinary global, agent, and profile tool policies alone do not impose this rule.
+Owner-authorized automations retain their own scheduling policy and workspace;
+ordinary guests cannot gain that authority through a tool allowlist.
+
+Children created before this rule was introduced lack sender-policy provenance.
+Their existing tool allow/deny snapshots still apply, but start fresh helpers to
+apply the inherited spawn limit.
+
 **Defaults:**
 
 - **Model:** same-agent native sub-agents inherit the caller's active model, including session and one-shot overrides, unless you set `agents.defaults.subagents.model` (or per-agent `agents.entries.*.subagents.model`). The inherited model ID is preserved exactly, even when it contains a provider prefix. Cross-agent spawns use the target agent's configured model. ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
@@ -53,7 +67,7 @@ session to confirm the effective tool list.
 - **Fast mode:** with swarm enabled, native sub-agents inherit the requester's setting only when the resolved child provider and model match the requester's active model. A different child model uses its own defaults. Explicit `sessions_spawn.fastMode` values (`true`, `false`, or `"auto"`) take precedence; aliases resolving to the same model preserve inheritance.
 - **Run timeout:** pass `runTimeoutSeconds` to set a timeout for a specific native, ACP, or visible sub-agent run. When omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` if configured; otherwise it falls back to `0` (no timeout). An explicit `0` disables the timeout for that run.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
-- **Task delivery:** hidden and visible native sub-agents receive their delegated task in a user message appended after any forked history. Model-only runtime context identifies the current child assignment and treats inherited conversation as background context; the Control UI displays only the task text. The hidden sub-agent system prompt carries runtime rules and routing context, not a duplicate of the task.
+- **Task delivery:** hidden and visible native sub-agents receive their delegated task in a user message appended after any forked history. Model-only runtime context identifies the current assignment; the Control UI displays only the task text. Hidden sub-agents receive exact child and requester session identities, their label, and requester channel alongside the assignment. Their system prompt carries shared runtime rules, keeping its prefix reusable across equivalent child spawns. Inherited conversation remains background context.
 
 Guests with `operator.sessions.write` can launch hidden native children for their
 own sandboxed work and receive private parent completions. The child keeps the
@@ -249,7 +263,7 @@ their latest assistant turn back to the requester; external delivery stays with
 the parent/requester agent.
 </Warning>
 
-With `visible: true`, `group`, `model`, `cwd`, `projectId`, `projectGitUrl`, and a same-agent `context: "fork"` are supported. Reserve this durable mode for a separate session the user requests or needs to revisit and steer independently; it appears in the sidebar when the web UI is available and still works without it. Internal QA, coding, review, and test lanes stay ordinary subagents even when they produce a PR or report or need isolated source work. Hidden native workers can request a managed worktree with `worktree: true`; an isolated checkout does not require a sidebar session. Pass `group` to place the new session in that sidebar group atomically; omitted or blank values leave it ungrouped. A sandboxed target restricts `cwd` to that agent's workspace. Non-admin callers may use `cwd` only inside a configured agent workspace. With `worktree: true`, omitting `cwd`, `projectId`, and `projectGitUrl` inherits the same-agent parent's live managed repository or directly selected registered project and creates a separate worktree. Other spawns use the target agent workspace. For another repository, omit `cwd` and select exactly one of `projectId` or `projectGitUrl`; both reuse the existing New session preparation flow at ordinary write scope. Add `worktree: true` for a separate managed worktree. Project selection does not bypass the target sandbox or grant permission to run worktree setup scripts. Do not replace a rejected persistent spawn with the synchronous `openclaw agent` CLI, whose command deadline defaults to 600 seconds. Thread binding, `mode: "session"`, thinking overrides, `lightContext`, and attachment staging are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The default `mode: "run"`, empty `attachments`, and an empty `attachAs.mountPath` are accepted without changing that behavior. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `all` scope covers sessions across agents on the Gateway for unsandboxed callers. Cross-agent access is on by default and governed by `tools.agentToAgent`; use `allow` to restrict agent pairs or set `enabled: false` to block ordinary cross-agent access (requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`). Set `agent` for same-agent-only access, `tree` for current plus spawned scope (main retains its same-agent exception), or `self` for current-session-only access. Sandbox spawned-only clamps still apply. Cross-agent owned children are included by `tree`, not `agent`; preserve explicit `tree` for that workflow. See [Session tools](/concepts/session-tool#visibility) and [Managed worktrees](/concepts/managed-worktrees).
+With `visible: true`, `group`, `model`, `cwd`, `projectId`, `projectGitUrl`, and a same-agent `context: "fork"` are supported. Reserve this durable mode for a separate session the user requests or needs to revisit and steer independently; it appears in the sidebar when the web UI is available and still works without it. Internal QA, coding, review, and test lanes stay ordinary subagents even when they produce a PR or report or need isolated source work. Hidden native workers can request a managed worktree with `worktree: true`; an isolated checkout does not require a sidebar session. Pass `group` to place the new session in that sidebar group atomically; omitted or blank values leave it ungrouped. A sandboxed target restricts `cwd` to that agent's workspace. Non-admin callers may use `cwd` only inside a configured agent workspace. With `worktree: true`, omitting `cwd`, `projectId`, and `projectGitUrl` inherits the same-agent parent's live managed repository or directly selected registered project and creates a separate worktree. Other spawns use the target agent workspace. For another repository, omit `cwd` and select exactly one of `projectId` or `projectGitUrl`; both reuse the existing New session preparation flow at ordinary write scope. Add `worktree: true` for a separate managed worktree. Project selection does not bypass the target sandbox or grant permission to run worktree setup scripts. Do not replace a rejected persistent spawn with the synchronous `openclaw agent` CLI, whose command deadline defaults to 600 seconds. Thread binding, `mode: "session"`, thinking overrides, `lightContext`, and attachment staging are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The default `mode: "run"`, empty `attachments`, and an empty `attachAs.mountPath` are accepted without changing that behavior. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn, except for an operator-configured [deny-only target delegation grant](/tools/subagents/tool-policy#delegate-tools-to-a-coding-agent). Session listing and addressing obey `tools.sessions.visibility`; the default `all` scope covers sessions across agents on the Gateway for unsandboxed callers. Cross-agent access is on by default and governed by `tools.agentToAgent`; use `allow` to restrict agent pairs or set `enabled: false` to block ordinary cross-agent access (requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`). Set `agent` for same-agent-only access, `tree` for current plus spawned scope (main retains its same-agent exception), or `self` for current-session-only access. Sandbox spawned-only clamps still apply. Cross-agent owned children are included by `tree`, not `agent`; preserve explicit `tree` for that workflow. See [Session tools](/concepts/session-tool#visibility) and [Managed worktrees](/concepts/managed-worktrees).
 
 Hidden native children accept `projectId`, `worktree: true`, `worktreeName`, and `worktreeBaseRef`, including with `completionTarget: "parent"`. They keep the native subagent registry, completion routing, and `cleanup` behavior. Managed preparation records the same session worktree binding used by visible sessions; the first turn starts only when that checkout is ready.
 
@@ -286,11 +300,13 @@ Code Mode, and do not send completion notifications.
 loops over `subagents`, `sessions_list`, `sessions_history`, shell
 `sleep`, or process polling just to detect child completion.
 
-When an earlier async tool call in the same model response has results the model
-has not received yet, OpenClaw defers `sessions_yield` and keeps the turn active.
-Finish the model response so the next request can deliver those results, then
-yield only if external work still requires waiting. This applies even when the
-tool has already finished and its result appears in the transcript.
+With Astra async tools, `sessions_yield` stays a synchronous call, so the model
+response pauses at the yield. When an earlier async tool call in that response
+has results the model has not received yet, OpenClaw defers the yield and keeps
+the turn active. The next request delivers those results ahead of the deferred
+yield result; the model yields again only if external work still requires
+waiting. This applies even when the tool has already finished and its result
+appears in the transcript.
 
 Use the optional `message` field for private context that the resumed turn
 should receive. OpenClaw sends a default waiting reply when an interactive
@@ -314,6 +330,11 @@ a polling loop just to wait for completion.
 A sub-agent can also explicitly set `waitFor: "message"` to wait for an incoming
 continuation about external work, such as a remote job it does not drive itself.
 This does not schedule that message; an operator or integration must send it.
+This applies to both visible and hidden native children, based on the active
+registered task, not the session key format. Root sessions, collectors, stopped
+tasks, and superseded generations cannot claim a child message wait. Separate
+admitted follow-ups in the same child session remain independent tasks. A quiet
+native child can pause without acquiring an announced completion or pause notice.
 Without a real pending child/runtime completion or this explicit message intent,
 yield is rejected. Return completed work as the normal final response:
 `sessions_yield` is not a final-result submission. An accepted yield pauses
@@ -325,7 +346,9 @@ or a default "Paused awaiting continuation." line. The acknowledgment is
 presented as child-provided data using the same escaping as completion results. The
 notice is distinct from a completion and uses the requester's existing message
 queue policy if it is already running. It does not resume the child: send the
-continuation with `sessions_send` to the named child session. Yielding again in
+continuation to the named child session through an authorized caller with
+`sessions_send`. Owning a child does not grant that tool; the child messaging
+restrictions still apply. Yielding again in
 the requester does not repeat an already delivered pause notice. A default
 follow-up already admitted on the child's session while the child was still
 yielding continues it instead, so no notice is sent. A follow-up with its own
@@ -358,7 +381,9 @@ returns `status: "nothing_pending"`: guidance for the model, not a tool failure,
 so the conversation gets no failure warning. Detached `image_generate`,
 `video_generate`, and `music_generate` runs deliver their result as a later
 turn; a turn that ends with such a run in flight and no final reply stays
-pending instead of reporting a missing reply.
+pending instead of reporting a missing reply. Its waiting reply is the standard
+waiting status, or on Telegram and Discord the turn's visible progress card, which
+the result replaces; an undelivered result leaves the card showing the failed run.
 
 The controlling parent resumes a paused native child with an ordinary
 `sessions_send` continuation. The runtime preserves the original task and its

@@ -53,6 +53,7 @@ let versionClock = INITIAL_SKILLS_SNAPSHOT_VERSION;
 let globalVersion = INITIAL_SKILLS_SNAPSHOT_VERSION;
 let sourceClock = INITIAL_SKILLS_SNAPSHOT_VERSION;
 let globalSourceVersion = sourceClock;
+let skillRootDiscoveryEpoch = 0;
 let listenerErrorHandler: ((err: unknown) => void) | undefined;
 
 function bumpVersion(current: number): number {
@@ -209,6 +210,13 @@ export function bumpSkillsSnapshotVersion(params?: {
     reason: params?.reason ?? "manual",
     changedPath: params?.changedPath,
   };
+  if (
+    event.reason === "manual" ||
+    event.reason === "workshop" ||
+    event.reason === "config-change"
+  ) {
+    skillRootDiscoveryEpoch += 1;
+  }
   // Availability is an owner fact even when the last content fingerprint is
   // unchanged; remote subscribers need it to reconcile later preparations.
   const semanticChange =
@@ -283,6 +291,10 @@ export function getSkillsSourceVersion(workspaceDir: string, scope?: SkillsSourc
   return Math.max(globalSourceVersion, readSourceVersion(discoveryVersions, workspaceDir, scope));
 }
 
+export function getSkillRootDiscoveryEpoch(): number {
+  return skillRootDiscoveryEpoch;
+}
+
 export function getSkillsResourceVersion(workspaceDir: string, scope?: SkillsSourceScope): number {
   return Math.max(
     getSkillsSourceVersion(workspaceDir, scope),
@@ -307,6 +319,7 @@ export function shouldRefreshSnapshotForVersion(
 }
 
 export function resetSkillsRefreshStateForTest(): void {
+  skillRootDiscoveryEpoch = 0;
   listeners.clear();
   workspaceVersions.clear();
   for (const versions of [discoveryVersions, supportingFileVersions]) {

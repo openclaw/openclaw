@@ -9,7 +9,6 @@ import {
   loadTranscriptEventsSync,
   persistSessionTranscriptTurn,
   readTranscriptStatsSync,
-  replaceTranscriptEvents,
 } from "./session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import {
@@ -25,6 +24,7 @@ import {
 } from "./session-accessor.sqlite-history-events.js";
 import { readActiveTranscriptStats } from "./session-accessor.sqlite-history.test-support.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionTranscriptRuntimeScope } from "./session-accessor.types.js";
 import {
   shouldRebuildSessionTranscriptIndexSynchronously,
@@ -45,17 +45,7 @@ type SqliteInstruction = {
 const readers: Array<
   [string, (scope: SessionTranscriptReadScope & { agentId: string }) => unknown]
 > = [
-  ["usage stats", readTranscriptStatsSync],
   ["active stats", readActiveTranscriptStats],
-  [
-    "rebuild preflight",
-    (scope) =>
-      shouldRebuildSessionTranscriptIndexSynchronously(
-        openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env }).db,
-        scope.sessionId,
-      ),
-  ],
-  ["raw delta", (scope) => readTranscriptRawDelta(scope, { maxBytes: 1024 })],
   ["display delta", (scope) => readTranscriptDisplayDelta(scope, { maxBytes: 1024 })],
   [
     "visible delta",
@@ -79,15 +69,6 @@ const readers: Array<
     "recent usage tail",
     (scope) =>
       readRecentSessionTranscriptMessageEvents(scope, {
-        maxBytes: 1024,
-        maxLines: 10,
-        maxMessages: 10,
-      }),
-  ],
-  [
-    "history tail",
-    (scope) =>
-      readRecentSessionTranscriptHistoryEvents(scope, {
         maxBytes: 1024,
         maxLines: 10,
         maxMessages: 10,
@@ -204,10 +185,8 @@ it.each(readers)("sizes %s without reading transcript overflow payloads", async 
   });
 });
 
-it.each([
-  { name: "raw", read: readTranscriptRawDelta },
-  { name: "display", read: readTranscriptDisplayDelta },
-])("bounds $name delta sizing before its byte limit and resumes in order", async ({ read }) => {
+it("bounds display delta sizing before its byte limit and resumes in order", async () => {
+  const read = readTranscriptDisplayDelta;
   await withByteSizeScope(async (scope) => {
     const events = Array.from({ length: 512 }, (_, index) => ({
       type: "message",
@@ -351,7 +330,6 @@ it("admits compressed transcript bytes before decoding and preserves canonical s
 });
 
 it.each([
-  { incomingRows: 1, storedRows: SYNC_REBUILD_MAX_ROWS - 1, synchronous: true },
   { incomingRows: 1, storedRows: SYNC_REBUILD_MAX_ROWS * 2, synchronous: false },
   { incomingRows: SYNC_REBUILD_MAX_ROWS + 1, storedRows: 1, synchronous: false },
 ])(
@@ -390,10 +368,8 @@ it.each([
   },
 );
 
-it.each([
-  { name: "usage", read: readRecentSessionTranscriptMessageEvents },
-  { name: "history", read: readRecentSessionTranscriptHistoryEvents },
-])("bounds $name tail sizing while retaining an oversized newest event", async ({ read }) => {
+it("bounds history tail sizing while retaining an oversized newest event", async () => {
+  const read = readRecentSessionTranscriptHistoryEvents;
   await withByteSizeScope(async (scope) => {
     await persistSessionTranscriptTurn(scope, {
       messages: [

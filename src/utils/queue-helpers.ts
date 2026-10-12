@@ -1,19 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
-/**
- * Shared queue overflow, debounce, and collection helpers.
- *
- * Queue owners use these helpers to cap pending work, summarize dropped items,
- * debounce drains, and force individual collection when cross-channel ordering matters.
- */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { QueueDropPolicy } from "../config/types.queue.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 
 type QueueSummaryState = {
   droppedCount: number;
   summaryLines: string[];
 };
-
-type QueueDropPolicy = "summarize" | "old" | "new";
 
 type QueueState<T> = QueueSummaryState & {
   items: T[];
@@ -89,7 +82,6 @@ type DrainQueueItemOptions<T> = {
   onDiscard?: (item: T) => void;
 };
 
-/** Apply overflow policy before enqueueing another item. */
 export function applyQueueDropPolicy<T>(params: {
   queue: QueueState<T>;
   summarize: (item: T) => string;
@@ -149,7 +141,6 @@ export function applyQueueDropPolicy<T>(params: {
   return true;
 }
 
-/** Wait until the queue has been quiet for its debounce window. */
 export function waitForQueueDebounce(
   queue: {
     debounceMs: number;
@@ -203,7 +194,6 @@ export function waitForQueueDebounce(
   });
 }
 
-/** Mark one queue as draining unless another drain is already active. */
 export function beginQueueDrain<T extends { draining: boolean }>(
   map: Map<string, T>,
   key: string,
@@ -225,7 +215,6 @@ export function removeQueuedItemsByRef<T>(items: T[], processed: readonly T[]): 
   }
 }
 
-/** Run and remove the next queued item, returning false when empty. */
 export async function drainNextQueueItem<T>(
   items: T[],
   run: (item: T) => Promise<void>,
@@ -254,7 +243,6 @@ export async function drainNextQueueItem<T>(
   return true;
 }
 
-/** Drain one collect step using mutable queue collection state. */
 export async function drainCollectQueueStep<T>(params: {
   collectState: { forceIndividualCollect: boolean };
   isCrossChannel: boolean;
@@ -273,7 +261,6 @@ export async function drainCollectQueueStep<T>(params: {
   return drained ? "drained" : "empty";
 }
 
-/** Render a collect prompt from queued items and optional overflow summary. */
 export function buildCollectPrompt<T>(params: {
   title: string;
   items: T[];
@@ -290,7 +277,6 @@ export function buildCollectPrompt<T>(params: {
   return blocks.join("\n\n");
 }
 
-/** Return true when queued items span keys or explicitly mark cross-channel state. */
 export function hasCrossChannelItems<T>(
   items: T[],
   resolveKey: (item: T) => { key?: string; cross?: boolean },

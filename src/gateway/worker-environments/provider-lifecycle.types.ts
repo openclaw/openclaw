@@ -118,8 +118,6 @@ export type WorkerProviderLifecycleOptions = Omit<
     run: (signal: AbortSignal) => Promise<T>,
   ) => Promise<T>;
   callProvider: <T>(environmentId: string, run: () => Promise<T>, timeoutMs?: number) => Promise<T>;
-  inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) => boolean;
-  isServiceError: (error: unknown, code: string) => boolean;
   isStopping: () => boolean;
   move: (
     record: WorkerEnvironmentRecord,
@@ -128,16 +126,5 @@ export type WorkerProviderLifecycleOptions = Omit<
     assertCurrent?: () => void,
   ) => Promise<WorkerEnvironmentRecord>;
   saveError: (record: WorkerEnvironmentRecord, error: unknown) => Promise<WorkerEnvironmentRecord>;
-  serviceError: (
-    code:
-      | "bootstrap_failure"
-      | "environment_not_found"
-      | "invalid_profile"
-      | "invalid_state"
-      | "profile_not_found"
-      | "provider_failure"
-      | "provider_not_found",
-    message: string,
-  ) => Error;
   withLock: <T>(environmentId: string, task: () => Promise<T>) => Promise<T>;
 };

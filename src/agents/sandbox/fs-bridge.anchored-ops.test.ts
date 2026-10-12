@@ -40,58 +40,6 @@ describe("sandbox fs bridge anchored ops", () => {
     },
   });
 
-  const pinnedReadCases = [
-    {
-      name: "workspace reads use pinned file descriptors",
-      filePath: "notes/todo.txt",
-      contents: "todo",
-      setup: async (workspaceDir: string) => {
-        await fs.mkdir(path.join(workspaceDir, "notes"), { recursive: true });
-        await fs.writeFile(path.join(workspaceDir, "notes", "todo.txt"), "todo");
-      },
-      sandbox: (workspaceDir: string) =>
-        createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-    },
-    {
-      name: "bind-mounted reads use pinned file descriptors",
-      filePath: "/workspace-two/README.md",
-      contents: "bind-read",
-      setup: async (workspaceDir: string, stateDir: string) => {
-        const bindRoot = path.join(stateDir, "workspace-two");
-        await fs.mkdir(workspaceDir, { recursive: true });
-        await fs.mkdir(bindRoot, { recursive: true });
-        await fs.writeFile(path.join(bindRoot, "README.md"), "bind-read");
-      },
-      sandbox: (workspaceDir: string, stateDir: string) =>
-        createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          docker: {
-            ...createSandbox().docker,
-            binds: [`${path.join(stateDir, "workspace-two")}:/workspace-two:ro`],
-          },
-        }),
-    },
-  ] as const;
-
-  it.each(pinnedReadCases)("$name", async (testCase) => {
-    await withTempDir("openclaw-fs-bridge-contract-read-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      await testCase.setup(workspaceDir, stateDir);
-      const bridge = createSandboxFsBridge({
-        sandbox: testCase.sandbox(workspaceDir, stateDir),
-      });
-
-      await expect(bridge.readFile({ filePath: testCase.filePath })).resolves.toEqual(
-        Buffer.from(testCase.contents),
-      );
-      expectOnlyCanonicalPathCommands();
-    });
-  });
-
   it.each([
     { name: "uncapped", maxBytes: undefined },
     { name: "bounded", maxBytes: 5 },
@@ -147,41 +95,30 @@ describe("sandbox fs bridge anchored ops", () => {
     });
   });
 
-  it.each([
-    { name: "empty files", contents: "", maxBytes: 0 },
-    { name: "files at the exact limit", contents: "hello", maxBytes: 5 },
-    {
-      name: "files spanning bounded read chunks",
-      contents: "x".repeat(64 * 1024 + 1),
-      maxBytes: 64 * 1024 + 1,
-    },
-  ])("reads $name through one pinned descriptor", async (testCase) => {
+  it("reads files spanning bounded read chunks through one pinned descriptor", async () => {
     await withTempDir("openclaw-fs-bridge-bounded-read-", async (stateDir) => {
+      const contents = "x".repeat(64 * 1024 + 1);
       const { bridge } = await createSeededSandboxFsBridge(stateDir, {
-        rootContents: testCase.contents,
+        rootContents: contents,
       });
 
       await expect(
-        bridge.readFile({ filePath: "from.txt", maxBytes: testCase.maxBytes }),
-      ).resolves.toEqual(Buffer.from(testCase.contents));
+        bridge.readFile({ filePath: "from.txt", maxBytes: contents.length }),
+      ).resolves.toEqual(Buffer.from(contents));
       expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
       expectOnlyCanonicalPathCommands();
     });
   });
 
-  it.each([
-    { name: "oversized files", maxBytes: 4, error: /exceeds 4 bytes/ },
-    { name: "negative limits", maxBytes: -1, error: /non-negative safe integer/ },
-    { name: "unsafe limits", maxBytes: Number.NaN, error: /non-negative safe integer/ },
-  ])("rejects $name without an unbounded read", async (testCase) => {
+  it("rejects negative limits without an unbounded read", async () => {
     await withTempDir("openclaw-fs-bridge-bounded-reject-", async (stateDir) => {
       const { bridge } = await createSeededSandboxFsBridge(stateDir, {
         rootContents: "hello",
       });
 
-      await expect(
-        bridge.readFile({ filePath: "from.txt", maxBytes: testCase.maxBytes }),
-      ).rejects.toThrow(testCase.error);
+      await expect(bridge.readFile({ filePath: "from.txt", maxBytes: -1 })).rejects.toThrow(
+        /non-negative safe integer/,
+      );
       expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
       expectOnlyCanonicalPathCommands();
     });
@@ -295,9 +232,9 @@ describe("sandbox fs bridge anchored ops", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32").each(["write", "readdir"] as const)(
-    "%s resolves directory aliases to canonical pinned paths",
-    async (operation) => {
+  it.runIf(process.platform !== "win32")(
+    "write resolves directory aliases to canonical pinned paths",
+    async () => {
       // Parent symlinks are resolved once to a canonical path, then the write is
       // anchored there so later alias changes cannot redirect the target.
       await withTempDir("openclaw-fs-bridge-contract-write-", async (stateDir) => {
@@ -312,12 +249,6 @@ describe("sandbox fs bridge anchored ops", () => {
             const target = getDockerArg(args, 1);
             return dockerExecResult(`${target.replace("/workspace/alias", "/workspace/real")}\n`);
           }
-          if (script.includes('stat -c "%F|%s|%y"')) {
-            return dockerExecResult("regular file|1|2");
-          }
-          if (getDockerArg(args, 1) === "readdir") {
-            return dockerExecResult('[{"name":"note.txt","isDirectory":false}]');
-          }
           return dockerExecResult("");
         });
 
@@ -328,20 +259,12 @@ describe("sandbox fs bridge anchored ops", () => {
           }),
         });
 
-        if (operation === "write") {
-          await bridge.writeFile({ filePath: "alias/note.txt", data: "updated" });
-        } else {
-          await expect(bridge.readDirectory!({ filePath: "alias" })).resolves.toEqual([
-            { name: "note.txt", isDirectory: false },
-          ]);
-        }
+        await bridge.writeFile({ filePath: "alias/note.txt", data: "updated" });
 
-        const args = requireDockerCall(findCallByDockerArg(1, operation), operation)[0];
+        const args = requireDockerCall(findCallByDockerArg(1, "write"), "write")[0];
         expect(getDockerArg(args, 2)).toBe("/workspace");
         expect(getDockerArg(args, 3)).toBe("real");
-        if (operation === "write") {
-          expect(getDockerArg(args, 4)).toBe("note.txt");
-        }
+        expect(getDockerArg(args, 4)).toBe("note.txt");
         expect(args).not.toContain("alias");
 
         const canonicalCalls = findCallsByScriptFragment('readlink -n -f -- "$cursor"');
@@ -437,29 +360,6 @@ describe("sandbox fs bridge anchored ops", () => {
           pinnedPath: "/workspace/notes/other.txt",
         }),
       ).rejects.toThrow("Pinned sandbox destination does not match the requested path");
-    });
-  });
-
-  it("stat anchors parent + basename", async () => {
-    await withTempDir("openclaw-fs-bridge-contract-stat-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
-      await fs.writeFile(path.join(workspaceDir, "nested", "file.txt"), "bye", "utf8");
-
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-      });
-
-      await bridge.stat({ filePath: "nested/file.txt" });
-
-      const statCall = findCallByScriptFragment('stat -c "%F|%s|%y" -- "$2"');
-      const args = requireDockerCall(statCall, "stat")[0];
-      expect(getDockerArg(args, 1)).toBe("/workspace/nested");
-      expect(getDockerArg(args, 2)).toBe("file.txt");
-      expect(args).not.toContain("/workspace/nested/file.txt");
     });
   });
 

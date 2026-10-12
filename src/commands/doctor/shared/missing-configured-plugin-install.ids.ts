@@ -6,16 +6,13 @@ import { resolveConfiguredChannelPresencePolicy } from "../../../plugins/channel
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
 import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-session-catalog-config.js";
-import {
-  resolveOfficialExternalProviderContractPluginIds,
-  resolveOfficialExternalWebProviderContractPluginIdsForEnv,
-} from "../../../plugins/official-external-plugin-catalog.js";
+import { resolveOfficialExternalProviderContractPluginIds } from "../../../plugins/official-external-plugin-catalog.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
-import {
-  resolveWebSearchInstallCatalogEntriesForEnv,
-  resolveWebSearchInstallCatalogEntry,
-} from "../../../plugins/web-search-install-catalog.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
+import {
+  collectConfiguredWebFetchPluginIds,
+  collectConfiguredWebSearchPluginIds,
+} from "./configured-provider-plugin-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
 import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-owners.js";
 
@@ -48,17 +45,8 @@ export function collectConfiguredPluginIds(
     }
     addConfiguredPluginId(ids, pluginId);
   }
-  const searchProvider = normalizeOptionalLowercaseString(cfg.tools?.web?.search?.provider);
-  if (cfg.tools?.web?.search?.enabled !== false && searchProvider) {
-    const installEntry = resolveWebSearchInstallCatalogEntry({ providerId: searchProvider });
-    if (installEntry?.pluginId) {
-      ids.add(installEntry.pluginId);
-    }
-  } else if (cfg.tools?.web?.search?.enabled !== false) {
-    // Only auto-detect from environment credentials when no provider was selected.
-    for (const entry of resolveWebSearchInstallCatalogEntriesForEnv(env ?? process.env)) {
-      ids.add(entry.pluginId);
-    }
+  for (const pluginId of collectConfiguredWebSearchPluginIds(cfg, env ?? process.env, "selected")) {
+    ids.add(pluginId);
   }
   for (const pluginId of collectConfiguredRuntimePluginIds(cfg, { env })) {
     ids.add(pluginId);
@@ -81,23 +69,8 @@ export function collectConfiguredPluginIds(
   })) {
     ids.add(pluginId);
   }
-  const webFetch = cfg.tools?.web?.fetch;
-  if (webFetch?.enabled !== false) {
-    const providerId = normalizeOptionalLowercaseString(webFetch?.provider);
-    if (providerId) {
-      for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
-        contract: "webFetchProviders",
-        providerIds: new Set([providerId]),
-      })) {
-        ids.add(pluginId);
-      }
-    }
-    for (const pluginId of resolveOfficialExternalWebProviderContractPluginIdsForEnv({
-      contract: "webFetchProviders",
-      env: env ?? process.env,
-    })) {
-      ids.add(pluginId);
-    }
+  for (const pluginId of collectConfiguredWebFetchPluginIds(cfg, env ?? process.env)) {
+    ids.add(pluginId);
   }
   return ids;
 }

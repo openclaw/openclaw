@@ -120,8 +120,6 @@ export type PluginControlUiDescriptor = {
   order?: number;
   /** Plugin-owned session actions this external tab may invoke through the parent UI. */
   sessionActions?: string[];
-  /** Allow this external tab to navigate the parent UI to a chat session. */
-  allowChatNavigation?: boolean;
 };
 
 export type PluginSessionActionContext = {

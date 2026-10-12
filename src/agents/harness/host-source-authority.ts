@@ -1,16 +1,94 @@
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-events.js";
-import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
+import {
+  getAgentRunLifecycleGeneration,
+  type AgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   assertAdmittedRunOperatorAuthority,
   bindOperatorModelExecution,
+  captureAdmittedRunActiveAssertion,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import {
+  captureGatewayToolReceiptAssertion,
+  type getGatewayToolCallerIdentity,
+} from "../tools/gateway-caller-context.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+
+/** Keep the original run and caller predicates attached to every host capability. */
+export function bindHarnessHostSourceAuthority(params: {
+  attempt: {
+    admittedRunContext: AdmittedRunContext;
+    runId: string;
+    agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+  };
+  delegatedAuthority: AgentRunDelegatedAuthority;
+  sourceCaller: ReturnType<typeof getGatewayToolCallerIdentity>;
+  isActive: () => boolean;
+  isGatewayCurrent: () => boolean;
+  inactiveError: (message: string) => Error;
+}) {
+  const { attempt, sourceCaller, inactiveError } = params;
+  const operationalRunInstance = attempt.admittedRunContext.operationalRunInstance;
+  const admittedSource = captureAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    params.delegatedAuthority,
+  );
+  const assertAdmitted = composeSessionSourceAssertion([admittedSource], (assertSource) => {
+    if (
+      !params.isActive() ||
+      !admittedSource ||
+      attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance
+    ) {
+      throw inactiveError("agent harness host capability is no longer active");
+    }
+    try {
+      assertSource();
+    } catch {
+      throw inactiveError("agent harness host capability is no longer active");
+    }
+    if (!params.isGatewayCurrent()) {
+      throw inactiveError("agent harness host capability is no longer active");
+    }
+  });
+  const receipt = sourceCaller?.receiptAuthority;
+  const assertReceipt =
+    receipt &&
+    captureGatewayToolReceiptAssertion(
+      receipt,
+      "agent harness host capability lost its source execution claim",
+    );
+  const assertCaller = composeSessionSourceAssertion(
+    [captureExternalSessionCommitGuard(assertReceipt)],
+    (assertSource) => {
+      if (
+        (sourceCaller &&
+          (sourceCaller.agentId !== attempt.agentId ||
+            sourceCaller.sessionKey !== attempt.sessionKey)) ||
+        (sourceCaller?.workerTurnClaim &&
+          (sourceCaller.workerTurnClaim.sessionId !== attempt.sessionId ||
+            sourceCaller.workerTurnClaim.runId !== attempt.runId)) ||
+        (sourceCaller?.workerTurnClaim && !receipt)
+      ) {
+        throw new Error("agent harness host capability lost its source execution claim");
+      }
+      assertSource();
+    },
+  );
+  return composeSessionSourceAssertion([assertAdmitted, assertCaller]);
+}
 
 /** Native delegation cannot select a person, so its live turn must remain unambiguous. */
 export function bindHarnessNativeSpawnAuthority(
@@ -148,7 +226,7 @@ export function retainHarnessSource(
 
 /** Host-only original source; an explicit undefined operator identifies System work. */
 export type AgentHarnessCompactionSourceAuthority = Readonly<{
-  assertActive: () => void;
+  assertActive: SessionSourceAssertion;
   operatorAuthority: AdmittedRunOperatorAuthority | undefined;
 }>;
 

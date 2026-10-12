@@ -228,18 +228,31 @@ describe("operator-managed private wildcard portal ingress", () => {
 });
 
 describe("managed private Serve portal ingress", () => {
-  it("partitions authentication and default app cookies for cross-site HTTPS embedding", async () => {
+  it("uses a private Serve claim with partitioned cookies even for a Funnel Gateway", async () => {
     await withServer(
       (_, res) => {
         res.setHeader("Set-Cookie", "session=ok; Path=/");
         res.end("app");
       },
       async (targetUrl) => {
-        publishManaged();
+        const resolveHost = vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore");
+        publishManaged("funnel");
         const { claim } = fakeClaim();
         vi.mocked(claimTailscaleServePort).mockResolvedValue(claim);
-        const { service } = makeService({ managedTailscale: true });
-        const portal = await service.open({ targetPort: Number(new URL(targetUrl).port) });
+        const { service, httpServers } = makeService({
+          managedTailscale: true,
+          httpBindHosts: ["0.0.0.0"],
+        });
+        const targetPort = Number(new URL(targetUrl).port);
+        const portal = await service.open({ targetPort, path: "/app" });
+        expect(portal.publicUrl).toBe(`https://gateway.example.ts.net:${portal.listenPort}/app`);
+        expect(claimTailscaleServePort).toHaveBeenCalledExactlyOnceWith(
+          portal.listenPort,
+          portal.listenPort,
+          expect.any(Function),
+        );
+        expect(httpServers[0]?.address()).toMatchObject({ address: "127.0.0.1" });
+        expect(portal.listenPort).not.toBe(443);
         const response = await ingressRequest(portal.listenPort, portal.url);
         expect(response.status).toBe(200);
         expect(response.cookie).toHaveLength(2);
@@ -248,68 +261,33 @@ describe("managed private Serve portal ingress", () => {
           expect(cookie).toContain("Secure");
           expect(cookie).toContain("Partitioned");
         }
+        await service.open({ targetPort });
+        expect(claimTailscaleServePort).toHaveBeenCalledTimes(1);
+        await service.close(portal.id);
+        expect(claim.stop).toHaveBeenCalledOnce();
+        expect(service.list()).toEqual([]);
+        expect(resolveHost).not.toHaveBeenCalled();
       },
     );
   });
-  it.each(["serve", "funnel"] as const)(
-    "uses a separate private Serve claim even for a %s Gateway",
-    async (mode) => {
-      const resolveHost = vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore");
-      publishManaged(mode);
-      const { claim } = fakeClaim();
-      vi.mocked(claimTailscaleServePort).mockResolvedValue(claim);
-      const { service, httpServers } = makeService({
-        managedTailscale: true,
-        httpBindHosts: ["0.0.0.0"],
-      });
-      const portal = await service.open({ targetPort: 3000, path: "/app" });
-      expect(portal.publicUrl).toBe(`https://gateway.example.ts.net:${portal.listenPort}/app`);
-      expect(claimTailscaleServePort).toHaveBeenCalledExactlyOnceWith(
-        portal.listenPort,
-        portal.listenPort,
-        expect.any(Function),
-      );
-      expect(httpServers[0]?.address()).toMatchObject({ address: "127.0.0.1" });
-      expect(portal.listenPort).not.toBe(443);
-      await service.open({ targetPort: 3000 });
-      expect(claimTailscaleServePort).toHaveBeenCalledTimes(1);
-      await service.close(portal.id);
-      expect(claim.stop).toHaveBeenCalledOnce();
-      expect(service.list()).toEqual([]);
-      expect(resolveHost).not.toHaveBeenCalled();
-    },
-  );
 
-  it("never silently publishes direct listener URLs when the managed route is absent", async () => {
-    const { service, httpServers } = makeService({ managedTailscale: true });
-    await expect(service.open({ targetPort: 3000 })).rejects.toThrow(
-      "managed Tailscale route is not active",
-    );
-    expect(httpServers).toEqual([]);
-    expect(claimTailscaleServePort).not.toHaveBeenCalled();
-  });
-
-  it("rolls back listener and target ownership on claim startup failure", async () => {
-    publishManaged();
-    vi.mocked(claimTailscaleServePort).mockRejectedValue(new Error("HTTPS port occupied"));
-    const releaseTarget = vi.fn();
-    const { service, httpServers } = makeService({ managedTailscale: true });
-    await expect(service.open({ targetPort: 3000, onClose: releaseTarget })).rejects.toThrow(
-      "HTTPS port occupied",
-    );
-    expect(httpServers).toEqual([]);
-    expect(service.list()).toEqual([]);
-    expect(releaseTarget).toHaveBeenCalledOnce();
-  });
-
-  it("revalidates authority after route startup and releases the unpublished claim", async () => {
-    publishManaged();
+  it.each([
+    ["absent", "managed Tailscale route is not active"],
+    ["failed", "HTTPS port occupied"],
+    ["revoked", "authority revoked"],
+  ])("rolls back unpublished resources when the managed route is %s", async (state, message) => {
     const { claim } = fakeClaim();
     let current = true;
-    vi.mocked(claimTailscaleServePort).mockImplementation(async () => {
-      current = false;
-      return claim;
-    });
+    if (state !== "absent") {
+      publishManaged();
+      vi.mocked(claimTailscaleServePort).mockImplementation(async () => {
+        if (state === "failed") {
+          throw new Error(message);
+        }
+        current = false;
+        return claim;
+      });
+    }
     const { service, httpServers } = makeService({ managedTailscale: true });
     const releaseTarget = vi.fn();
     await expect(
@@ -318,15 +296,19 @@ describe("managed private Serve portal ingress", () => {
         onClose: releaseTarget,
         assertCurrent: () => {
           if (!current) {
-            throw new Error("authority revoked");
+            throw new Error(message);
           }
         },
       }),
-    ).rejects.toThrow("authority revoked");
-    expect(claim.stop).toHaveBeenCalledOnce();
+    ).rejects.toThrow(message);
     expect(releaseTarget).toHaveBeenCalledOnce();
     expect(httpServers).toEqual([]);
     expect(service.list()).toEqual([]);
+    if (state === "absent") {
+      expect(claimTailscaleServePort).not.toHaveBeenCalled();
+    } else if (state === "revoked") {
+      expect(claim.stop).toHaveBeenCalledOnce();
+    }
   });
 
   it.each(["claim", "gateway"])(

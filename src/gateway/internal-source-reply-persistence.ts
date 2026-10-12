@@ -86,7 +86,7 @@ async function completePersistedInternalSourceReply(params: {
   };
   // Replay also refreshes history when an earlier owned drain suppressed publication.
   // Preserve the original bytes and run provenance; never restage a retry.
-  const replay = await persistSessionTranscriptTurn(scope, {
+  const options: Parameters<typeof persistSessionTranscriptTurn>[1] = {
     config: params.cfg,
     ...expected,
     assertCurrent,
@@ -109,7 +109,8 @@ async function completePersistedInternalSourceReply(params: {
       assertCurrentReplay(result.messageId);
       attachSourceReplyMedia(result, acceptCompletion);
     },
-  });
+  };
+  const replay = await persistSessionTranscriptTurn(scope, options);
   if (replay.rejectedReason || replay.messages.length === 0) {
     throw new Error("Internal source reply no longer owns the active transcript");
   }
@@ -183,7 +184,7 @@ export async function persistInternalSourceReply(params: {
       const writerFence = getOwnedSessionTranscriptWriterFence({
         sessionKey: params.sessionKey,
       });
-      const appended = await appendAssistantMessageToSessionTranscript({
+      const options: Parameters<typeof appendAssistantMessageToSessionTranscript>[0] = {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
@@ -212,6 +213,17 @@ export async function persistInternalSourceReply(params: {
           committed = result.appended;
           attachSourceReplyMedia(result, acceptCompletion);
         },
+      };
+      const appended = await appendAssistantMessageToSessionTranscript({
+        ...options,
+        assertCurrent: captureOwnedTranscriptWriteAssertion({
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.expectedSessionId,
+          storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+            agentId: params.agentId,
+          }),
+        }),
       });
       if (!appended.ok) {
         throw new Error(`Internal source reply persistence failed: ${appended.reason}`);

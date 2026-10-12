@@ -7,7 +7,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   ensureAuthProfileStore,
-  loadAuthProfileStoreForRuntime,
+  ensureAuthProfileStoreAsync,
+  loadAuthProfileStoreForRuntimeAsync,
 } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
@@ -29,38 +30,10 @@ import {
 } from "./execution-auth-binding.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
-const defaultCliAuthEpochDeps = {
-  readCodexCliCredentialsCached,
-  readGeminiCliCredentialsCached,
-  ensureAuthProfileStore,
-  loadAuthProfileStoreForRuntime,
-};
-
-type CliAuthEpochDeps = typeof defaultCliAuthEpochDeps;
-
-const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
-
 /** Version salt for CLI auth epoch encoding semantics. */
 export const CLI_AUTH_EPOCH_VERSION = 7;
 
 const GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
-
-/** Overrides credential readers for auth-epoch unit tests. */
-function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
-  Object.assign(cliAuthEpochDeps, overrides);
-}
-
-/** Restores default credential readers after auth-epoch unit tests. */
-function resetCliAuthEpochTestDeps(): void {
-  Object.assign(cliAuthEpochDeps, defaultCliAuthEpochDeps);
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliAuthEpochTestApi")] = {
-    setCliAuthEpochTestDeps,
-    resetCliAuthEpochTestDeps,
-  };
-}
 
 function hashCliAuthEpochPart(value: string): string {
   // Epoch hashes detect local auth-state changes; they are not password
@@ -158,18 +131,14 @@ function getLocalCliCredential(
 ): CodexCliCredential | GeminiCliCredential | undefined {
   switch (provider) {
     case "codex-cli":
-      return (
-        cliAuthEpochDeps.readCodexCliCredentialsCached({ ttlMs, allowKeychainPrompt: false }) ??
-        undefined
-      );
+      return readCodexCliCredentialsCached({ ttlMs, allowKeychainPrompt: false }) ?? undefined;
     case "google-gemini-cli":
-      return cliAuthEpochDeps.readGeminiCliCredentialsCached({ ttlMs }) ?? undefined;
+      return readGeminiCliCredentialsCached({ ttlMs }) ?? undefined;
     default:
       return undefined;
   }
 }
 
-/** Resolves the stable auth epoch hash for a CLI runtime/provider session. */
 export async function resolveCliAuthEpoch(params: {
   provider: string;
   agentDir?: string;
@@ -188,7 +157,7 @@ export async function resolveCliAuthEpoch(params: {
   }
 
   if (authProfileId) {
-    const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(params.agentDir, {
+    const store = await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
       readOnly: true,
       allowKeychainPrompt: false,
     });
@@ -233,7 +202,7 @@ export function resolveCliAuthBindingFingerprint(params: {
     parts.push(`local:${fingerprint}`);
   }
   if (authProfileId) {
-    const store = cliAuthEpochDeps.ensureAuthProfileStore(params.agentDir, {
+    const store = ensureAuthProfileStore(params.agentDir, {
       config: params.config,
       readOnly: true,
       allowKeychainPrompt: false,
@@ -365,7 +334,7 @@ export async function resolveCliRuntimeOwnerFingerprint(params: {
   }
   let authProfileOwnerFingerprint: string | undefined;
   if (authProfileId) {
-    const store = cliAuthEpochDeps.ensureAuthProfileStore(params.agentDir, {
+    const store = await ensureAuthProfileStoreAsync(params.agentDir, {
       config: params.config,
       readOnly: true,
       allowKeychainPrompt: false,

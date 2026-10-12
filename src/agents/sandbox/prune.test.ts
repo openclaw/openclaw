@@ -57,6 +57,7 @@ vi.mock("./docker-backend.js", () => ({
   dockerSandboxBackendManager: backendMocks,
 }));
 
+// mock-isolation: Prune selection uses synthetic rows; worker predicate behavior lives in registry tests.
 vi.mock("./registry.js", () => ({
   assertSandboxBrowserRegistryEntryCurrent: registryMocks.assertSandboxBrowserRegistryEntryCurrent,
   readBrowserRegistry: registryMocks.readBrowserRegistry,
@@ -74,11 +75,7 @@ vi.mock("./registry.js", () => ({
   removeSandboxRegistryRuntime: async (
     entry: SandboxRegistryEntry,
     removeRuntime: (current: SandboxRegistryEntry) => Promise<void>,
-    options?: { shouldRemove?: (current: SandboxRegistryEntry) => boolean },
   ) => {
-    if (options?.shouldRemove && !options.shouldRemove(entry)) {
-      return;
-    }
     await removeRuntime(entry);
     await registryMocks.removeRegistryEntry(entry.containerName);
   },

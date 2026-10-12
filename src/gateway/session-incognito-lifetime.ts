@@ -30,11 +30,16 @@ type IncognitoSessionDeadline = {
   source: { identity: string | symbol; assertCurrent(): void };
 };
 
+type DeleteIncognitoSession = (
+  deadline: IncognitoSessionDeadline,
+  assertCurrent: () => void,
+) => Promise<void>;
+
 /** Deadline scheduling only: the session deletion owner drains work and removes data. */
 function createIncognitoSessionDeadlineOwner(params: {
-  context: GatewayRequestContext;
   logWarning: (message: string) => void;
   scheduler: GatewayScheduler;
+  deleteSession: DeleteIncognitoSession;
 }) {
   type Deadline = IncognitoSessionDeadline & { job?: GatewayScheduledJob };
   const scheduler = params.scheduler.scope();
@@ -72,25 +77,13 @@ function createIncognitoSessionDeadlineOwner(params: {
           retire(deadline);
           return;
         }
+        let accepted = true;
         try {
-          const { deleteGatewaySession } = await import("./server-methods/sessions-delete.js");
-          const result = await deleteGatewaySession({
-            params: {
-              key: deadline.sessionKey,
-              agentId: deadline.agentId,
-              expectedSessionId: deadline.sessionId,
-            },
-            client: null,
-            context: params.context,
-            assertCurrent: () => {
-              if (!current(deadline)) {
-                throw new Error("Incognito expiry no longer owns this session.");
-              }
-            },
+          await params.deleteSession(deadline, () => {
+            if (!accepted || !current(deadline)) {
+              throw new Error("Incognito expiry no longer owns this session.");
+            }
           });
-          if (!result.ok) {
-            throw new Error(result.error.message);
-          }
           retire(deadline);
         } catch {
           if (current(deadline)) {
@@ -99,6 +92,8 @@ function createIncognitoSessionDeadlineOwner(params: {
           } else {
             retire(deadline);
           }
+        } finally {
+          accepted = false;
         }
       },
     });
@@ -133,19 +128,36 @@ function createIncognitoSessionDeadlineOwner(params: {
     },
     stop: async () => {
       scheduler.beginClose();
-      deadlines.clear();
       await scheduler.stop();
+      deadlines.clear();
     },
   };
 }
 
-/** Production acquisition remains native until every incognito caller moves together. */
 export function startIncognitoSessionLifetime(params: {
   context: GatewayRequestContext;
   logWarning: (message: string) => void;
   scheduler: GatewayScheduler;
 }): GatewayPostReadySidecarHandle {
-  const owner = createIncognitoSessionDeadlineOwner(params);
+  const owner = createIncognitoSessionDeadlineOwner({
+    ...params,
+    async deleteSession(deadline, assertCurrent) {
+      const { deleteGatewaySession } = await import("./server-methods/sessions-delete.js");
+      const result = await deleteGatewaySession({
+        params: {
+          key: deadline.sessionKey,
+          agentId: deadline.agentId,
+          expectedSessionId: deadline.sessionId,
+        },
+        client: null,
+        context: params.context,
+        assertCurrent,
+      });
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+    },
+  });
   const runInOwner = AsyncLocalStorage.snapshot();
   const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
   const restartSignal = getGatewayRestartDrainSignal();

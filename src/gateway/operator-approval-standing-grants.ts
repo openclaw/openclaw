@@ -4,6 +4,7 @@
 // one cron job re-execute without re-prompting while it revalidates.
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { stableStringify } from "@openclaw/normalization-core";
 import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
@@ -12,11 +13,15 @@ import {
   resolveCronJobGrantDefinitionGenerationFloor,
   resolveCronJobGrantDefinitionRevision,
 } from "../cron/store/row-codec.js";
+import { readCronRunReceiptCurrentFactsInDatabase } from "../cron/store/run-receipt-read.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { buildSystemRunApprovalEnvBinding } from "../infra/system-run-approval-binding.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -27,11 +32,13 @@ import {
 } from "../state/openclaw-state-db.js";
 import type {
   CronStandingGrantMintSpec,
+  CronStandingGrantLookupInput,
   CronStandingGrantRecord,
   ConsumeCronStandingGrantResult,
   CronStandingGrantListing,
   RevokeCronStandingGrantResult,
 } from "./operator-approval-standing-grants.types.js";
+import { operatorStandingGrantPublication } from "./operator-approval-store.publication.js";
 
 const STANDING_GRANT_TABLE = "operator_approval_standing_grants";
 const STANDING_GRANT_GENERATION_TABLE = "operator_approval_standing_grant_generations";
@@ -127,26 +134,17 @@ export function parseCronExecOperationBinding(binding: string): {
   }
 }
 
+const installStandingGrantSchema = createSqliteSchemaEnsurer(() => STANDING_GRANT_SCHEMA_SQL, {
+  tables: [STANDING_GRANT_TABLE, STANDING_GRANT_GENERATION_TABLE],
+});
+
 function ensureStandingGrantSchema(db: DatabaseSync): void {
-  // Pre-release shape carried a mandatory expiry stamped from a retired fixed
-  // TTL. That shape never reached a release tag, and grants are re-derivable
-  // authority (dropping one only re-prompts the next occurrence), so rebuild
-  // instead of migrating: fail-closed, no data a user can miss.
-  if (tableExists(db, STANDING_GRANT_TABLE)) {
-    // sqlite-allow-raw -- pragma introspection for the one-time shape check:
-    const rawColumns = db.prepare(`PRAGMA table_info(${STANDING_GRANT_TABLE})`).all(); // sqlite-allow-raw
-    // SAFETY: PRAGMA table_info rows always carry name/notnull columns.
-    const columns = rawColumns as Array<{ name: string; notnull: number }>;
-    const legacyMandatoryExpiry = columns.some(
-      (column) => column.name === "expires_at_ms" && column.notnull === 1,
-    );
-    if (legacyMandatoryExpiry) {
-      // sqlite-allow-raw -- unshipped-shape rebuild DDL.
-      db.exec(`DROP TABLE ${STANDING_GRANT_TABLE};`);
-    }
+  const ddl = getAdmittedSqliteSchemaFacts(db)?.tableSql.get(STANDING_GRANT_TABLE);
+  // This retired, unshipped shape is recognized from admission's existing DDL facts.
+  if (ddl && /\bexpires_at_ms\s+INTEGER\s+NOT\s+NULL\b/iu.test(ddl)) {
+    db.exec(`DROP TABLE ${STANDING_GRANT_TABLE};`); // sqlite-allow-raw -- Unshipped-shape repair DDL.
   }
-  // sqlite-allow-raw -- first-use additive schema DDL; grant rows use Kysely.
-  db.exec(STANDING_GRANT_SCHEMA_SQL);
+  installStandingGrantSchema(db);
 }
 
 function decodeDefinitionGeneration(value: unknown): number | null {
@@ -172,12 +170,17 @@ export function mintCronStandingGrantLocked(
   // Expired grants are dead weight; drop them opportunistically at mint time,
   // mirroring the operator-approval prune-on-insert pattern. NULL expiry rows
   // live until revoked or superseded.
-  executeSqliteQuerySync(
+  const expired = executeSqliteQuerySync(
     database.db,
     stateDb
       .deleteFrom(STANDING_GRANT_TABLE)
       .where("expires_at_ms", "is not", null)
-      .where("expires_at_ms", "<=", params.nowMs),
+      .where("expires_at_ms", "<=", params.nowMs)
+      .returning("grant_id"),
+  );
+  operatorStandingGrantPublication.stageDeletions(
+    database.db,
+    expired.rows.map((row) => row.grant_id),
   );
   const jobRows = executeSqliteQuerySync(
     database.db,
@@ -221,32 +224,41 @@ export function mintCronStandingGrantLocked(
         .where("job_id", "=", jobRow.job_id),
     );
   }
-  executeSqliteQuerySync(
+  const replaced = executeSqliteQuerySync(
     database.db,
     stateDb
       .deleteFrom(STANDING_GRANT_TABLE)
       .where("agent_id", "=", params.agentId)
       .where("cron_job_id", "=", params.cronJobId)
-      .where("operation_binding", "=", params.operationBinding),
+      .where("operation_binding", "=", params.operationBinding)
+      .returning("grant_id"),
+  );
+  operatorStandingGrantPublication.stageDeletions(
+    database.db,
+    replaced.rows.map((row) => row.grant_id),
   );
   const grantId = randomUUID();
-  executeSqliteQuerySync(
+  const inserted = executeSqliteQuerySync(
     database.db,
-    stateDb.insertInto(STANDING_GRANT_TABLE).values({
-      grant_id: grantId,
-      minted_by_approval_id: params.approvalId,
-      agent_id: params.agentId,
-      cron_job_id: params.cronJobId,
-      job_config_revision: params.jobConfigRevision,
-      operation_binding: params.operationBinding,
-      created_at_ms: params.nowMs,
-      expires_at_ms: params.expiresAtMs,
-      revoked_at_ms: null,
-      revoked_by: null,
-      last_used_at_ms: null,
-      use_count: 0,
-    }),
+    stateDb
+      .insertInto(STANDING_GRANT_TABLE)
+      .values({
+        grant_id: grantId,
+        minted_by_approval_id: params.approvalId,
+        agent_id: params.agentId,
+        cron_job_id: params.cronJobId,
+        job_config_revision: params.jobConfigRevision,
+        operation_binding: params.operationBinding,
+        created_at_ms: params.nowMs,
+        expires_at_ms: params.expiresAtMs,
+        revoked_at_ms: null,
+        revoked_by: null,
+        last_used_at_ms: null,
+        use_count: 0,
+      })
+      .returningAll(),
   );
+  operatorStandingGrantPublication.stagePostimages(database.db, inserted.rows);
   executeSqliteQuerySync(
     database.db,
     stateDb.insertInto(STANDING_GRANT_GENERATION_TABLE).values({
@@ -256,52 +268,20 @@ export function mintCronStandingGrantLocked(
   );
 }
 
-type CronStandingGrantLookupParams = {
-  agentId: string;
-  cronJobId: string;
-  jobConfigRevision: string;
-  operationBinding: string;
-  nowMs?: number;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-};
-
-/**
- * Validates a standing grant without recording a use. Callers that skip the
- * prompt on this result must still call consumeCronStandingGrant at the final
- * execution boundary: authority is recorded only where the process spawns, so
- * a revocation or job edit during awaited pre-spawn work still fails closed.
- */
-export function validateCronStandingGrant(
-  params: CronStandingGrantLookupParams,
+/** Worker snapshot lookup; only committed consumption authorizes a launch. */
+export function lookupCronStandingGrantInDatabase(
+  db: DatabaseSync,
+  params: CronStandingGrantLookupInput,
+  recordUse: boolean,
 ): ConsumeCronStandingGrantResult {
-  return lookupCronStandingGrant(params, { recordUse: false });
-}
-
-/**
- * Validates and consumes one standing grant for a cron-context exec. All
- * revalidation happens against authoritative rows inside one synchronous write
- * transaction: expiry, revocation, the cron job still existing with the same
- * config revision, and the minting approval row still holding allow-always.
- * Every non-consumed outcome means the caller falls through to prompting.
- */
-export function consumeCronStandingGrant(
-  params: CronStandingGrantLookupParams,
-): ConsumeCronStandingGrantResult {
-  return lookupCronStandingGrant(params, { recordUse: true });
-}
-
-function lookupCronStandingGrant(
-  params: CronStandingGrantLookupParams,
-  opts: { recordUse: boolean },
-): ConsumeCronStandingGrantResult {
-  return runOpenClawStateWriteTransaction((database) => {
-    if (!tableExists(database.db, STANDING_GRANT_TABLE)) {
+  return runSqliteDeferredTransactionSync(db, () => {
+    if (!tableExists(db, STANDING_GRANT_TABLE)) {
       return { outcome: "no-grant" };
     }
     const nowMs = params.nowMs ?? Date.now();
-    const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(database.db);
+    const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(db);
     const grant = executeSqliteQueryTakeFirstSync(
-      database.db,
+      db,
       stateDb
         .selectFrom(STANDING_GRANT_TABLE)
         .selectAll()
@@ -312,7 +292,12 @@ function lookupCronStandingGrant(
         .orderBy("grant_id", "desc")
         .limit(1),
     );
-    if (!grant) {
+    if (
+      !grant ||
+      (params.expectedGrant &&
+        (grant.grant_id !== params.expectedGrant.grantId ||
+          grant.minted_by_approval_id !== params.expectedGrant.mintedByApprovalId))
+    ) {
       return { outcome: "no-grant" };
     }
     if (grant.revoked_at_ms !== null) {
@@ -327,7 +312,7 @@ function lookupCronStandingGrant(
       return { outcome: "job-revision-changed" };
     }
     const jobRows = executeSqliteQuerySync(
-      database.db,
+      db,
       stateDb.selectFrom("cron_jobs").selectAll().where("job_id", "=", params.cronJobId).limit(2),
     ).rows;
     // Ambiguous multi-store rows fail closed to prompting like a missing job.
@@ -349,9 +334,9 @@ function lookupCronStandingGrant(
     if (jobRow.grant_definition_updated_at !== jobRow.updated_at) {
       return { outcome: "job-revision-changed" };
     }
-    const grantGenerationRow = tableExists(database.db, STANDING_GRANT_GENERATION_TABLE)
+    const grantGenerationRow = tableExists(db, STANDING_GRANT_GENERATION_TABLE)
       ? executeSqliteQueryTakeFirstSync(
-          database.db,
+          db,
           stateDb
             .selectFrom(STANDING_GRANT_GENERATION_TABLE)
             .select("job_definition_generation")
@@ -365,10 +350,28 @@ function lookupCronStandingGrant(
     if (grantGeneration === null || jobGeneration === null || grantGeneration !== jobGeneration) {
       return { outcome: "job-revision-changed" };
     }
+    const { handle } = params;
+    const facts = readCronRunReceiptCurrentFactsInDatabase(db, {
+      type: "cron.currentReceipt",
+      handle,
+      includeJob: false,
+      includeAvailability: true,
+    });
+    if (
+      !isDeepStrictEqual(facts.receipt, handle) ||
+      facts.deletionBlocked ||
+      handle.agentId !== params.agentId ||
+      handle.jobId !== params.cronJobId ||
+      handle.storeKey !== jobRow.store_key ||
+      handle.configRevision !== params.jobConfigRevision ||
+      (job.agentId !== undefined && job.agentId !== handle.agentId)
+    ) {
+      return { outcome: "receipt-not-current" };
+    }
     // Parent reversal fails closed: the approval row is the sole authorization
     // owner, so a pruned/reversed row invalidates its derivative grant.
     const approvalRow = executeSqliteQueryTakeFirstSync(
-      database.db,
+      db,
       stateDb
         .selectFrom("operator_approvals")
         .select(["status", "decision"])
@@ -380,7 +383,7 @@ function lookupCronStandingGrant(
     if (approvalRow.status !== "allowed" || approvalRow.decision !== "allow-always") {
       return { outcome: "approval-not-allow-always" };
     }
-    if (!opts.recordUse) {
+    if (!recordUse) {
       return {
         outcome: "consumed",
         grant: projectCronStandingGrant(grant),
@@ -388,7 +391,7 @@ function lookupCronStandingGrant(
     }
     const nextUseCount = grant.use_count + 1;
     const updated = executeSqliteQuerySync(
-      database.db,
+      db,
       stateDb
         .updateTable(STANDING_GRANT_TABLE)
         .set({ last_used_at_ms: nowMs, use_count: nextUseCount })
@@ -399,6 +402,13 @@ function lookupCronStandingGrant(
     if (updated.numAffectedRows !== 1n) {
       return { outcome: "no-grant" };
     }
+    operatorStandingGrantPublication.stagePostimages(db, [
+      {
+        ...grant,
+        last_used_at_ms: nowMs,
+        use_count: nextUseCount,
+      },
+    ]);
     return {
       outcome: "consumed",
       grant: {
@@ -407,7 +417,20 @@ function lookupCronStandingGrant(
         useCount: nextUseCount,
       },
     };
-  }, params.databaseOptions);
+  });
+}
+
+/** Called only by the existing shared-state writer transaction. */
+export function consumeCronStandingGrantInDatabase(
+  params: CronStandingGrantLookupInput & {
+    recordUse: boolean;
+    databaseOptions?: OpenClawStateDatabaseOptions;
+  },
+): ConsumeCronStandingGrantResult {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => lookupCronStandingGrantInDatabase(db, params, params.recordUse),
+    params.databaseOptions,
+  );
 }
 
 /** Includes revoked and expired grants so the operator ledger retains history. */
@@ -471,6 +494,13 @@ export function revokeCronStandingGrantInDatabase(params: {
         .where("grant_id", "=", params.grantId)
         .where("revoked_at_ms", "is", null),
     );
+    operatorStandingGrantPublication.stagePostimages(database.db, [
+      {
+        ...grant,
+        revoked_at_ms: nowMs,
+        revoked_by: params.revokedBy,
+      },
+    ]);
     return {
       outcome: "revoked",
       grant: {

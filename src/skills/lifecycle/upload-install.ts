@@ -66,9 +66,6 @@ export async function installUploadedSkillArchive(params: {
         await upload.remove().catch(() => undefined);
         return { ok: false, error, errorKind: "invalid-request" };
       };
-      if (record.kind !== "skill-archive") {
-        return await rejectInvalid("unsupported upload kind");
-      }
       if (record.slug !== requestedSlug) {
         return await rejectInvalid("install slug does not match upload slug");
       }

@@ -1,6 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
-import { createStdioTransport, resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
+import {
+  createStdioTransport,
+  resolveCodexAppServerSpawnEnv,
+  withCodexAppServerGitConfig,
+} from "./transport-stdio.js";
 
 const spawnMock = vi.hoisted(() => vi.fn(() => ({ pid: 1234 })));
 const prepareRegistration = vi.hoisted(() => vi.fn(async () => async () => {}));
@@ -14,6 +18,7 @@ beforeEach(() => {
   spawnMock.mockClear();
   prepareRegistration.mockReset().mockResolvedValue(async () => {});
 });
+afterEach(() => vi.unstubAllEnvs());
 
 function startOptions(command: string): CodexAppServerStartOptions {
   return {
@@ -175,6 +180,37 @@ describe("createStdioTransport", () => {
 });
 
 describe("resolveCodexAppServerSpawnEnv", () => {
+  it.each([
+    { label: "configured", parameters: "'user.name=Process'", clear: false, preserve: true },
+    { label: "empty", parameters: "", clear: false, preserve: false },
+    { label: "cleared", parameters: "'user.name=Process'", clear: true, preserve: false },
+    {
+      label: "already prepared",
+      parameters: "'user.name=Process' 'maintenance.auto=false' 'gc.auto=0'",
+      clear: false,
+      preserve: true,
+    },
+  ])("preserves $label Git settings when preparing the private process", (fixture) => {
+    vi.stubEnv("GIT_CONFIG_PARAMETERS", "'user.name=Ambient'");
+    const parameters = "'maintenance.auto=false' 'gc.auto=0'";
+    const original = {
+      ...startOptions("codex"),
+      env: {
+        GIT_CONFIG_PARAMETERS: fixture.parameters,
+        OPENCLAW_GIT_ENV_DROP: "fixture",
+      },
+      clearEnv: ["OPENCLAW_GIT_ENV_DROP", ...(fixture.clear ? ["GIT_CONFIG_PARAMETERS"] : [])],
+    };
+    const prepared = withCodexAppServerGitConfig(original, parameters);
+    const refreshed = withCodexAppServerGitConfig(prepared, parameters);
+    const env = resolveCodexAppServerSpawnEnv(refreshed);
+    expect(env.GIT_CONFIG_PARAMETERS).toBe(
+      fixture.preserve ? `'user.name=Process' ${parameters}` : parameters,
+    );
+    expect(env.OPENCLAW_GIT_ENV_DROP).toBeUndefined();
+    expect(original.env.GIT_CONFIG_PARAMETERS).toBe(fixture.parameters);
+  });
+
   it("applies configured env overrides before clearing denied env vars", () => {
     expect({
       ...resolveCodexAppServerSpawnEnv(

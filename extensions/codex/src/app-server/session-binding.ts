@@ -6,13 +6,12 @@ import {
   type AgentHarnessSessionDeletionMutation,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  prepareNativeSessionGenerationAuthority,
-  type NativeSessionBindingAuthority,
-  createNativeSessionBindingLifecycle,
+  createNativeSessionBindingLifecycleV2,
   reclaimNativeSessionGenerationWithAuthority,
-  resolveNativeSessionBindingWithAuthority,
+  resolveNativeSessionBindingWithAuthorityV2,
+  type NativeSessionBindingAuthority,
   type NativeSessionBindingLeaseOptions,
-  type NativeSessionBindingStateStore,
+  type NativeSessionBindingStateStoreV2,
   type NativeSessionGenerationAdoptionResult,
   type NativeSessionGenerationOperationsV2,
   type NativeSessionGenerationReclaimPlan,
@@ -30,6 +29,10 @@ import {
   type CodexNativeSubagentSubmission,
 } from "./native-subagent-submission.js";
 import {
+  CODEX_APP_SERVER_BINDING_LEASE,
+  PHYSICAL_SESSION_RETIRE_TTL_MS,
+} from "./session-binding-meta.js";
+import {
   mutateNativeSubagentBinding,
   type CodexNativeSubagentBindingMutation,
 } from "./session-binding-native-mutations.js";
@@ -37,11 +40,14 @@ import {
   readCurrentNativePendingAssignments,
   preserveNativePendingAssignments,
   preserveNativeTaskImport,
+  preservedSessionGeneration,
+  storedSessionGeneration,
   bindingStoreKey,
   matchesPendingSupervisionBranch,
   ownsStoredSessionGeneration,
   preserveCodexNativeSubagentSubmissions,
   readCurrentCodexAppServerBinding,
+  readCurrentCodexAppServerBindingAsync,
   readCurrentCodexAppServerBindings,
   readCurrentCodexNativeSubagentSubmissions,
   readStoredCodexAppServerBinding,
@@ -76,43 +82,11 @@ export {
 export type CodexBindingAuthority = NativeSessionBindingAuthority;
 export type CodexBindingWithCurrent = NativeSessionBindingAuthority["withCurrent"];
 
-const BINDING_LEASE_RETRY_INTERVAL_MS = 1_000;
-
 export {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
+  CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
 } from "./session-binding-meta.js";
-export const CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS = 60_000;
-const BINDING_LEASE_STALE_MS = CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS + 5_000;
-const BINDING_LEASE_WAIT_MS = BINDING_LEASE_STALE_MS + 5_000;
-const BINDING_LEASE_RENEW_INTERVAL_MS = Math.floor(BINDING_LEASE_STALE_MS / 3);
-// Physical session keys cannot have a successor generation. Retain their
-// retirement fence only long enough for bounded stale lease work to drain.
-const PHYSICAL_SESSION_RETIRE_TTL_MS = BINDING_LEASE_WAIT_MS;
-
-/** Decides whether a run may share the durable stable-key binding owner. */
-export async function resolveCodexRunSessionBindingAuthority(params: {
-  identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
-  config?: OpenClawConfig;
-  storePath?: string;
-}): Promise<Awaited<ReturnType<typeof prepareNativeSessionGenerationAuthority>>["state"]> {
-  return (
-    await prepareNativeSessionGenerationAuthority({
-      ...params,
-      target: params.identity,
-      createSupersededError: createCodexSessionGenerationSupersededError,
-    })
-  ).state;
-}
-
-/** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
-export function createCodexSessionGenerationSupersededError(
-  sessionId: string,
-): AgentHarnessSessionSupersededError {
-  return new AgentHarnessSessionSupersededError(
-    `Codex session generation is no longer current: ${sessionId}`,
-  );
-}
 
 type CodexAppServerBindingMutation =
   | CodexNativeSubagentBindingMutation
@@ -173,9 +147,15 @@ export async function clearCodexBindingForClient(
   );
 }
 
-export type CodexBindingStateStore = NativeSessionBindingStateStore<StoredCodexAppServerBinding> &
-  Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "entries"> & {
-    asyncReads: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup" | "lookupMany">;
+export type CodexBindingStateStore = Omit<
+  NativeSessionBindingStateStoreV2<StoredCodexAppServerBinding>,
+  "lookup" | "assertLeaseCurrent"
+> &
+  Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup"> & {
+    asyncReads: Pick<
+      PluginStateKeyedStore<StoredCodexAppServerBinding>,
+      "lookup" | "lookupMany" | "entries"
+    >;
   };
 
 function bindingLeaseLostError(key: string, cause?: unknown): Error {
@@ -185,7 +165,11 @@ function bindingLeaseLostError(key: string, cause?: unknown): Error {
 export type CodexAppServerBindingStore = {
   /** Durable ownership rows kept separate from replaceable session bindings. */
   managedThreads?: CodexManagedThreadStore;
+  /** Final synchronous effect guard; prepare ordinary reads through readAsync. */
   read(identity: CodexAppServerBindingIdentity): CodexAppServerThreadBinding | undefined;
+  readAsync(
+    identity: CodexAppServerBindingIdentity,
+  ): Promise<CodexAppServerThreadBinding | undefined>;
   /** Fresh worker-backed acquisition with row-ordered binding validation. */
   readMany: (
     identities: readonly CodexAppServerBindingIdentity[],
@@ -193,11 +177,11 @@ export type CodexAppServerBindingStore = {
   readNativeSubagentAssignments?(
     identity: CodexAppServerBindingIdentity,
     owner: CodexNativeSubagentHistoryOwner,
-  ): readonly CodexNativeSubagentPendingAssignment[];
+  ): Promise<readonly CodexNativeSubagentPendingAssignment[]>;
   readNativeSubagentSubmissions(
     identity: CodexAppServerBindingIdentity,
     owner: CodexNativeSubagentHistoryOwner,
-  ): readonly CodexNativeSubagentSubmission[];
+  ): Promise<readonly CodexNativeSubagentSubmission[]>;
   hasOtherThreadOwner(
     threadId: string,
     currentIdentity?: CodexAppServerBindingIdentity,
@@ -248,6 +232,15 @@ type CodexSessionGenerationReclaimParams = {
   reclaimStale?: boolean;
 };
 
+/** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
+export function createCodexSessionGenerationSupersededError(
+  sessionId: string,
+): AgentHarnessSessionSupersededError {
+  return new AgentHarnessSessionSupersededError(
+    `Codex session generation is no longer current: ${sessionId}`,
+  );
+}
+
 /** Lets the authoritative OpenClaw session generation claim a stale stable binding row. */
 export async function reclaimCurrentCodexSessionGeneration(
   params: CodexSessionGenerationReclaimParams,
@@ -276,7 +269,7 @@ export async function resolveCodexSessionBinding(params: {
   authority: CodexBindingAuthority;
 }> {
   const identity = params.identity;
-  return await resolveNativeSessionBindingWithAuthority({
+  return await resolveNativeSessionBindingWithAuthorityV2({
     ...params,
     ...(identity.kind === "session"
       ? {
@@ -285,7 +278,7 @@ export async function resolveCodexSessionBinding(params: {
         }
       : {}),
     readBinding: (sessionId) =>
-      params.bindingStore.read(
+      params.bindingStore.readAsync(
         sessionId && identity.kind === "session" ? { ...identity, sessionId } : identity,
       ),
     createSupersededError: createCodexSessionGenerationSupersededError,
@@ -296,38 +289,50 @@ export async function resolveCodexSessionBinding(params: {
 export function createCodexAppServerBindingStore(
   state: CodexBindingStateStore,
 ): CodexAppServerBindingStore {
-  const lifecycle = createNativeSessionBindingLifecycle<StoredCodexAppServerBinding>(state, {
-    readRecord: readStoredCodexAppServerBinding,
-    lease: {
-      staleMs: BINDING_LEASE_STALE_MS,
-      waitMs: BINDING_LEASE_WAIT_MS,
-      retryIntervalMs: BINDING_LEASE_RETRY_INTERVAL_MS,
-      renewIntervalMs: BINDING_LEASE_RENEW_INTERVAL_MS,
+  const lifecycle = createNativeSessionBindingLifecycleV2<StoredCodexAppServerBinding>(
+    {
+      lookup: (key) => state.asyncReads.lookup(key),
+      assertLeaseCurrent: (key, token) => {
+        const raw = state.lookup(key);
+        const current = readStoredCodexAppServerBinding(raw);
+        if (raw !== undefined && !current) {
+          throw new Error(`Invalid Codex app-server binding row: ${key}`);
+        }
+        if (current?.lease?.token !== token || current.lease.expiresAt <= Date.now()) {
+          throw bindingLeaseLostError(key);
+        }
+      },
+      withCurrent: (authority) => state.withCurrent(authority),
     },
-    releaseTtlMs: (key, current) =>
-      current.nativeSubagentTaskImport !== undefined ||
-      current.state === "active" ||
-      (current.retired === true && !key.startsWith("session:"))
-        ? undefined
-        : current.retired === true
-          ? PHYSICAL_SESSION_RETIRE_TTL_MS
-          : 1,
-    onReleaseFailure: (key, error) =>
-      embeddedAgentLog.warn("failed to release codex app-server binding lease", { key, error }),
-    errors: {
-      atomicUpdatesRequired: "Codex app-server bindings require atomic plugin-state updates",
-      invalidRow: (key) => new Error(`Invalid Codex app-server binding row: ${key}`),
-      lostLease: bindingLeaseLostError,
-      leaseTimeout: (key) => new Error(`Timed out waiting for Codex binding lease: ${key}`),
-      acquisitionRejected: (key) => new Error(`Codex binding generation was retired: ${key}`),
-      mutationBlocked:
-        "Codex binding mutation blocked while a native archive is in progress; retry",
-      conditionalDeletionRequired:
-        "Codex session deletion requires conditional plugin-state deletion",
-      deletionChanged: "Codex binding changed before session deletion",
-      rollbackChanged: "Codex binding changed before session deletion rollback",
+    {
+      workerCodec: "codex",
+      readRecord: readStoredCodexAppServerBinding,
+      lease: CODEX_APP_SERVER_BINDING_LEASE,
+      releaseTtlMs: (key, current) =>
+        current.nativeSubagentTaskImport !== undefined ||
+        current.state === "active" ||
+        (current.retired === true && !key.startsWith("session:"))
+          ? undefined
+          : current.retired === true
+            ? PHYSICAL_SESSION_RETIRE_TTL_MS
+            : 1,
+      onReleaseFailure: (key, error) =>
+        embeddedAgentLog.warn("failed to release codex app-server binding lease", { key, error }),
+      errors: {
+        atomicUpdatesRequired: "Codex app-server bindings require atomic plugin-state updates",
+        invalidRow: (key) => new Error(`Invalid Codex app-server binding row: ${key}`),
+        lostLease: bindingLeaseLostError,
+        leaseTimeout: (key) => new Error(`Timed out waiting for Codex binding lease: ${key}`),
+        acquisitionRejected: (key) => new Error(`Codex binding generation was retired: ${key}`),
+        mutationBlocked:
+          "Codex binding mutation blocked while a native archive is in progress; retry",
+        conditionalDeletionRequired:
+          "Codex session deletion requires conditional plugin-state deletion",
+        deletionChanged: "Codex binding changed before session deletion",
+        rollbackChanged: "Codex binding changed before session deletion rollback",
+      },
     },
-  });
+  );
 
   const prepareLease = (
     identity: CodexAppServerBindingIdentity,
@@ -413,15 +418,16 @@ export function createCodexAppServerBindingStore(
 
   return {
     read: (identity) => readCurrentCodexAppServerBinding(state, identity),
+    readAsync: (identity) => readCurrentCodexAppServerBindingAsync(state.asyncReads, identity),
     readMany: (identities) => readCurrentCodexAppServerBindings(state.asyncReads, identities),
     readNativeSubagentAssignments: (identity, owner) =>
-      readCurrentNativePendingAssignments(state, identity, owner),
+      readCurrentNativePendingAssignments(state.asyncReads, identity, owner),
     readNativeSubagentSubmissions: (identity, owner) =>
-      readCurrentCodexNativeSubagentSubmissions(state, identity, owner),
+      readCurrentCodexNativeSubagentSubmissions(state.asyncReads, identity, owner),
 
     async hasOtherThreadOwner(threadId, currentIdentity) {
       const currentKey = currentIdentity ? bindingStoreKey(currentIdentity) : undefined;
-      return state.entries().some(({ key, value }) => {
+      return (await state.asyncReads.entries()).some(({ key, value }) => {
         const stored = readStoredCodexAppServerBinding(value);
         if (!stored) {
           throw new Error(`Invalid Codex app-server binding row: ${key}`);
@@ -437,7 +443,7 @@ export function createCodexAppServerBindingStore(
 
     async prepareSessionGenerationReclaim(identity) {
       const key = bindingStoreKey(identity);
-      const raw = state.lookup(key);
+      const raw = await state.asyncReads.lookup(key);
       const current = readStoredCodexAppServerBinding(raw);
       if (raw !== undefined && !current) {
         throw new Error(`Invalid Codex app-server binding row: ${key}`);
@@ -490,35 +496,21 @@ export function createCodexAppServerBindingStore(
               }
               if (ownsGeneration) {
                 if (
-                  current.state === "cleared" &&
-                  current.retired === true &&
-                  current.sessionId === mutation.expectedPreviousSessionId
+                  current.state !== "cleared" ||
+                  current.retired !== true ||
+                  current.sessionId !== mutation.expectedPreviousSessionId
                 ) {
-                  // Reset boundaries now retain the OpenClaw session id. The
-                  // authoritative session-store check above proves this fence
-                  // belongs to the previous in-place lifecycle, not live work.
                   return {
-                    result: true,
-                    next: {
-                      version: 1,
-                      state: "cleared",
-                      sessionId: identity.sessionId,
-                      ...preserveNativeTaskImport(current),
-                      ...ownedLease,
-                    },
+                    result: current.state !== "cleared" || current.retired !== true,
                   };
                 }
-                return {
-                  result: current.state !== "cleared" || current.retired !== true,
-                };
-              }
-              if (current.sessionId !== mutation.expectedPreviousSessionId) {
-                return { result: false };
-              }
-              // A stale physical generation must never turn private user-home ownership into
-              // an ordinary empty binding. Supervision adoption has an explicit generation
-              // transfer path; every other successor fails closed and preserves this owner.
-              if (current.state === "active" && current.binding.connectionScope === "supervision") {
+                // The authoritative session-store check proves this same-id fence
+                // belongs to the previous in-place lifecycle, not live work.
+              } else if (
+                current.sessionId !== mutation.expectedPreviousSessionId ||
+                // Only explicit supervision adoption can transfer private user-home ownership.
+                (current.state === "active" && current.binding.connectionScope === "supervision")
+              ) {
                 return { result: false };
               }
               return {
@@ -756,24 +748,4 @@ function isSameSupervisionOwner(
     replacement.threadId === current.threadId &&
     replacement.supervisionSourceThreadId === current.supervisionSourceThreadId
   );
-}
-
-function storedSessionGeneration(
-  identity: CodexAppServerBindingIdentity,
-  current: StoredCodexAppServerBinding | undefined,
-): { sessionId?: string } {
-  if (identity.kind === "session") {
-    return { sessionId: identity.sessionId };
-  }
-  return current?.sessionId ? { sessionId: current.sessionId } : {};
-}
-
-function preservedSessionGeneration(
-  identity: CodexAppServerBindingIdentity,
-  current: StoredCodexAppServerBinding | undefined,
-): { sessionId?: string } {
-  if (current?.sessionId) {
-    return { sessionId: current.sessionId };
-  }
-  return storedSessionGeneration(identity, current);
 }

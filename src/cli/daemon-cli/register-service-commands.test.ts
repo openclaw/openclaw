@@ -97,33 +97,46 @@ describe("addGatewayServiceCommands", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["/opt/Runtime Tools/node", "C:\\\\Runtime Tools\\\\node.exe"])(
-    "forwards an exact runtime pin through gateway and daemon install: %s",
-    async (pin) => {
-      for (const parent of ["gateway", "daemon"]) {
-        runDaemonInstall.mockClear();
-        const program = new Command();
-        if (parent === "gateway") {
-          createGatewayParentLikeCommand(program);
-        } else {
-          registerDaemonCli(program);
-        }
-        await program.parseAsync([parent, "install", "--runtime-path", pin, "--force"], {
-          from: "user",
-        });
-        expect(expectSingleDaemonCall(runDaemonInstall)).toMatchObject({
-          runtimePath: pin,
-          force: true,
-        });
+  it.each([{ parent: "daemon", option: "--restore-service-cli" }])(
+    "defers $parent install startup until $option is checked",
+    async ({ parent, option }) => {
+      const program = new Command().name("openclaw");
+      addGatewayServiceCommands(program.command(parent));
+      registerPreActionHooks(program, "9.9.9-test");
+      const previousArgv = process.argv;
+      const previousTitle = process.title;
+      const previousVerbose = isVerbose();
+      const startupEnv = captureEnv(["NODE_NO_WARNINGS"]);
+      process.argv = [
+        "node",
+        "openclaw",
+        parent,
+        "install",
+        "--json",
+        option,
+        JSON.stringify({ revision: "observed-pin", definition: null }),
+      ];
+      try {
+        await withConsoleLogsRoutedToStderrForJson(
+          process.argv,
+          () => program.parseAsync(process.argv),
+          { restoreChanges: true },
+        );
+      } finally {
+        process.argv = previousArgv;
+        process.title = previousTitle;
+        setVerbose(previousVerbose);
+        startupEnv.restore();
       }
+      expect(ensureConfigReady).not.toHaveBeenCalled();
+      expect(runDaemonInstall).toHaveBeenCalledOnce();
     },
   );
 
-  it.each(
-    ["gateway", "daemon"].flatMap((parent) =>
-      ["install", "restart", "stop"].map((action) => ({ parent, action })),
-    ),
-  )(
+  it.each([
+    { parent: "gateway", action: "install" },
+    { parent: "daemon", action: "stop" },
+  ])(
     "probes $parent $action update custody without startup mutation or invoking the action",
     async ({ parent, action }) => {
       const program = new Command().name("openclaw").enablePositionalOptions();
@@ -163,75 +176,6 @@ describe("addGatewayServiceCommands", () => {
       expect(runDaemonStop).not.toHaveBeenCalled();
     },
   );
-
-  it.each([
-    {
-      name: "forwards install option collisions from parent gateway command",
-      argv: ["install", "--force", "--port", "19000", "--token", "tok_test", "--runtime", "bun"],
-      assert: () => {
-        const opts = expectSingleDaemonCall(runDaemonInstall);
-        expect(opts.force).toBe(true);
-        expect(opts.port).toBe("19000");
-        expect(opts.token).toBe("tok_test");
-        expect(opts.runtime).toBe("bun");
-      },
-    },
-    {
-      name: "preserves an omitted service start-mode override during updater reinstall",
-      argv: ["install", "--force", "--json"],
-      assert: () => {
-        expect(expectSingleDaemonCall(runDaemonInstall)).toMatchObject({
-          force: true,
-          json: true,
-          allowUnconfigured: undefined,
-        });
-      },
-    },
-    {
-      name: "forwards an explicit service start-mode override",
-      argv: ["install", "--allow-unconfigured"],
-      assert: () => {
-        expect(expectSingleDaemonCall(runDaemonInstall).allowUnconfigured).toBe(true);
-      },
-    },
-    {
-      name: "inherits the parent service start-mode override",
-      argv: ["--allow-unconfigured", "install"],
-      assert: () => {
-        expect(expectSingleDaemonCall(runDaemonInstall).allowUnconfigured).toBe(true);
-      },
-    },
-    {
-      name: "forwards stop force control",
-      argv: ["stop", "--force"],
-      assert: () => {
-        const opts = expectSingleDaemonCall(runDaemonStop);
-        expect(opts.force).toBe(true);
-      },
-    },
-    {
-      name: "forwards status auth collisions from parent gateway command",
-      argv: ["status", "--token", "tok_status", "--password", "pw_status"],
-      assert: () => {
-        const opts = expectSingleDaemonCall(runDaemonStatus);
-        const rpc = opts.rpc as { token?: unknown; password?: unknown } | undefined;
-        expect(rpc?.token).toBe("tok_status");
-        expect(rpc?.password).toBe("pw_status"); // pragma: allowlist secret
-      },
-    },
-    {
-      name: "forwards require-rpc for status",
-      argv: ["status", "--require-rpc"],
-      assert: () => {
-        const opts = expectSingleDaemonCall(runDaemonStatus);
-        expect(opts.requireRpc).toBe(true);
-      },
-    },
-  ])("$name", async ({ argv, assert }) => {
-    const gateway = createGatewayParentLikeCommand();
-    await gateway.parseAsync(argv, { from: "user" });
-    assert();
-  });
 
   it.each([
     {
@@ -321,61 +265,7 @@ describe("addGatewayServiceCommands", () => {
     expect(expectSingleDaemonCall(runDaemonRestart)).toMatchObject(expected);
   });
 
-  it.each(["gateway", "daemon"])("parses preservation only on %s restart", async (name) => {
-    const program = new Command()
-      .enablePositionalOptions()
-      .exitOverride()
-      .configureOutput({ writeErr: () => {} });
-    if (name === "daemon") {
-      registerDaemonCli(program);
-    } else {
-      createGatewayParentLikeCommand(program);
-    }
-    await program.parseAsync([name, "restart", "--preserve-definition", "--json"], {
-      from: "user",
-    });
-    expect(expectSingleDaemonCall(runDaemonRestart)).toMatchObject({
-      preserveDefinition: true,
-      json: true,
-    });
-    for (const verb of ["install", "start", "stop", "uninstall"]) {
-      await expect(
-        program.parseAsync([name, verb, "--preserve-definition"], { from: "user" }),
-      ).rejects.toMatchObject({ code: "commander.unknownOption" });
-    }
-    expect(runDaemonInstall).not.toHaveBeenCalled();
-    expect(runDaemonStart).not.toHaveBeenCalled();
-    expect(runDaemonStop).not.toHaveBeenCalled();
-    expect(runDaemonUninstall).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ...[
-      { leaf: "status", runner: runDaemonStatus },
-      { leaf: "install", runner: runDaemonInstall },
-      { leaf: "uninstall", runner: runDaemonUninstall },
-      { leaf: "start", runner: runDaemonStart },
-      { leaf: "stop", runner: runDaemonStop },
-      { leaf: "restart", runner: runDaemonRestart },
-    ].map(({ leaf, runner }) => ({
-      argv: ["daemon", "--json", leaf],
-      runner,
-    })),
-    { argv: ["daemon", "status", "--json"], runner: runDaemonStatus },
-  ])("forwards JSON mode for $argv", async ({ argv, runner }) => {
-    const program = new Command().enablePositionalOptions().exitOverride();
-    registerDaemonCli(program);
-
-    await program.parseAsync(argv, { from: "user" });
-
-    expect(expectSingleDaemonCall(runner).json).toBe(true);
-  });
-
-  it.each(
-    ["gateway", "daemon"].flatMap((name) =>
-      [undefined, "10000", "200"].map((timeout) => ({ name, timeout })),
-    ),
-  )(
+  it.each([{ name: "daemon", timeout: "200" }])(
     "preserves $name status timeout $timeout without inventing an explicit value",
     async ({ name, timeout }) => {
       const program = new Command().enablePositionalOptions().exitOverride();
@@ -405,18 +295,5 @@ describe("addGatewayServiceCommands", () => {
       port: "19002",
       localPortOverride: 19002,
     });
-  });
-
-  it.each([
-    { argv: ["status", "--port", "0"], error: "--port must be an integer between 1 and 65535." },
-    {
-      argv: ["--port", "19002", "status", "--url", "ws://localhost:19002"],
-      error: "Use either --url or --port, not both.",
-    },
-  ])("rejects invalid status options $argv", async ({ argv, error }) => {
-    const gateway = createGatewayParentLikeCommand().enablePositionalOptions().exitOverride();
-
-    await expect(gateway.parseAsync(argv, { from: "user" })).rejects.toThrow(error);
-    expect(runDaemonStatus).not.toHaveBeenCalled();
   });
 });

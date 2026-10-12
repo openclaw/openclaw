@@ -1,10 +1,6 @@
 // Discord tests cover command deploy plugin behavior.
 /* oxlint-disable typescript/unbound-method -- vitest mocks of RequestClient methods (createRest) intentionally expose vi.fn refs via `restA.get`/`.post`; not unbound class methods. */
-import {
-  ApplicationCommandType,
-  type APIApplicationCommand,
-  type APIApplicationCommandOption,
-} from "discord-api-types/v10";
+import type { APIApplicationCommand, APIApplicationCommandOption } from "discord-api-types/v10";
 import { describe, expect, test, vi } from "vitest";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { commandsEqual } from "./command-comparison.js";
@@ -173,7 +169,6 @@ describe("DiscordCommandDeployer SQLite cache", () => {
     readonly commandKind = "leaf";
     name: string;
     override description = "ping the bot";
-    type = ApplicationCommandType.ChatInput;
 
     constructor(name: string) {
       super();

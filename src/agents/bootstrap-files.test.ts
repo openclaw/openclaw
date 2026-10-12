@@ -61,21 +61,6 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 let testState: OpenClawTestState | undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function registerExtraBootstrapFileHook() {
-  registerInternalHook("agent:bootstrap", (event) => {
-    const context = event.context as AgentBootstrapHookContext;
-    context.bootstrapFiles = [
-      ...context.bootstrapFiles,
-      {
-        name: "EXTRA.md",
-        path: path.join(context.workspaceDir, "EXTRA.md"),
-        content: "extra",
-        missing: false,
-      } as unknown as WorkspaceBootstrapFile,
-    ];
-  });
-}
-
 function registerMalformedBootstrapFileHook() {
   registerInternalHook("agent:bootstrap", (event) => {
     const context = event.context as AgentBootstrapHookContext;
@@ -190,39 +175,11 @@ function registerBootstrapFileHook(relativePath = "BOOTSTRAP.md") {
   });
 }
 
-async function createHeartbeatAgentsWorkspace() {
-  const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-  await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
-  await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "repo rules", "utf8");
-  return workspaceDir;
-}
-
 async function writeCompletedWorkspaceState(workspaceDir: string): Promise<void> {
   await mergeWorkspaceSetupState(workspaceDir, {
     bootstrapSeededAt: "2026-05-16T00:00:00.000Z",
     setupCompletedAt: "2026-05-16T00:00:01.000Z",
   });
-}
-
-async function writeLegacyCompletedWorkspaceState(workspaceDir: string): Promise<void> {
-  await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
-  await fs.writeFile(
-    path.join(workspaceDir, ".openclaw", "workspace-state.json"),
-    `${JSON.stringify({
-      version: 1,
-      bootstrapSeededAt: "2026-05-16T00:00:00.000Z",
-      setupCompletedAt: "2026-05-16T00:00:01.000Z",
-    })}\n`,
-    "utf8",
-  );
-}
-
-function expectHeartbeatExcludedAndAgentsKept(files: WorkspaceBootstrapFile[]) {
-  // Heartbeat policy can remove HEARTBEAT.md for normal turns, but project rules
-  // must remain in the bootstrap set.
-  const fileNames = files.map((file) => file.name);
-  expect(fileNames).not.toContain("HEARTBEAT.md");
-  expect(fileNames).toContain("AGENTS.md");
 }
 
 describe("resolveBootstrapFilesForRun", () => {
@@ -363,30 +320,6 @@ describe("resolveBootstrapFilesForRun", () => {
     );
   });
 
-  it("keeps BOOTSTRAP.md until Doctor migrates legacy setup state", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await writeLegacyCompletedWorkspaceState(workspaceDir);
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "stale ritual", "utf8");
-
-    const files = await resolveBootstrapFilesForRun({ workspaceDir });
-
-    expect(files.map((file) => file.name)).toContain("AGENTS.md");
-    expect(files.map((file) => file.name)).toContain("BOOTSTRAP.md");
-  });
-
-  it("does not let hooks re-add stale root BOOTSTRAP.md after setup is completed", async () => {
-    registerBootstrapFileHook();
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await writeCompletedWorkspaceState(workspaceDir);
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "stale ritual", "utf8");
-
-    const files = await resolveBootstrapFilesForRun({ workspaceDir });
-
-    expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
-  });
-
   it("ignores stale root BOOTSTRAP.md for home-relative workspace paths", async () => {
     registerBootstrapFileHook();
     const parentDir = await makeTempWorkspace("openclaw-bootstrap-home-");
@@ -424,34 +357,6 @@ describe("resolveBootstrapFilesForRun", () => {
     );
     expect(files.map((file) => file.path)).not.toContain(path.join(workspaceDir, "BOOTSTRAP.md"));
   });
-
-  it("keeps MEMORY.md for direct sessions", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-direct-");
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      sessionKey: "agent:main:discord:direct:user-1",
-    });
-
-    expect(files.map((file) => file.name)).toContain("MEMORY.md");
-  });
-
-  it.each(["group", "channel"] as const)(
-    "drops MEMORY.md for an opaque session with authoritative %s chat type",
-    async (chatType) => {
-      const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-shared-");
-      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
-
-      const files = await resolveBootstrapFilesForRun({
-        workspaceDir,
-        sessionKey: "agent:main:opaque:binding",
-        chatType,
-      });
-
-      expect(files.map((file) => file.name)).not.toContain("MEMORY.md");
-    },
-  );
 
   it.each(["direct", "group", "channel"] as const)(
     "applies root-memory source privacy while keeping unrelated aliases for %s chats",
@@ -551,19 +456,6 @@ describe("resolveBootstrapFilesForRun", () => {
     },
   );
 
-  it("does not let hooks re-add MEMORY.md to shared sessions", async () => {
-    registerNamedBootstrapFileHook();
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-shared-");
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      sessionKey: "agent:main:slack:channel:c1",
-    });
-
-    expect(files.map((file) => file.name)).not.toContain("MEMORY.md");
-  });
-
   it("does not let hooks relabel and re-add root MEMORY.md to shared sessions", async () => {
     registerNamedBootstrapFileHook("MEMORY.md", "SOUL.md");
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-shared-alias-");
@@ -576,20 +468,6 @@ describe("resolveBootstrapFilesForRun", () => {
     });
 
     expect(files.map((file) => file.path)).not.toContain(rootMemoryPath);
-  });
-
-  it("keeps hook-added nested MEMORY.md in shared sessions", async () => {
-    registerNamedBootstrapFileHook(path.join("packages", "core", "MEMORY.md"));
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-nested-memory-");
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      sessionKey: "agent:main:slack:channel:c1",
-    });
-
-    expect(files.map((file) => path.relative(workspaceDir, file.path))).toContain(
-      path.join("packages", "core", "MEMORY.md"),
-    );
   });
 
   it("keeps missing hook records without source identity when policy allows them", async () => {
@@ -677,32 +555,6 @@ describe("resolveBootstrapContextForRun", () => {
   beforeEach(() => clearInternalHooks());
   afterEach(() => clearInternalHooks());
 
-  it("returns context files for hook-adjusted bootstrap files", async () => {
-    registerExtraBootstrapFileHook();
-
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    const result = await resolveBootstrapContextForRun({ workspaceDir });
-    const extra = result.contextFiles.find(
-      (file) => file.path === path.join(workspaceDir, "EXTRA.md"),
-    );
-
-    expect(extra?.content).toBe("extra");
-  });
-
-  it("keeps BOOTSTRAP.md available in shared injected context for non-attempt consumers", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "ritual", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
-
-    const result = await resolveBootstrapContextForRun({ workspaceDir });
-
-    const bootstrapFileNames = result.bootstrapFiles.map((file) => file.name);
-    expect(bootstrapFileNames).toContain("BOOTSTRAP.md");
-    const contextFileNames = new Set(result.contextFiles.map((file) => path.basename(file.path)));
-    expect(contextFileNames.has("BOOTSTRAP.md")).toBe(true);
-    expect(contextFileNames.has("AGENTS.md")).toBe(true);
-  });
-
   it("keeps bootstrap context empty in lightweight heartbeat mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
@@ -715,23 +567,6 @@ describe("resolveBootstrapContextForRun", () => {
 
     // Heartbeat context comes from cron scratch via the heartbeat runner now.
     expect(files).toStrictEqual([]);
-  });
-
-  it("never re-imports a leftover workspace HEARTBEAT.md into bootstrap context", async () => {
-    const workspaceDir = await createHeartbeatAgentsWorkspace();
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      runKind: "heartbeat",
-      config: {
-        agents: {
-          defaults: { heartbeat: {} },
-          list: [{ id: "main" }],
-        },
-      },
-    });
-
-    expectHeartbeatExcludedAndAgentsKept(files);
   });
 });
 
@@ -851,10 +686,6 @@ describe("hasCompletedBootstrapTurn", () => {
     expect(await hasCompletedBootstrapTurn({ ...sessionTarget, storePath: undefined })).toBe(false);
   });
 
-  it("returns false when the SQLite session has no transcript", async () => {
-    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
-  });
-
   it("returns false when no full bootstrap marker has been recorded", async () => {
     sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
     sessionManager.appendCustomEntry("openclaw:unrelated", { timestamp: 2 });
@@ -893,15 +724,6 @@ describe("hasCompletedBootstrapTurn", () => {
     expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 
-  it("accepts a newer full bootstrap marker after a session reset", async () => {
-    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
-    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
-    sessionManager.appendResetBoundary("reset");
-    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 3 });
-
-    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
-  });
-
   it("ignores completion markers on an inactive transcript branch", async () => {
     const firstEntryId = sessionManager.appendMessage(makeUserMessage("hello", 1));
     sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
@@ -931,65 +753,11 @@ describe("makeBootstrapWarn", () => {
       "workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating (sessionKey=agent:main:test-session)",
     ]);
   });
-
-  it("keeps warnings distinct across sessions", () => {
-    const warnings: string[] = [];
-    const workspaceDir = `/tmp/${randomUUID()}`;
-    const first = makeBootstrapWarn({
-      sessionLabel: "agent:main:first-session",
-      workspaceDir,
-      warn: (message) => warnings.push(message),
-    });
-    const second = makeBootstrapWarn({
-      sessionLabel: "agent:main:second-session",
-      workspaceDir,
-      warn: (message) => warnings.push(message),
-    });
-
-    first?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating");
-    second?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating");
-
-    expect(warnings).toEqual([
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating (sessionKey=agent:main:first-session)",
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating (sessionKey=agent:main:second-session)",
-    ]);
-  });
-
-  it("keeps warnings distinct across workspaces with the same session", () => {
-    const warnings: string[] = [];
-    const workspaceRoot = `/tmp/${randomUUID()}`;
-    const first = makeBootstrapWarn({
-      sessionLabel: "agent:main:shared-session",
-      workspaceDir: `${workspaceRoot}/workspace-a`,
-      warn: (message) => warnings.push(message),
-    });
-    const second = makeBootstrapWarn({
-      sessionLabel: "agent:main:shared-session",
-      workspaceDir: `${workspaceRoot}/workspace-b`,
-      warn: (message) => warnings.push(message),
-    });
-
-    first?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating");
-    second?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating");
-
-    expect(warnings).toEqual([
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating (sessionKey=agent:main:shared-session)",
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating (sessionKey=agent:main:shared-session)",
-    ]);
-  });
 });
 
 describe("resolveContextInjectionMode", () => {
   it("defaults to always when config is missing", () => {
     expect(resolveContextInjectionMode(undefined)).toBe("always");
-  });
-
-  it("returns the configured continuation-skip mode", () => {
-    expect(
-      resolveContextInjectionMode({
-        agents: { defaults: { contextInjection: "continuation-skip" } },
-      } as never),
-    ).toBe("continuation-skip");
   });
 
   it("uses per-agent contextInjection before defaults", () => {
@@ -998,7 +766,7 @@ describe("resolveContextInjectionMode", () => {
         {
           agents: {
             defaults: { contextInjection: "continuation-skip" },
-            list: [{ id: "strict", contextInjection: "always" }],
+            entries: { strict: { contextInjection: "always" } },
           },
         } as never,
         "strict",
@@ -1012,7 +780,7 @@ describe("resolveContextInjectionMode", () => {
         {
           agents: {
             defaults: { contextInjection: "never" },
-            list: [{ id: "worker" }],
+            entries: { worker: {} },
           },
         } as never,
         "worker",

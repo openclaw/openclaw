@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { expressionBuilder } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -6,6 +7,10 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import {
+  sessionEntrySnapshotColumnsDefinition as snapshotColumns,
+  type SessionEntryProjection,
+} from "./session-entry-snapshot-values.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionEntrySnapshot = {
@@ -13,34 +18,31 @@ export type SessionEntrySnapshot = {
   valueJson: string;
 };
 
-export type SessionEntrySnapshotRow = {
-  session_diff_baseline_json?: string | null;
-  skills_snapshot_json?: string | null;
-  system_prompt_report_json?: string | null;
-};
-
-const snapshotColumns = [
-  ["sessionDiffBaseline", "session_diff_baseline_json"],
-  ["skillsSnapshot", "skills_snapshot_json"],
-  ["systemPromptReport", "system_prompt_report_json"],
-] as const;
+export type { SessionEntrySnapshotRow } from "./session-entry-storage.types.js";
 
 /** One statement owns hot and cold facts; JSON remains opaque to SQLite's depth limit. */
-export function sessionEntrySnapshotColumnsForKeys(keys?: readonly string[]) {
+export function sessionEntrySnapshotColumnsForKeys(
+  keys?: readonly string[],
+  projection: SessionEntryProjection = "full",
+) {
   const selectedKeys = keys === undefined ? undefined : sqliteStringSet(keys);
   const eb = expressionBuilder<DB, "session_nodes">();
-  return snapshotColumns.map(([field, alias]) => {
-    const snapshot = eb
-      .selectFrom("session_entry_snapshots")
-      .select("value_json")
-      .whereRef("session_entry_snapshots.session_key", "=", "session_nodes.session_key")
-      .where("field", "=", field);
-    return (
-      selectedKeys === undefined
-        ? snapshot
-        : eb.case().when("session_nodes.session_key", "in", selectedKeys).then(snapshot).end()
-    ).as(alias);
-  });
+  return snapshotColumns
+    .filter(
+      ([field]) => projection === "full" || (projection !== "list" && projection.includes(field)),
+    )
+    .map(([field, alias]) => {
+      const snapshot = eb
+        .selectFrom("session_entry_snapshots")
+        .select("value_json")
+        .whereRef("session_entry_snapshots.session_key", "=", "session_nodes.session_key")
+        .where("field", "=", field);
+      return (
+        selectedKeys === undefined
+          ? snapshot
+          : eb.case().when("session_nodes.session_key", "in", selectedKeys).then(snapshot).end()
+      ).as(alias);
+    });
 }
 
 export const sessionEntrySnapshotColumns = sessionEntrySnapshotColumnsForKeys();
@@ -57,7 +59,11 @@ export function splitSessionEntrySnapshots(
   const values = { sessionDiffBaseline, skillsSnapshot, systemPromptReport };
   const snapshotsChanged =
     mode === "complete" ||
-    snapshotColumns.some(([field]) => values[field] !== mode.previousEntry?.[field]);
+    snapshotColumns.some(
+      ([field]) =>
+        values[field] !== mode.previousEntry?.[field] &&
+        !isDeepStrictEqual(values[field], mode.previousEntry?.[field]),
+    );
   const snapshots: SessionEntrySnapshot[] = [];
   for (const [field] of snapshotsChanged ? snapshotColumns : []) {
     const valueJson = JSON.stringify(values[field]);
@@ -66,20 +72,6 @@ export function splitSessionEntrySnapshots(
     }
   }
   return { entryJson: JSON.stringify(hot), snapshots, snapshotsChanged };
-}
-
-export function attachSessionEntrySnapshots<T extends object>(
-  entry: T,
-  row: SessionEntrySnapshotRow,
-): T {
-  for (const [field, alias] of snapshotColumns) {
-    const valueJson = row[alias];
-    if (valueJson != null) {
-      const value: unknown = JSON.parse(valueJson);
-      Object.assign(entry, { [field]: value });
-    }
-  }
-  return entry;
 }
 
 /** The entry writer owns this synchronous transaction and publishes its committed facts. */
@@ -105,12 +97,18 @@ export function writeSessionEntrySnapshots(
         ),
       ),
   );
-  for (const snapshot of snapshots) {
+  if (snapshots.length > 0) {
     executeSqliteQuerySync(
       database.db,
       db
         .insertInto("session_entry_snapshots")
-        .values({ session_key: sessionKey, field: snapshot.field, value_json: snapshot.valueJson })
+        .values(
+          snapshots.map((snapshot) => ({
+            session_key: sessionKey,
+            field: snapshot.field,
+            value_json: snapshot.valueJson,
+          })),
+        )
         .onConflict((conflict) =>
           conflict
             .columns(["session_key", "field"])

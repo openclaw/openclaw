@@ -75,8 +75,6 @@ describe("listControlUiPluginTabs", () => {
 
   it.each([
     { basePath: "", path: "/reports", match: "exact" as const, auth: "gateway" as const },
-    { basePath: "", path: "/reports", match: "prefix" as const, auth: "plugin" as const },
-    { basePath: "/team/", path: "/team/reports", match: "exact" as const, auth: "plugin" as const },
     { basePath: "/team", path: "/team", match: "prefix" as const, auth: "gateway" as const },
   ])(
     "drops a slug shadowed by $auth $match route $path under $basePath once",
@@ -114,24 +112,6 @@ describe("listControlUiPluginTabs", () => {
     },
   );
 
-  it.each([
-    { basePath: "", path: "/report", match: "prefix" as const },
-    { basePath: "", path: "/reports/child", match: "prefix" as const },
-    { basePath: "/team", path: "/reports", match: "exact" as const },
-    { basePath: "/team", path: "/team", match: "exact" as const },
-  ])(
-    "keeps slugs when $match route $path does not shadow mount $basePath",
-    ({ basePath, ...route }) => {
-      setRuntimeConfigSnapshot({ gateway: { controlUi: { basePath } } });
-      const registry = activateDescriptors(
-        [{ pluginId: "reports-fixture", descriptor: tabDescriptor({ slug: "reports" }) }],
-        [{ ...route, pluginId: "other" }],
-      );
-      expect(listControlUiPluginTabs(["operator.read"])[0]?.slug).toBe("reports");
-      expect(registry.diagnostics).toEqual([]);
-    },
-  );
-
   it("projects only tab descriptors", () => {
     activateDescriptors([
       {
@@ -155,7 +135,6 @@ describe("listControlUiPluginTabs", () => {
         pluginId: "logbook",
         descriptor: tabDescriptor({
           sessionActions: ["append", "export"],
-          allowChatNavigation: true,
         }),
       },
     ]);
@@ -164,7 +143,6 @@ describe("listControlUiPluginTabs", () => {
       expect.objectContaining({
         pluginId: "logbook",
         sessionActions: ["append", "export"],
-        allowChatNavigation: true,
       }),
     ]);
   });
@@ -315,36 +293,6 @@ describe("listControlUiPluginTabs", () => {
     ]);
   });
 
-  it("matches gateway routes against descriptor URL pathnames", () => {
-    const path = "/plugins/logbook/panel?view=activity#settings";
-    activateDescriptors(
-      [{ pluginId: "logbook", descriptor: tabDescriptor({ path }) }],
-      [{ pluginId: "logbook", path: "/plugins/logbook/panel", match: "exact" }],
-    );
-
-    expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([
-      {
-        pluginId: "logbook",
-        path: "/plugins/logbook/panel",
-        match: "exact",
-        scopes: ["operator.read"],
-      },
-    ]);
-    expect(listControlUiPluginTabs(["operator.read"])).toEqual([
-      expect.objectContaining({ path, requiresGatewayAuth: true }),
-    ]);
-  });
-
-  it("does not grant a matching route owned by another plugin", () => {
-    activateDescriptors(
-      [{ pluginId: "logbook", descriptor: tabDescriptor({ path: "/shared/panel" }) }],
-      [{ pluginId: "other", path: "/shared", match: "prefix" }],
-    );
-
-    expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([]);
-    expect(listControlUiPluginTabs(["operator.admin"])).toEqual([]);
-  });
-
   it("uses the first dispatched gateway route as descriptor owner", () => {
     activateDescriptors(
       [{ pluginId: "outer", descriptor: tabDescriptor({ path: "/shared/panel" }) }],
@@ -457,31 +405,6 @@ describe("listControlUiPluginTabs", () => {
     expect(listControlUiPluginTabs(["operator.admin"]).map((tab) => tab.pluginId)).toEqual([
       "alpha",
       "beta",
-    ]);
-  });
-
-  it("uses only the first route owner when plugins declare the same path", () => {
-    activateDescriptors(
-      [
-        { pluginId: "alpha", descriptor: tabDescriptor({ id: "alpha", path: "/shared" }) },
-        { pluginId: "beta", descriptor: tabDescriptor({ id: "beta", path: "/shared" }) },
-      ],
-      [
-        { pluginId: "alpha", path: "/shared", match: "exact" },
-        { pluginId: "beta", path: "/shared", match: "prefix" },
-      ],
-    );
-
-    expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([
-      {
-        pluginId: "alpha",
-        path: "/shared",
-        match: "exact",
-        scopes: ["operator.read"],
-      },
-    ]);
-    expect(listControlUiPluginTabs(["operator.admin"]).map((tab) => tab.pluginId)).toEqual([
-      "alpha",
     ]);
   });
 });

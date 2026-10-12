@@ -5,7 +5,6 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   buildRealtimeVoiceAgentControlSpeechMessage,
-  canonicalizeBase64,
   extractErrorCode,
   readErrorName,
   rawDataToString,
@@ -59,7 +58,6 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   model: string;
   onError?: (error: Error) => void;
   onFatalError: (error: Error) => void;
-  onAudio?: (audio: Buffer) => void;
   onSessionStarted?: (expiresAt: number | undefined) => void;
   onSessionClosed?: (
     reason: Extract<OpenAIQuicksilverInboundEvent, { kind: "session-closed" }>["reason"],
@@ -121,27 +119,25 @@ export class OpenAIQuicksilverDelegationController {
   private stopped = false;
   private drainDisposition: "abort" | "detach" | undefined;
   private readonly transcript = new OpenAIQuicksilverTranscript();
-  private readonly publicDelegations: OpenAILiveDelegationQueue | undefined;
+  private readonly delegations: OpenAILiveDelegationQueue;
 
   constructor(
     private readonly options: OpenAIQuicksilverDelegationControllerOptions,
     private readonly formatErrorMessage: OpenAIRealtimeHost["formatErrorMessage"],
   ) {
-    if (isOpenAIGptLiveApiModel(options.model)) {
-      this.publicDelegations = new OpenAILiveDelegationQueue({
-        isActive: () => !this.stopped && !this.drainDisposition && !options.signal.aborted,
-        readInput: () => this.transcript.latestUserInput(),
-        dispatch: (id, input) => this.startDelegation(id, input),
-        onExpired: (id) => {
-          this.sendAppend(
-            "Ask the user to repeat their request; no user transcript was received.",
-            "speakable",
-            id,
-          );
-        },
-        onError: (error) => this.fail(error),
-      });
-    }
+    this.delegations = new OpenAILiveDelegationQueue({
+      isActive: () => !this.stopped && !this.drainDisposition && !options.signal.aborted,
+      readInput: () => this.transcript.latestUserInput(),
+      dispatch: (id, input) => this.startDelegation(id, input),
+      onExpired: (id) => {
+        this.sendAppend(
+          "Ask the user to repeat their request; no user transcript was received.",
+          "speakable",
+          id,
+        );
+      },
+      onError: (error) => this.fail(error),
+    });
     this.completionClaimsAdopted = options.runAgentConsult.adoptCompletionClaims !== undefined;
     options.runAgentConsult.adoptCompletionClaims?.();
     if (options.signal.aborted) {
@@ -177,7 +173,13 @@ export class OpenAIQuicksilverDelegationController {
   }
 
   handleEvent(event: OpenAIQuicksilverInboundEvent): void {
-    if (this.stopped || event.kind === "ignored" || event.kind === "audio-cleared") {
+    // Media workers and browser WebRTC own audio; this controller owns delegation events.
+    if (
+      this.stopped ||
+      event.kind === "ignored" ||
+      event.kind === "audio-cleared" ||
+      event.kind === "audio"
+    ) {
       return;
     }
     if (
@@ -214,7 +216,7 @@ export class OpenAIQuicksilverDelegationController {
           onTranscript: this.options.onTranscript,
           canAppend: () => !this.stopped,
         });
-        this.publicDelegations?.resume();
+        this.delegations.resume();
       } else {
         this.transcript.append(event);
         this.options.onTranscript?.(event.role, event.text, event.kind === "transcript-done");
@@ -231,22 +233,12 @@ export class OpenAIQuicksilverDelegationController {
       }
       return;
     }
-    if (event.kind === "audio") {
-      if (!this.options.onAudio) {
-        // Browser and OAuth Gateway sessions negotiate audio over WebRTC.
-        return;
-      }
-      const audio = canonicalizeBase64(event.data);
-      if (!audio) {
-        this.fail(new Error("OpenAI GPT-Live returned malformed base64 audio"));
-        return;
-      }
-      this.options.onAudio(Buffer.from(audio, "base64"));
-      return;
-    }
-    if (this.publicDelegations) {
-      this.publicDelegations.enqueue(event.id);
+    if (isOpenAIGptLiveApiModel(this.options.model)) {
+      this.delegations.enqueue(event.id);
     } else {
+      if (!this.delegations.claim(event.id)) {
+        return;
+      }
       const input = event.prompt ?? this.transcript.latestUserInput();
       if (event.prompt === undefined && !input.trim()) {
         this.sendAppend(
@@ -273,7 +265,7 @@ export class OpenAIQuicksilverDelegationController {
       return;
     }
     this.drainDisposition = disposition;
-    this.publicDelegations?.stop();
+    this.delegations.stop();
     this.revokeRequesterFinal();
     this.pendingDelegation = undefined;
     if (disposition === "abort") {
@@ -282,24 +274,15 @@ export class OpenAIQuicksilverDelegationController {
   }
 
   stop(reason: Error): void {
-    if (this.stopped) {
-      return;
+    if (this.retire()) {
+      this.consultController?.abort(reason);
+      this.consultController = undefined;
     }
-    this.publicDelegations?.stop();
-    this.flushTranscript();
-    this.markStopped();
-    this.consultController?.abort(reason);
-    this.consultController = undefined;
   }
 
   /** Releases sideband ownership without canceling work already accepted by the host. */
   detach(): void {
-    if (this.stopped) {
-      return;
-    }
-    this.publicDelegations?.stop();
-    this.flushTranscript();
-    this.markStopped();
+    this.retire();
   }
 
   flushTranscript(): void {
@@ -461,12 +444,18 @@ export class OpenAIQuicksilverDelegationController {
     this.steeringPromise = completion;
   }
 
-  private markStopped(): void {
+  private retire(): boolean {
+    if (this.stopped) {
+      return false;
+    }
+    this.delegations.stop();
+    this.flushTranscript();
     this.stopped = true;
     this.revokeRequesterFinal();
     this.options.signal.removeEventListener("abort", this.onSessionAbort);
     this.pendingDelegation = undefined;
     this.transcript.clear();
+    return true;
   }
 
   private async runDelegation(

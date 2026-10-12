@@ -330,11 +330,10 @@ export async function applySystemAgentSetup(
     const allowWorkspaceWrite = params.allowWorkspaceChange || !currentHasRoster;
     let setupBaseConfig = currentBaseConfig;
     if (currentHasRoster) {
-      const { list: _legacyList, ...agents } = setupBaseConfig.agents ?? {};
       setupBaseConfig = {
         ...setupBaseConfig,
         agents: {
-          ...agents,
+          ...setupBaseConfig.agents,
           entries: toAgentEntriesRecord(roster),
         },
       };
@@ -514,16 +513,12 @@ export async function applySystemAgentSetup(
       const { updateExecApprovals } = await import("../infra/exec-approvals.js");
       beforePersistentApply?.();
       await updateExecApprovals({
-        update: (approvals) =>
-          approvals.agents?.openclaw
-            ? null
-            : {
-                ...approvals,
-                agents: {
-                  ...approvals.agents,
-                  openclaw: { security: "full", ask: "off" },
-                },
-              },
+        assertCurrent: beforePersistentApply,
+        update: {
+          kind: "ensure-agent",
+          agentId: "openclaw",
+          policy: { security: "full", ask: "off" },
+        },
       });
     },
     (error) =>

@@ -4,11 +4,17 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { QueuedFollowupReplyBatch } from "../../auto-reply/reply/queue/types.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
+import {
+  readTranscriptEventId,
+  readTranscriptEventMessage,
+} from "../../config/sessions/session-accessor.sqlite-read.js";
+import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
+import { findTranscriptEvent } from "../../config/sessions/session-transcript-match.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
-import { loadSessionEntry } from "../session-utils.js";
-import { formatForLog } from "../ws-log.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import {
   extractAssistantDisplayText,
   hasAssistantDisplayMediaContent,
@@ -23,18 +29,16 @@ import {
   broadcastChatTerminal,
   isSourceReplyTranscriptMirrorPayload,
 } from "./chat-broadcast.js";
+import { withPreparedWebchatReplyMedia } from "./chat-reply-media.js";
 import {
-  captureWebchatReplyMediaScope,
-  withPreparedWebchatReplyMedia,
-  type WebchatReplyMediaRequesterContext,
-} from "./chat-reply-media.js";
-import {
+  buildTranscriptReplyTextFromInputs,
   readChatSendReplyPayload,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
-import { isChatSendReplyDeliveryAuthorized } from "./chat-send-delivery-authority.js";
-import { buildTranscriptReplyTextFromInputs } from "./chat-send-reply-dispatch.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
+import {
+  createChatSendReplyFinalizationAuthority,
+  type ChatSendReplyFinalizationParams,
+} from "./chat-send-delivery-authority.js";
 import {
   assistantTranscriptScope,
   publishAssistantTranscriptRewrite,
@@ -43,7 +47,6 @@ import {
   type SourceReplyTranscriptMirror,
   type SourceReplyTranscriptRewrite,
 } from "./chat-transcript-persistence.js";
-import type { GatewayRequestContext } from "./types.js";
 
 function selectChatSendAgentReplyInputs(params: {
   deliveredReplies: readonly DeliveredChatSendReply[];
@@ -60,35 +63,27 @@ function selectChatSendAgentReplyInputs(params: {
     .map((entry) => entry.input);
 }
 
-type FinalizeChatSendAgentRepliesBase = {
-  requesterContext?: WebchatReplyMediaRequesterContext;
-  abortSignal?: AbortSignal;
-  accountId: string | undefined;
-  context: GatewayRequestContext;
-  emitFirstAssistantServerTiming: () => void;
-  session: Pick<
-    PreparedChatSendSession,
-    "agentId" | "backingSessionId" | "cfg" | "clientRunId" | "sessionKey" | "sessionLoadOptions"
-  >;
-};
-
 type ChatSendAgentReplyFinalization =
   | { kind: "delivered"; hasSourceReplyTranscriptMirror: boolean }
   | { kind: "dropped"; reason: "no-visible-content" };
 
 export function createChatSendLateReplyFinalizer(
-  params: Omit<FinalizeChatSendAgentRepliesBase, "emitFirstAssistantServerTiming">,
+  params: Omit<ChatSendReplyFinalizationParams, "emitFirstAssistantServerTiming">,
 ) {
   return async ({
-    runId,
+    runId: runtimeRunId,
+    clientRunId: runId,
     payloads,
     completion,
     isCurrent,
   }: Pick<QueuedFollowupReplyBatch, "runId" | "payloads" | "completion"> & {
+    clientRunId: string;
     isCurrent: () => boolean;
   }): Promise<ChatSendAgentReplyFinalization> => {
     const { context, session } = params;
     const broadcastParams = {
+      // Recovery uses its new run's lifecycle owner, not the original source admission.
+      terminalEntry: runId === session.clientRunId ? params.terminalEntry : undefined,
       context,
       runId,
       sessionKey: session.sessionKey,
@@ -107,7 +102,7 @@ export function createChatSendLateReplyFinalizer(
         publishMessage: (message, deliveryAuthorized) => {
           publicationStarted = true;
           if (completion.kind === "progress") {
-            const text = typeof message.text === "string" ? message.text : undefined;
+            const text = typeof message?.text === "string" ? message.text : undefined;
             if (text) {
               const run = context.chatRunState.getOrCreate(runId);
               broadcastChatDelta({
@@ -119,18 +114,25 @@ export function createChatSendLateReplyFinalizer(
             }
           } else {
             const run = context.chatRunState.runs.get(runId);
+            const canvas = run?.bufferIsCurrent?.() === false ? [] : (run?.canvasBlocks ?? []);
             broadcastChatTerminal({
               ...broadcastParams,
               state: "final",
-              message:
-                run?.bufferIsCurrent?.() === false
-                  ? message
-                  : appendChatCanvasBlocksToMessage(message, run?.canvasBlocks ?? []),
+              message: appendChatCanvasBlocksToMessage(
+                message ??
+                  (canvas.length
+                    ? { role: "assistant", content: [], timestamp: Date.now() }
+                    : undefined),
+                canvas,
+              ),
               stopReason: completion.stopReason,
             });
           }
         },
       });
+      if (!isCurrent()) {
+        return { kind: "dropped", reason: "no-visible-content" };
+      }
       if (
         completion.kind === "failed" ||
         completion.kind === "aborted" ||
@@ -181,7 +183,7 @@ export function createChatSendLateReplyFinalizer(
         : result;
     } catch (error) {
       // Preparation failure can still complete the run. An uncertain broadcast cannot be replayed.
-      if (terminal && !publicationStarted) {
+      if (terminal && !publicationStarted && isCurrent()) {
         context.chatRunState.flushPendingText(runId);
         broadcastChatTerminal({
           ...broadcastParams,
@@ -192,42 +194,36 @@ export function createChatSendLateReplyFinalizer(
       throw error;
     } finally {
       if (terminal) {
-        context.removeChatRun(runId, runId, session.sessionKey);
-        context.chatRunState.clearRun(runId);
-        context.agentRunSeq.delete(runId);
+        context.removeChatRun(runtimeRunId, runId, session.sessionKey);
+        if (isCurrent()) {
+          context.chatRunState.clearRun(runId);
+          context.agentRunSeq.delete(runId);
+        }
+        context.agentRunSeq.delete(runtimeRunId);
       }
     }
   };
 }
 
 async function finalizeChatSendAgentReplyPayloads(
-  params: FinalizeChatSendAgentRepliesBase & {
+  params: ChatSendReplyFinalizationParams & {
     inputs: readonly ReplyDispatchOperation[];
     suppressFinal?: boolean;
-    publishMessage?: (message: Record<string, unknown>, deliveryAuthorized: () => boolean) => void;
+    publishMessage?: (
+      message: Record<string, unknown> | undefined,
+      deliveryAuthorized: () => boolean,
+    ) => void;
     isCurrent?: () => boolean;
   },
 ): Promise<ChatSendAgentReplyFinalization> {
-  const { accountId, context, emitFirstAssistantServerTiming, session } = params;
-  const { agentId, backingSessionId, cfg, clientRunId, sessionKey, sessionLoadOptions } = session;
+  const { context, emitFirstAssistantServerTiming, session } = params;
+  const { agentId, backingSessionId, clientRunId, sessionKey, sessionLoadOptions } = session;
   const agentRunReplyPayloads = params.inputs.map(readChatSendReplyPayload);
   if (agentRunReplyPayloads.length === 0) {
     return { kind: "dropped", reason: "no-visible-content" };
   }
-  const deliveryAuthorized = () =>
-    (!params.isCurrent || params.isCurrent()) &&
-    agentRunReplyPayloads.every((payload) =>
-      isChatSendReplyDeliveryAuthorized({ agentId, payload, sessionLoadOptions }),
-    );
-  const authorizeDelivery = (stage: string) => {
-    if (deliveryAuthorized()) {
-      return true;
-    }
-    context.logGateway.warn(
-      `webchat settled final reply skipped: session writer changed before ${stage}`,
-    );
-    return false;
-  };
+  const { deliveryAuthorized, authorizeDelivery, captureMediaScope } =
+    createChatSendReplyFinalizationAuthority(params, agentRunReplyPayloads);
   if (!authorizeDelivery("finalization")) {
     return { kind: "dropped", reason: "no-visible-content" };
   }
@@ -235,59 +231,88 @@ async function finalizeChatSendAgentReplyPayloads(
   const hasSourceReplyTranscriptMirror = agentRunReplyPayloads.some(
     isSourceReplyTranscriptMirrorPayload,
   );
-  const mediaScope = captureWebchatReplyMediaScope({
-    requesterContext: params.requesterContext,
-    cfg,
-    sessionKey,
-    agentId,
-    sessionLoadOptions,
-    accountId,
-    assertCurrent: () => {
-      if (!deliveryAuthorized()) {
-        throw new Error("Chat media delivery is no longer authorized.");
-      }
-    },
-  });
-  const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
-    sessionKey,
-    sessionLoadOptions,
-  );
+  const mediaScope = captureMediaScope();
+  const { storePath: latestStorePath, entry: latestEntry } =
+    await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: context.getRuntimeConfig(),
+      key: sessionKey,
+      ...sessionLoadOptions,
+      projection: [],
+    });
+  if (!authorizeDelivery("session preparation")) {
+    return { kind: "dropped", reason: "no-visible-content" };
+  }
   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+  const sourceReplyScope = assistantTranscriptScope({
+    sessionId,
+    sessionKey,
+    storePath: latestStorePath,
+    agentId,
+  });
+  const committedSourceContent = await Promise.all(
+    agentRunReplyPayloads.map(async (payload) => {
+      const mirror = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
+      if (!sourceReplyScope || !mirror?.transcriptOwner || !mirror.idempotencyKey) {
+        return undefined;
+      }
+      const found = await findTranscriptEvent(sourceReplyScope, {
+        kind: "idempotency",
+        key: mirror.idempotencyKey,
+        deliveryMirror: true,
+      });
+      mediaScope.assertCurrent();
+      const messageId = found && readTranscriptEventId(found.event);
+      if (!messageId) {
+        return undefined;
+      }
+      const { anchors } = await readSessionTranscriptAnchorsAsync(
+        { ...sourceReplyScope, sessionKey },
+        { entryIds: [messageId] },
+        params.abortSignal,
+      );
+      mediaScope.assertCurrent();
+      const content = readAssistantDisplayContent(readTranscriptEventMessage(found.event));
+      return anchors.length > 0 && content.length > 0 ? content : undefined;
+    }),
+  );
+  mediaScope.assertCurrent();
+  const hasCommittedSourceReply = committedSourceContent.some(Boolean);
   const { finalInputsByIndex, sourceReplyContentStates, sourceReplyBroadcastContent } =
     await withPreparedWebchatReplyMedia(
       {
         scope: mediaScope,
         storePath: latestStorePath,
-        inputs: params.inputs,
+        inputs: params.inputs.filter((_, index) => !committedSourceContent[index]),
         abortSignal: params.abortSignal,
         includeSensitiveMedia: false,
-        onLocalAudioAccessDenied: (err) => {
-          context.logGateway.warn(
-            `webchat audio embedding denied local path: ${formatForLog(err)}`,
-          );
-        },
-        onManagedMediaPrepareError: (message) => {
-          context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
-        },
+        logGateway: context.logGateway,
       },
       async ({ payloads: normalizedPayloads, inputsByIndex, buildContent }) => {
         const contentStates: SourceReplyContentState[] = [];
         const broadcastContent: AssistantDisplayContentBlock[] = [];
+        let preparedIndex = 0;
         for (const [replyIndex] of agentRunReplyPayloads.entries()) {
-          const finalPayload = normalizedPayloads[replyIndex];
+          const committedContent = committedSourceContent[replyIndex];
+          if (committedContent) {
+            // The committed row already owns session.message/history delivery.
+            // Re-emitting its blocks as an unkeyed terminal creates a second occurrence.
+            contentStates[replyIndex] = {
+              broadcastContent: [],
+              persistedContent: committedContent,
+              hasManagedOutgoingContent: hasManagedOutgoingAssistantContent(committedContent),
+              backedManagedOutgoingContent: true,
+            };
+            continue;
+          }
+          const inputIndex = preparedIndex++;
+          const finalPayload = normalizedPayloads[inputIndex];
           if (!finalPayload) {
             continue;
           }
           const {
-            assistantContent: replyAssistantContent,
             persistedAssistantContent: persistedContent,
-            mediaMessage: replyMediaMessage,
-          } = await buildContent(inputsByIndex[replyIndex] ?? []);
-          const replyBroadcastContent = hasAssistantDisplayMediaContent(replyAssistantContent)
-            ? replyAssistantContent
-            : hasAssistantDisplayMediaContent(replyMediaMessage?.content)
-              ? replyMediaMessage?.content
-              : replyAssistantContent;
+            broadcastContent: replyBroadcastContent,
+          } = await buildContent(inputsByIndex[inputIndex] ?? []);
           const state: SourceReplyContentState = {
             broadcastContent: replyBroadcastContent ? [...replyBroadcastContent] : [],
             persistedContent: persistedContent ? [...persistedContent] : [],
@@ -308,7 +333,7 @@ async function finalizeChatSendAgentReplyPayloads(
   const displayReply =
     extractAssistantDisplayText(sourceReplyBroadcastContent) ??
     buildTranscriptReplyTextFromInputs(finalInputsByIndex.flat());
-  if (!sourceReplyBroadcastContent.length && !displayReply) {
+  if (!sourceReplyBroadcastContent.length && !displayReply && !hasCommittedSourceReply) {
     return { kind: "dropped", reason: "no-visible-content" };
   }
 
@@ -333,7 +358,10 @@ async function finalizeChatSendAgentReplyPayloads(
       metadata: mirrorMetadata,
     };
     sourceReplyMirrorCandidates.push(candidate);
-    if (hasAssistantDisplayMediaContent(state.persistedContent)) {
+    if (
+      !state.backedManagedOutgoingContent &&
+      hasAssistantDisplayMediaContent(state.persistedContent)
+    ) {
       if (!state.hasManagedOutgoingContent) {
         state.backedManagedOutgoingContent = true;
       }
@@ -341,12 +369,6 @@ async function finalizeChatSendAgentReplyPayloads(
     }
   }
 
-  const sourceReplyScope = assistantTranscriptScope({
-    sessionId,
-    sessionKey,
-    storePath: latestStorePath,
-    agentId,
-  });
   if (!authorizeDelivery("transcript finalization")) {
     return { kind: "dropped", reason: "no-visible-content" };
   }
@@ -386,18 +408,19 @@ async function finalizeChatSendAgentReplyPayloads(
   const sourceReplyTextFromContent = extractAssistantDisplayText(sourceReplyContent);
   const sourceReplyText =
     sourceReplyTextFromContent ?? (sourceReplyContent.length === 0 ? displayReply : undefined);
-  const message = {
-    role: "assistant",
-    ...(sourceReplyContent.length
-      ? { content: sourceReplyContent }
-      : sourceReplyText
-        ? { content: [{ type: "text", text: sourceReplyText }] }
-        : {}),
-    ...(sourceReplyText ? { text: sourceReplyText } : {}),
-    timestamp: Date.now(),
-    stopReason: "stop",
-    usage: { input: 0, output: 0, totalTokens: 0 },
-  };
+  const message =
+    sourceReplyContent.length || sourceReplyText
+      ? {
+          role: "assistant",
+          content: sourceReplyContent.length
+            ? sourceReplyContent
+            : [{ type: "text", text: sourceReplyText }],
+          ...(sourceReplyText ? { text: sourceReplyText } : {}),
+          timestamp: Date.now(),
+          stopReason: "stop",
+          usage: { input: 0, output: 0, totalTokens: 0 },
+        }
+      : undefined;
   // Failed turns retain source media/transcript finalization; chat.error carries no message.
   if (!params.suppressFinal) {
     if (!authorizeDelivery("broadcast")) {
@@ -410,6 +433,7 @@ async function finalizeChatSendAgentReplyPayloads(
       params.publishMessage(message, deliveryAuthorized);
     } else {
       broadcastChatFinal({
+        terminalEntry: params.terminalEntry,
         context,
         runId: clientRunId,
         sessionKey,
@@ -423,7 +447,7 @@ async function finalizeChatSendAgentReplyPayloads(
 
 /** Persist and broadcast agent-run source/status replies that bypass the normal model turn. */
 export async function finalizeChatSendSourceReplies(
-  params: FinalizeChatSendAgentRepliesBase & {
+  params: ChatSendReplyFinalizationParams & {
     deliveredReplies: readonly DeliveredChatSendReply[];
     hasReturnedAgentErrorPayloads: boolean;
     suppressFinal?: boolean;

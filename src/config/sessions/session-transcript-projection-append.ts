@@ -20,6 +20,10 @@ export type SessionTranscriptProjectionCursor = {
   leafEventId: string | null;
 };
 
+export type SessionTranscriptProjectionState = SessionTranscriptProjectionCursor & {
+  needsRebuild: boolean;
+};
+
 export type PreparedSessionTranscriptProjectionAppend = {
   activeRow?: {
     activePosition: number;

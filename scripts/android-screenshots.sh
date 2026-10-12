@@ -616,7 +616,7 @@ scene_ready_text() {
     # The screenshot fixture seeds chat history and restores at the live edge,
     # so wait for the latest reply instead of empty-chat copy.
     chat) printf '%s\n' "The Android release is close." ;;
-    settings) printf '%s\n' "OpenClaw mobile" ;;
+    settings) printf '%s\n' "Device name and identity" ;;
     voice-wake) printf '%s\n' "Wake listener" ;;
     # Connected fixtures can push Add Gateway below the composed viewport, so
     # wait for the gateway detail's always-visible subtitle instead.
@@ -682,7 +682,7 @@ normalize_capture_for_play() {
   rm -f "$input_path"
 
   description="$(file "$output_path")"
-  if [[ "$description" != *"${SCREENSHOT_SIZE/x/x}"* || "$description" != *"JPEG image data"* ]]; then
+  if [[ "$description" != *"$SCREENSHOT_SIZE"* || "$description" != *"JPEG image data"* ]]; then
     echo "Invalid Google Play screenshot output: ${description}" >&2
     return 1
   fi

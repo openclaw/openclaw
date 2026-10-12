@@ -183,7 +183,7 @@ cannot be combined with `placement: "route:<pluginId>"`. Registration rejects
 duplicate slugs from another active plugin (the first registration wins) and
 Gateway-owned names: `api`, `plugins`, `plugin`, `focus`, `approve`, `ask`, `share`,
 `j`, `v1`, `ui`, `mcp-app-sandbox`, `__openclaw__`, `__openclaw`, `sessions`,
-`agent`, `agents`, and probe names `health`, `healthz`, `ready`, `readyz`, `startup`,
+`agent`, `agents`, and check names `health`, `healthz`, `ready`, `readyz`, `startup`,
 and `startupz`.
 
 The Control UI ignores slugs matching the first segment of any native route or
@@ -200,7 +200,7 @@ short-lived, HttpOnly grant scoped to that plugin and route root so the
 sandboxed frame can load without copying the Gateway bearer token into its URL
 or JavaScript. The authenticated parent renews the grant while the external tab
 is active and before mounting it after navigation or browser resume. It also
-probes the grant from the same opaque sandbox before mounting, so browser
+checks the grant from the same opaque sandbox before mounting, so browser
 privacy modes that block the cookie fail closed with an unavailable panel.
 The frame grant accepts only `GET` and `HEAD` and always carries
 `operator.read`; `requiredScopes` controls tab visibility but never widens the
@@ -209,8 +209,9 @@ cookie grant. An external tab that needs a mutation can declare an explicit
 through `plugins.sessionAction` and supplies the active Control UI session key.
 The Gateway derives the action's context-window size from trusted session/model state
 and leaves the action's registered operator-scope and payload-schema checks in
-force. `allowChatNavigation: true` separately allows the tab to return the
-parent to a chat session. There is no generic parent fetch proxy and the frame
+force. Existing `openclaw-plugin-session-open` messages still use the parent's
+canonical session navigation, including the preferred session view. There is no
+generic parent fetch proxy and the frame
 never receives the Gateway bearer token. External tabs require HTTPS/Tailscale Serve or a
 browser-trusted loopback origin; plain HTTP on a LAN host shows the
 secure-context error instead of mounting a panel that cannot authenticate.
@@ -256,7 +257,6 @@ api.session.controls.registerControlUiDescriptor({
   group: "control",
   requiredScopes: ["operator.write"],
   sessionActions: ["append-entry"],
-  allowChatNavigation: true,
 });
 ```
 
@@ -304,11 +304,12 @@ port.postMessage({
 The parent replies on the same port with
 `{ v: 1, type: "openclaw.pluginUi.response", id, ok, result?, error? }`.
 It sends `openclaw.pluginUi.update` when the active session context or declared
-capabilities change. Each action and navigation request must echo the latest
+capabilities change. Each action request must echo the latest
 `context.revision` as `contextRevision`; stale requests are rejected before
 Gateway dispatch.
-When chat navigation is enabled, the frame can send
-`{ v: 1, type: "openclaw.pluginUi.navigate", id, target: "chat", sessionKey, contextRevision }`.
+For action-enabled documents, the parent verifies the current injected document
+over a private port before accepting an existing session-open message. This port
+is not exposed to plugin code; replacement documents cannot reuse the bridge.
 The parent accepts neither a plugin id nor a target session key for action
 dispatch: the active descriptor and current Control UI session supply both.
 
@@ -484,7 +485,7 @@ when it follows a failed or revoked core operation.
 
 The Crabbox adapter uses `crabbox exec --id <lease-id> [--pty] -- /bin/sh -c ...`
 and `stop --current-repo --id <lease-id>` from the original owning workspace. Its
-pre-allocation `exec --check` probe requires `execution` and `currentRepoStop` to
+pre-allocation `exec --check` check requires `execution` and `currentRepoStop` to
 both be true; initial support is for direct Daytona leases. Static SSH continues
 to use its existing settings through an adapter into the same workspace owner.
 

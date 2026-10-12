@@ -85,30 +85,39 @@ function mount(
 afterEach(() => document.body.replaceChildren());
 
 describe("Browser dashboard presentation", () => {
-  it("opens an isolated dashboard with session write access while hiding global transfers", async () => {
+  it.each([false, true])("routes dashboard access and transfers for admin=%s", async (admin) => {
     const { element, request } = mount(
       async (envelope) =>
         envelope.path === "/dashboard" ? response("first") : { running: false, tabs: [] },
       true,
-      ["operator.sessions.write"],
+      [admin ? "operator.admin" : "operator.sessions.write"],
     );
     await vi.waitFor(() => expect(element.querySelector("openclaw-browser-panel")).not.toBeNull());
     const panel = element.querySelector("openclaw-browser-panel")!;
     await panel.updateComplete;
     expect(request).toHaveBeenCalledWith(
-      "browser.dashboard.request",
-      expect.objectContaining({
-        sessionKey,
-        dashboard: { name: "status", instanceId: "first" },
-        method: "POST",
-        path: "/dashboard",
-      }),
+      admin ? "browser.request" : "browser.dashboard.request",
+      expect.objectContaining(
+        admin
+          ? { target: "host", path: "/dashboard" }
+          : {
+              sessionKey,
+              dashboard: { name: "status", instanceId: "first" },
+              method: "POST",
+              path: "/dashboard",
+            },
+      ),
       { timeoutMs: 150_000 },
     );
-    expect(panel.dashboardTarget?.sessionScoped).toBe(true);
-    expect(panel.shadowRoot?.querySelector('[aria-label="Download file"]')).toBeNull();
-    expect(panel.shadowRoot?.querySelector('[aria-label="New tab"]')).toBeNull();
-    expect(element.textContent).toContain("isolated session browser");
+    expect(panel.dashboardTarget?.sessionScoped).toBe(admin ? undefined : true);
+    const download = panel.renderRoot?.querySelector('[aria-label="Download file"]');
+    if (admin) {
+      expect(download).not.toBeNull();
+    } else {
+      expect(download).toBeNull();
+      expect(panel.renderRoot?.querySelector('[aria-label="New tab"]')).toBeNull();
+      expect(element.textContent).toContain("isolated session browser");
+    }
   });
 
   it.each([
@@ -136,22 +145,6 @@ describe("Browser dashboard presentation", () => {
     expect(element.querySelector("openclaw-browser-panel")).toBeNull();
     expect(request).toHaveBeenCalledOnce();
     expect(request.mock.calls[0]?.[0]).toBe("browser.dashboard.request");
-  });
-
-  it("keeps administrator dashboards on the global route with transfers", async () => {
-    const { element, request } = mount(async (envelope) =>
-      envelope.path === "/dashboard" ? response("first") : { running: false, tabs: [] },
-    );
-    await vi.waitFor(() => expect(element.querySelector("openclaw-browser-panel")).not.toBeNull());
-    const panel = element.querySelector("openclaw-browser-panel")!;
-    await panel.updateComplete;
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({ target: "host", path: "/dashboard" }),
-      { timeoutMs: 150_000 },
-    );
-    expect(panel.dashboardTarget?.sessionScoped).toBeUndefined();
-    expect(panel.shadowRoot?.querySelector('[aria-label="Download file"]')).not.toBeNull();
   });
 
   it("keeps an unfinished Stop visible until closure is confirmed", async () => {
@@ -258,8 +251,8 @@ describe("Browser dashboard presentation", () => {
     expect(panel.fixedTab?.targetId).toBe("current");
     expect(panel.dashboardTarget?.instanceId).toBe("current");
     await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelector('[aria-label="New tab"]')).toBeNull();
-    expect(panel.shadowRoot?.querySelector('[aria-label^="Close tab"]')).toBeNull();
+    expect(panel.renderRoot?.querySelector('[aria-label="New tab"]')).toBeNull();
+    expect(panel.renderRoot?.querySelector('[aria-label^="Close tab"]')).toBeNull();
   });
 
   it("hides without closing and stops/resumes through the dashboard owner", async () => {

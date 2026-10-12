@@ -31,12 +31,12 @@ import type {
   CronFailureNotificationDetail,
   CronDeliveryStatus,
   CronDeliveryTrace,
-  CronResolvedDeliveryState,
   CronJob,
   CronNextCheckProposal,
   CronJobCreate,
   CronJobPatch,
   CronRunDiagnostics,
+  CronRunDeliveryResult,
   CronMessageChannel,
   CronRunOutcome,
   CronRunStatus,
@@ -108,17 +108,6 @@ export type CronSystemEventEnqueueResult =
 /** Notifications queued by cron mutations until their state is durable. */
 export type DeferredCronNotifications = CronNotificationIntent[];
 
-export type CronRunDeliveryResult = {
-  /** True after verified delivery, including a matching messaging-tool send. */
-  delivered?: boolean;
-  /** Delivery may have been attempted without a confirmed transport acknowledgment. */
-  deliveryAttempted?: boolean;
-  deliveryError?: string;
-  deliverySuppressionReason?: NormalizeReplySkipReason;
-  deliveryState?: CronResolvedDeliveryState;
-  delivery?: CronDeliveryTrace;
-};
-
 export type CronServiceDeps = {
   nowMs?: () => number;
   scheduler: GatewayScheduler;
@@ -143,7 +132,7 @@ export type CronServiceDeps = {
   /** Resolve the current default when runtime config can change after startup. */
   resolveDefaultAgentId?: () => string | undefined;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
-  resolveSessionStoreAgentIds?: () => string[];
+  resolveSessionStoreAgentIds?: () => string[] | Promise<string[]>;
   /** Revalidate resident policy using the supplied transaction or worker deletion facts. */
   isAgentAvailable?: CronAgentAvailability;
   resolveSessionStorePath?: (agentId?: string) => string;
@@ -185,7 +174,7 @@ export type CronServiceDeps = {
   resolveOriginDeliveryContext?: (params: {
     sessionKey?: string;
     agentId?: string;
-  }) => DeliveryContext | undefined;
+  }) => DeliveryContext | undefined | Promise<DeliveryContext | undefined>;
   /** Binds the Gateway for complete scheduled operations, including admission and settlement. */
   runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
@@ -328,16 +317,20 @@ type QueuedCronRunReservation = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
-  /** One prepared list, invalidated by committed revisions and service mutations. */
-  listPageSnapshot?: {
+  /** Read facts share one generation across committed and scheduler-local mutations. */
+  readSnapshot?: {
     storeRevision: number;
-    filteredJobs: CronJob[];
-    sortBy: CronJobsSortBy;
-    sortDir: CronSortDir;
-    jobs: CronJob[];
+    source: CronJob[] | undefined;
+    status: CronStatusSummary;
+    list?: {
+      filteredJobs: CronJob[];
+      sortBy: CronJobsSortBy;
+      sortDir: CronSortDir;
+      jobs: CronJob[];
+      snapshotRevision: string;
+    };
     /** Requested rows are detached and frozen once for this list generation. */
     readJobs: WeakMap<CronJob, CronJob>;
-    snapshotRevision: string;
   };
   /** Last known durable wake for each persisted job. Map presence distinguishes
    * a durably unscheduled job from one that is not part of durable topology. */
@@ -478,6 +471,7 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  sourceConversation?: CronStoredJob["sourceConversation"];
   /** Selected revisions captured from a validated caller session, never public input. */
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;

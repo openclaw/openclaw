@@ -32,7 +32,7 @@ import { leasePendingAgentSteeringItems } from "../../subagents/registry/subagen
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
@@ -153,8 +153,10 @@ async function fixture(
     forceToolNames: ["message", "denied"],
   });
   const admission = prepareSystemAgentRunAdmission(cfg, runId, agentId, "prefilter-test");
+  const promptStateLease = retainEmbeddedSessionPromptState(runId);
   onTestFinished(() => {
     admission.close();
+    promptStateLease[Symbol.dispose]();
     forgetPromptBuildDrainCacheForRun(runId);
     clearEmbeddedSessionPromptStates([runId]);
   });
@@ -201,8 +203,8 @@ async function fixture(
     assembly: Awaited<ReturnType<typeof assemble>>,
     persistToolResultProjections: () => Promise<void>,
   ) => {
-    const state = getEmbeddedSessionPromptState(runId);
-    return submitEmbeddedAttemptPrompt({
+    const state = promptStateLease.state;
+    return await submitEmbeddedAttemptPrompt({
       attempt,
       activeSession: session,
       contextTokenBudget: 8000,
@@ -211,7 +213,6 @@ async function fixture(
       transcriptPrompt: assembly.effectivePrompt,
       systemPrompt: session.agent.state.systemPrompt,
       runtimeOnly: false,
-      sessionPromptState: state,
       toolResultPromptProjectionState: state.toolResults,
       toolResultMaxChars: 4000,
       toolResultAggregateMaxChars: 8000,

@@ -4,6 +4,7 @@ import ai.openclaw.app.SecurePrefs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.Required
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -43,15 +44,11 @@ data class GatewayRegistryEntry(
 
 @Serializable
 internal data class PersistedGatewayRegistry(
+  @Required
   val version: Int = 1,
   val activeStableId: String? = null,
   val connectedStableIds: List<String>? = null,
   val entries: List<GatewayRegistryEntry> = emptyList(),
-)
-
-@Serializable
-private data class PersistedGatewayRegistryVersion(
-  val version: Int,
 )
 
 class GatewayRegistryStore(
@@ -171,7 +168,7 @@ class GatewayRegistryStore(
       val nextEntries = _entries.value.filterNot { it.stableId == normalized }
       val nextActiveStableId = _activeStableId.value?.takeUnless { it == normalized }
       val nextConnectedStableIds = _connectedStableIds.value.filterNot { it == normalized }
-      if (!persistSynchronously(nextEntries, nextActiveStableId, nextConnectedStableIds)) return@synchronized false
+      if (!prefs.putStringSynchronously(STORAGE_KEY, encodedRegistry(nextEntries, nextActiveStableId, nextConnectedStableIds))) return@synchronized false
 
       // Publish only after the durable commit.
       _entries.value = nextEntries
@@ -192,17 +189,6 @@ class GatewayRegistryStore(
     if (!mutationsAllowed) return
     prefs.putString(STORAGE_KEY, encodedRegistry())
   }
-
-  private fun persistSynchronously(
-    entries: List<GatewayRegistryEntry>,
-    activeStableId: String?,
-    connectedStableIds: List<String>,
-  ): Boolean =
-    mutationsAllowed &&
-      prefs.putStringSynchronously(
-        STORAGE_KEY,
-        encodedRegistry(entries, activeStableId, connectedStableIds),
-      )
 
   private fun encodedRegistry(
     entries: List<GatewayRegistryEntry> = _entries.value,
@@ -227,19 +213,15 @@ class GatewayRegistryStore(
 
   private fun decode(rawValue: String?): DecodedRegistry {
     val raw = rawValue ?: return DecodedRegistry(PersistedGatewayRegistry(), canRewrite = false)
-    val version =
-      runCatching { json.decodeFromString<PersistedGatewayRegistryVersion>(raw) }
-        .getOrNull()
-        ?.version
-        ?.takeIf { it in 1..2 }
-        ?: return DecodedRegistry(PersistedGatewayRegistry(), canRewrite = false)
     val decoded =
-      runCatching { json.decodeFromString<PersistedGatewayRegistry>(raw) }.getOrNull()
+      runCatching { json.decodeFromString<PersistedGatewayRegistry>(raw) }
+        .getOrNull()
+        ?.takeIf { it.version in 1..2 }
         ?: return DecodedRegistry(PersistedGatewayRegistry(), canRewrite = false)
     val entries = decoded.entries.sortedForStorage()
     val active = decoded.activeStableId?.takeIf { activeId -> entries.any { it.stableId == activeId } }
     val connected =
-      (decoded.connectedStableIds ?: if (version == 1) listOfNotNull(active) else emptyList())
+      (decoded.connectedStableIds ?: if (decoded.version == 1) listOfNotNull(active) else emptyList())
         .distinct()
         .filter { connectedId -> entries.any { it.stableId == connectedId } }
     return DecodedRegistry(

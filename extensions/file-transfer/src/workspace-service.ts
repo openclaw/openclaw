@@ -47,9 +47,7 @@ export function registerNodeWorkspaces(api: OpenClawPluginApi): void {
         "plugins.entries.file-transfer.config.workspaces",
         "agents.defaults.workspace",
         "agents.entries.*.workspace",
-        "agents.entries.*.default",
         "agents.ownership",
-        "agents.list",
       ],
     },
     async start(ctx) {

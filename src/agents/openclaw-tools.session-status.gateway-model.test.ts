@@ -87,7 +87,7 @@ function modelConfig(
 ): OpenClawConfig {
   return {
     agents: {
-      entries: { main: { default: true }, support: {} },
+      entries: { main: {}, support: {} },
       defaults: {
         ...selection,
         modelSelectionScope: "global",
@@ -294,7 +294,6 @@ it.each([false, true])(
 );
 
 it.each([
-  ["unavailable", "The selected runtime is no longer available."],
   ["retired before commit", "The selected runtime is no longer available."],
   ["sandbox", "requires a sandbox"],
   ["worker", "cannot select a runtime without cloud placement support"],
@@ -390,7 +389,7 @@ it("routes status model changes through the original operator policy and preserv
     models: { "fixture/blocked": { alias: "blocked" }, "fixture/allowed": { alias: "chosen" } },
     modelPolicy: { allow: ["fixture/*"] },
   });
-  cfg.agents = { ...cfg.agents, entries: { main: { default: true } } };
+  cfg.agents = { ...cfg.agents, entries: { main: {} } };
   cfg.gateway = {
     roles: {
       default: "limited",

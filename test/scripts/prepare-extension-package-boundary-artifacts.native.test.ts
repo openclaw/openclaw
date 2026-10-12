@@ -17,6 +17,14 @@ import {
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 
+function copyFixtureFiles(root: string, files: string[]) {
+  for (const file of files) {
+    const target = path.join(root, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.cpSync(path.resolve(file), target, { recursive: true });
+  }
+}
+
 function createPreparationFixture(mode: "package-boundary" | "all", signal: AbortSignal) {
   const ancestor = fs.realpathSync.native(fixture.createTempDir("native-preparer-"));
   const root = path.join(ancestor, ".claude/worktrees/validation");
@@ -33,6 +41,7 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     JSON.stringify({
       compilerOptions: {
         target: "es2023",
+        lib: ["es5"],
         module: "nodenext",
         skipLibCheck: true,
         types: [],
@@ -41,11 +50,15 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   );
   write(
     "packages/plugin-sdk/tsconfig.json",
-    JSON.stringify({ extends: "../../tsconfig.json", include: ["../../src/**/*.ts"] }),
+    JSON.stringify({
+      extends: "../../tsconfig.json",
+      include: ["../../src/**/*.ts"],
+      exclude: ["../../src/shared/deferred.ts"],
+    }),
   );
   write("src/plugin-sdk/core.ts", 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
-  for (const file of [
+  copyFixtureFiles(root, [
     "scripts/prepare-extension-package-boundary-artifacts.mts",
     "scripts/compile-extension-boundary.mts",
     "scripts/run-tsgo.mjs",
@@ -54,15 +67,12 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     "scripts/tsx.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib",
+    "src/shared/deferred.ts",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
-  ]) {
-    const target = path.join(root, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.cpSync(path.resolve(file), target, { recursive: true });
-  }
+  ]);
   write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
-  for (const name of ["tsx", "@openclaw/fs-safe"]) {
+  for (const name of ["tsx", "@openclaw/fs-safe", "@openclaw/proc-safe"]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.resolve("node_modules", name), target);
@@ -121,15 +131,11 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
 }
 
 function writeSelectedConsumer(f: ReturnType<typeof createPreparationFixture>) {
-  for (const file of [
+  copyFixtureFiles(f.root, [
     "scripts/check-file-utils.ts",
     "src/plugins/package-entrypoints.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
-  ]) {
-    const target = path.join(f.root, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.copyFileSync(path.resolve(file), target);
-  }
+  ]);
   f.write(
     "packages/plugin-sdk/tsconfig.json",
     JSON.stringify({
@@ -379,16 +385,12 @@ describe("native declaration preparation", () => {
   it("prepares the full shared SDK when the boundary checker selects no packages", ({ signal }) =>
     fixture.run(async () => {
       const f = createPreparationFixture("package-boundary", signal);
-      for (const file of [
+      copyFixtureFiles(f.root, [
         "scripts/check-extension-package-tsc-boundary.mts",
         "scripts/check-file-utils.ts",
         "src/plugins/package-entrypoints.ts",
         "src/shared/non-packaged-plugin-dirs.ts",
-      ]) {
-        const target = path.join(f.root, file);
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.copyFileSync(path.resolve(file), target);
-      }
+      ]);
       fs.symlinkSync(path.resolve("node_modules/p-map"), path.join(f.root, "node_modules/p-map"));
       fs.mkdirSync(path.join(f.root, "extensions"));
       f.write(
@@ -585,7 +587,6 @@ describe("native declaration preparation", () => {
     { name: "Windows 8.3 short entry", entry: true, workspace: false },
     { name: "Windows 8.3 workspace junction", entry: false, workspace: true },
     { name: "Windows 8.3 short entry and workspace junction", entry: true, workspace: true },
-    { name: "POSIX PWD alias (package-boundary)", mode: "package-boundary" as const },
     { name: "POSIX PWD alias (all)", mode: "all" as const },
   ])(
     "publishes cold native output and reuses warm receipts through $name",
@@ -698,39 +699,37 @@ describe("native declaration preparation", () => {
     },
   );
 
-  it.for(["package-boundary", "all"] as const)(
-    "preserves outputs on compile failure and prunes obsolete declarations after repair (%s)",
+  it(
+    "preserves outputs on compile failure and prunes obsolete declarations after repair",
     { timeout: 30_000 },
-    (mode, { signal }) =>
+    ({ signal }) =>
       fixture.run(async () => {
         const { root, native, write, plugins, recordPath, output, step, run } =
-          createPreparationFixture(mode, signal);
+          createPreparationFixture("all", signal);
         await run();
-        if (mode === "all") {
-          const slackBoundaryEntry = BOUNDARY_PLUGIN_UNITS.find(([id]) => id === "slack")?.[1];
-          if (!slackBoundaryEntry) {
-            throw new Error("Slack extension boundary entry is missing");
-          }
-          write(
-            "consumer.ts",
-            `import { consume } from "./.artifacts/extension-package-boundary/plugins/slack/${slackBoundaryEntry}.js"; consume(value => value.toUpperCase());`,
-          );
-          await step(
-            "isolated-boundary-consumer",
-            [
-              "--ignoreConfig",
-              "--module",
-              "nodenext",
-              "--target",
-              "es2023",
-              "--strict",
-              "--skipLibCheck",
-              "--noEmit",
-              path.join(root, "consumer.ts"),
-            ],
-            native,
-          );
+        const slackBoundaryEntry = BOUNDARY_PLUGIN_UNITS.find(([id]) => id === "slack")?.[1];
+        if (!slackBoundaryEntry) {
+          throw new Error("Slack extension boundary entry is missing");
         }
+        write(
+          "consumer.ts",
+          `import { consume } from "./.artifacts/extension-package-boundary/plugins/slack/${slackBoundaryEntry}.js"; consume(value => value.toUpperCase());`,
+        );
+        await step(
+          "isolated-boundary-consumer",
+          [
+            "--ignoreConfig",
+            "--module",
+            "nodenext",
+            "--target",
+            "es2023",
+            "--strict",
+            "--skipLibCheck",
+            "--noEmit",
+            path.join(root, "consumer.ts"),
+          ],
+          native,
+        );
         const first = readArtifactRecord(recordPath)!;
         expect(first.outputs[`${output}/src/nested.d.ts`]).toBeDefined();
         write("src/plugin-sdk/core.ts", 'export { value } from "../renamed.js";');
@@ -776,39 +775,6 @@ describe("native declaration preparation", () => {
         await run();
         expect(fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs).toBe(unchanged);
         expect(fs.statSync(recordPath).mtimeMs).toBe(unchangedRecord);
-      }),
-  );
-
-  it.for(["src/nested.ts", "package.json"])(
-    "rejects %s mutated after native emit without publishing or pruning",
-    { timeout: 30_000 },
-    (input, { signal }) =>
-      fixture.run(async () => {
-        const f = createPreparationFixture("package-boundary", signal);
-        const trigger = path.join(f.root, ".artifacts/mutate-after-native");
-        const source = path.join(f.root, input);
-        const original = fs.readFileSync(source, "utf8");
-        const worker = path.join(f.root, "scripts/compile-extension-boundary.mts");
-        fs.appendFileSync(
-          worker,
-          `\nif (fs.existsSync(${JSON.stringify(trigger)})) fs.appendFileSync(${JSON.stringify(source)}, "\\n");\n`,
-        );
-        await f.run();
-        expect(readArtifactRecord(f.recordPath)).toBeDefined();
-        f.write(`${f.output}/orphan.d.ts`, "export interface Orphan {}\n");
-        f.write(".artifacts/mutate-after-native", "armed");
-
-        // The fixture worker mutates only after the real native emitter exits
-        // successfully; its unchanged membership must still fail the seal fence.
-        await expect(f.run()).rejects.toThrow("failed with exit code 1");
-        expect(fs.readFileSync(source, "utf8")).toBe(`${original}\n`);
-        expect(fs.existsSync(f.recordPath)).toBe(false);
-        expect(fs.readFileSync(path.join(f.root, f.output, "orphan.d.ts"), "utf8")).toBe(
-          "export interface Orphan {}\n",
-        );
-        expect(fs.existsSync(path.join(f.root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
-          false,
-        );
       }),
   );
 

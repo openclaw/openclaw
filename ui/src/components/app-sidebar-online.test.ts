@@ -12,6 +12,7 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import "../test-helpers/app-sidebar-suite.ts";
+import { selectSidebarView } from "../test-helpers/app-sidebar-setup.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -83,7 +84,11 @@ function createWorkloadGateway(readSummary: () => Promise<SessionsListResult>, i
       if (!Value.Check(SessionsListParamsSchema, params)) {
         throw new Error("Invalid sessions.list request");
       }
-      return params.includeOwnerSessionCounts ? summaryRequest() : PAGE;
+      if (params.includeOwnerSessionCounts && params.excludeSubagents) {
+        return summaryRequest();
+      }
+      // Navigation scope equivalence is a separate full-population query.
+      return params.includeOwnerSessionCounts ? summary() : PAGE;
     }
     throw new Error("Unexpected Gateway request: " + method);
   });
@@ -109,6 +114,7 @@ async function mountWorkload(readSummary = async () => summary(), includeRaw = f
     TWO_AGENTS,
   );
   mounted.sidebar.connected = true;
+  await selectSidebarView(mounted.sidebar, "online");
   await mounted.sidebar.updateComplete;
   await vi.dynamicImportSettled();
   await settle(mounted.sidebar);
@@ -185,7 +191,7 @@ describe("sidebar people workload", () => {
     },
   );
 
-  it("keeps a single deduplicated self visible in the roster and collapsed facepile", async () => {
+  it("keeps a single deduplicated self visible when returning to Online", async () => {
     const { sidebar, gateway } = await mountWorkload();
     const self = presence()[0]!;
     gateway.publishEvent("presence", {
@@ -194,13 +200,43 @@ describe("sidebar people workload", () => {
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["ada"]);
     expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
-    await click(sidebar, ".sidebar-online .sidebar-session-group-toggle");
-    const facepile = sidebar.querySelector("openclaw-viewer-facepile");
-    expect(facepile?.staticUsers?.map((user) => user.id)).toEqual(["ada"]);
+    await selectSidebarView(sidebar, "sessions");
+    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
+    await selectSidebarView(sidebar, "online");
+    expect(names(sidebar)).toEqual(["ada"]);
     gateway.publishEvent("presence", { presence: [{ ...self, reason: "disconnect" }] });
     await settle(sidebar);
-    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
+    expect(names(sidebar)).toEqual([]);
+    expect(sidebar.querySelector(".sidebar-online__list")).not.toBeNull();
   });
+
+  it.each(["chip", "roster"] as const)(
+    "hides people filters in Sessions and preserves them when Online is selected again (%s)",
+    async (mode) => {
+      const { sidebar } = await mountWorkload();
+      sidebar.sidebarAgentsMode = mode;
+      const view = sidebar.sidebarMenus.host.people;
+      view.setStatusFilter("running");
+      view.setSortMode("running");
+      await settle(sidebar);
+      const toggle = ".sidebar-online .sidebar-session-group-toggle";
+      if (sidebar.querySelector(toggle)?.getAttribute("aria-expanded") === "false") {
+        await click(sidebar, toggle);
+      }
+      expect(names(sidebar)).toEqual(["bea", "ada"]);
+      expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
+
+      await selectSidebarView(sidebar, "sessions");
+      expect(sidebar.querySelector(".sidebar-online__filter-toggle")).toBeNull();
+      expect(sidebar.querySelector(".sidebar-online__list")).toBeNull();
+
+      await selectSidebarView(sidebar, "online");
+      expect(names(sidebar)).toEqual(["bea", "ada"]);
+      expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
+      await click(sidebar, ".sidebar-online__filter-toggle");
+      expect(sidebar.sidebarMenus.peopleFilterMenuPosition).not.toBeNull();
+    },
+  );
 
   it("uses one complete cross-agent summary, including self, not the paginated or owner-filtered sidebar", async () => {
     const pending = createDeferred<SessionsListResult>();
@@ -214,6 +250,8 @@ describe("sidebar people workload", () => {
     );
     expect(summaryRequest).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      rowMode: "compact",
+      source: "sidebar",
       configuredAgentsOnly: true,
       includeOwnerSessionCounts: true,
       limit: 1,
@@ -222,6 +260,7 @@ describe("sidebar people workload", () => {
       excludeSubagents: true,
       excludeCron: true,
       excludeSystem: true,
+      excludeDock: true,
     });
 
     sidebar.setSessionOwnerFilter("cy");
@@ -418,76 +457,68 @@ describe("sidebar people workload", () => {
     );
   });
 
-  it("clears the previous viewer's counts on the same client before adopting a fresh summary", async () => {
-    const stale = createDeferred<SessionsListResult>();
+  it.each([
+    "disconnect",
+    "scope replacement",
+    "viewer replacement",
+    "presence reset",
+    "unmount",
+  ] as const)("retires prior counts and ignores an in-flight reply after %s", async (boundary) => {
+    const late = createDeferred<SessionsListResult>();
     const current = createDeferred<SessionsListResult>();
     const response = vi
       .fn<() => Promise<SessionsListResult>>()
       .mockResolvedValueOnce(summary())
-      .mockReturnValueOnce(stale.promise)
-      .mockReturnValue(current.promise);
-    const { sidebar, gateway, summaryRequest } = await mountWorkload(response);
+      .mockReturnValueOnce(late.promise)
+      .mockReturnValue(boundary === "viewer replacement" ? current.promise : late.promise);
+    const { sidebar, gateway, provider, summaryRequest } = await mountWorkload(response);
     expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
     void sidebar.sessionData.ownerCounts.refresh();
     expect(summaryRequest).toHaveBeenCalledTimes(2);
-    gateway.publish({
-      selfUser: {
-        id: "replacement-viewer",
-        identity: { type: "profile", id: "replacement-viewer" },
-      },
-    });
-    await settle(sidebar);
-    expect(counts(sidebar, "ada")).toEqual([]);
 
-    stale.resolve(summary([{ profileId: "ada", open: 99, running: 99 }]));
+    if (boundary === "disconnect") {
+      gateway.publish({ phase: "reconnecting" });
+    } else if (boundary === "viewer replacement") {
+      gateway.publish({
+        selfUser: {
+          id: "replacement-viewer",
+          identity: { type: "profile", id: "replacement-viewer" },
+        },
+      });
+    } else if (boundary === "presence reset") {
+      gateway.publishEvent("presence", { presence: [] });
+    } else if (boundary === "unmount") {
+      sidebar.remove();
+    } else {
+      const replacement = createWorkloadGateway(async () =>
+        summary([{ profileId: "ada", open: 2, running: 0 }]),
+      );
+      provider.setContext(
+        createContext(replacement.gateway.gateway, replacement.sessions, TWO_AGENTS),
+      );
+    }
     await settle(sidebar);
-    expect(counts(sidebar, "ada")).toEqual([]);
-    expect(summaryRequest).toHaveBeenCalledTimes(3);
-    current.resolve(summary([{ profileId: "ada", open: 2, running: 0 }]));
+    if (boundary === "viewer replacement") {
+      expect(counts(sidebar, "ada")).toEqual([]);
+    } else if (boundary !== "scope replacement") {
+      expect(sidebar.sessionData.ownerCounts.counts).toBeNull();
+    } else {
+      expect(counts(sidebar, "ada")).toEqual(["2"]);
+    }
+    late.resolve(summary([{ profileId: "ada", open: 99, running: 99 }]));
     await settle(sidebar);
-    expect(counts(sidebar, "ada")).toEqual(["2"]);
+    if (boundary === "viewer replacement") {
+      expect(counts(sidebar, "ada")).toEqual([]);
+    } else if (boundary !== "scope replacement") {
+      expect(sidebar.sessionData.ownerCounts.counts).toBeNull();
+    } else {
+      expect(counts(sidebar, "ada")).toEqual(["2"]);
+    }
+    if (boundary === "viewer replacement") {
+      expect(summaryRequest).toHaveBeenCalledTimes(3);
+      current.resolve(summary([{ profileId: "ada", open: 2, running: 0 }]));
+      await settle(sidebar);
+      expect(counts(sidebar, "ada")).toEqual(["2"]);
+    }
   });
-
-  it.each(["disconnect", "scope replacement", "presence reset", "unmount"] as const)(
-    "retires prior counts and ignores an in-flight reply after %s",
-    async (boundary) => {
-      const late = createDeferred<SessionsListResult>();
-      const response = vi
-        .fn<() => Promise<SessionsListResult>>()
-        .mockResolvedValueOnce(summary())
-        .mockReturnValue(late.promise);
-      const { sidebar, gateway, provider, summaryRequest } = await mountWorkload(response);
-      expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
-      void sidebar.sessionData.ownerCounts.refresh();
-      expect(summaryRequest).toHaveBeenCalledTimes(2);
-
-      if (boundary === "disconnect") {
-        gateway.publish({ phase: "reconnecting" });
-      } else if (boundary === "presence reset") {
-        gateway.publishEvent("presence", { presence: [] });
-      } else if (boundary === "unmount") {
-        sidebar.remove();
-      } else {
-        const replacement = createWorkloadGateway(async () =>
-          summary([{ profileId: "ada", open: 2, running: 0 }]),
-        );
-        provider.setContext(
-          createContext(replacement.gateway.gateway, replacement.sessions, TWO_AGENTS),
-        );
-      }
-      await settle(sidebar);
-      if (boundary !== "scope replacement") {
-        expect(sidebar.sessionData.ownerCounts.counts).toBeNull();
-      } else {
-        expect(counts(sidebar, "ada")).toEqual(["2"]);
-      }
-      late.resolve(summary([{ profileId: "ada", open: 99, running: 99 }]));
-      await settle(sidebar);
-      if (boundary !== "scope replacement") {
-        expect(sidebar.sessionData.ownerCounts.counts).toBeNull();
-      } else {
-        expect(counts(sidebar, "ada")).toEqual(["2"]);
-      }
-    },
-  );
 });

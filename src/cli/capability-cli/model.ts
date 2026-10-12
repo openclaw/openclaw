@@ -13,6 +13,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   normalizeThinkLevel,
   THINKING_LEVELS_HELP,
@@ -48,21 +49,7 @@ async function loadModelCatalogForInspection(cfg: OpenClawConfig, rawAgentId?: s
   );
 }
 
-function requireModelRunPrompt(value: unknown): string {
-  if (typeof value !== "string" || normalizeOptionalString(value) === undefined) {
-    throw new Error("--prompt cannot be empty or whitespace-only.");
-  }
-  return value;
-}
-
-type ModelRunImageFile = {
-  path: string;
-  fileName: string;
-  mimeType: string;
-  data: string;
-};
-
-async function readModelRunImageFiles(files: string[] | undefined): Promise<ModelRunImageFile[]> {
+async function readModelRunImageFiles(files: string[] | undefined) {
   if (!files || files.length === 0) {
     return [];
   }
@@ -95,20 +82,6 @@ async function readModelRunImageFiles(files: string[] | undefined): Promise<Mode
   );
 }
 
-function normalizeModelRunThinking(value: unknown): ThinkLevel | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    throw new Error("--thinking must be a string.");
-  }
-  const normalized = normalizeThinkLevel(value);
-  if (!normalized) {
-    throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
-  }
-  return normalized;
-}
-
 async function runModelRun(params: {
   prompt: string;
   files?: string[];
@@ -125,7 +98,6 @@ async function runModelRun(params: {
   const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
   const { getRuntimeConfig } = await import("../../config/config.js");
   const { canonicalizeCaseOnlyCatalogModelRef } = await import("../../agents/model-selection.js");
-  const { readPreparedModelCatalog } = await import("../../agents/prepared-model-catalog.js");
   const explicitModelOverride = requireProviderModelOverride(params.model);
   const cfg =
     params.transport === "local"
@@ -139,11 +111,15 @@ async function runModelRun(params: {
     raw: params.model,
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
-    loadCatalog: () => readPreparedModelCatalog({ config: cfg, agentId, readOnly: true }),
+    loadCatalog: () => loadModelCatalogForInspection(cfg, agentId),
     preserveAuthProfile: params.transport === "local",
   });
   const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
   const imageFiles = await readModelRunImageFiles(params.files);
+  const inputs =
+    imageFiles.length > 0
+      ? { inputs: imageFiles.map((image) => ({ path: image.path, mimeType: image.mimeType })) }
+      : {};
   const messageContent =
     imageFiles.length > 0
       ? [
@@ -212,14 +188,28 @@ async function runModelRun(params: {
               },
             });
             const text = collectTextContentBlocks(result.content).join("").trim();
+            const detail = result.errorMessage?.trim();
+            const target = `for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail ? `: ${detail}` : ""}.`;
             if (!text) {
-              const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
-              const detail =
-                typeof providerErrorMessage === "string" && providerErrorMessage.trim()
-                  ? `: ${providerErrorMessage.trim()}`
+              // Keep AI runtime imports out of command registration and help loading.
+              const { hasOnlyAssistantReasoningContent, isReasoningOnlyLengthAssistantTurn } =
+                await import("@openclaw/ai/internal/shared");
+              // Failed or aborted streams can keep partial reasoning; report those as provider failures.
+              const completedWithoutError =
+                (result.stopReason === "stop" || result.stopReason === "length") && !detail;
+              if (completedWithoutError && hasOnlyAssistantReasoningContent(result)) {
+                const limitHint = isReasoningOnlyLengthAssistantTurn(result)
+                  ? " It stopped at the output token limit while reasoning; a lower --thinking level may leave room for text."
                   : "";
+                throw new Error(
+                  `Model returned reasoning but no text output ${target}${limitHint}`,
+                );
+              }
+              throw new Error(`No text output returned ${target}`);
+            }
+            if (result.stopReason === "error" || result.stopReason === "aborted") {
               throw new Error(
-                `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
+                `Model run ${result.stopReason === "aborted" ? "aborted" : "failed"} ${target}`,
               );
             }
             return {
@@ -229,14 +219,7 @@ async function runModelRun(params: {
               provider: prepared.selection.provider,
               model: prepared.selection.modelId,
               attempts: [],
-              ...(imageFiles.length > 0
-                ? {
-                    inputs: imageFiles.map((image) => ({
-                      path: image.path,
-                      mimeType: image.mimeType,
-                    })),
-                  }
-                : {}),
+              ...inputs,
               outputs: [
                 {
                   text,
@@ -265,16 +248,9 @@ async function runModelRun(params: {
   const sessionId = `model-run-${randomUUID()}`;
   const sessionKey = buildExplicitSessionIdSessionKey({ agentId, sessionId });
   const response: {
-    result?: {
-      payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
-      meta?: {
-        agentMeta?: {
-          provider?: string;
-          model?: string;
-          fallbackAttempts?: Array<Record<string, unknown>>;
-        };
-      };
-    };
+    status?: string;
+    summary?: string;
+    result?: EmbeddedAgentRunResult;
   } = await callGateway({
     method: "agent",
     params: {
@@ -305,6 +281,13 @@ async function runModelRun(params: {
     mode: hasModelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
     ...(hasModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
   });
+  if (response.status && response.status !== "ok" && response.status !== "completed") {
+    throw new Error(
+      response.result?.meta?.error?.message ||
+        response.summary ||
+        `Gateway model run ${response.status}.`,
+    );
+  }
   return {
     ok: true,
     capability: "model.run",
@@ -317,26 +300,19 @@ async function runModelRun(params: {
       mediaUrl: payload.mediaUrl,
       mediaUrls: payload.mediaUrls,
     })),
-    ...(imageFiles.length > 0
-      ? {
-          inputs: imageFiles.map((image) => ({
-            path: image.path,
-            mimeType: image.mimeType,
-          })),
-        }
-      : {}),
+    ...inputs,
   } satisfies CapabilityEnvelope;
 }
 
 async function buildModelProviders(cfg: OpenClawConfig, agentId: string) {
-  const { providerHasGenericConfig, resolveSelectedProviderFromModelRef } =
-    await import("./shared.js");
+  const { providerHasGenericConfig } = await import("./shared.js");
+  const { resolveModelRefOverride } = await import("../../shared/model-ref-override.js");
   const { resolveAgentEffectiveModelPrimary } = await import("../../agents/agent-scope.js");
   const { getProviderEnvVarsCore } = await import("../../secrets/provider-env-vars.js");
   const catalog = await loadModelCatalogForInspection(cfg, agentId);
-  const selectedProvider = resolveSelectedProviderFromModelRef(
+  const selectedProvider = resolveModelRefOverride(
     resolveAgentEffectiveModelPrimary(cfg, agentId),
-  );
+  ).provider;
   const grouped = new Map<
     string,
     {
@@ -458,12 +434,23 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .action((opts, command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption, resolveTransport } = await import("./shared.js");
-        const prompt = requireModelRunPrompt(opts.prompt);
-        const thinking = normalizeModelRunThinking(opts.thinking);
+        const prompt = opts.prompt;
+        if (typeof prompt !== "string" || normalizeOptionalString(prompt) === undefined) {
+          throw new Error("--prompt cannot be empty or whitespace-only.");
+        }
+        let thinking: ThinkLevel | undefined;
+        if (opts.thinking !== undefined) {
+          if (typeof opts.thinking !== "string") {
+            throw new Error("--thinking must be a string.");
+          }
+          thinking = normalizeThinkLevel(opts.thinking);
+          if (!thinking) {
+            throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
+          }
+        }
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
-          supported: ["local", "gateway"],
           defaultTransport: "local",
         });
         return runModelRun({

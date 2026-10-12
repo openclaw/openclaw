@@ -89,11 +89,7 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
     pending = null;
     snapshot = { result: null, repositories: [], ready: false };
   };
-  const notify = () => {
-    for (const listener of listeners) {
-      listener();
-    }
-  };
+  const notify = () => listeners.forEach((listener) => listener());
   const synchronize = () => {
     const next = gateway.snapshot;
     const nextSignature = JSON.stringify([

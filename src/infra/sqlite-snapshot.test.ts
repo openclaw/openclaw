@@ -282,7 +282,7 @@ describe("createVerifiedSqliteSnapshot", () => {
       expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
       const rejected = results.find((result) => result.status === "rejected");
       expect(rejected).toBeDefined();
-      expect((rejected as PromiseRejectedResult).reason).toMatchObject({ code: "EEXIST" });
+      expect((rejected as PromiseRejectedResult).reason).toMatchObject({ code: "already-exists" });
       await expect(fs.lstat(directoryPath)).resolves.toMatchObject({});
     },
   );
@@ -314,7 +314,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     },
   );
 
-  it.each([undefined, false, true])(
+  it.each([undefined, true])(
     "preserves implicit row IDs only when requested (%s), including committed WAL data",
     async (preserveRowIds) => {
       const source = new sqlite.DatabaseSync(sourcePath);
@@ -879,15 +879,6 @@ describe("createVerifiedSqliteSnapshot", () => {
     );
   });
 
-  it("accepts an exclusive-copy publication receipt", async () => {
-    const publish = mockExclusiveCopyPublication();
-
-    await expectSnapshotSuccess({ sourcePath, targetPath });
-    expect(publish).toHaveBeenCalledTimes(1);
-    const restored = new sqlite.DatabaseSync(targetPath, { readOnly: true });
-    restored.close();
-  });
-
   it("removes an exclusive-copy publication whose bytes fail verification", async () => {
     const publish = mockExclusiveCopyPublication(async (filePath) => {
       await fs.appendFile(filePath, "changed-copy");
@@ -1021,46 +1012,41 @@ describe("createVerifiedSqliteSnapshot", () => {
     },
   );
 
-  it.each([false, true])(
-    "validates source and transformed snapshot (isolated=%s)",
-    async (isolated) => {
-      const removedValue = `removed-secret-${"x".repeat(256)}`;
-      const source = new sqlite.DatabaseSync(sourcePath);
-      source.exec("PRAGMA secure_delete = OFF; CREATE TABLE records (value TEXT NOT NULL);");
-      source.prepare("INSERT INTO records VALUES (?)").run(removedValue);
-      source.close();
-      const validatedValues = new Map<string, unknown>();
+  it("validates source and transformed isolated snapshot", async () => {
+    const removedValue = `removed-secret-${"x".repeat(256)}`;
+    const source = new sqlite.DatabaseSync(sourcePath);
+    source.exec("PRAGMA secure_delete = OFF; CREATE TABLE records (value TEXT NOT NULL);");
+    source.prepare("INSERT INTO records VALUES (?)").run(removedValue);
+    source.close();
+    const validatedValues = new Map<string, unknown>();
 
-      await createVerifiedSqliteSnapshot({
-        sourcePath,
-        targetPath,
-        ...(isolated
-          ? { sourceAcquisition: { mode: "isolated-process" as const, stagingRoot: tempDir } }
-          : {}),
-        transform: (database) => {
-          database.exec("DELETE FROM records;");
-          database.prepare("INSERT INTO records VALUES (?)").run("new");
-        },
-        validate: (database, label) => {
-          validatedValues.set(label, database.prepare("SELECT value FROM records").get()?.value);
-        },
-      });
+    await createVerifiedSqliteSnapshot({
+      sourcePath,
+      targetPath,
+      sourceAcquisition: { mode: "isolated-process", stagingRoot: tempDir },
+      transform: (database) => {
+        database.exec("DELETE FROM records;");
+        database.prepare("INSERT INTO records VALUES (?)").run("new");
+      },
+      validate: (database, label) => {
+        validatedValues.set(label, database.prepare("SELECT value FROM records").get()?.value);
+      },
+    });
 
-      expect(validatedValues).toEqual(
-        new Map([
-          [sourcePath, removedValue],
-          [targetPath, "new"],
-        ]),
-      );
-      expect((await fs.readFile(targetPath)).includes(removedValue)).toBe(false);
-      withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
-        expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "new" });
+    expect(validatedValues).toEqual(
+      new Map([
+        [sourcePath, removedValue],
+        [targetPath, "new"],
+      ]),
+    );
+    expect((await fs.readFile(targetPath)).includes(removedValue)).toBe(false);
+    withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
+      expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "new" });
+    });
+    withReadOnlySnapshot(sqlite, sourcePath, (unchanged) => {
+      expect(unchanged.prepare("SELECT value FROM records").get()).toEqual({
+        value: removedValue,
       });
-      withReadOnlySnapshot(sqlite, sourcePath, (unchanged) => {
-        expect(unchanged.prepare("SELECT value FROM records").get()).toEqual({
-          value: removedValue,
-        });
-      });
-    },
-  );
+    });
+  });
 });

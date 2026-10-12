@@ -98,14 +98,9 @@ export function clearPaneSessionHandoff(
 
 export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: string): void {
   const byPane = paneSessionHandoffs.get(context);
-  if (!byPane) {
+  if (!byPane?.delete(paneId)) {
     return;
   }
-  const pending = byPane.get(paneId);
-  if (!pending) {
-    return;
-  }
-  byPane.delete(paneId);
   if (byPane.size === 0) {
     paneSessionHandoffs.delete(context);
   }
@@ -144,12 +139,8 @@ export function catalogRawString(raw: unknown, keys: readonly string[]): string 
 }
 export function catalogRawResult(raw: unknown): string | null {
   const result = catalogRawRecord(raw)?.result;
-  if (result === undefined) {
-    return null;
-  }
   try {
-    const text = JSON.stringify(result);
-    return text || null;
+    return JSON.stringify(result) || null;
   } catch {
     return null;
   }

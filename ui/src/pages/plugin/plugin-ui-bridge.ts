@@ -11,8 +11,6 @@ type PluginUiBridgeTarget = {
   sessionKey: string;
   contextTokens?: number;
   sessionActions: readonly string[];
-  allowChatNavigation: boolean;
-  navigateToChat: (sessionKey: string) => void;
 };
 
 type PluginUiBridgeMessage = {
@@ -21,8 +19,6 @@ type PluginUiBridgeMessage = {
   id?: unknown;
   actionId?: unknown;
   payload?: unknown;
-  target?: unknown;
-  sessionKey?: unknown;
   contextRevision?: unknown;
   nonce?: unknown;
 };
@@ -91,6 +87,9 @@ function isJsonPayload(value: unknown, state = { nodes: 0 }, depth = 0): boolean
 export class PluginUiBridgeController {
   private target: PluginUiBridgeTarget | null = null;
   private port: MessagePort | null = null;
+  private documentPort: MessagePort | null = null;
+  private documentVerificationId = 0;
+  private pendingDocumentVerification: { id: number; onVerified: () => void } | null = null;
   private loadHandler: (() => void) | null = null;
   private readyHandler: ((event: MessageEvent) => void) | null = null;
   private loadState: "initial" | "active" | "replacement" | "revoked" = "initial";
@@ -109,9 +108,7 @@ export class PluginUiBridgeController {
     ) {
       const sessionChanged = currentTarget.sessionKey !== target.sessionKey;
       const contextChanged = sessionChanged || currentTarget.contextTokens !== target.contextTokens;
-      const capabilitiesChanged =
-        !sameStrings(currentTarget.sessionActions, target.sessionActions) ||
-        currentTarget.allowChatNavigation !== target.allowChatNavigation;
+      const capabilitiesChanged = !sameStrings(currentTarget.sessionActions, target.sessionActions);
       // Keep object identity stable for the active port listener while
       // refreshing callback/client references from the latest UI context.
       // UI snapshots can also refine session context after the first action
@@ -134,7 +131,7 @@ export class PluginUiBridgeController {
     this.loadState = reusesFrameForAnotherTab ? "replacement" : "initial";
     this.loadHandler = () => {
       if (this.loadState === "replacement") {
-        // Lit reuses the iframe element across plugin routes. Do not let the
+        // The renderer can reuse the iframe element across plugin routes. Do not let the
         // retiring document reacquire a port carrying the next tab's grant.
         this.loadState = "active";
         return;
@@ -152,6 +149,9 @@ export class PluginUiBridgeController {
       // intentionally selects a new tab key.
       this.port?.close();
       this.port = null;
+      this.documentPort?.close();
+      this.documentPort = null;
+      this.pendingDocumentVerification = null;
       this.loadState = "revoked";
     };
     target.frame.addEventListener("load", this.loadHandler);
@@ -161,26 +161,47 @@ export class PluginUiBridgeController {
         return;
       }
       const offeredPort = event.ports[0];
+      const offeredDocumentPort = event.ports[1];
       if (
         this.loadState === "replacement" ||
         this.loadState === "revoked" ||
         this.target?.frame !== target.frame ||
         event.source !== target.frame.contentWindow ||
         data.nonce !== target.nonce ||
+        event.ports.length !== 2 ||
         !offeredPort ||
+        !offeredDocumentPort ||
         this.port
       ) {
-        offeredPort?.close();
+        for (const port of event.ports) {
+          port.close();
+        }
         return;
       }
-      this.connect(target, offeredPort);
+      this.connect(target, offeredPort, offeredDocumentPort);
     };
     window.addEventListener("message", this.readyHandler);
   }
 
-  private connect(target: PluginUiBridgeTarget, port: MessagePort) {
+  verifyDocument(onVerified: () => void): boolean {
+    const port = this.documentPort;
+    if (!this.target || !port || this.loadState === "replacement" || this.loadState === "revoked") {
+      return false;
+    }
+    const id = ++this.documentVerificationId;
+    // Only the newest navigation intent needs proof. A WindowProxy survives
+    // navigation, but this private endpoint stays with the injected document.
+    this.pendingDocumentVerification = { id, onVerified };
+    port.postMessage({ v: 1, type: "openclaw.pluginUi.verifyDocument", id });
+    return true;
+  }
+
+  private connect(target: PluginUiBridgeTarget, port: MessagePort, documentPort: MessagePort) {
     this.port?.close();
     this.port = port;
+    this.documentPort?.close();
+    this.documentPort = documentPort;
+    this.pendingDocumentVerification = null;
     port.addEventListener("message", (event: MessageEvent) => {
       if (this.target !== target || this.port !== port) {
         return;
@@ -191,13 +212,28 @@ export class PluginUiBridgeController {
       }
       if (message.type === "openclaw.pluginUi.sessionAction") {
         void this.handleSessionAction(target, port, message);
-        return;
-      }
-      if (message.type === "openclaw.pluginUi.navigate") {
-        this.handleNavigation(target, port, message);
       }
     });
     port.start();
+    documentPort.addEventListener("message", (event: MessageEvent) => {
+      const message = parsePluginUiBridgeMessage(event.data);
+      const pending = this.pendingDocumentVerification;
+      if (
+        this.target !== target ||
+        this.documentPort !== documentPort ||
+        !pending ||
+        message?.v !== 1 ||
+        message.type !== "openclaw.pluginUi.documentVerified" ||
+        message.id !== pending.id
+      ) {
+        return;
+      }
+      this.pendingDocumentVerification = null;
+      // The caller rechecks current frame ownership and authorization before
+      // applying the request. This proof certifies only the injected document.
+      pending.onVerified();
+    });
+    documentPort.start();
     this.contextRevision += 1;
     // The registered document offers this nonce-bound private port. Sending
     // capabilities on it binds them to that document even if its WindowProxy
@@ -215,7 +251,6 @@ export class PluginUiBridgeController {
       type,
       capabilities: {
         sessionActions: [...target.sessionActions],
-        navigateToChat: target.allowChatNavigation,
       },
       context: {
         sessionKey: target.sessionKey,
@@ -290,30 +325,6 @@ export class PluginUiBridgeController {
     }
   }
 
-  private handleNavigation(
-    target: PluginUiBridgeTarget,
-    port: MessagePort,
-    message: PluginUiBridgeMessage,
-  ) {
-    const id = normalizeMessageId(message.id);
-    const requestedSessionKey =
-      typeof message.sessionKey === "string" ? message.sessionKey.trim() : "";
-    if (message.contextRevision !== this.contextRevision) {
-      this.reply(target, port, id, {
-        ok: false,
-        error: "Plugin UI session context is stale",
-        contextRevision: message.contextRevision,
-      });
-      return;
-    }
-    if (!target.allowChatNavigation || message.target !== "chat") {
-      this.reply(target, port, id, { ok: false, error: "Plugin UI navigation is not allowed" });
-      return;
-    }
-    target.navigateToChat(requestedSessionKey || target.sessionKey);
-    this.reply(target, port, id, { ok: true, contextRevision: message.contextRevision });
-  }
-
   clear() {
     if (this.target && this.loadHandler) {
       this.target.frame.removeEventListener("load", this.loadHandler);
@@ -322,8 +333,11 @@ export class PluginUiBridgeController {
       window.removeEventListener("message", this.readyHandler);
     }
     this.port?.close();
+    this.documentPort?.close();
     this.target = null;
     this.port = null;
+    this.documentPort = null;
+    this.pendingDocumentVerification = null;
     this.loadHandler = null;
     this.readyHandler = null;
     this.loadState = "initial";

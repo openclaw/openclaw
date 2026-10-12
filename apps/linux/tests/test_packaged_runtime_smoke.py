@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -97,7 +98,24 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
                 appimage,
                 self.appdir,
                 readelf=str(self.readelf),
+                # Generic ABI fixtures model historical packages without Bun.
+                allow_legacy_runtime=True,
             )
+
+    def test_missing_bundled_runtime_requires_explicit_historical_opt_in(self):
+        appimage = self.write_elf(self.root / "OpenClaw.AppImage", version_output())
+        with mock.patch.object(smoke.platform, "machine", return_value="x86_64"):
+            with self.assertRaisesRegex(RuntimeError, "Missing required bundled runtime"):
+                smoke.collect_abi_report(appimage, self.appdir, readelf=str(self.readelf))
+            report = smoke.collect_abi_report(
+                appimage, self.appdir, readelf=str(self.readelf), allow_legacy_runtime=True
+            )
+        self.assertEqual([entry["path"] for entry in report["files"]], [appimage.name])
+
+    def test_historical_opt_in_still_rejects_an_incomplete_bundled_runtime(self):
+        (self.appdir / smoke.BUNDLED_BUN_PATH).parent.mkdir(parents=True)
+        with self.assertRaisesRegex(RuntimeError, "invalid runtime manifest"):
+            self.collect(version_output())
 
     def test_exact_limits_pass(self):
         report = self.collect(
@@ -259,7 +277,7 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
         (self.appdir / "usr/lib/z-link.so").symlink_to("z.so")
         with mock.patch.object(smoke.platform, "machine", return_value="x86_64"):
             report = smoke.collect_abi_report(
-                appimage, self.appdir, readelf=str(self.readelf)
+                appimage, self.appdir, readelf=str(self.readelf), allow_legacy_runtime=True
             )
 
         self.assertEqual(
@@ -333,6 +351,65 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
                     self.appdir,
                     readelf=str(self.readelf),
                 )
+
+    def write_bundled_bun(self, executable=b"\x7fELFsynthetic bun"):
+        resource = self.appdir / smoke.BUNDLED_BUN_PATH
+        resource.parent.mkdir(parents=True, exist_ok=True)
+        resource.write_bytes(b"OPENCLAW-BUN-RUNTIME-V1\n" + executable)
+        (resource.parent.parent / "manifest.json").write_text(json.dumps({
+            "platform": "linux",
+            "files": {"bin/bun": hashlib.sha256(executable).hexdigest()},
+        }))
+        return resource
+
+    def test_enveloped_bun_abi_is_checked_and_reported_at_its_bundle_path(self):
+        resource = self.write_bundled_bun()
+        source_path = smoke.BUNDLED_BUN_PATH.as_posix()
+        readelf = smoke.run_readelf
+
+        def inspect(path, source, tool, *arguments):
+            if source != source_path:
+                return readelf(path, source, tool, *arguments)
+            self.assertNotEqual(path, resource)
+            self.assertEqual(path.read_bytes(), b"\x7fELFsynthetic bun")
+            if arguments == ("--file-header",):
+                return "ELF Header:\n  Machine: Advanced Micro Devices X86-64\n"
+            return version_output(needs=("GLIBC_2.36", "GLIBCXX_3.4.30"))
+
+        with mock.patch.object(smoke, "run_readelf", side_effect=inspect):
+            report = self.collect(version_output(needs=("GLIBC_2.17",)))
+        self.assertEqual(report["files"][-1], {
+            "path": source_path,
+            "source": "appdir",
+            "requires": {"GLIBC": ["2.36"], "GLIBCXX": ["3.4.30"], "CXXABI": [], "GCC": []},
+        })
+        self.assertNotIn("openclaw-bun-abi-", json.dumps(report))
+        with self.assertRaisesRegex(RuntimeError, re.escape(source_path) + r" requires GLIBC_2.36"):
+            smoke.enforce_abi_limits(report)
+
+    def test_enveloped_bun_refuses_damaged_prefix_and_decoded_hash(self):
+        resource = self.write_bundled_bun()
+        for payload, error in (
+            (b"BROKEN\n\x7fELFsynthetic bun", "invalid runtime envelope"),
+            (b"OPENCLAW-BUN-RUNTIME-V1\n\x7fELFtampered bun", "runtime checksum mismatch"),
+        ):
+            with self.subTest(error=error):
+                resource.write_bytes(payload)
+                with self.assertRaisesRegex(RuntimeError, error):
+                    self.collect(version_output())
+
+    def test_enveloped_bun_rejects_a_different_architecture(self):
+        self.write_bundled_bun()
+        readelf = smoke.run_readelf
+
+        def inspect(path, source, tool, *arguments):
+            if source == smoke.BUNDLED_BUN_PATH.as_posix():
+                return "ELF Header:\n  Machine: AArch64\n"
+            return readelf(path, source, tool, *arguments)
+
+        with mock.patch.object(smoke, "run_readelf", side_effect=inspect):
+            with self.assertRaisesRegex(RuntimeError, "architecture does not match"):
+                self.collect(version_output())
 
 
 class PackagedRuntimeGStreamerTest(unittest.TestCase):

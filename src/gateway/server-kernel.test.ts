@@ -39,19 +39,7 @@ import { createMaintenanceHandles } from "./server-runtime-services.test-harness
 import { expectCoreAgentDatabaseReadiness } from "./server-startup-readiness.test-support.js";
 import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-
-const KERNEL_TEST_ENV = {
-  OPENCLAW_GATEWAY_PASSWORD: undefined,
-  OPENCLAW_GATEWAY_TOKEN: undefined,
-  OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-  OPENCLAW_SKIP_CANVAS_HOST: "1",
-  OPENCLAW_SKIP_CHANNELS: "1",
-  OPENCLAW_SKIP_CRON: "1",
-  OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-  OPENCLAW_SKIP_PROVIDERS: "1",
-  OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-  VITEST: "1",
-};
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 
 describe("createGatewayKernel", () => {
   it.each([false, true])(
@@ -131,14 +119,14 @@ describe("createGatewayKernel", () => {
           },
           controlUiEnabled: false,
           sidecarStartup: "defer",
-          tryRecoverChannelAutostartSuppression: () => true,
+          tryRecoverChannelAutostartSuppression: async () => undefined,
         });
 
-        await expect(kernel.channelManager.recoverAutostartSuppression()).resolves.toBe(true);
+        await expect(kernel.channelManager.recoverAutostartSuppression()).resolves.toBeUndefined();
         expect(startAccount).not.toHaveBeenCalled();
 
         if (closing) {
-          await kernel.beginClosePrelude();
+          await kernel.prepareClose();
         }
         kernel.releaseStartupAccountStarts();
         await (closing ? nextTurn() : started.promise);
@@ -324,7 +312,6 @@ describe("createGatewayKernel", () => {
           .mockReturnValue(updateWork);
         const terminalDispose = vi.spyOn(kernel.terminalSessions, "disposeAll");
         const gatewayStop = vi.spyOn(kernel.shutdownRuntime, "runGlobalGatewayStopSafely");
-        const prepareShutdown = vi.spyOn(kernel.shutdownRuntime, "prepareGatewayClose");
         const maintenance = createMaintenanceHandles();
         maintenance.stopPeriodicTasks.mockReturnValue(periodicStopped.promise);
         kernel.kernel.setMaintenanceHandles(maintenance);
@@ -350,7 +337,6 @@ describe("createGatewayKernel", () => {
         await expect(boundHost.request("start", () => {})).rejects.toThrow("closed instance");
         expect(acceptRequest).not.toHaveBeenCalled();
         expect(invalidateCron).toHaveBeenCalledOnce();
-        expect(stopRecovery).toHaveBeenCalledOnce();
         await nextTurn();
         expect(startMaintenance).not.toHaveBeenCalled();
         expect(reloadStop).toHaveBeenCalledOnce();
@@ -370,7 +356,6 @@ describe("createGatewayKernel", () => {
         expect(closeFirstStop).not.toHaveBeenCalled();
         updateCheckStopped.resolve();
         await nextTurn();
-        expect(prepareShutdown).not.toHaveBeenCalled();
         periodicStopped.resolve();
         await Promise.race([publicationDrainEntered.promise, closing]);
         expect(projectionDispose).not.toHaveBeenCalled();
@@ -942,7 +927,6 @@ describe("createGatewayKernel", () => {
         "config.auth.secrets-activate",
         "agents.github-profile-cleanup",
         "plugins.bootstrap-imports",
-        "startup.maintenance",
         "plugins.bootstrap",
         "gateway.kernel-state",
         "node-desktop.runtime-import",
@@ -965,9 +949,13 @@ describe("createGatewayKernel", () => {
         "runtime.early",
         "runtime.early.discovery",
         "gateway.request-runtime",
+        "gateway.chat-metadata-lifecycle",
         "gateway.config-revision-key",
         "gateway.request-context",
         "sessions.projection",
+        "sessions.materialize",
+        "gateway.lifetime-sidecars",
+        "gateway.instance-runtime-import",
       ]);
     } finally {
       try {

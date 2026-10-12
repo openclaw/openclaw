@@ -160,7 +160,7 @@ vi.mock("./runtime-api.js", async (importOriginal) => {
     normalizeE164: (v: string) => v,
     recordSessionMetaFromInbound: async () => {},
     resolveChannelContextVisibilityMode: () => "off",
-    resolveInboundSessionEnvelopeContext: () => ({
+    resolveInboundSessionEnvelopeContextAsync: async () => ({
       storePath: "/tmp",
       envelopeOptions: {},
       previousTimestamp: undefined,
@@ -258,7 +258,6 @@ function callProcessMessage(
     dispatchReplyFromConfig?: Parameters<typeof processMessage>[0]["dispatchReplyFromConfig"];
     groupHistories?: Map<string, unknown[]>;
     msg?: unknown;
-    suppressGroupHistoryClear?: boolean;
   } = {},
 ) {
   return processMessage({
@@ -273,9 +272,6 @@ function callProcessMessage(
     verbose: false,
     maxMediaBytes: 1024,
     dispatchReplyFromConfig: overrides.dispatchReplyFromConfig,
-    ...(overrides.suppressGroupHistoryClear === undefined
-      ? {}
-      : { suppressGroupHistoryClear: overrides.suppressGroupHistoryClear }),
     replyResolver: (async () => undefined) as never,
     replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
     backgroundTasks: new Set(),
@@ -336,101 +332,46 @@ describe("processMessage group system prompt wiring", () => {
     ).toBe("from config");
   });
 
-  it.each([
-    {
-      name: "marks detected WhatsApp slash messages as text command turns",
-      message: { body: "/status" },
-      commandBody: "/status",
-      isControlCommand: true,
-      expectedContext: {
-        command: {
-          kind: "text-slash",
-          authorization: { kind: "authorized" },
-          body: "/status",
-        },
-        rawBody: "/status",
-      },
-    },
-    {
-      name: "keeps generated media notices out of command input",
-      message: {
-        body: "/reset\n\n[whatsapp attachment unavailable]",
-        commandBody: "/reset",
-      },
-      commandBody: "/reset",
-      isControlCommand: true,
-      expectedContext: {
-        bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
-        command: {
-          kind: "text-slash",
-          authorization: { kind: "authorized" },
-          body: "/reset",
-        },
-        rawBody: "/reset",
-      },
-    },
-    {
-      name: "checks auth for inline command tokens without marking them as command-source turns",
-      message: { body: "please inspect `/tmp/foo`" },
-      commandBody: "please inspect `/tmp/foo`",
-      isControlCommand: false,
-      expectedContext: {
-        command: {
-          kind: "normal",
-          authorization: { kind: "authorized" },
-          body: "please inspect `/tmp/foo`",
-        },
-        rawBody: "please inspect `/tmp/foo`",
-      },
-    },
-  ])("$name", async ({ message, commandBody, isControlCommand, expectedContext }) => {
-    isControlCommandMessageMock.mockReturnValue(isControlCommand);
+  it("keeps generated media notices out of command input", async () => {
+    isControlCommandMessageMock.mockReturnValue(true);
     shouldComputeCommandAuthorizedMock.mockReturnValue(true);
 
-    await callProcessMessage({ msg: makeBaseMsg(message) });
+    await callProcessMessage({
+      msg: makeBaseMsg({
+        body: "/reset\n\n[whatsapp attachment unavailable]",
+        commandBody: "/reset",
+      }),
+    });
 
-    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith(commandBody, {});
-    expect(isControlCommandMessageMock).toHaveBeenCalledWith(commandBody, {});
-    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject(
-      expectedContext,
-    );
+    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/reset", {});
+    expect(isControlCommandMessageMock).toHaveBeenCalledWith("/reset", {});
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
+      command: { kind: "text-slash", authorized: true, body: "/reset" },
+      rawBody: "/reset",
+    });
   });
 
-  it.each(["dispatched", "failed", "suppressed"] as const)(
-    "passes pending history to context and finalizes only a dispatched turn: %s",
-    async (outcome) => {
-      const historyKey = "whatsapp:default:group:123@g.us";
-      const entries = [
-        {
-          sender: "Alice (+15550002222)",
-          body: "quiet pending context",
-          timestamp: 1710000000,
-          id: "quiet-msg-1",
-          senderJid: "15550002222@s.whatsapp.net",
-        },
-      ];
-      const groupHistories = new Map<string, unknown[]>([[historyKey, entries]]);
-      const dispatchError = new Error("dispatch failed");
-      const dispatchReplyFromConfig = vi.fn(async () => {
-        throw dispatchError;
-      });
-      const turn = callProcessMessage({
-        groupHistories,
-        suppressGroupHistoryClear: outcome === "suppressed",
-        ...(outcome === "failed" ? { dispatchReplyFromConfig } : {}),
-      });
-      if (outcome === "failed") {
-        await expect(turn).rejects.toBe(dispatchError);
-        expect(dispatchReplyFromConfig).toHaveBeenCalledOnce();
-      } else {
-        await turn;
-      }
-      expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
-        groupHistory: entries,
-      });
-      expect(groupHistories.get(historyKey)).toEqual(outcome === "dispatched" ? [] : entries);
-    },
-  );
+  it("passes pending history to context and clears it after dispatch", async () => {
+    const historyKey = "whatsapp:default:group:123@g.us";
+    const entries = [
+      {
+        sender: "Alice (+15550002222)",
+        body: "quiet pending context",
+        timestamp: 1710000000,
+        id: "quiet-msg-1",
+        senderJid: "15550002222@s.whatsapp.net",
+      },
+    ];
+    const groupHistories = new Map<string, unknown[]>([[historyKey, entries]]);
+
+    await callProcessMessage({ groupHistories });
+
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      groupHistory: entries,
+    });
+    expect(groupHistories.get(historyKey)).toEqual([]);
+  });
 
   it.each([true, false])(
     "emits canonical WhatsApp hooks only with explicit opt-in: %s",

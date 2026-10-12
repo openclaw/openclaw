@@ -46,6 +46,7 @@ import { watchCliExitAfterOutput } from "../one-shot-exit.js";
 import { hasCliProcessScope } from "../runtime-cleanup-scope.js";
 import { getPendingCliDisposers } from "../runtime-cleanup.js";
 import {
+  createUpdateCommandFailureResult,
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
 } from "./update-command-result.js";
@@ -85,6 +86,7 @@ export class UpdateFinalizationLifecycle {
   private driver?: UpdateRunDriver;
   private ledgerOptions?: { env: NodeJS.ProcessEnv };
   private ownsRun = false;
+  private ownsRepairRun = false;
   private warnedHeartbeat = false;
   private deferredExitWatch?: () => void;
   completed = false;
@@ -92,6 +94,7 @@ export class UpdateFinalizationLifecycle {
   private stateBudgetMs: number | undefined;
   private reportTimeout?: () => void;
   private failureObservation?: UpdateRunResult;
+  private failureReason?: string;
 
   constructor(
     private readonly json: boolean,
@@ -115,7 +118,8 @@ export class UpdateFinalizationLifecycle {
     this.ownsRun = !inherited;
     adoptUpdateRun(this.runId, admissionOptions);
     this.handoff?.bindRun(this.runId);
-    if (repair && this.ownsRun) {
+    this.ownsRepairRun = repair && this.ownsRun;
+    if (this.ownsRepairRun) {
       recordUpdateRunRepairContinuation(this.runId, this.runId, admissionOptions);
     }
     if (this.active) {
@@ -159,24 +163,24 @@ export class UpdateFinalizationLifecycle {
     detail?: string,
     failureFacts?: UpdateFailureFact[],
     exitCode?: number | null,
+    startedAtMs?: number,
   ): void {
+    const failureReason = failureFacts?.find(
+      (fact) => fact.code.trim() && fact.code !== "finalization-failed",
+    )?.code;
     const step = {
       step: name,
       status,
       ...(detail ? { detail } : {}),
       ...(failureFacts?.length ? { failureFacts } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),
-      ...(status === "failed"
-        ? {
-            reason:
-              failureFacts?.find((fact) => fact.code.trim() && fact.code !== "finalization-failed")
-                ?.code ?? name,
-          }
-        : {}),
+      ...(status === "failed" ? { reason: failureReason ?? name } : {}),
       ...(status === "in_progress" ? { startedAtMs: at } : { endedAtMs: at }),
+      ...(startedAtMs !== undefined ? { startedAtMs } : {}),
     };
     const message = `[update finalize] ${JSON.stringify(step)}`;
     if (status === "failed") {
+      this.failureReason = failureReason;
       defaultRuntime.error(message);
     } else if (name.startsWith("warning:")) {
       console.warn(message);
@@ -209,6 +213,7 @@ export class UpdateFinalizationLifecycle {
         row.detail,
         row.failureFacts,
         row.exitCode,
+        Math.max(0, endedAtMs - step.durationMs),
       );
     }
   }
@@ -391,21 +396,16 @@ export class UpdateFinalizationLifecycle {
       const doctorFailure = collectNestedErrorCandidates(error).find(
         (cause): cause is UpdateDoctorError => cause instanceof UpdateDoctorError,
       );
-      const facts = failure
-        ? [
-            createUpdateFailureFact({
-              check: phase,
-              code: "finalization-timeout",
-              message: failure.message,
-            }),
-          ]
-        : doctorFailure
+      const facts =
+        !failure && doctorFailure
           ? collectUpdateDoctorFailureFacts(error)
           : [
               createUpdateFailureFact({
                 check: phase,
-                code: extractErrorCode(error) ?? "finalization-failed",
-                message: formatErrorMessage(error),
+                code: failure
+                  ? "finalization-timeout"
+                  : (extractErrorCode(error) ?? "finalization-failed"),
+                message: failure ? failure.message : formatErrorMessage(error),
               }),
             ];
       const deferred =
@@ -440,13 +440,15 @@ export class UpdateFinalizationLifecycle {
     const result: UpdateRunResult =
       error instanceof UpdateCommandFailure
         ? error.result
-        : {
-            status: "error",
+        : createUpdateCommandFailureResult({
             mode: "unknown",
             root: this.root,
-            steps: [],
+            failure: { cause: error },
             durationMs: Math.round(performance.now() - this.startedAt),
-          };
+          });
+    if (result.reason === "update-failed") {
+      result.reason = this.failureReason ?? (this.ownsRepairRun ? "repair-failed" : result.reason);
+    }
     try {
       this.failureObservation = await verifyUpdateFailureRecovery({
         result,
@@ -469,12 +471,21 @@ export class UpdateFinalizationLifecycle {
     }
   }
 
-  private finishLedger(exitCode: number): void {
+  private finishLedger(exitCode: number, deferredMaintenance?: string): void {
     if (this.runId && this.ownsRun) {
       try {
         finishUpdateRun(
           this.runId,
-          { status: exitCode ? "failed" : "succeeded", diagnostics: this.failureObservation },
+          {
+            status: exitCode ? "failed" : deferredMaintenance ? "skipped" : "succeeded",
+            reason: deferredMaintenance
+              ? "doctor-maintenance-pending"
+              : this.failureObservation?.reason === "repair-failed"
+                ? "repair-failed"
+                : undefined,
+            nextAction: deferredMaintenance,
+            diagnostics: this.failureObservation,
+          },
           this.ledgerOptions,
         );
       } catch {
@@ -508,31 +519,37 @@ export class UpdateFinalizationLifecycle {
     watch?.();
   }
 
-  complete(exitCode: number): void {
+  complete(exitCode: number, deferredMaintenance?: string): void {
     if (this.completed) {
       return;
     }
     this.completed = true;
-    this.finishLedger(exitCode);
+    this.finishLedger(exitCode, deferredMaintenance);
     this.reportTimeout?.();
     if (!hasCliProcessScope()) {
       return;
     }
-    // Recovery may still await diagnostics after terminal output; arm the watchdog
-    // from finishRecovery before unwinding resource cleanup.
+    // Recovery may still await diagnostics after terminal output. Once it has
+    // settled, the watchdog diagnoses stalls and cancels only this owner's children;
+    // the CLI finalizer still joins their cleanup before recording the exit code.
     this.deferredExitWatch = () =>
-      watchCliExitAfterOutput(exitCode, () => {
-        const diagnostic = JSON.stringify({
-          activeResources: [...new Set(process.getActiveResourcesInfo())].toSorted(),
-          unsettledDisposers: getPendingCliDisposers(),
-          ...inspectUpdateFinalizationChildren(),
-        });
-        writeSync(
-          2,
-          `[update finalize] Process still alive after terminal output: ${diagnostic}\n`,
-        );
-        this.recordDiagnostic(diagnostic);
-        this.stopChildren();
+      watchCliExitAfterOutput(() => {
+        try {
+          const diagnostic = JSON.stringify({
+            activeResources: [...new Set(process.getActiveResourcesInfo())].toSorted(),
+            unsettledDisposers: getPendingCliDisposers(),
+            ...inspectUpdateFinalizationChildren(),
+          });
+          writeSync(
+            2,
+            `[update finalize] Process still alive after terminal output: ${diagnostic}\n`,
+          );
+          this.recordDiagnostic(diagnostic);
+        } catch {
+          // A broken diagnostic sink cannot interrupt owner cancellation or cleanup.
+        } finally {
+          this.stopChildren();
+        }
       });
   }
 }

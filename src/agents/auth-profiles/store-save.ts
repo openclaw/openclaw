@@ -20,8 +20,7 @@ import {
 } from "./runtime-external-profile-references.js";
 import { pruneAuthProfileStoreReferences } from "./runtime-snapshot-owner.js";
 import { getRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
-import type { AuthProfileStoreOwner } from "./sqlite.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileStore, AuthProfileStoreOwner } from "./types.js";
 
 export type SaveAuthProfileStoreOptions = {
   filterExternalAuthProfiles?: boolean;
@@ -31,64 +30,6 @@ export type SaveAuthProfileStoreOptions = {
   sharedStoreWrite?: boolean;
   syncExternalCli?: boolean;
 };
-
-function shouldKeepProfileInLocalStore(params: {
-  getScopedSharedAuthStore: () => AuthProfileStore | undefined;
-  owner: AuthProfileStoreOwner;
-  store: AuthProfileStore;
-  profileId: string;
-  credential: AuthProfileStore["profiles"][string];
-  options?: SaveAuthProfileStoreOptions;
-  persistedStores: PersistedAuthProfileStores;
-  externalProfiles: () => RuntimeExternalOAuthProfile[];
-}): boolean {
-  const { getScopedSharedAuthStore } = params;
-  const inherited = getScopedSharedAuthStore()?.profiles[params.profileId];
-  if (inherited && !params.persistedStores.localStore?.profiles[params.profileId]) {
-    // Runtime state updates must not turn read-through credentials into local copies.
-    // Compare persisted shapes so a materialized SecretRef stays inherited too.
-    const secrets = buildPersistedAuthProfileSecretsStore({
-      version: AUTH_STORE_VERSION,
-      profiles: { [params.profileId]: params.credential },
-    });
-    if (isDeepStrictEqual(secrets.profiles[params.profileId], inherited)) {
-      return false;
-    }
-  }
-  if (params.credential.type !== "oauth") {
-    return true;
-  }
-  if (
-    isInheritedMainOAuthCredentialFromStores({
-      profileId: params.profileId,
-      credential: params.credential,
-      persistedStores: params.persistedStores,
-    })
-  ) {
-    return false;
-  }
-  if (params.options?.filterExternalAuthProfiles === false) {
-    return true;
-  }
-  if (
-    params.store.runtimeExternalProfileIds?.includes(params.profileId) &&
-    !params.persistedStores.localStore?.profiles[params.profileId]
-  ) {
-    // Runtime external profiles are normally overlays. Persist only when they
-    // have explicit local state or differ from the runtime snapshot.
-    const runtimeCredential = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-      params.owner.databasePath,
-    )?.profiles[params.profileId];
-    if (!runtimeCredential || isDeepStrictEqual(runtimeCredential, params.credential)) {
-      return false;
-    }
-  }
-  return shouldPersistRuntimeExternalOAuthProfile({
-    profileId: params.profileId,
-    credential: params.credential,
-    profiles: params.externalProfiles(),
-  });
-}
 
 export function buildLocalAuthProfileStoreForSave(params: {
   getScopedSharedAuthStore: () => AuthProfileStore | undefined;
@@ -100,6 +41,7 @@ export function buildLocalAuthProfileStoreForSave(params: {
   agentDir?: string;
   options?: SaveAuthProfileStoreOptions;
   persistedStores: PersistedAuthProfileStores;
+  runtimeStore?: AuthProfileStore;
 }): AuthProfileStore {
   const localStore = cloneAuthProfileStore(removePersonalAuthProfileReferences(params.store));
   for (const [profileId, credential] of Object.entries(localStore.profiles)) {
@@ -113,18 +55,54 @@ export function buildLocalAuthProfileStoreForSave(params: {
       agentDir: params.agentDir,
     }));
   localStore.profiles = Object.fromEntries(
-    Object.entries(localStore.profiles).filter(([profileId, credential]) =>
-      shouldKeepProfileInLocalStore({
-        getScopedSharedAuthStore: params.getScopedSharedAuthStore,
-        owner: params.owner,
-        store: params.store,
+    Object.entries(localStore.profiles).filter(([profileId, credential]) => {
+      const inherited = params.getScopedSharedAuthStore()?.profiles[profileId];
+      if (inherited && !params.persistedStores.localStore?.profiles[profileId]) {
+        // Runtime state updates must not turn read-through credentials into local copies.
+        // Compare persisted shapes so a materialized SecretRef stays inherited too.
+        const secrets = buildPersistedAuthProfileSecretsStore({
+          version: AUTH_STORE_VERSION,
+          profiles: { [profileId]: credential },
+        });
+        if (isDeepStrictEqual(secrets.profiles[profileId], inherited)) {
+          return false;
+        }
+      }
+      if (credential.type !== "oauth") {
+        return true;
+      }
+      if (
+        isInheritedMainOAuthCredentialFromStores({
+          profileId,
+          credential,
+          persistedStores: params.persistedStores,
+        })
+      ) {
+        return false;
+      }
+      if (params.options?.filterExternalAuthProfiles === false) {
+        return true;
+      }
+      if (
+        params.store.runtimeExternalProfileIds?.includes(profileId) &&
+        !params.persistedStores.localStore?.profiles[profileId]
+      ) {
+        // Runtime external profiles are normally overlays. Persist only when they
+        // have explicit local state or differ from the runtime snapshot.
+        const runtimeCredential = (
+          params.runtimeStore ??
+          getRuntimeAuthProfileStoreSnapshotAtDatabasePath(params.owner.databasePath)
+        )?.profiles[profileId];
+        if (!runtimeCredential || isDeepStrictEqual(runtimeCredential, credential)) {
+          return false;
+        }
+      }
+      return shouldPersistRuntimeExternalOAuthProfile({
         profileId,
         credential,
-        options: params.options,
-        persistedStores: params.persistedStores,
-        externalProfiles: getExternalProfiles,
-      }),
-    ),
+        profiles: getExternalProfiles(),
+      });
+    }),
   );
   const keptProfileIds = new Set(Object.keys(localStore.profiles));
   const keptOrderProfileIds = new Set(keptProfileIds);
@@ -143,14 +121,11 @@ export function buildLocalAuthProfileStoreForSave(params: {
   for (const profileId of normalizeUniqueStringEntries(params.options?.pruneOrderProfileIds)) {
     keptOrderProfileIds.delete(profileId);
   }
-  for (const profileId of keptProfileIds) {
-    if (isUserModelAuthProfileId(profileId)) {
-      keptProfileIds.delete(profileId);
-    }
-  }
-  for (const profileId of keptOrderProfileIds) {
-    if (isUserModelAuthProfileId(profileId)) {
-      keptOrderProfileIds.delete(profileId);
+  for (const profileIds of [keptProfileIds, keptOrderProfileIds]) {
+    for (const profileId of profileIds) {
+      if (isUserModelAuthProfileId(profileId)) {
+        profileIds.delete(profileId);
+      }
     }
   }
   pruneAuthProfileStoreReferences(localStore, keptProfileIds, keptOrderProfileIds);

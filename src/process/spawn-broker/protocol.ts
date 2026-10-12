@@ -15,7 +15,8 @@ export type BrokerSpawnOptions = Pick<
   | "gid"
 > & { stdio: ("pipe" | "ignore" | "inherit" | "ipc")[] };
 export type BrokerRequest =
-  | { type: "spawn"; id: number; argv: string[]; options: BrokerSpawnOptions }
+  | { type: "spawn" | "prepare-spawn"; id: number; argv: string[]; options: BrokerSpawnOptions }
+  | { type: "launch"; id: number; allowed: boolean }
   | { type: "spawn-execa"; id: number; argv: string[]; options: BrokerExecaOptions }
   | { type: "kill"; id: number; signal: NodeJS.Signals | number }
   | { type: "ipc"; id: number; sequence: number; message: Serializable }
@@ -33,6 +34,7 @@ export type BrokerError = {
   spawnargs?: string[];
 };
 export type BrokerResponse =
+  | { type: "prepared"; id: number }
   | { type: "ready"; pid: number }
   | { type: "owned"; id: number; pid: number }
   | { type: "pipe"; id: number; fd: number; closed?: true }

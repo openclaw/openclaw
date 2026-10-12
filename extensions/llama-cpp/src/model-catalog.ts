@@ -281,6 +281,6 @@ export function recommendLlamaCppModel(
     reason:
       candidates.length > 0
         ? "There is not enough free disk space for a recommended model, embeddings, and the runtime. Free space in the model cache and retry setup."
-        : `No recommended model fits the current ${formatLlamaCppMemory(Math.max(0, memoryBudgetBytes))} memory budget. Close other applications and retry, or configure an existing GGUF or external server.`,
+        : `No recommended model fits the current ${formatLlamaCppMemory(Math.max(0, memoryBudgetBytes))} memory budget. Close other applications and retry, or configure an existing GGUF or external server. For local memory search without a chat model, an embedding-only local server (about 0.3 GB for the default embedding model) can fit instead. Set memory.search.provider to "local" with openclaw config set memory.search.provider local, then re-run openclaw models auth login --provider llama-cpp --method local using the same profile for both commands.`,
   };
 }

@@ -1,9 +1,14 @@
+import {
+  IncognitoSessionEndedError,
+  rethrowIncognitoSessionError,
+} from "openclaw/plugin-sdk/acp-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { acpHost, useTelegramThreadBindingsFixture } from "./thread-bindings.test-support.js";
 
 describe("telegram thread binding startup reconciliation", () => {
-  const { createManager, storedBindings } = useTelegramThreadBindingsFixture();
+  const fixture = useTelegramThreadBindingsFixture();
+  const { createManager, storedBindings } = fixture;
 
   it.each([
     { target: "agent:main:acp:stale", storeReadFailed: false, retained: false },
@@ -40,6 +45,71 @@ describe("telegram thread binding startup reconciliation", () => {
     }
     if (storeReadFailed === undefined) {
       expect(acpHost.read).not.toHaveBeenCalled();
+    }
+  });
+
+  it("propagates a refused session join without deleting the stored binding", async () => {
+    const options = { accountId: "default", persist: true, enableSweeper: false };
+    const manager = await createManager(options);
+    const target = "agent:main:acp:refused";
+    await getSessionBindingService().bind({
+      targetSessionKey: target,
+      targetKind: "session",
+      conversation: { channel: "telegram", accountId: "default", conversationId: "refused" },
+    });
+    await manager.stop();
+    const error = new IncognitoSessionEndedError();
+    acpHost.read.mockImplementation(() => {
+      throw error;
+    });
+
+    await expect(createManager(options)).rejects.toBe(error);
+    expect(await storedBindings()).toContainEqual(
+      expect.objectContaining({ conversationId: "refused", targetSessionKey: target }),
+    );
+  });
+
+  it("retains persisted incognito bindings when prepared cleanup loses authority", async () => {
+    const options = { accountId: "default", persist: true, enableSweeper: false };
+    const manager = await createManager(options);
+    const target = "agent:main:dashboard:incognito-prepared";
+    await getSessionBindingService().bind({
+      targetSessionKey: target,
+      targetKind: "session",
+      conversation: { channel: "telegram", accountId: "default", conversationId: "prepared" },
+    });
+    await manager.stop();
+    let current = true;
+    const error = new IncognitoSessionEndedError();
+    const remove = fixture.store.delete.bind(fixture.store);
+    const deletion = vi.spyOn(fixture.store, "delete").mockImplementation(async (...args) => {
+      current = false;
+      return remove(...args);
+    });
+    const release = vi.fn();
+    try {
+      const failure = await createManager({
+        ...options,
+        prepareAcpSession: async () => ({
+          session: { cfg: {}, storePath: "/fixture", sessionKey: target, storeSessionKey: target },
+          assertCurrent() {
+            if (!current) {
+              throw error;
+            }
+          },
+          release,
+        }),
+      }).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect(() => rethrowIncognitoSessionError(failure)).toThrow();
+      expect(await storedBindings()).toContainEqual(
+        expect.objectContaining({ conversationId: "prepared", targetSessionKey: target }),
+      );
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      deletion.mockRestore();
     }
   });
 });

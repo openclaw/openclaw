@@ -11,7 +11,7 @@ import {
 } from "../shared/tool-approval-reviews.js";
 import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
 
-function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is string {
+function isDisplayRouteIdentifier(value: unknown, maxChars: number): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
@@ -46,10 +46,10 @@ export function projectToolResultDetails(
   // A partial or shortened address can select a different browser. Only display
   // text may be truncated; route identifiers must survive projection unchanged.
   if (
-    isBrowserRouteIdentifier(browserTab?.targetId, 128) &&
-    isBrowserRouteIdentifier(browserTab?.profile, 128) &&
+    isDisplayRouteIdentifier(browserTab?.targetId, 128) &&
+    isDisplayRouteIdentifier(browserTab?.profile, 128) &&
     ((browserTab?.target === "host" && browserTab.node === undefined) ||
-      (browserTab?.target === "node" && isBrowserRouteIdentifier(browserTab.node, 256)))
+      (browserTab?.target === "node" && isDisplayRouteIdentifier(browserTab.node, 256)))
   ) {
     projected.browserTab = {
       targetId: browserTab.targetId,
@@ -64,10 +64,23 @@ export function projectToolResultDetails(
         : {}),
     };
   }
-  // The diff is the one display-capped field here; surface the fact so the
-  // message-level marker covers capped tool-result details too.
+  // Surface capped detail fields through the same message-level display marker.
   let truncated = false;
-  for (const key of ["changed", "created"] as const) {
+  for (const key of ["exitCode", "durationMs"] as const) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      projected[key] = value;
+    }
+  }
+  if (typeof record.cwd === "string") {
+    const cwd = truncateChatHistoryText(record.cwd, maxChars);
+    projected.cwd = cwd.text;
+    truncated ||= cwd.truncated;
+  }
+  if (isDisplayRouteIdentifier(record.sessionKey, maxChars)) {
+    projected.sessionKey = record.sessionKey;
+  }
+  for (const key of ["ok", "changed", "created"] as const) {
     if (typeof record[key] === "boolean") {
       projected[key] = record[key];
     }
@@ -75,7 +88,7 @@ export function projectToolResultDetails(
   if (typeof record.diff === "string" && record.diff.trim()) {
     const diff = truncateChatHistoryText(record.diff, maxChars);
     projected.diff = diff.text;
-    truncated = diff.truncated;
+    truncated ||= diff.truncated;
   }
   if (Array.isArray(record.approvalReviews)) {
     const reviews = record.approvalReviews

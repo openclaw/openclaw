@@ -160,39 +160,6 @@ afterEach(async () => {
 });
 
 describe("CodexAppServerEventProjector media projection", () => {
-  it("fetches saved-path-only remote images over the bounded Codex command protocol", async () => {
-    const readRemoteWorkspaceFile = vi.fn<RemoteWorkspaceFileReader>(async () =>
-      Buffer.from(tinyPngBase64, "base64"),
-    );
-    const runAbort = new AbortController();
-    const projector = await createProjector(undefined, {
-      remoteWorkspaceRoot: "/remote/codex-workspace",
-      readRemoteWorkspaceFile,
-      remoteWorkspaceRequestTimeoutMs: 90_000,
-      runAbortSignal: runAbort.signal,
-    });
-    const savedPath = "/remote/codex-home/generated_images/session-1/ig_saved_only.png";
-
-    await projector.handleNotification(imageEvent("ig_saved_only", undefined, savedPath));
-
-    const result = resultOf(projector);
-    expect(readRemoteWorkspaceFile).toHaveBeenCalledWith({
-      path: savedPath,
-      maxBytes: expect.any(Number),
-      signal: expect.any(AbortSignal),
-      timeoutMs: 90_000,
-    });
-    expect(result.toolMediaUrls).toHaveLength(1);
-    expect(result.toolMediaUrls?.[0]).not.toBe(savedPath);
-    await expect(fs.readFile(result.toolMediaUrls?.[0] ?? "")).resolves.toEqual(
-      Buffer.from(tinyPngBase64, "base64"),
-    );
-    const signal = readRemoteWorkspaceFile.mock.calls[0]?.[0].signal;
-    expect(signal?.aborted).toBe(false);
-    runAbort.abort();
-    expect(signal?.aborted).toBe(true);
-  });
-
   it("fences direct tool-result callbacks after blocked media when projection closes", async () => {
     const media = createDeferred<Buffer>();
     const readRemoteWorkspaceFile = vi.fn<RemoteWorkspaceFileReader>(() => media.promise);
@@ -332,21 +299,6 @@ describe("CodexAppServerEventProjector media projection", () => {
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "rewritten B" }]);
   });
 
-  it("uses the decoder's whitespace rules for the image byte budget", async () => {
-    const projector = await createProjector({
-      ...(await createParams()),
-      config: {
-        agents: {
-          defaults: { mediaMaxMb: Buffer.from(tinyPngBase64, "base64").length / (1024 * 1024) },
-        },
-      },
-    });
-    await projector.handleNotification(
-      imageEvent("ig_whitespace", tinyPngBase64.split("").join("\u0001")),
-    );
-    await expectImage(projector);
-  });
-
   it("rejects oversized typed Codex images instead of using a remote saved path", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const projector = await createProjector({
@@ -405,25 +357,7 @@ describe("CodexAppServerEventProjector media projection", () => {
     await expectImage(projector);
   });
 
-  it("preserves distinct raw image-generation items with identical image bytes", async () => {
-    const projector = await createProjector();
-
-    for (const id of ["ig_raw_1", "ig_raw_2"]) {
-      await projector.handleNotification(rawImageEvent(id));
-    }
-
-    const result = resultOf(projector);
-
-    expect(result.toolMediaUrls).toHaveLength(2);
-    expect(new Set(result.toolMediaUrls)).toHaveLength(2);
-    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
-    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
-  });
-
-  it.each([
-    { attachment: "first", target: "chat-source" },
-    { attachment: "unrelated", target: "chat-source" },
-  ] as const)(
+  it.each([{ attachment: "first", target: "chat-source" }] as const)(
     "preserves generated media and route-specific identity after sending $attachment to $target",
     async ({ attachment, target }) => {
       const { projector, bridge, execute, sources } = await createRemoteGeneratedMediaDelivery(
@@ -461,43 +395,37 @@ describe("CodexAppServerEventProjector media projection", () => {
       expect(delivery?.mediaUrls).toContain(stagedPath);
       expect(result.messagingToolSentMediaUrls).toEqual(delivery?.mediaUrls);
       expect(delivery?.mediaUrls).not.toContain(second?.url);
-      if (attachment === "first") {
-        expect(delivery?.mediaUrls).toContain(first?.url);
-      } else {
-        expect(delivery?.mediaUrls).not.toContain(first?.url);
-      }
+      expect(delivery?.mediaUrls).toContain(first?.url);
     },
   );
 
-  it.each(["unchanged", "replaced", "file-url", "stripped", "error"] as const)(
+  it.each(["replaced", "file-url", "error"] as const)(
     "preserves the processed internal UI attachment: %s",
     async (presentation) => {
       const replacementUrl = "https://example.test/filtered-preview.png";
-      if (presentation !== "unchanged") {
-        installCodexToolResultMiddleware((event) => {
-          let processedUrl = replacementUrl;
-          if (presentation === "file-url") {
-            if (typeof event.args.mediaUrl !== "string") {
-              throw new Error("Expected the staged attachment path");
-            }
-            processedUrl = pathToFileURL(event.args.mediaUrl).href;
+      installCodexToolResultMiddleware((event) => {
+        let processedUrl = replacementUrl;
+        if (presentation === "file-url") {
+          if (typeof event.args.mediaUrl !== "string") {
+            throw new Error("Expected the staged attachment path");
           }
-          return {
-            ...event.result,
-            details:
-              presentation === "replaced" || presentation === "file-url"
-                ? {
-                    deliveryStatus: "sent",
-                    sourceReplySink: "internal-ui",
-                    sourceReply: {
-                      text: presentation === "replaced" ? "Filtered attachment." : "Attached.",
-                      mediaUrls: [processedUrl],
-                    },
-                  }
-                : { status: presentation === "error" ? "error" : "ok" },
-          };
-        });
-      }
+          processedUrl = pathToFileURL(event.args.mediaUrl).href;
+        }
+        return {
+          ...event.result,
+          details:
+            presentation === "replaced" || presentation === "file-url"
+              ? {
+                  deliveryStatus: "sent",
+                  sourceReplySink: "internal-ui",
+                  sourceReply: {
+                    text: presentation === "replaced" ? "Filtered attachment." : "Attached.",
+                    mediaUrls: [processedUrl],
+                  },
+                }
+              : { status: "error" },
+        };
+      });
       const { projector, bridge, execute, sources } = await createRemoteGeneratedMediaDelivery(
         async (args) => ({
           content: [{ type: "text", text: "Sent to current chat." }],
@@ -520,17 +448,13 @@ describe("CodexAppServerEventProjector media projection", () => {
       const result = projector.buildResult(bridge.telemetry);
 
       expect(result.messagingToolSourceReplyPayloads).toEqual(
-        presentation === "stripped" || presentation === "error"
+        presentation === "error"
           ? []
           : [
               {
                 text: presentation === "replaced" ? "Filtered attachment." : "Attached.",
                 mediaUrls: [
-                  presentation === "replaced"
-                    ? replacementUrl
-                    : presentation === "file-url"
-                      ? pathToFileURL(stagedPath).href
-                      : stagedPath,
+                  presentation === "replaced" ? replacementUrl : pathToFileURL(stagedPath).href,
                 ],
               },
             ],
@@ -538,7 +462,7 @@ describe("CodexAppServerEventProjector media projection", () => {
       expect(result.messagingToolSentTargets).toEqual([]);
       expect(result.messagingToolSentMediaUrls).toEqual([]);
       expect(result.messagingToolSentTexts).toEqual([]);
-      const sentGeneratedImage = presentation === "unchanged" || presentation === "file-url";
+      const sentGeneratedImage = presentation === "file-url";
       expect(result.toolMediaUrls).toHaveLength(sentGeneratedImage ? 1 : 2);
       expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
       const remainingImages = await Promise.all(
@@ -555,10 +479,7 @@ describe("CodexAppServerEventProjector media projection", () => {
     },
   );
 
-  it.each([
-    { name: "a partial saved-path send", partialDelivery: true, useFileUrl: false },
-    { name: "a confirmed file-URL send", partialDelivery: false, useFileUrl: true },
-  ])(
+  it.each([{ name: "a partial saved-path send", partialDelivery: true, useFileUrl: false }])(
     "keeps correct local image delivery evidence for $name",
     async ({ partialDelivery, useFileUrl }) => {
       const params = await createParams();

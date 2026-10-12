@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -109,31 +110,23 @@ async function waitForLiveTerminalEventHandlers(runId: string): Promise<"settled
   }
 }
 
-function waitForTerminalEventHandlers(runId: string): Promise<void> {
-  let timeout: NodeJS.Timeout | undefined;
+async function waitForTerminalEventHandlers(runId: string): Promise<void> {
   const settled = waitForLiveTerminalEventHandlers(runId);
   // Promise.race bounds the host wait; JavaScript cannot cancel the plugin
   // promises themselves, so timeout also marks the run expired to block late
   // run-context resurrection by handlers that eventually settle.
-  const timedOut = new Promise<"timeout">((resolve) => {
-    timeout = setTimeout(() => {
+  await raceWithTimeout(
+    settled,
+    PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS,
+    () => {
       rememberBoundedRunId(getPluginHostRuntimeState().terminalEventCleanupExpiredRunIds, runId);
       getPluginHostRuntimeState().pendingAgentEventHandlersByRunId.delete(runId);
       log.warn(
         `plugin terminal agent event subscriptions still running after ${PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS}ms; clearing run context without waiting for them to settle`,
       );
-      resolve("timeout");
-    }, PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS);
-  });
-  if (timeout) {
-    timeout.unref?.();
-  }
-  return Promise.race([settled, timedOut]).then(() => {
-    if (timeout) {
-      clearTimeout(timeout);
-      timeout = undefined;
-    }
-  });
+    },
+    { ref: false },
+  );
 }
 
 /** Stores JSON-compatible plugin run context for one run/plugin/namespace tuple. */

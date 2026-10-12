@@ -157,10 +157,10 @@ merge_outcome_load_local() {
       def recovery:
         if has("recovery") then . as $record | .recovery |
           type == "object" and
-          (((keys - ["preDispatchRefusal","providerRejection","staleHeadRetirement"]) == ["actor","attempt","outcome","reason"]) or
-           ((keys - ["preDispatchRefusal","providerRejection","staleHeadRetirement"]) == ["actor","attempt","outcome","reason","replacementHead"] and
+          (((keys - ["preDispatchRefusal","providerRejection","staleHeadRetirement","asyncFailure"]) == ["actor","attempt","outcome","reason"]) or
+           ((keys - ["preDispatchRefusal","providerRejection","staleHeadRetirement","asyncFailure"]) == ["actor","attempt","outcome","reason","replacementHead"] and
             (.replacementHead | oid) and .replacementHead == $record.head)) and
-          ([.preDispatchRefusal,.providerRejection,.staleHeadRetirement] |
+          ([.preDispatchRefusal,.providerRejection,.staleHeadRetirement,.asyncFailure] |
             map(select(. != null)) | length <= 1) and
           (if has("preDispatchRefusal") then (.preDispatchRefusal | type == "object") else true end) and
           (if has("providerRejection") then (.providerRejection | type == "object") and
@@ -170,6 +170,11 @@ merge_outcome_load_local() {
           (if has("staleHeadRetirement") then (.staleHeadRetirement | type == "object") and
             has("replacementHead") and $record.route == "auto" and
             ($record | has("priorCiAdmin") | not)
+           else true end) and
+          (if has("asyncFailure") then $record.route == "immediate" and
+            (has("replacementHead") | not) and (.asyncFailure |
+              keys == ["message","sha","status","uuid"] and (.uuid | attempt) and
+              .status == "failed" and .sha == null and (.message | type == "string"))
            else true end) and
           (.outcome | oid) and (.attempt | attempt) and
           (.actor | type == "string" and length > 0) and .reason == "explicit-operator-recovery"
@@ -181,6 +186,12 @@ merge_outcome_load_local() {
         (if has("cancellation") then .route == "auto" and
           (.cancellation | keys == ["actor","outcome","state"] and (.outcome | oid) and
             (.actor | type == "string" and length > 0) and (.state | IN("requested","confirmed")))
+         else true end) and
+        (if has("headDrift") then . as $record | .route == "auto" and .accepted == true and
+          (has("cancellation") | not) and .phase != "intent" and
+          (.headDrift | keys == ["actor","mergedHead","outcome"] and
+            (.outcome | oid) and (.mergedHead | oid) and .mergedHead != $record.head and
+            (.actor | type == "string" and length > 0))
          else true end) and
         (if has("legacyRefusal") then (has("recovery") | not) and (.legacyRefusal |
           keys == ["actor","files","head","kind","preparedBase"] and
@@ -199,6 +210,16 @@ merge_outcome_load_local() {
             (.actor | type == "string" and length > 0) and
             (if .changeKind == "pre-existing-failure" then (.testedMerge | oid) else true end)) else true end) and
         (.accepted | type == "boolean") and
+        (if has("asyncMerge") then . as $record |
+          .transport == "rest" and .route == "immediate" and .method == "squash" and
+          (.asyncMerge | keys == ["message","sha","status","uuid"] and
+            (.message | type == "string" and length <= 4096) and
+            (.uuid == null or (.uuid | attempt)) and
+            (if .status == "submitting" then .uuid == null and $record.accepted == false
+             else $record.accepted == true and (.status | IN("pending","merged","enqueued","failed")) and
+               (if .status == "pending" then (.uuid | attempt) else true end) end) and
+            (if .status == "merged" then (.sha | oid) else .sha == null end))
+         else true end) and
         (if .phase == "intent" then .landed == null else
           (.phase == "merged" or .phase == "commenting" or .phase == "commented" or .phase == "complete") and (.landed | oid) end))
     ') || { merge_outcome_stop "corrupt or mismatched retained record"; return 1; }
@@ -206,7 +227,7 @@ merge_outcome_load_local() {
       merge_outcome_stop "invalid retained repository identity"; return 1;
     }
     parents=$(GIT_NO_LAZY_FETCH=1 pr_git cat-file commit "$MERGE_OUTCOME_OID" | awk 'NF == 0 {exit} $1 == "parent" {printf "%s ", $2}') || return 1
-    for retained in $(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge] | .[] | select(. != null)'); do
+    for retained in $(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead] | .[] | select(. != null)'); do
       case " $parents " in *" $retained "*) ;; *) merge_outcome_stop "record does not retain required commit $retained"; return 1 ;; esac
       GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$retained^{commit}" || { merge_outcome_stop "required historical commit $retained is unavailable"; return 1; }
     done
@@ -235,6 +256,9 @@ merge_outcome_load_local() {
           (if $next.recovery.providerRejection != null then
              .accepted == false and .route == "admin" and $next.route == "admin" and
              .priorCiAdmin.dispatchTransport == "rest" and .head == $next.head
+           elif $next.recovery.asyncFailure != null then
+             .accepted == true and .route == "immediate" and .transport == "rest" and
+             .head == $next.head and .asyncMerge == $next.recovery.asyncFailure
            elif $next.recovery.staleHeadRetirement != null then
              .accepted == false and .route == "admin" and $next.route == "auto" and
              .priorCiAdmin.dispatchTransport == "rest" and
@@ -298,6 +322,23 @@ merge_outcome_load_local() {
         merge_outcome_stop "invalid or unretained auto cancellation provenance"; return 1
       fi
     fi
+    if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("headDrift")' >/dev/null; then
+      retained=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .headDrift.outcome)
+      if ! GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" ||
+        ! GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json" | jq -e --argjson next "$MERGE_OUTCOME_RECORD" '
+          .phase == "intent" and .route == "auto" and .accepted == true and
+          (has("cancellation") | not) and (has("headDrift") | not) and
+          .repo == $next.repo and .pr == $next.pr and .prId == $next.prId and
+          .base == $next.base and .head == $next.head and .main == $next.main and
+          .method == $next.method and .attempt == $next.attempt
+        ' >/dev/null; then
+        merge_outcome_stop "invalid or unretained head-drift receipt provenance"; return 1
+      fi
+      if ! GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor \
+        "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .head)" "$(merge_outcome_receipt_head)"; then
+        merge_outcome_stop "retained merged head does not descend from the retained auto head"; return 1
+      fi
+    fi
   else
     GIT_NO_LAZY_FETCH=1 pr_git show-ref --verify --quiet "$MERGE_OUTCOME_REF" 2>/dev/null || ref_status=$?
     [ "$ref_status" -eq 1 ] || { merge_outcome_stop "unreadable outcome ref"; return 1; }
@@ -309,7 +350,7 @@ merge_outcome_write() {
   shift
   mark_pr_operation_side_effects_started || return 1
   local parents=()
-  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge] | unique | .[] | select(. != null)'); do
+  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead] | unique | .[] | select(. != null)'); do
     parents+=(-p "$parent")
   done
   [ -z "$MERGE_OUTCOME_OID" ] || parents+=(-p "$MERGE_OUTCOME_OID")
@@ -522,6 +563,18 @@ merge_outcome_dispatch_squash() (
   printf '%s\n' "$payload" | pr_gh_plain api graphql --hostname "$MERGE_REPO_HOST" --input -
 )
 
+merge_outcome_dispatch_async() {
+  local result
+  result=$(merge_rest merge "$1" "$2" "$3" "$MERGE_OBSERVATION") || return 1
+  # Recovery retains this child's capture with the acknowledgement, so finish
+  # stdout before recording it; later writes would invalidate retained evidence.
+  printf '%s\n' "$result"
+  # Retain the server UUID before polling. Process loss must never turn an
+  # acknowledged asynchronous request into permission to submit another PUT.
+  merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c --argjson result "$result" \
+    '.accepted=true | .asyncMerge=$result')" || return 1
+}
+
 merge_outcome_dispatch_prior_ci_squash() (
   local payload
   payload=$(printf '%s\n%s\n' "$MERGE_OUTCOME_RECORD" "$1" | jq -cse --arg title "$2" '
@@ -541,8 +594,17 @@ merge_read() {
     [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
     # This complete read reports policy/check facts; prior-CI admission still owns their verdict.
     response=$(merge_rest observe-prior-ci "$pr") || return 1
-    printf '%s\n' "$response" | jq -c '{transport:"rest",payload:.}'
-    return
+    if ! printf '%s\n' "$response" | jq -e '. == {restUnavailable:true}' >/dev/null 2>&1; then
+      printf '%s\n' "$response" | jq -c '{transport:"rest",payload:.}'
+      return
+    fi
+    if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ]; then
+      merge_outcome_stop "merged PR receipt became unavailable during active prior-CI admission" >&2
+      return 1
+    fi
+    # Only the absent merged-receipt field permits this mode to return unavailable.
+    # Postdispatch reconciliation may change readers, never repeat the mutation.
+    first=graphql
   fi
   if [ "$first" = rest ]; then second=graphql; else second=rest; fi
   local transport
@@ -632,13 +694,13 @@ merge_outcome_read_remote() {
     if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] &&
       [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ] &&
       [ "$(printf '%s\n' "$observation" | jq -r .pr.state)" = OPEN ]; then
-      previous="${MERGE_PRIOR_CI_OBSERVED_MAIN:-$PR_MAIN_SHA}"
-      if [ -z "${MERGE_PRIOR_CI_OBSERVED_MAIN:-}" ] && [ -n "${MERGE_OBSERVATION:-}" ]; then
+      previous="${MERGE_OBSERVED_MAIN:-$PR_MAIN_SHA}"
+      if [ -z "${MERGE_OBSERVED_MAIN:-}" ] && [ -n "${MERGE_OBSERVATION:-}" ]; then
         previous=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -er .main) || return 1
       fi
       # Consume transient read boundaries before emitting normalized/retained facts.
-      verify_prior_ci_main_advance "$previous" "$before" "$local_only" >&2 || return 1
-      [ "$before" = "$main" ] || verify_prior_ci_main_advance "$before" "$main" "$local_only" >&2 || return 1
+      verify_merge_main_advance "$previous" "$before" "$local_only" >&2 || return 1
+      [ "$before" = "$main" ] || verify_merge_main_advance "$before" "$main" "$local_only" >&2 || return 1
     elif [ "$(printf '%s\n' "$observation" | jq -r .pr.state)" != MERGED ] && [ "$before" != "$main" ]; then
       merge_outcome_stop "main changed while reading evidence outside active prior-CI admission" >&2
       return 1
@@ -647,14 +709,22 @@ merge_outcome_read_remote() {
   printf '%s\n' "$observation"
 }
 
-merge_outcome_require_main() {
-  local oid="$1"
+merge_outcome_require_commit() {
+  local oid="$1" role="$2"
   # Fetch immutable objects only. Do not replace a pinned observation with the
   # moving origin/main tracking ref or FETCH_HEAD.
   if ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$oid^{commit}" 2>/dev/null; then
-    pr_git fetch --no-tags --no-write-fetch-head "$MERGE_REPO_URL" "$oid" || { merge_outcome_stop "cannot fetch authoritative main $oid"; return 1; }
+    pr_git fetch --no-tags --no-write-fetch-head "$MERGE_REPO_URL" "$oid" || { merge_outcome_stop "cannot fetch authoritative $role $oid"; return 1; }
   fi
   GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$oid^{commit}"
+}
+
+merge_outcome_require_main() {
+  merge_outcome_require_commit "$1" main
+}
+
+merge_outcome_receipt_head() {
+  printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '.headDrift.mergedHead // .head'
 }
 
 merge_outcome_observe() {
@@ -665,17 +735,20 @@ merge_outcome_observe() {
   MERGE_TRANSPORT=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r '.transport') || return 1
   main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main) || return 1
   merge_outcome_require_main "$main" || return 1
-  if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] &&
-    [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ] &&
-    [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ]; then
-    MERGE_PRIOR_CI_OBSERVED_MAIN="$main"
-    [ "$MERGE_TRANSPORT" != rest ] || MERGE_PRIOR_CI_REST_OBSERVATION=true
+  if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ]; then
+    MERGE_OBSERVED_MAIN="$main"
+    if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ] && [ "$MERGE_TRANSPORT" = rest ]; then
+      MERGE_PRIOR_CI_REST_OBSERVATION=true
+    fi
   fi
 }
 
-verify_prior_ci_main_advance() {
+verify_merge_main_advance() {
   local previous="$1" main="$2" local_only="${3:-false}"
   [ "$main" != "$previous" ] || [ "$main" != "$PR_MAIN_SHA" ] || return 0
+  if [ "${OPENCLAW_PR_STRICT_DRIFT:-}" = 1 ]; then
+    merge_outcome_stop "main changed during observation (OPENCLAW_PR_STRICT_DRIFT=1)"; return 1
+  fi
   if [ "$local_only" = true ]; then
     # The CLI switch fails closed on Git versions that ignore the environment variable.
     local GIT_NO_LAZY_FETCH=1 revision role git_diagnostic git_exit missing_main="" missing_diagnostic="" query_output query_error
@@ -740,7 +813,7 @@ verify_prior_ci_main_advance() {
   fi
   if ! pr_git merge-base --is-ancestor "$previous" "$main" ||
     ! pr_git merge-base --is-ancestor "$PR_MAIN_SHA" "$main"; then
-    merge_outcome_stop "prior-CI main must advance from both observed and verified main"; return 1
+    merge_outcome_stop "main must advance from both observed and verified main"; return 1
   fi
   # The fixed CI/security proof remains bound to its verified main ancestor.
   # Prove the new composition without changing the pinned intent/audit anchor.
@@ -749,62 +822,69 @@ verify_prior_ci_main_advance() {
 
 merge_outcome_stable() {
   local reread main previous_main observation_attempt settling=false local_only="${2:-false}"
+  local main_floor="${4:-}"
   for observation_attempt in 1 2 3; do
     reread=$(merge_outcome_read_remote "$1" "$local_only") || {
       merge_outcome_stop "observation reread: observed=unavailable or invalid; expected=authoritative PR/main metadata"; return 1;
     }
-    # Keep the intent anchor separate from the latest verified main. Recalculation
-    # may temporarily erase projections, but never replaces their known pins.
-    if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] && [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ]; then
+    # Admission advances a separate verified cursor; the intent/audit main stays
+    # pinned. Retained outcomes never acquire fresh dispatch authority here.
+    if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ]; then
       if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ] &&
         [ "$(printf '%s\n' "$reread" | jq -r .transport)" = rest ]; then
-        # Persist selection outside the read's subshell so final authority is rechecked.
         MERGE_PRIOR_CI_REST_OBSERVATION=true
       fi
-      previous_main="${MERGE_PRIOR_CI_OBSERVED_MAIN:-$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)}"
-      if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" != true ] ||
-        printf '%s\n' "$reread" | jq -e --argjson observed "$MERGE_OBSERVATION" \
-          --arg previous "$previous_main" --argjson settling "$settling" '
-          def facts: del(.main,.pr.mergeable,.pr.mergeStateStatus);
-          (if .transport != $observed.transport then
-             (facts | del(.transport,.restPolicy)) == ($observed | facts | del(.transport,.restPolicy))
-           else facts == ($observed | facts) end) and
-          ((.pr.mergeable == $observed.pr.mergeable and .pr.mergeStateStatus == $observed.pr.mergeStateStatus) or
-           (.pr.state == "OPEN" and
-            ($settling or .main != $previous) and
-            $observed.pr.mergeable == "MERGEABLE" and $observed.pr.mergeStateStatus != "UNKNOWN" and
-            (.pr.mergeable == "UNKNOWN" or .pr.mergeable == $observed.pr.mergeable) and
-            (.pr.mergeStateStatus == "UNKNOWN" or .pr.mergeStateStatus == $observed.pr.mergeStateStatus)))
-        ' >/dev/null; then
-        if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
-          main=$(printf '%s\n' "$reread" | jq -r .main) || return 1
-          local proof_main="$previous_main" advance_result=0
-          if [ "${3:-}" = requalify-prior-ci ] && [ "$local_only" != true ] && [ -n "${MERGE_PRIOR_CI_REMATERIALIZE_MAIN:-}" ]; then
-            # Keep the known projection while requiring descent from the tip
-            # that invalidated the previous authority window.
-            proof_main="$MERGE_PRIOR_CI_REMATERIALIZE_MAIN"
-          fi
-          verify_prior_ci_main_advance "$proof_main" "$main" "$local_only" "${3:-}" || advance_result=$?
-          if [ "$advance_result" -ne 0 ]; then
-            [ "$advance_result" -eq 75 ] && [ -n "${MERGE_PRIOR_CI_REMATERIALIZE_MAIN:-}" ] && return 75
+      previous_main="${MERGE_OBSERVED_MAIN:-$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)}"
+      if printf '%s\n' "$reread" | jq -e --argjson observed "$MERGE_OBSERVATION" \
+        --arg previous "$previous_main" --argjson settling "$settling" '
+        def facts: del(.main,.pr.mergeable,.pr.mergeStateStatus);
+        (if .transport != $observed.transport then
+           (facts | del(.transport,.restPolicy)) == ($observed | facts | del(.transport,.restPolicy))
+         else facts == ($observed | facts) end) and
+        .pr.state == "OPEN" and .pr.isDraft == false and
+        ((.pr.mergeable == $observed.pr.mergeable and .pr.mergeStateStatus == $observed.pr.mergeStateStatus) or
+         (($settling or .main != $previous) and
+          $observed.pr.mergeable == "MERGEABLE" and $observed.pr.mergeStateStatus != "UNKNOWN" and
+          (.pr.mergeable | IN("UNKNOWN", "MERGEABLE"))))
+      ' >/dev/null; then
+        main=$(printf '%s\n' "$reread" | jq -r .main) || return 1
+        # External proof tightens ancestry without consuming the new tip's first
+        # projection observation. Later settling reads follow the observed cursor.
+        local proof_main="${main_floor:-$previous_main}" advance_result=0
+        if [ "${3:-}" = requalify-prior-ci ] && [ "$local_only" != true ] && [ -n "${MERGE_PRIOR_CI_REMATERIALIZE_MAIN:-}" ]; then
+          # A returned authority window must also descend from its missing tip.
+          proof_main="$MERGE_PRIOR_CI_REMATERIALIZE_MAIN"
+        fi
+        verify_merge_main_advance "$proof_main" "$main" "$local_only" "${3:-}" || advance_result=$?
+        if [ "$advance_result" -ne 0 ]; then
+          [ "$advance_result" -eq 75 ] && [ -n "${MERGE_PRIOR_CI_REMATERIALIZE_MAIN:-}" ] && return 75
+          return 1
+        fi
+        MERGE_PRIOR_CI_REMATERIALIZE_MAIN=""
+        main_floor=""
+        MERGE_OBSERVED_MAIN="$main"
+        if printf '%s\n' "$reread" | jq -e '.pr.mergeable == "UNKNOWN" or .pr.mergeStateStatus == "UNKNOWN"' >/dev/null; then
+          if [ "$observation_attempt" -eq 3 ]; then
+            merge_outcome_diagnose "$1" "$reread" "$MERGE_OBSERVATION"
+            merge_outcome_stop "mergeability recalculation remained UNKNOWN after 3 observations; stopped before intent/dispatch"
             return 1
           fi
-          MERGE_PRIOR_CI_REMATERIALIZE_MAIN=""
-          MERGE_PRIOR_CI_OBSERVED_MAIN="$main"
-          if printf '%s\n' "$reread" | jq -e '.pr.mergeable == "UNKNOWN" or .pr.mergeStateStatus == "UNKNOWN"' >/dev/null; then
-            if [ "$observation_attempt" -eq 3 ]; then
-              merge_outcome_diagnose "$1" "$reread" "$MERGE_OBSERVATION"
-              merge_outcome_stop "mergeability recalculation remained UNKNOWN after 3 observations; stopped before intent/dispatch"
-              return 1
-            fi
-            [ "$settling" = true ] || echo "Waiting for prior-CI mergeability recalculation after verified main advance (up to 3 observations)."
-            settling=true
-            MERGE_PRIOR_CI_RECALCULATED=true
-            sleep "$observation_attempt"
-            continue
-          fi
+          [ "$settling" = true ] || echo "Waiting for mergeability recalculation after verified main advance (up to 3 observations)."
+          settling=true
+          MERGE_PRIOR_CI_RECALCULATED=true
+          sleep "$observation_attempt"
+          continue
         fi
-        reread=$(printf '%s\n' "$reread" | jq -c --arg main "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" '.main=$main') || return 1
+        verify_merge_route_projection "$1" "$reread" "$route" "${qualified_refusal:-false}" || return 1
+        if ! printf '%s\n' "$reread" | jq -e --argjson observed "$MERGE_OBSERVATION" '
+          .pr.mergeable == $observed.pr.mergeable and .pr.mergeStateStatus == $observed.pr.mergeStateStatus
+        ' >/dev/null; then
+          MERGE_PRIOR_CI_RECALCULATED=true
+        fi
+        MERGE_OBSERVATION=$(printf '%s\n' "$reread" | jq -c \
+          --arg main "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" '.main=$main') || return 1
+        MERGE_TRANSPORT=$(printf '%s\n' "$reread" | jq -r .transport) || return 1
+        return 0
       fi
     fi
     break
@@ -843,28 +923,11 @@ merge_outcome_stable() {
   merge_outcome_stop "PR or main changed during observation; rerun for read-only reconciliation if intent exists"
 }
 
-merge_outcome_reconcile() {
-  local pr="$1" head state landed method route parent source_base tree phase
-  merge_outcome_observe "$pr" || return 1
-  head=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .head)
-  if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" '
-    .pr.id == $record.prId and .pr.headRefOid == $record.head and .pr.baseRefName == $record.base
-  ' >/dev/null; then
-    merge_outcome_stop "PR identity/head/base drift from the retained attempt"; return 1
-  fi
-  state=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.state)
-  phase=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .phase)
-  if [ "$state" != MERGED ]; then
-    merge_outcome_stable "$pr" || return 1
-    if [ "$phase" = intent ] && [ "$state" = OPEN ] &&
-      printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.isInMergeQueue or .pr.autoMergeRequest != null' >/dev/null; then
-      echo "AUTO/QUEUE PENDING for PR #$pr; not merged. Retained expected head $head; no re-arm, cancellation, or immediate fallback."
-      echo "Run scripts/pr merge-run $pr again to reconcile only; inspect GitHub queue/auto status if it does not complete."
-      [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .accepted)" = true ] && return 0
-    fi
-    merge_outcome_stop "prior dispatch unresolved (state=$state, phase=$phase); OPEN, process death, head changes, and elapsed time do not prove non-execution"
-    return 1
-  fi
+merge_outcome_verify_landed() {
+  local pr="$1" head="$2" landed method route parent="" source_base tree
+  MERGE_LANDED=""
+  MERGE_LANDED_PARENT=""
+  MERGE_LANDED_TREE=""
   landed=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.mergeCommit.oid)
   pr_git merge-base --is-ancestor "$landed" "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" || {
     local observed_main main_local=false landed_local=false
@@ -892,28 +955,147 @@ merge_outcome_reconcile() {
     }
     merge_inputs=(--merge-base="$source_base" "$landed" "$head")
   else
+    if [ "$method" = squash ] && [ "$(pr_git cat-file commit "$landed" | awk 'NF == 0 {exit} $1 == "parent" {count++} END {print count+0}')" -ne 1 ]; then
+      merge_outcome_stop "landed commit shape does not match the retained squash method (expected one parent)"; return 1
+    fi
     parent=$(pr_git rev-parse "$landed^1") || return 1
     if [ "$method" = merge ] && ! pr_git merge-base --is-ancestor "$head" "$landed"; then
       merge_outcome_stop "landed merge does not retain prepared-head ancestry"; return 1
     fi
     merge_inputs=("$parent" "$head")
   fi
-  tree=$(pr_git merge-tree --write-tree "${merge_inputs[@]}") || {
+  tree=$(pr_git merge-tree --write-tree ${merge_inputs[@]+"${merge_inputs[@]}"}) || {
     merge_outcome_stop "cannot reconstruct $method/$route landed tree at $landed"; return 1;
   }
   [ "$tree" = "$(pr_git rev-parse "$landed^{tree}")" ] || {
     merge_outcome_stop "landed tree does not match the prepared source ($method/$route)"; return 1;
   }
+  MERGE_LANDED="$landed"
+  MERGE_LANDED_PARENT="$parent"
+  MERGE_LANDED_TREE="$tree"
+}
+
+merge_outcome_reconcile() {
+  local pr="$1" head state landed phase
+  local async_uuid async_result async_status_error=false
+  async_uuid=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r \
+    'select(.phase == "intent" and .asyncMerge.status == "pending") | .asyncMerge.uuid // empty') || return 1
+  if [ -n "$async_uuid" ]; then
+    head=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .head) || return 1
+    if async_result=$(merge_rest merge-result "$pr" "$async_uuid" "$head"); then
+      if [ "$async_result" != "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c .asyncMerge)" ]; then
+        merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c --argjson result "$async_result" '.asyncMerge=$result')" || return 1
+      fi
+    else
+      # Results expire after 24 hours. A fresh PR/tree receipt can still prove
+      # completion, but a missing result never permits another submission.
+      async_status_error=true
+    fi
+  fi
+  merge_outcome_observe "$pr" || return 1
+  head=$(merge_outcome_receipt_head)
+  if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" --arg head "$head" '
+    .pr.id == $record.prId and .pr.headRefOid == $head and .pr.baseRefName == $record.base
+  ' >/dev/null; then
+    if printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" '
+      $record.route == "auto" and $record.accepted == true and $record.phase == "intent" and
+      .pr.state == "MERGED" and .pr.id == $record.prId and .pr.baseRefName == $record.base and
+      .pr.headRefOid != $record.head
+    ' >/dev/null; then
+      echo "If the branch was pushed after the accepted auto request and GitHub merged the pushed head, inspect the PR timeline and main history, then record that receipt: scripts/pr merge-recover $pr $MERGE_OUTCOME_OID --confirmed-operator-recovery --merged-head $(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.headRefOid)" >&2
+    fi
+    merge_outcome_stop "PR identity/head/base drift from the retained attempt"; return 1
+  fi
+  state=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.state)
+  phase=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .phase)
+  if [ "$state" != MERGED ]; then
+    merge_outcome_stable "$pr" || return 1
+    if [ "$phase" = intent ] && [ "$state" = OPEN ] &&
+      printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.asyncMerge != null' >/dev/null; then
+      if [ "$async_status_error" = true ]; then
+        merge_outcome_stop "async result unavailable or expired; request $async_uuid remains retained; no resubmission"
+        return 1
+      fi
+      case "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .asyncMerge.status)" in
+        pending|merged)
+          echo "ASYNC MERGE PENDING for PR #$pr; request ${async_uuid:-already-completed}, expected head $head; PR merge not yet verified."
+          echo "Run scripts/pr merge-run $pr again to poll and reconcile only; no new merge request."
+          return 0 ;;
+        failed|enqueued)
+          printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '.asyncMerge | "Async merge result: \(.status): \(.message)"' >&2
+          merge_outcome_stop "async direct merge did not complete; inspect the retained result; no resubmission"
+          return 1 ;;
+      esac
+    fi
+    if [ "$phase" = intent ] && [ "$state" = OPEN ] &&
+      printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.isInMergeQueue or .pr.autoMergeRequest != null' >/dev/null; then
+      echo "AUTO/QUEUE PENDING for PR #$pr; not merged. Retained expected head $head; no re-arm, cancellation, or immediate fallback."
+      echo "Run scripts/pr merge-run $pr again to reconcile only; inspect GitHub queue/auto status if it does not complete."
+      [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .accepted)" = true ] && return 0
+    fi
+    merge_outcome_stop "prior dispatch unresolved (state=$state, phase=$phase); OPEN, process death, head changes, and elapsed time do not prove non-execution"
+    return 1
+  fi
+  landed=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.mergeCommit.oid)
+  if ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg landed "$landed" \
+    '.asyncMerge.status != "merged" or .asyncMerge.sha == $landed' >/dev/null; then
+    merge_outcome_stop "async merge commit differs from the authoritative PR receipt"; return 1
+  fi
+  merge_outcome_verify_landed "$pr" "$head" || return 1
+  landed="$MERGE_LANDED"
   merge_outcome_stable "$pr" || return 1
   if [ "$phase" = intent ]; then
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c --arg landed "$landed" '.phase="merged" | .landed=$landed')" || return 1
   elif [ "$landed" != "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .landed)" ]; then
     merge_outcome_stop "remote merge receipt differs from the retained receipt"; return 1
   fi
-  if [ "$method" = squash ] && [ "$route" != queue ] && [ "$tree" = "$(pr_git rev-parse "$parent^{tree}")" ]; then
+  if [ -n "$MERGE_LANDED_PARENT" ] &&
+    [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .method)" = squash ] &&
+    [ "$MERGE_LANDED_TREE" = "$(pr_git rev-parse "$MERGE_LANDED_PARENT^{tree}")" ]; then
     echo "Warning: recorded squash has no net change at its landed parent ($landed). Inspect main/PR history; receipt retained, no resubmission or automatic revert." >&2
   fi
-  echo "MERGED exact attempted head $head as $landed; receipt retained at $MERGE_OUTCOME_REF."
+  if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("headDrift")' >/dev/null; then
+    echo "MERGED pushed head $head (retained auto head $(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .head)) as $landed; receipt retained at $MERGE_OUTCOME_REF."
+  else
+    echo "MERGED exact attempted head $head as $landed; receipt retained at $MERGE_OUTCOME_REF."
+  fi
+}
+
+# GitHub checks the auto-merge head only at submission; a collaborator push keeps
+# it armed. The operator confirms the head GitHub merged after inspecting the timeline.
+merge_outcome_accept_head_drift() {
+  local pr="$1" expected_oid="$2" merged_head="$3" head actor landed
+  if [ "$expected_oid" != "$MERGE_OUTCOME_OID" ] ||
+    ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '
+      .phase == "intent" and .route == "auto" and .accepted == true and (has("cancellation") | not)
+    ' >/dev/null; then
+    merge_outcome_stop "head-drift receipt requires the exact current retained accepted non-queue auto intent without a cancellation record"; return 1
+  fi
+  head=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .head)
+  if [ "$merged_head" = "$head" ]; then
+    merge_outcome_stop "selected merged head equals the retained auto head; use scripts/pr merge-run for ordinary reconciliation"; return 1
+  fi
+  merge_outcome_observe "$pr" || return 1
+  if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" --arg merged "$merged_head" '
+    .pr.id == $record.prId and .pr.baseRefName == $record.base and
+    .pr.state == "MERGED" and .pr.headRefOid == $merged
+  ' >/dev/null; then
+    merge_outcome_stop "head-drift receipt requires the MERGED PR with retained identity/base and the explicitly selected merged head as its authoritative head"; return 1
+  fi
+  merge_outcome_require_commit "$merged_head" "merged head" || return 1
+  if ! pr_git merge-base --is-ancestor "$head" "$merged_head"; then
+    merge_outcome_stop "selected merged head does not strictly descend from the retained auto head"; return 1
+  fi
+  actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1
+  [ -n "$actor" ] || { merge_outcome_stop "cannot identify the operator recovery actor"; return 1; }
+  merge_outcome_verify_landed "$pr" "$merged_head" || return 1
+  landed="$MERGE_LANDED"
+  merge_outcome_stable "$pr" || return 1
+  merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c \
+    --arg actor "$actor" --arg outcome "$expected_oid" --arg merged "$merged_head" --arg landed "$landed" \
+    '.phase="merged" | .landed=$landed | .headDrift={actor:$actor,outcome:$outcome,mergedHead:$merged}')" || return 1
+  echo "MERGED pushed head $merged_head (retained auto head $head) as $landed; head-drift receipt retained at $MERGE_OUTCOME_REF."
+  echo "After ownership-checked cleanup, explicitly finalize: scripts/pr merge-complete $pr $MERGE_OUTCOME_OID --confirmed-operator-completion"
 }
 
 merge_outcome_cancel_auto() {
@@ -1016,6 +1198,12 @@ merge_outcome_comment_body() {
   esac
   printf 'Merged via %s.\n\n- Prepared head SHA: [%s](%s/pull/%s/commits/%s)\n- Landed commit: [%s](%s/commit/%s)' \
     "$label" "$head" "$MERGE_REPO_URL" "$pr" "$head" "$landed" "$MERGE_REPO_URL" "$landed"
+  if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("headDrift")' >/dev/null; then
+    local merged_head
+    merged_head=$(merge_outcome_receipt_head) || return 1
+    printf '\n- Merged head after push: [%s](%s/pull/%s/commits/%s). The branch was pushed after the auto-merge request and GitHub merged the pushed head; the operator confirmed this receipt after inspecting the PR timeline. Wrapper review and preparation bind the prepared head; GitHub branch protection admitted the pushed head.' \
+      "$merged_head" "$MERGE_REPO_URL" "$pr" "$merged_head"
+  fi
   if [ "$route" = admin ] && printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("priorCiAdmin")' >/dev/null; then
     ci_url=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -er '
       def positive: type == "number" and . > 0 and floor == .;
@@ -1060,7 +1248,7 @@ merge_outcome_post_comment() {
 merge_outcome_head_branch() {
   local pr="$1" head_json
   head_json=$(pr_gh_plain pr view "$pr" --repo "$MERGE_REPO_URL" --json headRefOid,headRefName,headRepository,headRepositoryOwner) || return 1
-  MERGE_HEAD_REF=$(printf '%s\n' "$head_json" | jq -er --arg head "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .head)" \
+  MERGE_HEAD_REF=$(printf '%s\n' "$head_json" | jq -er --arg head "$(merge_outcome_receipt_head)" \
     'select(.headRefOid == $head) | .headRefName | select(type == "string" and length > 0)') || return 1
   MERGE_HEAD_REPO=$(printf '%s\n' "$head_json" | jq -er '.headRepositoryOwner.login + "/" + .headRepository.name | select(test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))') || return 1
   pr_git check-ref-format "refs/heads/$MERGE_HEAD_REF"

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSlackChannelE2e } from "./channel-e2e.js";
+import { runSlackScenario } from "./scenario-runtime.js";
 import { readSlackQaNativeWrites, type SlackNativeWrite } from "./slack-live.capture.js";
 import type { SlackMessage } from "./slack-live.contracts.js";
 
@@ -137,6 +138,78 @@ describe("Slack agent E2E ownership", () => {
     expect(f.sutClient.chat.delete.mock.calls.map(([input]) => input)).toEqual([
       { channel: "C_QA", ts: "2.000000" },
     ]);
+  });
+
+  it("cleans standalone scenario progress and final receipts after an assertion fails", async () => {
+    const f = fixture();
+    const outputs = [
+      { ts: "2.000000", text: "COMMENTARY" },
+      { ts: "3.000000", text: "Ran Exec" },
+      { ts: "4.000000", text: "TOOL OUTPUT" },
+      { ts: "5.000000", text: "FINAL" },
+    ];
+    const unrelated = [
+      { ts: "6.000000", text: "Ran Exec", user: "U_OTHER" },
+      { ts: "7.000000", text: "other channel", user: "U_SUT" },
+      { ts: "8.000000", text: "other thread", user: "U_SUT", thread_ts: "foreign" },
+    ];
+    f.messages.push(...outputs.map((message) => ({ ...message, user: "U_SUT" })), ...unrelated);
+    for (const message of [...outputs, ...unrelated.slice(1)]) {
+      f.writes.push({
+        evidence: "api-accepted",
+        requestEventId: Number(message.ts),
+        method: "chat.postMessage",
+        channelId: message.ts === "7.000000" ? "C_OTHER" : "C_QA",
+        messageId: message.ts,
+        threadId: message.ts === "8.000000" ? "foreign" : undefined,
+      });
+    }
+    f.sutClient.chat.delete.mockImplementation(async ({ ts }) => {
+      const index = f.messages.findIndex((message) => message.ts === ts);
+      if (index >= 0) {
+        f.messages.splice(index, 1);
+      }
+      return { ok: true };
+    });
+    const run = {
+      expectReply: true,
+      input: "owned scenario",
+      matchText: "FINAL",
+      verify: () => {
+        throw new Error("intentional assertion failure");
+      },
+    };
+    try {
+      await expect(
+        runSlackScenario(
+          {
+            channelId: "C_QA",
+            channelE2e: f.session.driver,
+            recordScenarioMessages: f.session.recordScenarioMessages,
+            configureScenario: async () => ({ cfg: {}, primaryModel: "mock-openai/test", run }),
+            context: { driverClient: f.driverClient, sutReadClient: f.sutClient },
+            getMessageWriteCursor: async () => 0,
+            observedMessages: [],
+            readMessageWrites: async () =>
+              f.messages.map((message) => ({ ...message, channelId: "C_QA" })),
+            scenario: { id: "ownership", title: "ownership", timeoutMs: 1000 },
+            sutIdentity: { userId: "U_SUT" },
+          } as never,
+          { buildRun: () => run },
+        ),
+      ).rejects.toThrow("intentional assertion failure");
+    } finally {
+      await f.session.cleanup();
+    }
+    expect(f.messages).toEqual(unrelated);
+    const artifact = JSON.parse(await fs.readFile(f.session.artifactPath, "utf8"));
+    expect(artifact.ownedMessages).toHaveLength(5);
+    expect(artifact.ownedMessages.every((receipt: { deleted: boolean }) => receipt.deleted)).toBe(
+      true,
+    );
+    expect(f.sutClient.chat.delete.mock.calls.map(([input]) => input.ts).toSorted()).toEqual(
+      outputs.map((message) => message.ts),
+    );
   });
 
   it.each([

@@ -29,7 +29,6 @@ export type MemoryFlushPlanForRunResolution = Omit<MemoryFlushPlanResolution, "p
   plan: ResolvedMemoryFlushPlan;
 };
 
-/** Resolve host-owned flush timing from config and the active model context window. */
 function resolveMemoryFlushTiming(params: {
   cfg?: OpenClawConfig;
   contextWindowTokens?: number;

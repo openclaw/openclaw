@@ -23,9 +23,6 @@ type RepairIMessageConversationAnchorParams = {
   client: IMessageRpcClient;
   message: IMessagePayload;
   runtime?: RuntimeLogger;
-  chatsLimit?: number;
-  perChatHistoryLimit?: number;
-  rpcTimeoutMs?: number;
 };
 
 type AuthoritativeRecoveryProjection = {
@@ -144,8 +141,8 @@ export async function repairIMessageConversationAnchor(
   try {
     chatsResult = await client.request<{ chats?: ChatsListEntry[] }>(
       "chats.list",
-      { limit: params.chatsLimit ?? DEFAULT_CHATS_LIMIT },
-      { timeoutMs: params.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS },
+      { limit: DEFAULT_CHATS_LIMIT },
+      { timeoutMs: DEFAULT_RPC_TIMEOUT_MS },
     );
   } catch (err) {
     runtime?.error?.(`imessage: anchorless message recovery failed listing chats: ${String(err)}`);
@@ -167,9 +164,9 @@ export async function repairIMessageConversationAnchor(
         {
           attachments: false,
           chat_id: chatId,
-          limit: params.perChatHistoryLimit ?? DEFAULT_PER_CHAT_HISTORY_LIMIT,
+          limit: DEFAULT_PER_CHAT_HISTORY_LIMIT,
         },
-        { timeoutMs: params.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS },
+        { timeoutMs: DEFAULT_RPC_TIMEOUT_MS },
       );
     } catch {
       continue;

@@ -129,6 +129,8 @@ function installDiscoveryHooks(options: DiscoveryContractOptions) {
         coerceSecretRef: asNullableRecord,
         ensureApiKeyFromOptionEnvOrPrompt: vi.fn(),
         ensureAuthProfileStore: ensureAuthProfileStoreMock,
+        ensureAuthProfileStoreAsync: async (...args: unknown[]) =>
+          ensureAuthProfileStoreMock(...args),
         listProfilesForProvider: listProfilesForProviderMock,
         normalizeApiKeyInput: (value: unknown) => (typeof value === "string" ? value.trim() : ""),
         normalizeGithubCopilotDomain: (raw: unknown) => {

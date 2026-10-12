@@ -39,8 +39,8 @@ import {
   mergeTtsSupplementMessages,
   projectForwardedMessages,
   toProjectedMessages,
-  type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
+import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import {
   sanitizeChatHistoryContentBlock,
   sanitizeChatHistoryMessage,
@@ -53,12 +53,14 @@ import type {
   CurrentUserProfileDisplay,
   CurrentUserProfileDisplayResolver,
 } from "./current-user-profile-display.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 import { projectTranscriptImageArtifacts } from "./transcript-image-artifacts.js";
 
 export type ChatDisplayProjectionOptions = {
   resolveCronJobName?: (jobId: string) => string | undefined;
   includeCommentaryFallbacks?: boolean;
   maxChars?: number;
+  toolResultMaxChars?: number;
   activity?: false;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   stripEnvelope?: boolean;
@@ -117,14 +119,7 @@ function projectCurrentUserProfileAvatars(
   if (!resolveDisplay) {
     return messages;
   }
-  const project = createCurrentUserProfileMessageProjector(resolveDisplay);
-  let changed = false;
-  const projected = messages.map((message) => {
-    const row = project(message);
-    changed ||= row !== message;
-    return row;
-  });
-  return changed ? projected : messages;
+  return mapChatDisplayMessages(messages, createCurrentUserProfileMessageProjector(resolveDisplay));
 }
 
 type ChatDisplayProjectionResult = {
@@ -397,12 +392,10 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
 function projectEmptyAssistantErrorMessages(
   messages: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
-  let changed = false;
-  const projected = messages.map((message) => {
+  return mapChatDisplayMessages(messages, (message) => {
     if (message.role !== "assistant" || message.stopReason !== "error") {
       return message;
     }
-    changed = true;
     const hasDisplayableStructuredContent =
       hasAssistantDisplayableNonTextContent(message) || hasTranscriptMediaFacts(message);
     if (hasDisplayableStructuredContent) {
@@ -426,7 +419,6 @@ function projectEmptyAssistantErrorMessages(
     delete next.text;
     return next;
   });
-  return changed ? projected : messages;
 }
 
 type ChatHistoryRecoveryOptions = Pick<
@@ -510,6 +502,7 @@ export function projectChatDisplayMessagesWithState(
   const displayMessages = sanitizeChatHistoryMessages(
     mergeTtsSupplementMessages(filtered.messages),
     options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    { toolResultMaxChars: options?.toolResultMaxChars },
   ) as Array<Record<string, unknown>>;
   const result: ChatDisplayProjectionResult = {
     activity,
@@ -539,5 +532,34 @@ export function projectChatDisplayMessage(
   message: unknown,
   options?: ChatDisplayProjectionOptions,
 ): Record<string, unknown> | undefined {
-  return projectChatDisplayMessages([message], options)[0];
+  const projected = projectChatDisplayMessages([message], options);
+  if (
+    !options?.includeCommentaryFallbacks ||
+    !projected.some((entry) => entry.openclawStreamFallback)
+  ) {
+    return projected[0];
+  }
+  // A fetched source row restores all its visible fragments as one message.
+  const result: Record<string, unknown> = {
+    ...projected.at(-1),
+    content: projected.flatMap(({ content }) =>
+      Array.isArray(content)
+        ? content
+        : typeof content === "string"
+          ? [{ type: "text", text: content }]
+          : [],
+    ),
+  };
+  const truncated = projected
+    .map((entry) => asOptionalRecord(entry["__openclaw"]))
+    .find((metadata) => metadata?.truncated === true);
+  if (truncated) {
+    result["__openclaw"] = {
+      ...asOptionalRecord(result["__openclaw"]),
+      truncated: true,
+      reason: truncated.reason,
+    };
+  }
+  delete result.openclawStreamFallback;
+  return result;
 }

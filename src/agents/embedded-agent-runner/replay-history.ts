@@ -23,7 +23,11 @@ import {
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
+import {
+  isTranscriptOnlyOpenClawAssistantMessage,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+} from "../../shared/transcript-only-openclaw-assistant.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -53,6 +57,7 @@ import {
   extractToolResultId,
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "../tool-call-id.js";
+import { createCompletedToolCallPredicate } from "../tool-call-shared.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import type { TranscriptPolicy } from "../transcript-policy.types.js";
 import {
@@ -63,7 +68,13 @@ import {
   type UsageLike,
 } from "../usage.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
-import { createProviderReplaySessionState } from "./replay-session-state.js";
+import {
+  createProviderReplaySessionState,
+  isSameModelSnapshot,
+  MODEL_SNAPSHOT_CUSTOM_TYPE,
+  readModelSnapshotState,
+  type ModelSnapshotEntry,
+} from "./replay-session-state.js";
 import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
@@ -71,7 +82,6 @@ import {
   stripInvalidThinkingSignatures,
 } from "./thinking.js";
 
-const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
 const MANAGED_DISPLAY_BLOCK_TYPES = new Set([
   "attachment",
   "attachment_error",
@@ -79,17 +89,6 @@ const MANAGED_DISPLAY_BLOCK_TYPES = new Set([
   "image",
   "video",
 ]);
-type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
-type ModelSnapshotEntry = {
-  timestamp: number;
-  provider?: string;
-  modelApi?: string | null;
-  modelId?: string;
-};
-type ModelSnapshotState = {
-  lastSnapshot: ModelSnapshotEntry | null;
-  latestSwitchTimestamp: number | null;
-};
 type AssistantReplayMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 type ProviderReplayHookParams = {
@@ -103,6 +102,21 @@ type ProviderReplayHookParams = {
   sessionId?: string;
 };
 
+function resolveReplayPolicy(params: ProviderReplayHookParams & { policy?: TranscriptPolicy }) {
+  return (
+    params.policy ??
+    resolveTranscriptPolicy({
+      modelApi: params.modelApi,
+      provider: params.provider,
+      modelId: params.modelId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      model: params.model,
+    })
+  );
+}
+
 function createProviderReplayPluginParams(params: ProviderReplayHookParams & { provider: string }) {
   const context = {
     config: params.config,
@@ -114,13 +128,8 @@ function createProviderReplayPluginParams(params: ProviderReplayHookParams & { p
     model: params.model,
     sessionId: params.sessionId,
   };
-  return {
-    provider: params.provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    context,
-  };
+  const { provider, config, workspaceDir, env } = context;
+  return { provider, config, workspaceDir, env, context };
 }
 
 function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessage[] {
@@ -193,18 +202,6 @@ function sanitizeUserReplayContent(
   return touched ? { ...message, content: sanitizedContent } : message;
 }
 
-function normalizeAssistantReplayTextContent(
-  message: AssistantReplayMessage,
-  replayContent: string,
-): AssistantReplayMessage | null {
-  const strippedText = stripInternalMetadataForDisplay(replayContent);
-  const trimmed = strippedText.trim();
-  if (!trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
-    return null;
-  }
-  return replaceCompactionReplayOwnerContent(message, [{ type: "text", text: strippedText }]);
-}
-
 function normalizeAssistantReplayBlockContent(
   message: AssistantReplayMessage,
   replayContent: unknown[],
@@ -214,16 +211,12 @@ function normalizeAssistantReplayBlockContent(
   const sanitizedContent: unknown[] = [];
   for (const block of replayContent) {
     const record = asOptionalRecord(block);
-    if (!record) {
-      sanitizedContent.push(block);
-      continue;
-    }
-    const type = record.type;
+    const type = record?.type;
     if (typeof type === "string" && MANAGED_DISPLAY_BLOCK_TYPES.has(type)) {
       touched = true;
       continue;
     }
-    const text = record.text;
+    const text = record?.text;
     if (typeof text !== "string") {
       sanitizedContent.push(block);
       continue;
@@ -258,6 +251,14 @@ function normalizeAssistantReplayBlockContent(
 }
 
 function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantReplayMessage): boolean {
+  // Canonical automation results are visible conversation turns, not mirrors,
+  // even when they repeat the preceding reply without using model tokens.
+  if (
+    next.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
+    next.model === "automation-result"
+  ) {
+    return false;
+  }
   const previous = out.at(-1);
   if (!previous || previous.role !== "assistant") {
     return false;
@@ -283,86 +284,92 @@ function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantRepla
   );
 }
 
+function normalizeAssistantReplayMessage(
+  message: AssistantReplayMessage,
+  out: AgentMessage[],
+): AssistantReplayMessage | null {
+  if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
+    // Drop from the in-memory replay copy; the persisted JSONL keeps the
+    // entry so user-facing transcript surfaces are unchanged.
+    return null;
+  }
+  // Failed attempts have no model content; discard the legacy placeholder too.
+  // Keep billed silent replies and incomplete tool/length states unchanged.
+  if (
+    isStreamErrorFallbackContent(message.content) &&
+    (message.stopReason === "error" ||
+      isZeroUsageEmptyStopAssistantTurn({ ...message, content: [] }))
+  ) {
+    return null;
+  }
+  const replayContent = (message as { content?: unknown }).content;
+  if (typeof replayContent === "string") {
+    const strippedText = stripInternalMetadataForDisplay(replayContent);
+    const trimmed = strippedText.trim();
+    return !trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)
+      ? null
+      : replaceCompactionReplayOwnerContent(message, [{ type: "text", text: strippedText }]);
+  }
+  const blockContent = Array.isArray(replayContent)
+    ? replayContent
+    : replayContent != null && typeof replayContent === "object"
+      ? [replayContent]
+      : [];
+  const assistantMessage =
+    blockContent === replayContent
+      ? message
+      : replaceCompactionReplayOwnerContent(message, blockContent as typeof message.content);
+  const normalized = normalizeAssistantReplayBlockContent(assistantMessage, blockContent);
+  // Token-limited thinking is incomplete provider state. Replaying it can
+  // resend a partial signature, while visible text or tool calls remain useful.
+  if (!normalized || isReasoningOnlyLengthAssistantTurn(normalized)) {
+    return null;
+  }
+  // Historical side-branch rebuilds could strip every mirror marker while
+  // retaining the zero-usage receipt immediately after its source reply.
+  // Keep this recovery shape narrow; ordinary repeated model turns survive.
+  return isBareDeliveryMirrorDuplicate(out, normalized) ? null : normalized;
+}
+
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
+  let isCompletedToolCall: ReturnType<typeof createCompletedToolCallPredicate> | undefined;
   const out: AgentMessage[] = [];
   for (const message of messages) {
-    if (message?.role === "user") {
-      const sanitizedUserMessage = sanitizeUserReplayContent(message);
-      if (sanitizedUserMessage) {
-        out.push(sanitizedUserMessage);
-      }
-      if (sanitizedUserMessage !== message) {
-        touched = true;
-      }
-      continue;
-    }
-    if (!message || message.role !== "assistant") {
+    if (message?.role !== "user" && message?.role !== "assistant") {
       out.push(message);
       continue;
     }
-    if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
-      // Drop from the in-memory replay copy; the persisted JSONL keeps the
-      // entry so user-facing transcript surfaces are unchanged.
-      touched = true;
-      continue;
-    }
-    // Failed attempts have no model content; discard the legacy placeholder too.
-    // Keep billed silent replies and incomplete tool/length states unchanged.
+    let normalized =
+      message.role === "user"
+        ? sanitizeUserReplayContent(message)
+        : normalizeAssistantReplayMessage(message, out);
     if (
-      isStreamErrorFallbackContent(message.content) &&
-      (message.stopReason === "error" ||
-        isZeroUsageEmptyStopAssistantTurn({ ...message, content: [] }))
+      normalized?.role === "assistant" &&
+      (normalized.stopReason === "error" || normalized.stopReason === "aborted") &&
+      normalized.content.some((block) => block.type === "toolCall")
     ) {
-      touched = true;
-      continue;
-    }
-    let assistantMessage: AssistantReplayMessage = message;
-    const replayContent = (message as { content?: unknown }).content;
-    if (typeof replayContent === "string") {
-      const normalized = normalizeAssistantReplayTextContent(message, replayContent);
-      if (normalized) {
-        out.push(normalized);
+      const completedToolCall = (isCompletedToolCall ??=
+        createCompletedToolCallPredicate(messages));
+      if (
+        normalized.content.some((block) => block.type === "toolCall" && completedToolCall(block))
+      ) {
+        // Signed thinking belongs to the completed calls; the failed source stays intact for display.
+        const completed = normalized.content.filter(
+          (block) =>
+            block.type !== "text" && (block.type !== "toolCall" || completedToolCall(block)),
+        );
+        normalized = {
+          ...replaceCompactionReplayOwnerContent(normalized, completed),
+          stopReason: "toolUse",
+        };
       }
-      touched = true;
-      continue;
     }
-    const blockContent = Array.isArray(replayContent)
-      ? replayContent
-      : replayContent != null && typeof replayContent === "object"
-        ? [replayContent]
-        : [];
-    if (blockContent !== replayContent) {
-      assistantMessage = replaceCompactionReplayOwnerContent(
-        message,
-        blockContent as typeof message.content,
-      ) as AssistantReplayMessage;
-      touched = true;
+    if (normalized) {
+      out.push(normalized);
     }
-    const normalized = normalizeAssistantReplayBlockContent(assistantMessage, blockContent);
-    if (normalized !== assistantMessage) {
-      touched = true;
-      if (!normalized) {
-        continue;
-      }
-      assistantMessage = normalized;
-    }
-    if (isReasoningOnlyLengthAssistantTurn(assistantMessage)) {
-      // Token-limited thinking is incomplete provider state. Replaying it can
-      // resend a partial signature, while visible text or tool calls remain useful.
-      touched = true;
-      continue;
-    }
-    // Historical side-branch rebuilds could strip every mirror marker while
-    // retaining the zero-usage receipt immediately after its source reply.
-    // Keep this recovery shape narrow; ordinary repeated model turns survive.
-    if (isBareDeliveryMirrorDuplicate(out, assistantMessage)) {
-      touched = true;
-      continue;
-    }
-    out.push(assistantMessage);
+    touched ||= normalized !== message;
   }
-
   return touched ? out : messages;
 }
 
@@ -458,39 +465,6 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
   return touched ? out : messages;
 }
 
-function readModelSnapshotState(sessionManager: SessionManager): ModelSnapshotState {
-  let lastSnapshot: ModelSnapshotEntry | null = null;
-  let latestSwitchTimestamp: number | null = null;
-  try {
-    for (const rawEntry of sessionManager.getBranch()) {
-      const entry = rawEntry as CustomEntryLike;
-      if (entry?.type !== "custom" || entry?.customType !== MODEL_SNAPSHOT_CUSTOM_TYPE) {
-        continue;
-      }
-      const data = entry?.data as ModelSnapshotEntry | undefined;
-      if (data && typeof data === "object") {
-        if (
-          lastSnapshot &&
-          !isSameModelSnapshot(lastSnapshot, data) &&
-          Number.isFinite(data.timestamp)
-        ) {
-          latestSwitchTimestamp = data.timestamp;
-        }
-        lastSnapshot = data;
-      }
-    }
-  } catch {
-    return { lastSnapshot: null, latestSwitchTimestamp: null };
-  }
-  return { lastSnapshot, latestSwitchTimestamp };
-}
-
-function isSameModelSnapshot(a: ModelSnapshotEntry, b: ModelSnapshotEntry): boolean {
-  return (["provider", "modelApi", "modelId"] as const).every(
-    (field) => (a[field] ?? "") === (b[field] ?? ""),
-  );
-}
-
 function formatOpenAIResponsesReplayInvariantError(params: {
   reason: "dangling_tool_call" | "orphan_tool_result";
   toolCallId?: string;
@@ -531,14 +505,13 @@ function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): 
       const toolCallId = extractToolResultId(
         message as Extract<AgentMessage, { role: "toolResult" }>,
       );
-      if (!toolCallId || !pending.has(toolCallId)) {
+      if (!toolCallId || !pending.delete(toolCallId)) {
         throw formatOpenAIResponsesReplayInvariantError({
           reason: "orphan_tool_result",
           ...(toolCallId ? { toolCallId } : {}),
           messageIndex: i,
         });
       }
-      pending.delete(toolCallId);
       continue;
     }
 
@@ -572,17 +545,7 @@ export async function sanitizeSessionHistory(
   },
 ): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
-  const policy =
-    params.policy ??
-    resolveTranscriptPolicy({
-      modelApi: params.modelApi,
-      provider: params.provider,
-      modelId: params.modelId,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      model: params.model,
-    });
+  const policy = resolveReplayPolicy(params);
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
   const signedThinkingProvider = providerRequiresSignedThinking(params.provider);
   const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
@@ -637,27 +600,24 @@ export async function sanitizeSessionHistory(
   // bound to the original prefix; after compaction the prefix changes and Anthropic
   // rejects them. Timestamp comparison with the latest compaction summary identifies
   // the affected messages regardless of which compaction path produced them.
-  const compactionStaleStripped =
-    signedThinkingProvider || policy.preserveSignatures
-      ? stripStaleThinkingSignaturesForCompactionReplay(sanitizedImages)
-      : sanitizedImages;
   // Some recovery paths supply a narrow policy with preserveSignatures disabled.
   // Native signed-thinking providers still cannot replay missing/blank
   // signatures once the assistant turn is no longer latest in the outbound
   // request.
-  const validatedThinkingSignatures =
-    signedThinkingProvider || policy.preserveSignatures
-      ? stripInvalidThinkingSignatures(compactionStaleStripped, {
-          preserveLatestAssistant: preserveLatestAssistantThinking,
-        })
-      : compactionStaleStripped;
-  const droppedReasoning = policy.dropReasoningFromHistory
-    ? dropReasoningFromHistory(validatedThinkingSignatures)
-    : validatedThinkingSignatures;
-  const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(droppedReasoning)
-    : droppedReasoning;
-  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
+  let messages = sanitizedImages;
+  if (signedThinkingProvider || policy.preserveSignatures) {
+    messages = stripInvalidThinkingSignatures(
+      stripStaleThinkingSignaturesForCompactionReplay(messages),
+      { preserveLatestAssistant: preserveLatestAssistantThinking },
+    );
+  }
+  if (policy.dropReasoningFromHistory) {
+    messages = dropReasoningFromHistory(messages);
+  }
+  if (policy.dropThinkingBlocks) {
+    messages = dropThinkingBlocks(messages);
+  }
+  messages = sanitizeToolCallInputs(messages, {
     allowedToolNames: params.allowedToolNames,
     allowProviderOwnedThinkingReplay,
   });
@@ -665,42 +625,30 @@ export async function sanitizeSessionHistory(
   // Codex repairs those gaps with "aborted"; keep that before the fc_* downgrade
   // so both call and result ids are rewritten together. Covered by unit replay
   // tests plus live OpenAI/Codex and generic replay-repair model tests.
-  const openAIRepairedToolCalls =
-    isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairingForModel(sanitizedToolCalls, true)
-      : sanitizedToolCalls;
-  const openAISafeToolCalls = isOpenAIResponsesApi
-    ? downgradeOpenAIFunctionCallReasoningPairs(
-        normalizeOpenAIResponsesToolCallIds(
-          // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
-          // invalidated by a switch, every later replay must keep dropping them.
-          dropStaleOpenAIReasoning(
-            openAIRepairedToolCalls,
-            latestModelSwitchTimestamp ?? undefined,
-          ),
-        ),
-      )
-    : sanitizedToolCalls;
-  const pairedToolCalls =
-    !isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairingForModel(openAISafeToolCalls, false)
-      : openAISafeToolCalls;
-  const sanitizedToolIds =
-    !isOpenAIResponsesApi && policy.sanitizeToolCallIds && policy.toolCallIdMode
-      ? sanitizeToolCallIdsForCloudCodeAssist(pairedToolCalls, policy.toolCallIdMode, {
-          preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
-          duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
-          preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
-          allowedToolNames: params.allowedToolNames,
-        })
-      : pairedToolCalls;
-  const sanitizedToolResults = stripToolResultDetails(sanitizedToolIds);
-  const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
-    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
+  if (policy.repairToolUseResultPairing) {
+    messages = sanitizeToolUseResultPairingForModel(messages, isOpenAIResponsesApi);
+  }
+  if (isOpenAIResponsesApi) {
+    messages = downgradeOpenAIFunctionCallReasoningPairs(
+      normalizeOpenAIResponsesToolCallIds(
+        // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
+        // invalidated by a switch, every later replay must keep dropping them.
+        dropStaleOpenAIReasoning(messages, latestModelSwitchTimestamp ?? undefined),
+      ),
+    );
+  } else if (policy.sanitizeToolCallIds && policy.toolCallIdMode) {
+    messages = sanitizeToolCallIdsForCloudCodeAssist(messages, policy.toolCallIdMode, {
+      preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+      duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
+      preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
+      allowedToolNames: params.allowedToolNames,
+    });
+  }
+  messages = ensureAssistantUsageSnapshots(
+    stripStaleAssistantUsageBeforeLatestCompaction(stripToolResultDetails(messages)),
   );
   const provider = params.provider?.trim();
-  let providerSanitized: AgentMessage[] | undefined;
-  if (provider && provider.length > 0) {
+  if (provider) {
     const pluginParams = createProviderReplayPluginParams({ ...params, provider });
     const replaySession = createProviderReplaySessionState(params.sessionManager);
     try {
@@ -709,25 +657,23 @@ export async function sanitizeSessionHistory(
         context: {
           ...pluginParams.context,
           sessionId: params.sessionId ?? "",
-          messages: sanitizedCompactionUsage,
+          messages,
           allowedToolNames: params.allowedToolNames,
           sessionState: replaySession.state,
         },
       });
-      providerSanitized = providerResult ?? undefined;
+      messages = providerResult ?? messages;
     } finally {
       replaySession.close();
     }
   }
-  const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
   // Provider replay hooks may rewrite history, so reassert the same pairing policy afterward.
-  const responsesProviderRepaired =
-    isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairingForModel(sanitizedWithProvider, true)
-      : sanitizedWithProvider;
-  const responsesInvariantChecked = isOpenAIResponsesApi
-    ? assertOpenAIResponsesToolUseResultInvariant(responsesProviderRepaired)
-    : responsesProviderRepaired;
+  if (isOpenAIResponsesApi) {
+    if (policy.repairToolUseResultPairing) {
+      messages = sanitizeToolUseResultPairingForModel(messages, true);
+    }
+    assertOpenAIResponsesToolUseResultInvariant(messages);
+  }
 
   if (currentSnapshot && (!priorSnapshot || modelChanged)) {
     try {
@@ -735,13 +681,14 @@ export async function sanitizeSessionHistory(
         MODEL_SNAPSHOT_CUSTOM_TYPE,
         currentSnapshot,
       );
-    } catch {
+    } catch (error) {
+      rethrowIncognitoSessionError(error);
       // ignore persistence failures
     }
   }
 
   if (!policy.applyGoogleTurnOrdering) {
-    return responsesInvariantChecked;
+    return messages;
   }
 
   // Strict OpenAI-compatible providers (vLLM, Gemma, etc.) also reject
@@ -750,7 +697,7 @@ export async function sanitizeSessionHistory(
   // provider-owned ordering rewrite above; keep this generic fallback for the
   // strict OpenAI-compatible path and for any provider that leaves assistant-
   // first repair to core. See #38962.
-  const googleOrdered = sanitizeGoogleTurnOrdering(responsesInvariantChecked);
+  const googleOrdered = sanitizeGoogleTurnOrdering(messages);
   return isOpenAIResponsesApi
     ? assertOpenAIResponsesToolUseResultInvariant(googleOrdered)
     : googleOrdered;
@@ -766,17 +713,7 @@ export async function validateReplayTurns(
     policy?: TranscriptPolicy;
   },
 ): Promise<AgentMessage[]> {
-  const policy =
-    params.policy ??
-    resolveTranscriptPolicy({
-      modelApi: params.modelApi,
-      provider: params.provider,
-      modelId: params.modelId,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      model: params.model,
-    });
+  const policy = resolveReplayPolicy(params);
   const provider = params.provider?.trim();
   if (provider) {
     const pluginParams = createProviderReplayPluginParams({ ...params, provider });
@@ -801,4 +738,3 @@ export async function validateReplayTurns(
       })
     : validatedGemini;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

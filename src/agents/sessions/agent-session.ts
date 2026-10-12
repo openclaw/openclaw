@@ -15,8 +15,7 @@ export class AgentSession extends AgentSessionTree {
     this.unsubscribeAgent = this.agent.subscribe(this.handleAgentEvent);
     this.installAgentToolHooks();
     this.buildRuntime({
-      activeToolNames: this.initialActiveToolNames,
-      includeAllExtensionTools: true,
+      activeToolNames: [...this.allowedToolNames],
     });
   }
 }

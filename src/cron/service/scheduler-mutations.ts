@@ -1,16 +1,17 @@
-import { isDeepStrictEqual } from "node:util";
 import { noteCronJobsStoreCommit } from "../store.js";
 import type { CronRunHistorySource } from "../store/run-history.js";
-import type { CronRuntimeMutationContracts } from "../store/runtime-mutation.types.js";
-import type { CronRuntimeMutationInputs } from "../store/runtime-worker.types.js";
-import { resolveFailureAlert } from "./failure-alerts.js";
+import type {
+  CronRuntimeMutationContracts,
+  CronRuntimeMutationInputs,
+} from "../store/runtime-worker.types.js";
+import { hasActiveCronRun, isJobEnabled } from "./jobs-scheduling.js";
 import {
   captureCronNotificationRouting,
-  prepareCronNotificationRouting,
+  resolveCronNotificationQueueOwner,
 } from "./notification-intents.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
-import { prepareCronScheduleOwnership } from "./schedule-maintenance.js";
+import { captureCronScheduleOwnership } from "./schedule-maintenance.js";
 import type { CronServiceState } from "./state.js";
 import { captureCronServiceMutationSource, runPostPersistCronNotifications } from "./store.js";
 
@@ -18,7 +19,7 @@ type SchedulerSource = ReturnType<typeof captureCronServiceMutationSource>;
 type SkippedOutcome = CronRuntimeMutationContracts["cron.recordSkippedRuns"]["outcome"];
 type StartupOutcome = CronRuntimeMutationContracts["cron.planStartup"]["outcome"];
 
-/** History and other effects run after the native scope joins, including a lost committed reply. */
+/** Publish history and other effects after the worker transaction completes. */
 export async function recordSkippedCronRuns(params: {
   state: CronServiceState;
   source: SchedulerSource;
@@ -30,7 +31,15 @@ export async function recordSkippedCronRuns(params: {
   const { state, source } = params;
   const change = structuredClone(params.change);
   let committed: SkippedOutcome | undefined;
-  let historySource: CronRunHistorySource | undefined;
+  const defaultAgentId = state.deps.resolveDefaultAgentId
+    ? state.deps.resolveDefaultAgentId()
+    : state.deps.defaultAgentId;
+  const historySource: CronRunHistorySource = {
+    ...source,
+    defaultAgentId: defaultAgentId ?? state.deps.defaultAgentId,
+    // A committed completion keeps its original attribution when routing refreshes.
+    assertCurrent: () => source.assertStorageCurrent(),
+  };
   let failure: { error: unknown } | undefined;
   try {
     await runCronRuntimeMutation({
@@ -41,67 +50,19 @@ export async function recordSkippedCronRuns(params: {
         source.assertCurrent();
         params.assertCurrent?.();
       },
-      prepare({ jobs }) {
-        const prepared = prepareCronScheduleOwnership(
-          state,
-          jobs.map(({ id }) => id),
-        );
-        const defaultAgentId = state.deps.resolveDefaultAgentId
-          ? state.deps.resolveDefaultAgentId()
-          : state.deps.defaultAgentId;
-        const effectiveDefaultAgentId = defaultAgentId ?? state.deps.defaultAgentId;
-        const notificationRouting = captureCronNotificationRouting(
+      // Routing and activity may change after submission; this snapshot owns the outcome.
+      snapshot: {
+        nowMs: params.nowMs,
+        defaultAgentId,
+        notificationRouting: captureCronNotificationRouting(
           defaultAgentId,
           state.deps.defaultAgentId,
-        );
-        const assertRoutingCurrent = () => {
-          source.assertStorageCurrent();
-          const currentDefault = state.deps.resolveDefaultAgentId
-            ? state.deps.resolveDefaultAgentId()
-            : state.deps.defaultAgentId;
-          if (
-            currentDefault !== defaultAgentId ||
-            (currentDefault ?? state.deps.defaultAgentId) !== effectiveDefaultAgentId ||
-            captureCronNotificationRouting(currentDefault, state.deps.defaultAgentId)
-              .defaultAgentId !== notificationRouting.defaultAgentId
-          ) {
-            throw new Error("Cron skipped-run owner changed before completion");
-          }
-        };
-        historySource = {
-          ...source,
-          defaultAgentId: effectiveDefaultAgentId,
-          // A committed completion keeps its original attribution when routing refreshes.
-          assertCurrent: () => source.assertStorageCurrent(),
-        };
-        const cronConfig = structuredClone(state.deps.cronConfig);
-        const failureAlerts = jobs.map((job) => ({
-          jobId: job.id,
-          value: resolveFailureAlert({ deps: { cronConfig } }, job),
-        }));
-        return {
-          value: {
-            nowMs: params.nowMs,
-            defaultAgentId,
-            notificationRouting,
-            cronConfig,
-            ownership: prepared.ownership,
-            failureAlerts,
-          },
-          assertCurrent() {
-            assertRoutingCurrent();
-            prepared.assertCurrent();
-            if (
-              !isDeepStrictEqual(cronConfig, state.deps.cronConfig) ||
-              jobs.some(
-                (job, index) =>
-                  !isDeepStrictEqual(failureAlerts[index]?.value, resolveFailureAlert(state, job)),
-              )
-            ) {
-              throw new Error("Cron skipped-run policy changed before commit");
-            }
-          },
-        };
+        ),
+        cronConfig: structuredClone(state.deps.cronConfig),
+        ownership: captureCronScheduleOwnership(
+          state,
+          state.store?.jobs.map((job) => job.id) ?? [],
+        ),
       },
       publish(outcome) {
         committed = outcome;
@@ -116,9 +77,6 @@ export async function recordSkippedCronRuns(params: {
   }
   if (committed) {
     try {
-      if (!historySource) {
-        throw new Error("Cron skipped run lost its original history source");
-      }
       historySource.assertCurrent();
       await params.afterCommit(committed, historySource);
     } catch (error) {
@@ -141,6 +99,19 @@ export async function planCronStartup(params: {
   skipJobIds?: ReadonlySet<string>;
 }): Promise<StartupOutcome["missed"]> {
   const { state, source } = params;
+  const skipMissedJobs = state.deps.cronConfig?.skipMissedJobs === true;
+  const selected = new Set(params.jobIds);
+  const notificationNeedsDefault =
+    skipMissedJobs &&
+    state.store?.jobs.some(
+      (job) =>
+        selected.has(job.id) &&
+        isJobEnabled(job) &&
+        !params.skipJobIds?.has(job.id) &&
+        !hasActiveCronRun(job, false) &&
+        (job.schedule.kind === "cron" || job.schedule.kind === "every") &&
+        !resolveCronNotificationQueueOwner(job, "auto-disabled").agentId,
+    );
   let committed: StartupOutcome | undefined;
   let failure: { error: unknown } | undefined;
   try {
@@ -153,29 +124,15 @@ export async function planCronStartup(params: {
         skipJobIds: params.skipJobIds ? [...params.skipJobIds] : undefined,
       },
       assertCurrent: () => source.assertCurrent(),
-      prepare({ jobIds, notificationNeedsDefault }) {
-        const prepared = prepareCronScheduleOwnership(state, jobIds);
-        const skipMissedJobs = state.deps.cronConfig?.skipMissedJobs === true;
-        const notifications = prepareCronNotificationRouting(
-          state.deps,
-          skipMissedJobs && notificationNeedsDefault,
-        );
-        return {
-          value: {
-            nowMs: params.nowMs,
-            skipMissedJobs,
-            ownership: prepared.ownership,
-            notificationRouting: notifications.routing,
-          },
-          assertCurrent() {
-            source.assertCurrent();
-            prepared.assertCurrent();
-            notifications.assertCurrent();
-            if ((state.deps.cronConfig?.skipMissedJobs === true) !== skipMissedJobs) {
-              throw new Error("Cron missed-job policy changed before commit");
-            }
-          },
-        };
+      // A reload may race planning; queued effects retain this routing snapshot.
+      snapshot: {
+        nowMs: params.nowMs,
+        skipMissedJobs,
+        ownership: captureCronScheduleOwnership(state, params.jobIds),
+        notificationRouting: captureCronNotificationRouting(
+          notificationNeedsDefault ? state.deps.resolveDefaultAgentId?.() : undefined,
+          notificationNeedsDefault ? state.deps.defaultAgentId : undefined,
+        ),
       },
       publish(outcome) {
         committed = outcome;
@@ -193,7 +150,7 @@ export async function planCronStartup(params: {
       source.assertStorageCurrent();
       for (const notification of committed.notifications) {
         source.assertStorageCurrent();
-        runPostPersistCronNotifications(state, [notification]);
+        await runPostPersistCronNotifications(state, [notification]);
       }
       source.assertStorageCurrent();
       applyCronRuntimeRowsToState(state, committed.jobs);

@@ -17,7 +17,8 @@ export function extractFirstTextBlock(message: unknown): string | undefined {
 }
 
 export type AssistantPhase = "commentary" | "final_answer";
-type AssistantTextBlock = Record<string, unknown> & { type: string; text: string };
+type AssistantTextBlock = AssistantTextSignatureBlock &
+  Record<string, unknown> & { type: string; text: string };
 
 type AssistantTextSignature = { id?: string; phase?: AssistantPhase } | null;
 type AssistantTextSignatureBlock = { textSignature?: unknown };

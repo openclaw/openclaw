@@ -12,36 +12,30 @@ import {
 import { decodeClawAgentOwnership } from "./provenance-agent-origin.js";
 import { clawBootstrapProvenanceFromRow } from "./provenance-bootstrap.js";
 import * as installRecordSchema from "./provenance-schema-version.js";
-import type {
-  ClawInstallStatus,
-  ClawOrphanWorkspace,
-  PersistedClawInstall,
-} from "./provenance-types.js";
+import type { ClawOrphanWorkspace, PersistedClawInstall } from "./provenance-types.js";
 
-type ClawInstallRow = {
-  schema_version: string;
-  source_kind: "package" | "development";
-  claw_name: string;
-  claw_version: string;
-  package_root: string;
-  manifest_path: string;
-  integrity_kind: "artifact" | "development-snapshot";
-  integrity: string;
+type ClawInstallRow = Omit<
+  DB["claw_installs"],
+  "source_byte_length" | "manifest_schema_version" | "added_at_ms" | "updated_at_ms"
+> & {
   source_byte_length: number | bigint;
   manifest_schema_version: number | bigint;
-  plan_integrity: string;
-  agent_id: string;
-  workspace: string;
-  agent_config_digest: string;
-  agent_owned_paths_json: string;
-  bootstrap_source_path: string | null;
-  bootstrap_content_digest: string | null;
-  status: ClawInstallStatus;
   added_at_ms: number | bigint;
   updated_at_ms: number | bigint;
 };
 
-function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
+export function clawInstallRecordFromRow(row: ClawInstallRow): PersistedClawInstall {
+  if (
+    (row.source_kind !== "package" && row.source_kind !== "development") ||
+    (row.integrity_kind !== "artifact" && row.integrity_kind !== "development-snapshot") ||
+    (row.status !== "pending" &&
+      row.status !== "workspace_ready" &&
+      row.status !== "config_committed" &&
+      row.status !== "complete" &&
+      row.status !== "partial")
+  ) {
+    throw new Error("Claw install record has invalid source or status fields.");
+  }
   const ownership = decodeClawAgentOwnership(row.agent_owned_paths_json, row.schema_version);
   const manifestSchemaVersion = sqliteNumber(row.manifest_schema_version);
   if (manifestSchemaVersion !== CLAW_SCHEMA_VERSION) {
@@ -95,7 +89,7 @@ export function readClawInstallRecordFromDatabase(
   agentId: string,
 ): PersistedClawInstall | undefined {
   const row = selectClawInstallRow(db, agentId);
-  return row ? rowToRecord(row) : undefined;
+  return row ? clawInstallRecordFromRow(row) : undefined;
 }
 
 export function readClawInstallRecordsInDatabase(db: DatabaseSync): PersistedClawInstall[] {
@@ -113,7 +107,7 @@ export function readClawInstallRecordsInDatabase(db: DatabaseSync): PersistedCla
       )
       // SAFETY: This inventory uses the same admitted install projection as the exact-row reader.
       .all() as ClawInstallRow[];
-  return rows.map(rowToRecord);
+  return rows.map(clawInstallRecordFromRow);
 }
 
 export type ClawPackageRefQuery = {

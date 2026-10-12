@@ -10,6 +10,7 @@ import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/trans
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 
@@ -37,6 +38,7 @@ export function createFixture(mocks: {
     getHeartbeatToolResponse: vi.fn(() => undefined),
     getItemLifecycle: vi.fn(() => ({ startedCount: 0, completedCount: 0, activeCount: 0 })),
     getLastAssistantTextMessageIndex: vi.fn(() => undefined),
+    getKeptAnswer: vi.fn(() => undefined),
     getLastAssistantUsage: vi.fn(() => undefined),
     getLastCompactionTokensAfter: vi.fn(() => undefined),
     getLastToolError: vi.fn(() => undefined),
@@ -125,7 +127,6 @@ export function createFixture(mocks: {
     cache: {},
     history: {
       contextEnginePromptAuthority: "assembled",
-      contextEngineAssemblySucceeded: true,
       unwindowedContextEngineMessagesForPrecheck: [{ role: "user", content: "history" }],
     },
     isProbeSession: false,
@@ -161,6 +162,7 @@ export function createFixture(mocks: {
     },
     cacheTrace,
     contextGuards: {
+      checkMidTurnPrecheck: vi.fn(),
       getAfterTurnCheckpoint: vi.fn(() => 2),
       takePendingMidTurnPrecheckRequest: vi.fn(() => null),
     },
@@ -220,7 +222,7 @@ export function createFixture(mocks: {
         runtimeInfo: { model: { id: "model" } },
         systemPromptReport: { chars: 13 },
       },
-      toolBase: { nestedToolActivities: [] },
+      toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
       toolCatalog: {
         effectiveTools: [{ name: "read" }],
         emptyExplicitToolAllowlistError: undefined,

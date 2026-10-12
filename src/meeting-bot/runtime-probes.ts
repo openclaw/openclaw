@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { sleep } from "../utils/sleep.js";
 import type { MeetingPluginJoinRequest, MeetingPluginProbeHealth } from "./session-types.js";
 
@@ -209,21 +210,15 @@ export function createMeetingRuntimeProbes<
         if (remainingMs <= 0) {
           break;
         }
-        let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-        const deadlineReached = new Promise<boolean>((resolve) => {
-          deadlineTimer = setTimeout(() => resolve(false), remainingMs);
-        });
-        const refreshed = await Promise.race([
-          (
-            options.refreshCaptionHealth?.(context, result.session, remainingMs) ??
-            context.refreshCaptionHealth(result.session, remainingMs)
-          ).then(() => true),
-          deadlineReached,
-        ]).finally(() => {
-          if (deadlineTimer !== undefined) {
-            clearTimeout(deadlineTimer);
-          }
-        });
+        const refreshed = await raceWithTimeout(
+          () =>
+            (
+              options.refreshCaptionHealth?.(context, result.session, remainingMs) ??
+              context.refreshCaptionHealth(result.session, remainingMs)
+            ).then(() => true),
+          remainingMs,
+          () => false,
+        );
         if (!refreshed) {
           break;
         }

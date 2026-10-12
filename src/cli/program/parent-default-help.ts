@@ -1,4 +1,3 @@
-// Parent-command default action helper that prints help with success exit status.
 import type { Command } from "commander";
 
 const parentDefaultHelpCommands = new WeakSet<Command>();

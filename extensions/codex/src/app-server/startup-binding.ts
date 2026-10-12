@@ -1,7 +1,3 @@
-/**
- * Guards Codex app-server thread reuse during startup by rotating bindings when
- * native transcripts exceed byte or token budgets.
- */
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -33,17 +29,9 @@ const CODEX_APP_SERVER_ROLLOUT_TAIL_READ_BYTES = 64 * 1024;
 const CODEX_APP_SERVER_BYTE_UNITS: Record<string, number> = {
   b: 1,
   k: 1024,
-  kb: 1024,
-  kib: 1024,
-  m: 1024 * 1024,
-  mb: 1024 * 1024,
-  mib: 1024 * 1024,
-  g: 1024 * 1024 * 1024,
-  gb: 1024 * 1024 * 1024,
-  gib: 1024 * 1024 * 1024,
-  t: 1024 * 1024 * 1024 * 1024,
-  tb: 1024 * 1024 * 1024 * 1024,
-  tib: 1024 * 1024 * 1024 * 1024,
+  m: 1024 ** 2,
+  g: 1024 ** 3,
+  t: 1024 ** 4,
 };
 type CodexAppServerRolloutFile = {
   path: string;
@@ -67,7 +55,8 @@ function parseCodexAppServerByteLimit(value: unknown): number | undefined {
     return undefined;
   }
   const unit = (match[2] ?? "b").toLowerCase();
-  const multiplier = CODEX_APP_SERVER_BYTE_UNITS[unit];
+  const unitPrefix = /^[kmgt](?:i?b)?$/.test(unit) ? unit.charAt(0) : unit;
+  const multiplier = CODEX_APP_SERVER_BYTE_UNITS[unitPrefix];
   if (multiplier === undefined) {
     return undefined;
   }
@@ -160,12 +149,10 @@ async function readCodexAppServerRolloutTokenSnapshot(
   openedHandle?: Awaited<ReturnType<typeof fs.open>>,
 ): Promise<CodexAppServerRolloutTokenSnapshot | undefined> {
   let handle = openedHandle;
-  if (!handle) {
-    try {
-      handle = await fs.open(file, "r");
-    } catch {
-      return undefined;
-    }
+  try {
+    handle ??= await fs.open(file, "r");
+  } catch {
+    return undefined;
   }
   let snapshot: CodexAppServerRolloutTokenSnapshot | undefined;
   try {
@@ -252,15 +239,8 @@ function readCodexAppServerRolloutTokenSnapshotLine(
       typeof windowValue === "number" && Number.isFinite(windowValue) && windowValue > 0
         ? Math.floor(windowValue)
         : undefined;
-    const snapshot: CodexAppServerRolloutTokenSnapshot = {};
-    if (totalTokens !== undefined) {
-      snapshot.totalTokens = totalTokens;
-    }
-    if (modelContextWindow !== undefined) {
-      snapshot.modelContextWindow = modelContextWindow;
-    }
-    return snapshot.totalTokens !== undefined || snapshot.modelContextWindow !== undefined
-      ? snapshot
+    return totalTokens !== undefined || modelContextWindow !== undefined
+      ? { totalTokens, modelContextWindow }
       : undefined;
   } catch {
     return undefined;
@@ -292,7 +272,6 @@ function maxDefinedNumber(values: Array<number | undefined>): number | undefined
   return nums.length ? Math.max(...nums) : undefined;
 }
 
-/** Clears and drops a binding when the native Codex thread is too large to resume safely. */
 export async function rotateOversizedCodexAppServerStartupBinding(params: {
   assertCurrent?: () => void;
   authority?: CodexBindingAuthority;

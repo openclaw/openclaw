@@ -857,6 +857,13 @@ describe("minimal npm extended-stable workflow", () => {
     expect(publishStep.env?.PUBLISH_TARBALL_PATH).toBe(
       "${{ steps.preflight_provenance.outputs.tarball_path }}",
     );
+    expect(publishStep.env).toMatchObject({
+      PREFLIGHT_WORKFLOW_SHA: "${{ steps.preflight_run.outputs.head_sha }}",
+      PREFLIGHT_RUN_ID: "${{ steps.preflight_run.outputs.run_id }}",
+      PREFLIGHT_RUN_ATTEMPT: "${{ steps.preflight_run.outputs.run_attempt }}",
+      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ inputs.full_release_validation_run_attempt }}",
+    });
     expect(publish?.steps?.map((candidate) => candidate.name)).not.toContain(
       "Resolve publish tarball",
     );
@@ -883,7 +890,7 @@ describe("minimal npm extended-stable workflow", () => {
     ]);
     expect(publish.run).toContain("(.corePackageTarballs // [])[]");
     expect(publish.run).toContain(
-      'bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
+      'bash trusted-workflow/scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
     );
   });
 });

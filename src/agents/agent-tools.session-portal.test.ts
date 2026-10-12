@@ -43,26 +43,27 @@ function context(dedicated: boolean, attached: boolean, locked = false) {
   );
 }
 
-function tools(
+async function tools(
   builder: "agent" | "gateway" | "http",
   cfg: OpenClawConfig = { tools: { profile: "coding" } },
   senderIsOwner = false,
 ) {
   return builder === "agent"
     ? createOpenClawCodingTools({ ...identity, config: cfg, senderIsOwner })
-    : resolveGatewayScopedTools({
-        ...identity,
-        cfg,
-        senderIsOwner,
-        surface: builder === "http" ? "http" : "loopback",
-      }).tools;
+    : (
+        await resolveGatewayScopedTools({
+          ...identity,
+          cfg,
+          senderIsOwner,
+          surface: builder === "http" ? "http" : "loopback",
+        })
+      ).tools;
 }
 
 describe("attached conversation portal tool availability", () => {
   it.each([
     ["agent", "scoped", true, true, false, false],
     ["gateway", "scoped", true, true, false, false],
-    ["agent", "global", false, false, false, true],
     ["gateway", "global", false, false, false, true],
     ["gateway", "absent", false, true, false, false],
     ["agent", "absent", true, false, false, false],
@@ -70,18 +71,20 @@ describe("attached conversation portal tool availability", () => {
     ["http", "absent", true, true, false, false],
   ] as const)(
     "%s has %s portal access (dedicated=%s, attached=%s, locked=%s, owner=%s)",
-    (builder, access, dedicated, attached, locked, owner) => {
+    async (builder, access, dedicated, attached, locked, owner) => {
       const ctx = context(dedicated, attached, locked);
-      withPluginRuntimeGatewayContextResolver(
+      await withPluginRuntimeGatewayContextResolver(
         () => ctx,
-        () => {
-          const portal = tools(builder, undefined, owner).find((tool) => tool.name === "portal");
+        async () => {
+          const portal = (await tools(builder, undefined, owner)).find(
+            (tool) => tool.name === "portal",
+          );
           if (access === "scoped") {
             expect(portal).toBeDefined();
             expect(portal?.parameters).not.toHaveProperty("properties.environmentId");
             expect(portal?.description).toContain("attached dedicated worker");
             expect(
-              tools(builder, { tools: { profile: "coding", deny: ["portal"] } }).some(
+              (await tools(builder, { tools: { profile: "coding", deny: ["portal"] } })).some(
                 (tool) => tool.name === "portal",
               ),
             ).toBe(false);
@@ -91,9 +94,9 @@ describe("attached conversation portal tool availability", () => {
             expect(portal).toBeUndefined();
           }
           if (locked) {
-            expect(tools(builder, undefined, true).some((tool) => tool.name === "portal")).toBe(
-              true,
-            );
+            expect(
+              (await tools(builder, undefined, true)).some((tool) => tool.name === "portal"),
+            ).toBe(true);
           }
         },
       );

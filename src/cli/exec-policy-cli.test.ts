@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolAccessDiagnostics } from "../../packages/gateway-protocol/src/schema/tools-catalog.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { ConfigReadOnlyError } from "../config/config-write-guard.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentEntryConfig } from "../config/types.agents.js";
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
@@ -94,14 +95,13 @@ const mocks = vi.hoisted(() => {
       async ({
         baseHash,
         update,
-      }: {
-        baseHash?: string;
-        update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
-      }) => {
+      }: Parameters<typeof import("../infra/exec-approvals.js").updateExecApprovals>[0]) => {
         if (baseHash !== undefined && baseHash !== approvalsHash) {
           return null;
         }
-        const next = update(structuredClone(approvalsState));
+        const { applyExecApprovalsUpdate } =
+          await import("../infra/exec-approvals-mutation.kernel.js");
+        const next = applyExecApprovalsUpdate(structuredClone(approvalsState), update);
         if (next !== null) {
           approvalsState = next;
           approvalsHash = "written-approvals-hash";
@@ -137,11 +137,20 @@ vi.mock("../infra/exec-approvals.js", async () => {
   );
   return {
     ...actual,
-    readExecApprovalsSnapshot: mocks.readExecApprovalsSnapshot,
+    readExecApprovalsSnapshotAsync: async () => mocks.readExecApprovalsSnapshot(),
     restoreExecApprovalsSnapshotLocked: mocks.restoreExecApprovalsSnapshot,
     updateExecApprovals: mocks.updateExecApprovals,
   };
 });
+
+// mock-isolation: In-memory policy cases omit filesystem ownership; the real CLI boundary is covered by local-state-owner.process.test.ts.
+vi.mock("./local-state-owner.js", () => ({
+  runWithLocalStateOwner: ({
+    runLocal,
+  }: {
+    runLocal: (scope: { assertCurrent: () => void }) => unknown;
+  }) => runLocal({ assertCurrent() {} }),
+}));
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
@@ -729,6 +738,81 @@ describe("exec-policy CLI", () => {
     expect(mocks.defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      name: "show with a blank agent",
+      args: ["show", "--agent", ""],
+      message: "--agent must not be blank.",
+    },
+    {
+      name: "unknown preset",
+      args: ["preset", "bogus"],
+      message: "Unknown exec-policy preset: bogus",
+    },
+    {
+      name: "preset with terminal controls",
+      args: ["preset", "bogus\u001B[2J\nforged\u0007"],
+      message: "Unknown exec-policy preset: bogus\\nforged",
+    },
+    {
+      name: "set without policy flags",
+      args: ["set"],
+      message: "Provide at least one of --host, --security, --ask, or --ask-fallback.",
+    },
+  ])("delegates JSON failure for $name to the root handler", async ({ args, message }) => {
+    await expect(runExecPolicyCommand(["exec-policy", ...args, "--json"])).rejects.toMatchObject({
+      message,
+      humanOutput: message,
+      machineOutput: message,
+      cause: expect.any(Error),
+    });
+
+    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.updateExecApprovals).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes JSON failure diagnostics while preserving the original cause", async () => {
+    const cause = new Error("Config read failed\u001B[2J\nforged\u0007");
+    mocks.readConfigFileSnapshot.mockRejectedValueOnce(cause);
+
+    const error = await runExecPolicyCommand(["exec-policy", "show", "--json"]).catch(
+      (caughtError: unknown) => caughtError,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) {
+      throw new Error("Expected the command to propagate its failure");
+    }
+    expect(error.message).toBe("Config read failed\\nforged");
+    expect(error).toMatchObject({
+      humanOutput: error.message,
+      machineOutput: error.message,
+    });
+    expect(error.cause).toBe(cause);
+    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it("preserves expected JSON failure identity and recovery guidance after rollback", async () => {
+    const error = new ConfigReadOnlyError({ configPath: "/tmp/openclaw.json" });
+    const originalApprovals = structuredClone(mocks.getApprovals());
+    mocks.replaceConfigFile.mockRejectedValueOnce(error);
+
+    await expect(
+      runExecPolicyCommand(["exec-policy", "set", "--security", "full", "--json"]),
+    ).rejects.toBe(error);
+
+    expect(mocks.getApprovals()).toEqual(originalApprovals);
+    expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+  });
+
   it.each(["argument", "configuration"])(
     "rejects a node host from %s without writing",
     async (source) => {
@@ -830,6 +914,8 @@ describe("exec-policy CLI", () => {
       expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledWith(
         originalSnapshot,
         "written-approvals-hash",
+        expect.anything(),
+        expect.any(Function),
       );
       expect(mocks.updateExecApprovals).toHaveBeenCalledTimes(concurrent ? 2 : 1);
       if (!rollbackError) {

@@ -20,6 +20,7 @@ import {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   parseUsageCountedSessionIdFromFileName,
+  readBoundIncognitoMemoryCorpus,
   readSessionTranscriptCorpusInWorker,
   readTranscriptContentRevisionSync,
   resolveSessionAgentId,
@@ -155,32 +156,26 @@ function collectCronGeneratedSessionKeys(
   // artifacts share the same lineage classification.
   const entriesByKey = new Map(summaries.map((summary) => [summary.sessionKey, summary.entry]));
   const cronGeneratedKeys = new Set<string>();
-  const cache = new Map<string, boolean>();
-  const resolving = new Set<string>();
+  const visited = new Set<string>();
+  const childrenByKey = new Map<string, string[]>();
 
   const isCronGenerated = (sessionKey: string, entry: SessionEntry | undefined): boolean => {
     if (isCronRunSessionKey(sessionKey)) {
-      cache.set(sessionKey, true);
       cronGeneratedKeys.add(sessionKey);
       return true;
     }
-    const cached = cache.get(sessionKey);
-    if (cached !== undefined) {
-      return cached;
-    }
-    if (resolving.has(sessionKey)) {
-      return false;
+    if (visited.has(sessionKey)) {
+      return cronGeneratedKeys.has(sessionKey);
     }
 
-    resolving.add(sessionKey);
-    const generated = readParentSessionKeys(entry).some(
-      (parentKey) =>
-        // Parent rows can be pruned before child rows; a cron-shaped parent key
-        // still carries cron lineage without requiring a store entry.
-        isCronRunSessionKey(parentKey) || isCronGenerated(parentKey, entriesByKey.get(parentKey)),
-    );
-    resolving.delete(sessionKey);
-    cache.set(sessionKey, generated);
+    visited.add(sessionKey);
+    const generated = readParentSessionKeys(entry).some((parentKey) => {
+      const children = childrenByKey.get(parentKey) ?? [];
+      children.push(sessionKey);
+      childrenByKey.set(parentKey, children);
+      // Pruned parents still carry lineage through a cron-shaped key.
+      return isCronGenerated(parentKey, entriesByKey.get(parentKey));
+    });
     if (generated) {
       cronGeneratedKeys.add(sessionKey);
     }
@@ -189,6 +184,13 @@ function collectCronGeneratedSessionKeys(
 
   for (const summary of summaries) {
     isCronGenerated(summary.sessionKey, summary.entry);
+  }
+  // A cycle may be visited before another parent establishes its cron lineage.
+  // Expand only observed edges, retaining which duplicate entry the walk selected.
+  for (const sessionKey of cronGeneratedKeys) {
+    for (const child of childrenByKey.get(sessionKey) ?? []) {
+      cronGeneratedKeys.add(child);
+    }
   }
   return cronGeneratedKeys;
 }
@@ -486,19 +488,10 @@ function readCorpusSessionEntries(
     : listSessionEntriesCore(input);
 }
 
-/**
- * Lists transcript corpus entries for memory indexing.
- *
- * Active sessions come from the session accessor seam; retained reset/delete
- * transcript artifacts remain explicit file artifacts until core owns archive
- * artifact enumeration.
- */
-export async function listSessionTranscriptCorpusEntriesForAgent(
-  agentId: string,
-  options: SessionTranscriptCorpusOptions = {},
-): Promise<SessionTranscriptCorpusEntry[]> {
-  const scope = resolveSessionTranscriptCorpusScope(agentId);
-  const capturedOptions = { ...options };
+async function readSessionTranscriptCorpusArtifacts(
+  scope: SessionTranscriptCorpusScope,
+  options: SessionTranscriptCorpusOptions,
+): Promise<SessionTranscriptCorpusArtifact[]> {
   const artifactDirs = new Map<string, string>();
   for (const dir of scope.artifactDirs) {
     artifactDirs.set(await normalizeRealComparablePathAsync(dir), dir);
@@ -523,7 +516,7 @@ export async function listSessionTranscriptCorpusEntriesForAgent(
       }
       seen.add(comparablePath);
       let contentRevision: string | undefined;
-      if (capturedOptions.includeContentRevision !== false) {
+      if (options.includeContentRevision !== false) {
         try {
           contentRevision = fileContentRevisionFromStat(
             await fs.stat(artifactPath, { bigint: true }),
@@ -535,6 +528,36 @@ export async function listSessionTranscriptCorpusEntriesForAgent(
       artifacts.push({ path: artifactPath, contentRevision });
     }
   }
+  return artifacts;
+}
+
+/**
+ * Lists transcript corpus entries for memory indexing.
+ *
+ * Active sessions come from the session accessor seam; retained reset/delete
+ * transcript artifacts remain explicit file artifacts until core owns archive
+ * artifact enumeration.
+ */
+export async function listSessionTranscriptCorpusEntriesForAgent(
+  agentId: string,
+  options: SessionTranscriptCorpusOptions = {},
+  source?: {
+    memoryCorpus(
+      scope: SessionTranscriptCorpusScope,
+      options: SessionTranscriptCorpusOptions,
+    ): Promise<SessionTranscriptCorpusEntry[]>;
+  },
+): Promise<SessionTranscriptCorpusEntry[]> {
+  const scope = resolveSessionTranscriptCorpusScope(agentId);
+  const capturedOptions = { ...options };
+  if (source) {
+    return source.memoryCorpus(scope, capturedOptions);
+  }
+  const incognito = readBoundIncognitoMemoryCorpus(scope, capturedOptions);
+  if (incognito) {
+    return incognito;
+  }
+  const prepareArtifacts = () => readSessionTranscriptCorpusArtifacts(scope, capturedOptions);
   if (
     isIncognitoOpenClawAgentSqlitePath(scope.storePath, {
       agentId: scope.normalizedAgentId,
@@ -544,11 +567,11 @@ export async function listSessionTranscriptCorpusEntriesForAgent(
     return projectSessionTranscriptCorpusEntries(
       scope,
       capturedOptions,
-      artifacts,
+      await prepareArtifacts(),
       readCorpusSessionEntries(scope, capturedOptions),
     );
   }
-  return readSessionTranscriptCorpusInWorker(scope, capturedOptions, artifacts);
+  return readSessionTranscriptCorpusInWorker(scope, capturedOptions, prepareArtifacts);
 }
 
 /** Project inventory in the admitted reader; only corpus metadata crosses the worker boundary. */

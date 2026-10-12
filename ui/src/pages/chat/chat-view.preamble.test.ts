@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { renderChatInto } from "./chat-view.test-helpers.ts";
 import {
@@ -30,7 +31,7 @@ const preamble = (text: string, timestamp: number, itemId: string, owner = runId
 });
 
 it("keeps successive commentary inline and formatted across the live-to-history handoff", () => {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   const earlier = preamble("Reading the files.", 2, "read");
   const detail = "Checking the caller and its lifecycle. ".repeat(25);
   const text = "**Checking** tests.\n\n" + detail + "End of the explanation.";
@@ -62,41 +63,14 @@ it("keeps successive commentary inline and formatted across the live-to-history 
   );
 });
 
-it("keeps only the active run's durable commentary inline when commentary retention is off", () => {
-  const container = document.createElement("div");
-  const old = preamble("Older run's commentary.", 0, "old", "old-run");
-  const messages = [old, user, preamble("Checking the result.", 2, "check")];
-  renderChatInto(container, {
-    runActive: true,
-    runId,
-    messages,
-    streamStartedAt: 1,
-    persistCommentary: false,
-  });
-  expect(container.querySelector(".chat-group.assistant .chat-text")?.textContent?.trim()).toBe(
-    "Checking the result.",
-  );
-  expect(container.textContent).not.toContain("Older run's commentary.");
-  renderChatInto(container, {
-    runActive: false,
-    runId: null,
-    messages,
-    persistCommentary: false,
-  });
-  expect(container.textContent).not.toContain("Checking the result.");
-  renderChatInto(container, { messages, persistCommentary: true });
-  expect(container.textContent).toContain("Checking the result.");
-  expect(messages).toHaveLength(3);
-});
-
-it.each(["segment", "tool", "cached"] as const)(
-  "keeps durable commentary for a run inferred from %s activity when retention is off",
+it.each(["explicit", "segment", "tool", "cached"] as const)(
+  "keeps only active durable commentary with %s run identity when retention is off",
   (source) => {
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     const props = {
       runActive: true,
-      runId: null,
-      stream: "Still checking.",
+      runId: source === "explicit" ? runId : null,
+      stream: source === "explicit" ? null : "Still checking.",
       streamStartedAt: 1,
       persistCommentary: false,
       messages: [
@@ -116,13 +90,13 @@ it.each(["segment", "tool", "cached"] as const)(
         },
       ],
     };
-    const boundary: ChatStreamSegment = { text: "", ts: 1, runId, boundaryMarker: true };
+    const segment: ChatStreamSegment = { text: "", ts: 1, runId };
     if (source === "cached") {
-      renderChatInto(container, { ...props, messages: [user], streamSegments: [boundary] });
+      renderChatInto(container, { ...props, messages: [user], streamSegments: [segment] });
     }
     renderChatInto(container, {
       ...props,
-      streamSegments: source === "segment" ? [boundary] : [],
+      streamSegments: source === "segment" ? [segment] : [],
       toolMessages:
         source === "tool"
           ? [
@@ -136,15 +110,25 @@ it.each(["segment", "tool", "cached"] as const)(
             ]
           : [],
     });
+    if (source === "explicit") {
+      expect(container.querySelector(".chat-group.assistant .chat-text")?.textContent?.trim()).toBe(
+        "Checking the result.",
+      );
+    }
     expect(container.textContent).toContain("Checking the result.");
     expect(container.textContent).not.toContain("Older run's commentary.");
-    renderChatInto(container, { ...props, runActive: false, stream: null });
+    renderChatInto(container, { ...props, runActive: false, runId: null, stream: null });
     expect(container.textContent).not.toContain("Checking the result.");
+    if (source === "explicit") {
+      renderChatInto(container, { messages: props.messages, persistCommentary: true });
+      expect(container.textContent).toContain("Checking the result.");
+      expect(props.messages).toHaveLength(3);
+    }
   },
 );
 
 it("leaves unphased answers and mixed-phase narration and final text in the transcript", () => {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   renderChatInto(container, {
     runActive: true,
     runId,

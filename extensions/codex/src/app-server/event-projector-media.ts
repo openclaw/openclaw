@@ -17,6 +17,13 @@ import type { CodexThreadItem, JsonObject } from "./protocol.js";
 
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 
+type GeneratedImageResult = {
+  itemId: string;
+  result: string;
+  revisedPrompt?: string;
+  source: "native" | "raw";
+};
+
 export class CodexGeneratedMediaProjection {
   private readonly itemIds = new Set<string>();
   private readonly mediaByItemId = new Map<string, { mediaUrl?: string; savedPath?: string }>();
@@ -93,7 +100,10 @@ export class CodexGeneratedMediaProjection {
         }
         return;
       }
-      this.recordUrl({ itemId: item.id, mediaUrl: savedPath });
+      const existing = this.mediaByItemId.get(item.id);
+      if (!existing?.mediaUrl) {
+        this.mediaByItemId.set(item.id, { ...existing, mediaUrl: savedPath });
+      }
     }
   }
 
@@ -114,12 +124,7 @@ export class CodexGeneratedMediaProjection {
     });
   }
 
-  private async recordImage(params: {
-    itemId: string;
-    result: string;
-    revisedPrompt?: string;
-    source: "native" | "raw";
-  }): Promise<void> {
+  private async recordImage(params: GeneratedImageResult): Promise<void> {
     this.itemIds.add(params.itemId);
     if (this.gatewayMaterializedItemIds.has(params.itemId)) {
       return;
@@ -146,12 +151,7 @@ export class CodexGeneratedMediaProjection {
     }
   }
 
-  private async materializeImage(params: {
-    itemId: string;
-    result: string;
-    revisedPrompt?: string;
-    source: "native" | "raw";
-  }): Promise<void> {
+  private async materializeImage(params: GeneratedImageResult): Promise<void> {
     const maxBytes = resolveGeneratedMediaMaxBytes(this.config, "image");
     const estimatedDecodedBytes = estimateBase64DecodedBytes(params.result);
     if (estimatedDecodedBytes > maxBytes) {
@@ -184,12 +184,11 @@ export class CodexGeneratedMediaProjection {
         asset.fileName,
       );
       this.gatewayMaterializedItemIds.add(params.itemId);
-      this.recordUrl({
-        itemId: params.itemId,
+      // Both Codex event shapes can carry a DevBox-local savedPath; channel
+      // delivery must always use the copy materialized on this gateway.
+      this.mediaByItemId.set(params.itemId, {
+        ...this.mediaByItemId.get(params.itemId),
         mediaUrl: saved.path,
-        // Both Codex event shapes can carry a DevBox-local savedPath; channel
-        // delivery must always use the copy materialized on this gateway.
-        replaceExisting: true,
       });
     } catch (error) {
       embeddedAgentLog.warn(
@@ -258,15 +257,5 @@ export class CodexGeneratedMediaProjection {
           : target;
       }),
     };
-  }
-
-  private recordUrl(params: { itemId: string; mediaUrl: string; replaceExisting?: boolean }): void {
-    const existing = this.mediaByItemId.get(params.itemId);
-    if (existing?.mediaUrl && params.replaceExisting !== true) {
-      this.itemIds.add(params.itemId);
-      return;
-    }
-    this.mediaByItemId.set(params.itemId, { ...existing, mediaUrl: params.mediaUrl });
-    this.itemIds.add(params.itemId);
   }
 }

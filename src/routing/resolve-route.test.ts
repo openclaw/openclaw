@@ -502,7 +502,7 @@ describe("resolveAgentRoute", () => {
       name: "defaultAgentId is used when no binding matches",
       cfg: {
         agents: {
-          list: [{ id: "home", default: true, workspace: "~/openclaw-home" }],
+          entries: { home: { workspace: "~/openclaw-home" } },
         },
       } satisfies OpenClawConfig,
       channel: "whatsapp" as const,
@@ -941,7 +941,7 @@ describe("unknown direct-message route decisions", () => {
 describe("wildcard peer bindings (peer.id=*)", () => {
   test("peer.id=* does not match group peers when kind is direct", () => {
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "dm-only" }] },
+      agents: { entries: { main: {}, "dm-only": {} } },
       bindings: [
         {
           agentId: "dm-only",
@@ -958,6 +958,7 @@ describe("wildcard peer bindings (peer.id=*)", () => {
       channel: "telegram",
       accountId: "bot1",
       peer: { kind: "group", id: "group-999" },
+      defaultAgentId: "main",
     });
     expect(route.agentId).toBe("main");
     expect(route.matchedBy).toBe("default");
@@ -978,7 +979,7 @@ describe("wildcard peer bindings (peer.id=*)", () => {
     },
   ])("$name", ({ peerId, agentId, matchedBy }) => {
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "exact" }, { id: "wild" }] },
+      agents: { entries: { exact: {}, wild: {} } },
       bindings: [
         {
           agentId: "wild",

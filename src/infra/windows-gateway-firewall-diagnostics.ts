@@ -1,4 +1,3 @@
-// Read-only diagnostics for Windows LAN Gateway reachability.
 import { safeParseJson } from "@openclaw/normalization-core";
 import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../process/exec.js";
 import { getWindowsPowerShellExePath } from "./windows-install-roots.js";
@@ -146,7 +145,6 @@ export type WindowsGatewayFirewallDiagnostic = {
 type WindowsGatewayFirewallCommandResult = {
   code: number | null;
   stdout: string;
-  stderr?: string;
   stdoutTruncatedBytes?: number;
   stderrTruncatedBytes?: number;
 };
@@ -203,17 +201,6 @@ type QuickFirewallPayload = {
   LocalRules?: unknown;
 };
 
-function powershell(command: string): string[] {
-  return [
-    getWindowsPowerShellExePath(),
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-Command",
-    command,
-  ];
-}
-
 async function runBestEffortCommand(
   runCommandWithTimeout: WindowsGatewayFirewallCommandRunner,
   argv: string[],
@@ -258,7 +245,7 @@ function stringField(row: Record<string, unknown>, ...keys: string[]): string {
 }
 
 function normalizeProfileName(value: string): string {
-  const normalized = value.trim().toLowerCase();
+  const normalized = value.toLowerCase();
   if (normalized === "domainauthenticated") {
     return "domain";
   }
@@ -392,10 +379,7 @@ function formatProfiles(activeProfileNames: string[]): string {
 }
 
 function formatRuleNames(rules: FirewallRule[]): string {
-  return rules
-    .map((rule) => rule.displayName)
-    .filter(Boolean)
-    .join(", ");
+  return rules.map((rule) => rule.displayName).join(", ");
 }
 
 function classifyWindowsGatewayFirewallState(
@@ -572,7 +556,14 @@ export async function inspectWindowsGatewayFirewall(
   const timeoutMs = params.timeoutMs ?? WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS;
   const quickJson = await runBestEffortCommand(
     runCommandWithTimeout,
-    powershell(buildWindowsQuickFirewallCommand(params.port)),
+    [
+      getWindowsPowerShellExePath(),
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      buildWindowsQuickFirewallCommand(params.port),
+    ],
     timeoutMs,
   );
   if (quickJson === null) {

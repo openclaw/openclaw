@@ -1,4 +1,3 @@
-// Microsoft Teams plugin reconstructs transport context for durable ingress replay.
 import type { MSTeamsSdkCloudOptions } from "./cloud.js";
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import {
@@ -13,6 +12,7 @@ export function createMSTeamsReplayContext(
   activity: MSTeamsTurnContext["activity"],
   app: MSTeamsApp,
   serviceUrlBoundary: MSTeamsSdkCloudOptions,
+  accountId?: string,
 ): MSTeamsTurnContext {
   const rawConversationId = activity.conversation?.id ?? "";
   const conversationId = normalizeMSTeamsConversationId(rawConversationId);
@@ -43,6 +43,7 @@ export function createMSTeamsReplayContext(
     ...(activity.from?.aadObjectId ? { aadObjectId: activity.from.aadObjectId } : {}),
   };
   const proactiveOptions = {
+    accountId,
     ...(quoteActivityId ? { quoteActivityId } : {}),
     ...(threadActivityId ? { threadActivityId } : {}),
     serviceUrlBoundary,

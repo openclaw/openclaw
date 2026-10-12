@@ -4,10 +4,7 @@ import type {
   ResponseCompactionItemParam,
   ResponseOutputItem,
 } from "openai/resources/responses/responses.js";
-import type {
-  BaseOpenAIStreamOptions,
-  OpenAIResponsesCompactionRejection,
-} from "../provider-options.js";
+import type { BaseOpenAIStreamOptions, CompactionReplayRejection } from "../provider-options.js";
 import {
   isOpenAIResponsesCompactionOutput,
   readOpenAIResponsesCompactionWindow,
@@ -47,21 +44,15 @@ function isOpenAIResponsesCompactionState(
   if (state.type === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE) {
     return state.data === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA;
   }
-  if (state.type === OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE) {
-    return (
-      typeof state.data === "string" &&
-      state.data.length > 0 &&
-      (state.id === undefined || typeof state.id === "string") &&
-      state.replayIndex === undefined
-    );
-  }
+  const retained = state.type === OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE;
   return (
-    state.type === OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE &&
+    (retained || state.type === OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE) &&
     typeof state.data === "string" &&
     state.data.length > 0 &&
     (state.id === undefined || typeof state.id === "string") &&
     (state.replayIndex === undefined ||
-      (typeof state.replayIndex === "number" &&
+      (!retained &&
+        typeof state.replayIndex === "number" &&
         Number.isSafeInteger(state.replayIndex) &&
         state.replayIndex >= 0))
   );
@@ -131,7 +122,7 @@ export function suppressOpenAIResponsesCompaction(
   output: Pick<AssistantMessage, "providerReplay">,
   model: Model,
   options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected" | "sessionId">,
-  rejectedCheckpoint?: OpenAIResponsesCompactionRejection,
+  rejectedCheckpoint?: CompactionReplayRejection,
 ): void {
   const context = buildProviderReplayContext(model, options);
   if (!context.baseUrlHash) {

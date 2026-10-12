@@ -10,6 +10,8 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
+import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
+import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import {
   createSqliteReadOnlyWorkerScope,
   runSqliteReadOnlyOperation,
@@ -121,6 +123,18 @@ it("preserves bounded catalog reads, queued inputs, and cancellation ownership",
       operation.mockRestore();
     }
   }
+  await waitForDiagnosticEventsDrained();
+  const events: DiagnosticWorkerRequestFields[] = [];
+  const stop = onInternalDiagnosticEvent(
+    (event) => {
+      if (event.type === "worker.request" && event.kind === "sqlite_read") {
+        events.push(event);
+      }
+    },
+    { include: ["worker.request"] },
+  );
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
   const send = vi.spyOn(child, "send");
   const emit = child.emit.bind(child);
   let paused = createDeferredCore<() => boolean>();
@@ -150,6 +164,7 @@ it("preserves bounded catalog reads, queued inputs, and cancellation ownership",
       awaitGateBeforeSettlement(paused.promise, first, "Read settled before its transfer started"),
       signal,
     );
+    now = 10;
     const command = {
       type: "pluginCatalog.read" as const,
       input: {
@@ -180,6 +195,9 @@ it("preserves bounded catalog reads, queued inputs, and cancellation ownership",
     pending.push(queued);
     const rejectedQueued = expect(queued).rejects.toBe(queuedFailure);
     queuedAbort.abort(queuedFailure);
+    await waitForDiagnosticEventsDrained();
+    expect(events.at(-1)).toMatchObject({ phase: "completed", queueDepth: 1 });
+    now = 25;
     release();
     await expect(first).resolves.toEqual([{ pluginId: "small", contents: "small catalog" }]);
     await expect(captured).resolves.toEqual([{ pluginId: "small", contents: "small catalog" }]);
@@ -218,6 +236,7 @@ it("preserves bounded catalog reads, queued inputs, and cancellation ownership",
       awaitGateBeforeSettlement(paused.promise, active, "Read settled before cancellation"),
       signal,
     );
+    now = 35;
     activeAbort.abort(activeFailure);
     await rejectedActive;
     expect(requests()).toHaveLength(3);
@@ -225,7 +244,22 @@ it("preserves bounded catalog reads, queued inputs, and cancellation ownership",
     expect(child.connected).toBe(false);
     expect(digest(readFileSync(source))).toBe(sourceDigest);
     expect(spawn).toHaveBeenCalledTimes(1);
+    await waitForDiagnosticEventsDrained();
+    expect(events.filter((event) => event.phase === "queued")).toHaveLength(4);
+    expect(events.filter((event) => event.phase === "started")).toHaveLength(3);
+    expect(events.filter((event) => event.phase === "completed")).toHaveLength(4);
+    expect(Math.max(...events.map((event) => event.queueDepth))).toBe(2);
+    expect(events.at(-1)?.queueDepth).toBe(0);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ phase: "started", queueWaitMs: 15 }),
+        expect.objectContaining({ phase: "completed", durationMs: 25 }),
+        expect.objectContaining({ phase: "completed", durationMs: 10 }),
+      ]),
+    );
   } finally {
+    stop();
+    clock.mockRestore();
     queuedAbort.abort();
     activeAbort.abort();
     receiving.mockRestore();

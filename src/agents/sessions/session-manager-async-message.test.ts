@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
+  appendTranscriptMessageSync,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -11,7 +12,9 @@ import {
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { prepareModelVisibleToolTextBlock } from "../../logging/redact.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -19,6 +22,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
+import { sessionManagerReadMessageAnchor } from "./session-manager-message-anchor.js";
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -47,6 +51,112 @@ const user = (key: string) => ({
   content: `Synthetic input ${key}`,
   timestamp: 1,
   idempotencyKey: `${key}:user`,
+});
+
+it.each([1, 2])(
+  "rereads and retries one local append after a transcript conflict (conflicting writes: %s)",
+  async (conflicts) => {
+    const { target, manager } = await fixture(state, `mutation-conflicts-${conflicts}`);
+    await manager.appendMessageAsync(user("seed"));
+    const withWorker = metadataRuntime.withSessionMetadataWorker;
+    let appends = 0;
+    let mutationReads = 0;
+    const failures: unknown[] = [];
+    const spy = vi
+      .spyOn(metadataRuntime, "withSessionMetadataWorker")
+      .mockImplementation((options, database, assertCurrent, operation, controls) =>
+        withWorker(
+          options,
+          database,
+          assertCurrent,
+          (worker) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                if (command.type === "session.metadata.mutation") {
+                  mutationReads++;
+                }
+                if (command.type === "session.metadata.append" && ++appends <= conflicts) {
+                  // The synchronous SDK can commit after host preparation but before the worker.
+                  expect(
+                    appendTranscriptMessageSync(target, {
+                      eventId: `concurrent-${appends}`,
+                      message: user(`concurrent-${appends}`),
+                    }).ok,
+                  ).toBe(true);
+                }
+                try {
+                  return await worker.execute(command, commandOptions);
+                } catch (error) {
+                  failures.push(error);
+                  throw error;
+                }
+              },
+            }),
+          controls,
+        ),
+      );
+    let failure: unknown;
+    let entryId: string | undefined;
+    try {
+      entryId = await manager.appendMessageAsync(user("accepted")).catch((error: unknown) => {
+        failure = error;
+        return undefined;
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(appends).toBe(2);
+    expect(mutationReads).toBe(1);
+    expect(failures).toHaveLength(conflicts);
+    for (const error of failures) {
+      expect(error).toBeInstanceOf(SqliteTranscriptMutationConflictError);
+    }
+    const events = await loadTranscriptEvents(target);
+    expect(events.slice(2, 2 + conflicts)).toMatchObject(
+      Array.from({ length: conflicts }, (_, index) => ({
+        id: `concurrent-${index + 1}`,
+        message: user(`concurrent-${index + 1}`),
+      })),
+    );
+    if (conflicts === 1) {
+      expect(failure).toBeUndefined();
+      expect(events).toHaveLength(4);
+      expect(events.at(-1)).toMatchObject({
+        id: entryId,
+        parentId: "concurrent-1",
+        message: user("accepted"),
+      });
+      expect(manager.getPersistedEntries()).toEqual(events);
+    } else {
+      expect(failure).toBeInstanceOf(SqliteTranscriptMutationConflictError);
+      expect(events).toHaveLength(4);
+      expect(entryId).toBeUndefined();
+    }
+  },
+);
+
+it("keeps a newer user intact when a prepared tool result cannot rebase", async () => {
+  const { target, manager } = await fixture(state, "superseded-tool-result");
+  await manager.appendMessageAsync(user("seed"));
+  expect(
+    appendTranscriptMessageSync(target, {
+      eventId: "newer-user",
+      message: user("newer"),
+    }).ok,
+  ).toBe(true);
+  const before = await loadTranscriptEvents(target);
+  await expect(
+    manager.appendMessageAsync({
+      role: "toolResult",
+      toolCallId: "superseded-result",
+      toolName: "lookup",
+      content: [{ type: "text", text: "Prepared for the older user" }],
+      isError: false,
+      timestamp: 2,
+    }),
+  ).rejects.toBeInstanceOf(SqliteTranscriptMutationConflictError);
+  expect(await loadTranscriptEvents(target)).toEqual(before);
+  expect(manager.getEntries()).toHaveLength(1);
 });
 
 it("shares one frozen tool-result graph across append receipts, transcript views, and prompt history", async () => {
@@ -463,6 +573,8 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
     });
     expect(pending.state).toBe("consumed");
     expect(manager.getLeafEntry()).toMatchObject({ id: newerId, parentId: pending.inputId });
+    expect(manager[sessionManagerReadMessageAnchor](newerId)).toMatchObject({ entryId: newerId });
+    expect(manager[sessionManagerReadMessageAnchor](committed.entryId)).toBeUndefined();
     expect(await loadTranscriptEvents(target)).toEqual(manager.getPersistedEntries());
   } finally {
     pending.finish("interrupted");
@@ -482,20 +594,15 @@ it("fences local navigation changes at worker commit and receipt publication", a
   const before = await loadTranscriptEvents(target);
   for (const change of ["branch", "branch-back"] as const) {
     manager.branch(tail);
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const admission = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            manager.branch(seed);
-            if (change === "branch-back") {
-              manager.branch(tail);
-            }
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        manager.branch(seed);
+        if (change === "branch-back") {
+          manager.branch(tail);
+        }
+      }
+      admit(request, grant);
+    });
     try {
       await expect(manager.appendMessageAsync(user(`refused-${change}`))).rejects.toThrow(
         "Session transcript navigation changed before publication",
@@ -627,17 +734,12 @@ it("rolls back worker promotion when pending authority retires at commit", async
     "Expected pending input custody",
   );
   const before = await loadTranscriptEvents(target);
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const admission = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          current = false;
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      current = false;
+    }
+    admit(request, grant);
+  });
   try {
     await expect(receipt.run(() => manager.appendMessageAsync(receipt.message))).rejects.toThrow(
       "Pending owner retired at commit",

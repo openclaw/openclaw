@@ -19,12 +19,8 @@ import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { parse as parseYaml } from "yaml";
 import {
   normalizePublicationIntent,
-  publicationAdmissionContract,
-  publicationDispatchEnvelope,
-  publicationSourceContract,
   type PublicationSelection,
 } from "./full-release-publication-contract.mjs";
 import {
@@ -36,11 +32,12 @@ import {
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
-import { loadChangelogCollection, loadReleaseChangelog } from "./lib/release-changelog.mjs";
+import { loadChangelogCollection } from "./lib/release-changelog.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
 import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-evidence.mts";
 import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { sleep as wait } from "./lib/sleep.mjs";
 import {
   downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
@@ -121,13 +118,15 @@ const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
 const RELEASE_CANDIDATE_STATE_VERSION = 2;
 const RELEASE_CANDIDATE_STATE_FILE = "release-candidate-state.json";
 const TRUSTED_TOOLING_SHA_ENV = "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA";
+// Release tooling (toolingSha and its publishWorkflowRef tag) is not candidate
+// identity: each run re-verifies the current tooling against trusted main, and
+// saved FRV/npm evidence is authenticated against its own producer run. Tooling
+// repaired mid-release can therefore resume the same state.
 const RELEASE_CANDIDATE_STATE_KEYS = [
   "repo",
   "tag",
   "targetSha",
-  "toolingSha",
   "workflowRef",
-  "publishWorkflowRef",
   "provider",
   "mode",
   "releaseProfile",
@@ -165,8 +164,8 @@ prepare-once release button for complete regular beta/stable releases.
 Options:
   --tag <tag>                         Release tag. An existing tag must resolve to the target SHA.
   --target-sha <sha>                  Frozen release SHA. Defaults to the current HEAD.
-  --workflow-ref <ref>                Trusted workflow ref. Default: main.
-  --workflow-sha <sha>                Trusted main ancestor to pin the tooling to; reuses or mints its release-publish/<sha12>-<epoch> tag.
+  --workflow-ref <ref>                Trusted helper/publisher source (P), not the candidate harness. Default: main.
+  --workflow-sha <sha>                Trusted helper/publisher SHA (P); reuses or mints its release-publish tag. Fresh qualification runs Q=C.
   --publish-workflow-ref <tag>         Protected publication tooling tag matching the trusted helper checkout.
   --publication-route <normal|prepared>
                                       Intended publication route. Default: normal; not inferred from a protected ref.
@@ -381,21 +380,29 @@ export function parseArgs(argv: string[]) {
 export function run(
   command: string,
   args: string[],
-  options: { capture?: boolean; cwd?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { capture?: boolean | "echo"; cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
     env: options.env ? { ...process.env, ...options.env } : process.env,
-    maxBuffer: COMMAND_CAPTURE_MAX_BUFFER_BYTES,
+    ...(options.capture === "echo" ? {} : { maxBuffer: COMMAND_CAPTURE_MAX_BUFFER_BYTES }),
     stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
+  if (options.capture === "echo") {
+    if (result.stdout) {
+      process.stdout.write(result.stdout);
+    }
+    if (result.stderr) {
+      process.stderr.write(result.stderr);
+    }
+  }
   if (result.status !== 0) {
     throw new Error(
       `${command} ${args.join(" ")} failed with ${result.status ?? result.signal}\n${result.stderr ?? ""}`,
     );
   }
-  return result.stdout ?? "";
+  return `${result.stdout ?? ""}${options.capture === "echo" ? (result.stderr ?? "") : ""}`;
 }
 
 function readJson(path: string, label: string) {
@@ -514,19 +521,37 @@ export function buildReleaseCandidateState(
   };
 }
 
-export function reconcileReleaseCandidateState(saved: unknown, expected: CandidateState) {
+function canUpdateReleaseCandidateState(saved: JsonRecord, hasRetainedRequest: boolean) {
+  // The canonical helper can retain an accepted or uncertain dispatch before
+  // this coordinator receives its run ID. Empty IDs alone do not mean unbound.
+  return (
+    saved.phase === "validated" &&
+    !saved.fullReleaseRunId &&
+    !saved.npmPreflightRunId &&
+    !hasRetainedRequest
+  );
+}
+
+export function reconcileReleaseCandidateState(
+  saved: unknown,
+  expected: CandidateState,
+  hasRetainedRequest = false,
+) {
   if (!saved) {
     return expected;
   }
   if (!isRecord(saved) || saved.version !== RELEASE_CANDIDATE_STATE_VERSION) {
     throw new Error("release candidate state has an unsupported schema");
   }
-  // Historical state emitted the normal command by default. It did not record
-  // source admission, and cannot silently become a newly selected prepared route.
-  if ((saved.publicationRoute ?? "normal") !== expected.publicationRoute) {
+  const canUpdate = canUpdateReleaseCandidateState(saved, hasRetainedRequest);
+  // Once bound, historical state retains its original normal publication route.
+  if (!canUpdate && (saved.publicationRoute ?? "normal") !== expected.publicationRoute) {
     throw new Error("release candidate state mismatch for publicationRoute");
   }
   for (const key of RELEASE_CANDIDATE_STATE_KEYS) {
+    if (canUpdate && key !== "repo" && key !== "tag" && key !== "targetSha") {
+      continue;
+    }
     if (!isDeepStrictEqual(saved[key], expected[key])) {
       throw new Error(
         `release candidate state mismatch for ${key}: saved=${JSON.stringify(saved[key])} current=${JSON.stringify(expected[key])}`,
@@ -767,23 +792,35 @@ function runFromTrustedTooling(
       );
     }
   } finally {
-    // Remove the installed graph before Git walks the checkout to remove it.
+    // Remove the graph first, but retain checkout/.git until Git removes its
+    // worktree registration. Failed Git cleanup leaves a recoverable checkout.
     try {
-      rmSync(tempRoot, { force: true, recursive: true });
+      rmSync(join(toolingRoot, "node_modules"), { force: true, recursive: true });
     } catch (error) {
       console.warn(
-        `could not remove temporary trusted tooling files at ${tempRoot}: ${String(error)}`,
+        `could not remove temporary trusted tooling dependencies at ${toolingRoot}: ${String(error)}`,
       );
     }
+    let worktreeRemoved = !worktreeAdded;
     if (worktreeAdded) {
       const cleanup = spawnSync("git", ["worktree", "remove", "--force", toolingRoot], {
         cwd: targetRoot,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       });
-      if (cleanup.status !== 0) {
+      worktreeRemoved = cleanup.status === 0;
+      if (!worktreeRemoved) {
         console.warn(
-          `could not remove temporary trusted tooling worktree: ${cleanup.stderr?.trim() || cleanup.signal || cleanup.status}`,
+          `could not remove temporary trusted tooling worktree at ${toolingRoot}: ${cleanup.stderr?.trim() || cleanup.error?.message || cleanup.signal || cleanup.status}`,
+        );
+      }
+    }
+    if (worktreeRemoved) {
+      try {
+        rmSync(tempRoot, { force: true, recursive: true });
+      } catch (error) {
+        console.warn(
+          `could not remove temporary trusted tooling files at ${tempRoot}: ${String(error)}`,
         );
       }
     }
@@ -878,11 +915,20 @@ export function assertReleaseCandidateTag(tag: string, targetSha: string, cwd: s
   }
 }
 
-function savedPublishWorkflowRef(statePath: string) {
-  const saved = existsSync(statePath)
-    ? readJson(statePath, "release candidate state").publishWorkflowRef
-    : undefined;
-  return typeof saved === "string" && PUBLISH_TOOLING_TAG_PATTERN.test(saved) ? saved : "";
+function savedPublishWorkflowRef(statePath: string, toolingSha: string) {
+  if (!existsSync(statePath)) {
+    return "";
+  }
+  const saved = readJson(statePath, "release candidate state");
+  if (saved.version !== RELEASE_CANDIDATE_STATE_VERSION) {
+    throw new Error("release candidate state has an unsupported schema");
+  }
+  const tag = saved.publishWorkflowRef;
+  return typeof tag === "string" &&
+    PUBLISH_TOOLING_TAG_PATTERN.test(tag) &&
+    tag.startsWith(`release-publish/${toolingSha.slice(0, 12)}-`)
+    ? tag
+    : "";
 }
 
 function gitIsAncestor(ancestor: string, target: string, cwd = process.cwd()) {
@@ -1057,7 +1103,7 @@ export function loadCandidateShippedBaseline(ref: string, rootDir = process.cwd(
   gitRevParse(`${tagRef}^{commit}`, rootDir);
   const changelog = loadChangelogCollection({ rootDir, ref: tagRef, recordsOnly: true });
   const version = requireString(releaseNotesVersionForTag(ref), "release notes version");
-  const source = loadReleaseChangelog({ rootDir, ref: tagRef, version });
+  const source = loadReleaseNotesForTag({ rootDir, ref: tagRef, tag: ref, version });
   candidateContributionRecordPullRequests(
     source.record ?? source.section,
     `shipped baseline ${ref}`,
@@ -1072,6 +1118,10 @@ export function validateCandidateReleaseNotes({
   tag,
   contributionRecordPath,
 }: StringFields<"changelog" | "repository" | "tag"> & { contributionRecordPath?: string }) {
+  if (/-beta\.[1-9][0-9]*$/u.test(tag)) {
+    // New candidates cannot silently reuse cumulative or earlier-beta prose.
+    extractChangelogSection(changelog, tag.slice(1));
+  }
   const rendered = renderGithubReleaseNotes({
     changelog,
     version: releaseNotesVersionForTag(tag),
@@ -1102,7 +1152,7 @@ export function validateCandidateChangelogProvenance({
   isAncestor?: (ancestor: string, target: string) => boolean;
   loadShippedBaseline?: (ref: string) => { pullRequests: Set<number> };
 }) {
-  // Correction tags may carry their own changelog heading.
+  // Beta and correction tags may carry their own changelog heading.
   let section: string | undefined;
   let sectionVersion = version;
   const dedicatedVersion = dedicatedSectionVersionForTag(tag);
@@ -1263,27 +1313,6 @@ async function resolveRunArtifact(
   return artifact;
 }
 
-function runAndEcho(command: string, args: string[]) {
-  const result = spawnSync(command, args, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.stdout) {
-    process.stdout.write(result.stdout);
-  }
-  if (result.stderr) {
-    process.stderr.write(result.stderr);
-  }
-  if (result.status !== 0) {
-    throw new Error(
-      `${command} ${args.join(" ")} failed with ${result.status ?? result.signal}\n${
-        result.stderr ?? ""
-      }`,
-    );
-  }
-  return `${result.stdout ?? ""}${result.stderr ?? ""}`;
-}
-
 function runLocalGeneratedCheckIfNeeded(options: ReturnType<typeof parseArgs>): LocalCheckResult {
   if (options.skipLocalGeneratedCheck) {
     return { status: "skipped", reason: "operator skipped --skip-local-generated-check" };
@@ -1292,12 +1321,8 @@ function runLocalGeneratedCheckIfNeeded(options: ReturnType<typeof parseArgs>): 
   return { status: "passed", command: "pnpm release:generated:check" };
 }
 
-export function parseRunIdFromDispatchOutput(output: string) {
-  return output.match(/actions\/runs\/([0-9]+)/u)?.[1] ?? "";
-}
-
 export function requireRunIdFromDispatchOutput(output: string, workflowFile: string) {
-  const runId = parseRunIdFromDispatchOutput(output);
+  const runId = output.match(/actions\/runs\/([0-9]+)/u)?.[1];
   if (!runId) {
     throw new Error(
       `gh workflow run ${workflowFile} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs`,
@@ -1306,54 +1331,73 @@ export function requireRunIdFromDispatchOutput(output: string, workflowFile: str
   return runId;
 }
 
-export function fullReleaseTrustedWorkflowFields({
-  workflowRef,
-  workflowSha,
-  workflowSource,
-  publicationIntent,
-}: {
-  workflowRef: string;
-  workflowSha: string;
-  workflowSource: string;
-  publicationIntent?: import("./full-release-publication-contract.mjs").PublicationIntent;
-}) {
-  const workflow: unknown = parseYaml(workflowSource);
-  const env = isRecord(workflow) && isRecord(workflow.env) ? workflow.env : undefined;
-  const contract = formatJsonValue(env?.RELEASE_ISOLATION_TOOLING_CONTRACT ?? "");
-  if (contract === "1") {
-    return {};
+/** The canonical helper alone owns admission, transport refs, and FRV dispatch. */
+function dispatchFullReleaseUsingHelper(
+  options: ReturnType<typeof parseArgs>,
+  targetSha: string,
+  toolingSha: string,
+) {
+  if (options.repo !== DEFAULT_REPO) {
+    throw new Error("Full Release Validation helper requires the canonical repository");
   }
-  if (contract !== "2") {
+  const requestFile = resolvePath(options.outputDir, "frv-request.json");
+  const retained = existsSync(requestFile);
+  const targetContextRef = releaseBranchForTag(options.tag) || options.tag;
+  const args = [
+    join(TOOLING_ROOT, "scripts/full-release-validation-at-sha.mjs"),
+    "--sha",
+    targetSha,
+    "--target-ref",
+    targetContextRef,
+    // Existing records reconcile their original Q/ref, not today's default.
+    ...(!retained
+      ? [
+          "--trusted-workflow-ref",
+          "candidate",
+          "--workflow-sha",
+          targetSha,
+          "--admission-workflow-sha",
+          toolingSha,
+          "--admission-workflow-ref",
+          options.publishWorkflowRef || options.workflowRef,
+        ]
+      : []),
+    "--request-file",
+    requestFile,
+    "--",
+    "-f",
+    "validation_purpose=publish",
+    "-f",
+    `publication_selection_json=${JSON.stringify(publicationSelectionForChecklist(options))}`,
+    "-f",
+    `provider=${options.provider}`,
+    "-f",
+    `mode=${options.mode}`,
+    "-f",
+    `release_profile=${options.releaseProfile}`,
+    "-f",
+    `run_release_soak=${options.releaseProfile !== "beta"}`,
+    "-f",
+    "rerun_group=all",
+  ];
+  run(process.execPath, args);
+  const record = readJson(requestFile, "Full Release Validation request");
+  const observed = isRecord(record.run) ? record.run : undefined;
+  if (
+    record.phase !== "observed" ||
+    !Number.isSafeInteger(observed?.id) ||
+    Number(observed?.id) < 1
+  ) {
+    const resumable =
+      record.kind === "openclaw.full-release-dispatch/v2" &&
+      record.phase === "prepared" &&
+      isRecord(record.refs) &&
+      record.refs.workflow === "intended";
     throw new Error(
-      "Full Release Validation does not declare a supported release tooling contract",
+      `No observed Full Release Validation run. Next: pnpm ci:full-release -- ${resumable ? "--resume-request" : "--reconcile-request"} ${shellQuote(requestFile)}. The canonical helper revalidates admission; never redispatch uncertain work.`,
     );
   }
-  const workflowDispatch =
-    isRecord(workflow) && isRecord(workflow.on) && isRecord(workflow.on.workflow_dispatch)
-      ? workflow.on.workflow_dispatch
-      : undefined;
-  const inputs =
-    workflowDispatch && isRecord(workflowDispatch.inputs) ? workflowDispatch.inputs : undefined;
-  if (!inputs || !Object.hasOwn(inputs, "trusted_workflow_json")) {
-    throw new Error(`Full Release Validation contract ${contract} requires trusted_workflow_json`);
-  }
-  if (!/^[a-f0-9]{40}$/u.test(workflowSha)) {
-    throw new Error("Full Release Validation trusted workflow SHA must be a full lowercase SHA");
-  }
-  const identity = { ref: workflowRef, fullRef: `refs/heads/${workflowRef}`, sha: workflowSha };
-  if (publicationSourceContract(workflowSource) === "1") {
-    if (!publicationIntent) {
-      throw new Error("Fresh FRV dispatch requires explicit source intent");
-    }
-    return { trusted_workflow_json: publicationDispatchEnvelope(identity, publicationIntent) };
-  }
-  return { trusted_workflow_json: JSON.stringify(identity) };
-}
-
-async function wait(ms: number) {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
+  return String(observed!.id);
 }
 
 function dispatchWorkflow(
@@ -1366,7 +1410,7 @@ function dispatchWorkflow(
   for (const [key, value] of Object.entries(fields)) {
     args.push("-f", `${key}=${String(value)}`);
   }
-  return requireRunIdFromDispatchOutput(runAndEcho("gh", args), workflowFile);
+  return requireRunIdFromDispatchOutput(run("gh", args, { capture: "echo" }), workflowFile);
 }
 
 async function runInfo(repo: string, runId: string) {
@@ -1513,33 +1557,31 @@ function sha256(path: string) {
   return run("shasum", ["-a", "256", path], { capture: true }).trim().split(/\s+/u)[0] ?? "";
 }
 
-function pluginPlanArgs(options: ReturnType<typeof parseArgs>) {
-  const args = ["--selection-mode", options.pluginPublishScope];
-  if (options.pluginPublishScope === "selected") {
-    args.push("--plugins", options.plugins);
-  }
-  return args;
-}
-
 function collectPluginPlan(script: string, options: ReturnType<typeof parseArgs>): unknown {
   const plan: unknown = JSON.parse(
-    run("node", ["--import", "tsx", join(TOOLING_ROOT, script), ...pluginPlanArgs(options)], {
-      capture: true,
-    }),
+    run(
+      "node",
+      [
+        "--import",
+        "tsx",
+        join(TOOLING_ROOT, script),
+        "--selection-mode",
+        options.pluginPublishScope,
+      ],
+      { capture: true },
+    ),
   );
   console.log(formatPluginPlanSummary(script, plan).join("\n"));
   return plan;
 }
 
 async function collectPluginPlanWithRetry(script: string, options: ReturnType<typeof parseArgs>) {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; ; attempt += 1) {
     try {
       return collectPluginPlan(script, options);
     } catch (error) {
-      lastError = error;
       if (attempt === 3) {
-        break;
+        throw error;
       }
       console.warn(
         `${script} failed on attempt ${attempt}; retrying: ${
@@ -1549,7 +1591,6 @@ async function collectPluginPlanWithRetry(script: string, options: ReturnType<ty
       await wait(5_000 * attempt);
     }
   }
-  throw lastError;
 }
 
 function formatPluginPlanSummary(label: string, plan: unknown): string[] {
@@ -1678,7 +1719,7 @@ export function validatePreflightManifest(manifest: JsonRecord, params: JsonReco
   const dependencyTarballs = preflightDependencyTarballs(manifest);
   for (const dependency of [...corePackageTarballs, ...dependencyTarballs]) {
     if (
-      !dependency?.packageName ||
+      !dependency.packageName ||
       !dependency.packageVersion ||
       !dependency.tarballName ||
       !dependency.tarballSha256 ||
@@ -1768,14 +1809,14 @@ export function validateFullManifest(manifest: JsonRecord, params: JsonRecord) {
 export function candidateParallelsArgs(
   tarballPath: string,
   dependencyTarballPaths: string[] = [],
-  toolingRoot = TOOLING_ROOT,
+  candidateRoot = process.cwd(),
   registryPackageTarballPaths: string[] = [],
   macosSnapshotHint = "",
 ) {
   return [
     "exec",
     "tsx",
-    join(toolingRoot, "scripts/e2e/parallels/npm-update-smoke.ts"),
+    join(candidateRoot, "scripts/e2e/parallels/npm-update-smoke.ts"),
     "--target-tarball",
     tarballPath,
     ...dependencyTarballPaths.flatMap((dependency) => ["--dependency-tarball", dependency]),
@@ -1794,6 +1835,7 @@ export function candidateParallelsShellCommand(
   dependencyTarballPaths: string[] = [],
   registryPackageTarballPaths: string[] = [],
   macosSnapshotHint = "",
+  candidateRoot = process.cwd(),
 ) {
   // Login shells can replace the candidate's supported Node with ambient host Node.
   // Keep the invoking Node first so pnpm and npm use the validated runtime.
@@ -1809,7 +1851,7 @@ export function candidateParallelsShellCommand(
     ...candidateParallelsArgs(
       tarballPath,
       dependencyTarballPaths,
-      TOOLING_ROOT,
+      candidateRoot,
       registryPackageTarballPaths,
       macosSnapshotHint,
     ).map(shellQuote),
@@ -1821,12 +1863,14 @@ async function runParallelsIfNeeded(
   tarballPath: string,
   dependencyTarballPaths: string[],
   registryPackageTarballPaths: string[],
+  candidateRoot: string,
 ): Promise<LocalCheckResult> {
   if (options.skipParallels) {
     return { status: "skipped", reason: options.parallelsSkipReason };
   }
   const timeoutBin = run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
     capture: true,
+    cwd: candidateRoot,
   }).trim();
   const command = candidateParallelsShellCommand(
     tarballPath,
@@ -1834,10 +1878,12 @@ async function runParallelsIfNeeded(
     dependencyTarballPaths,
     registryPackageTarballPaths,
     process.env.OPENCLAW_PARALLELS_MACOS_SNAPSHOT_HINT?.trim() ?? "",
+    candidateRoot,
   );
   run("bash", ["-lc", command], {
+    cwd: candidateRoot,
     env: {
-      OPENCLAW_PARALLELS_ARTIFACT_ROOT: join(process.cwd(), ".artifacts", "parallels"),
+      OPENCLAW_PARALLELS_ARTIFACT_ROOT: join(candidateRoot, ".artifacts", "parallels"),
     },
   });
   return {
@@ -1897,15 +1943,61 @@ async function runTelegramIfNeeded(
   manifest: JsonRecord,
   runAttempt: number,
   sourceSha: string,
-  coveragePolicy: string | undefined,
+  fullValidationEvidence: Awaited<ReturnType<typeof authenticateFullReleaseValidationEvidence>>,
+  npmUsesFullRun: boolean,
 ): Promise<TelegramResult> {
   if (options.skipTelegram) {
     return { status: "skipped" };
   }
   // Only the admitted evidence policy defers this wait; legacy beta evidence
   // still requires the separate Telegram qualification.
-  if (coveragePolicy === "npm-beta-v1") {
+  if (fullValidationEvidence.coveragePolicy === "npm-beta-v1") {
     return { status: "deferred-postpublish" };
+  }
+  const qualificationManifest = fullValidationEvidence.evidence.current.manifest;
+  const coversPackageTelegram =
+    fullValidationEvidence.coveragePolicy === "npm-stable-v1" ||
+    (fullValidationEvidence.source === "candidate-owned-admission-v1" &&
+      (qualificationManifest.releaseProfile === "stable" ||
+        qualificationManifest.releaseProfile === "full"));
+  if (
+    npmUsesFullRun &&
+    coversPackageTelegram &&
+    options.telegramProviderMode === "mock-openai" &&
+    !qualificationManifest.validationInputs?.telegramWaiver
+  ) {
+    // Authentication proves package acceptance passed with Q's mock Telegram
+    // harness. Reuse only its exact qualified package, not a separately packed one.
+    return { status: "covered-by-full-release-validation", providerMode: "mock-openai" };
+  }
+  const qualificationRef = fullValidationEvidence.run.headBranch;
+  if (
+    fullValidationEvidence.run.headSha !== sourceSha ||
+    typeof qualificationRef !== "string" ||
+    !isShaPinnedReleaseValidationBranch(qualificationRef) ||
+    !qualificationRef.startsWith(`release-ci/${sourceSha.slice(0, 12)}-`)
+  ) {
+    throw new Error(
+      "Separate Telegram qualification requires candidate-owned Full Release Validation with a retained release-ci ref at the candidate SHA; never use main's harness. Obtain newly bound candidate evidence or use already covered package Telegram proof.",
+    );
+  }
+  const refPath = `repos/${options.repo}/git/ref/heads/${qualificationRef}`;
+  const transport = await githubApi(refPath).catch((cause: unknown) => {
+    throw new Error(
+      `Telegram qualification ref ${qualificationRef} is unavailable; obtain candidate-owned Full Release Validation with a retained qualification ref.`,
+      { cause },
+    );
+  });
+  if (
+    !isRecord(transport) ||
+    transport.ref !== `refs/heads/${qualificationRef}` ||
+    !isRecord(transport.object) ||
+    transport.object.type !== "commit" ||
+    transport.object.sha !== sourceSha
+  ) {
+    throw new Error(
+      `Telegram qualification ref ${qualificationRef} no longer points to candidate ${sourceSha}; obtain newly bound candidate evidence without moving the original ref.`,
+    );
   }
   const workflowFile = "npm-telegram-beta-e2e.yml";
   const artifactInputs = buildTelegramArtifactInputs({
@@ -1915,17 +2007,22 @@ async function runTelegramIfNeeded(
     runId: String(artifact.workflowRunId),
     sourceSha,
   });
-  const runId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
+  const runId = dispatchWorkflow(options.repo, workflowFile, qualificationRef, {
     package_spec: `openclaw@${options.tag.replace(/^v/u, "")}`,
     package_label: options.tag,
     ...artifactInputs,
-    harness_ref: options.workflowRef,
+    harness_ref: sourceSha,
     provider_mode: options.telegramProviderMode,
   });
   const { run: runLocal } = await waitForSuccessfulRun(options.repo, runId, {
     workflowName: "NPM Telegram Beta E2E",
-    workflowRef: options.workflowRef,
+    workflowRef: qualificationRef,
   });
+  if (runLocal.headSha !== sourceSha) {
+    throw new Error(
+      `Telegram qualification SHA mismatch: expected ${sourceSha}, got ${runLocal.headSha}`,
+    );
+  }
   return {
     status: "passed",
     runId,
@@ -1994,16 +2091,17 @@ async function main() {
   });
   // Publication may use repaired tooling while the prepared tarball retains its original producer.
   const statePath = join(options.outputDir, RELEASE_CANDIDATE_STATE_FILE);
+  const hasRetainedRequest = existsSync(join(options.outputDir, "frv-request.json"));
   if (options.workflowSha && !options.publishWorkflowRef) {
     if (options.workflowSha !== toolingSha) {
       throw new Error(
         `--workflow-sha ${options.workflowSha} does not match tooling checkout ${toolingSha}`,
       );
     }
-    // A resumed candidate keeps the exact tag it recorded; a newer tag at the
-    // same SHA must not fail state reconciliation. The identity check below
-    // still proves that saved tag resolves to this tooling SHA.
-    const savedTag = savedPublishWorkflowRef(statePath);
+    // A resumed candidate reuses the tag it recorded for this tooling SHA; a
+    // repaired tooling SHA gets its own tag. The identity check below proves
+    // the selected tag resolves to this tooling SHA.
+    const savedTag = savedPublishWorkflowRef(statePath, toolingSha);
     const ensured = savedTag
       ? { tag: savedTag, created: false }
       : ensureReleasePublishToolingTag({
@@ -2041,22 +2139,11 @@ async function main() {
   let candidateState = reconcileReleaseCandidateState(
     existsSync(statePath) ? readJson(statePath, "release candidate state") : undefined,
     expectedState,
+    hasRetainedRequest,
   );
   options.fullReleaseRunId = candidateState.fullReleaseRunId;
   options.npmPreflightRunId = candidateState.npmPreflightRunId;
   if (!options.fullReleaseRunId && !options.skipDispatch) {
-    const workflowSource = readFileSync(
-      join(TOOLING_ROOT, ".github/workflows/full-release-validation.yml"),
-      "utf8",
-    );
-    if (
-      publicationSourceContract(workflowSource) !== "1" ||
-      publicationAdmissionContract(workflowSource) !== "1"
-    ) {
-      throw new Error(
-        "Fresh checklist dispatch requires source and registry admission in frozen tooling; existing run recovery is unchanged.",
-      );
-    }
     const version = parseReleaseVersion(options.tag.replace(/^v/u, ""));
     const train = version && classifyReleaseTrain(version);
     if (train === "unsupported-extended-stable-correction") {
@@ -2111,31 +2198,7 @@ async function main() {
     ? runLocalGeneratedCheckIfNeeded(options)
     : undefined;
   if (dispatchesValidation) {
-    const workflowFile = "full-release-validation.yml";
-    const targetContextRef = releaseBranchForTag(options.tag);
-    const trustedWorkflowFields = fullReleaseTrustedWorkflowFields({
-      workflowRef: options.workflowRef,
-      workflowSha: toolingSha,
-      workflowSource: readFileSync(
-        join(TOOLING_ROOT, ".github", "workflows", workflowFile),
-        "utf8",
-      ),
-      publicationIntent: {
-        validationPurpose: "publish",
-        publicationSelection: publicationSelectionForChecklist(options),
-      },
-    });
-    options.fullReleaseRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
-      ref: targetSha,
-      ...(targetContextRef ? { target_context_ref: targetContextRef } : {}),
-      ...trustedWorkflowFields,
-      provider: options.provider,
-      mode: options.mode,
-      release_profile: options.releaseProfile,
-      run_release_soak:
-        options.releaseProfile === "stable" || options.releaseProfile === "full" ? "true" : "false",
-      rerun_group: "all",
-    });
+    options.fullReleaseRunId = dispatchFullReleaseUsingHelper(options, targetSha, toolingSha);
     candidateState = updateReleaseCandidateState(statePath, candidateState, "dispatching", {
       fullReleaseRunId: options.fullReleaseRunId,
     });
@@ -2378,6 +2441,7 @@ async function main() {
     tarballPath,
     dependencyTarballPaths,
     revalidatedRegistryArtifacts.map((artifact) => artifact.tarballPath),
+    targetRoot,
   );
   const npmTelegram = await runTelegramIfNeeded(
     options,
@@ -2385,13 +2449,15 @@ async function main() {
     npmManifest,
     npmRun.runAttempt,
     targetSha,
-    fullValidationEvidence.coveragePolicy,
+    fullValidationEvidence,
+    npmUsesFullRun,
   );
   const publicationOptions = {
     ...options,
     fullReleaseRunAttempt: fullRun.runAttempt,
-    npmTelegramRunId: npmTelegram.runId,
   };
+  // FRV owns required publication qualification. Supplemental Q checks stay in
+  // candidate evidence, not the optional main/P publisher diagnostic input.
   const publicationSelection = publicationSelectionForChecklist(options);
   const publishPreflight = await runReleasePublishPreflight(
     {
@@ -2412,7 +2478,6 @@ async function main() {
       pluginSdkApiAcknowledgement: options.pluginSdkApiAcknowledgement,
       windowsNodeTag: options.windowsNodeTag,
       windowsNodeInstallerDigests: options.windowsNodeInstallerDigests,
-      npmTelegramRunId: npmTelegram.runId ?? "",
     },
     {
       manifest: fullManifest,
@@ -2511,9 +2576,7 @@ async function main() {
       }`,
       `- full release artifact: ${fullArtifactName}`,
       `- GitHub release notes: ${releaseNotesCheck.status} (${releaseNotesCheck.mode}, ${releaseNotesCheck.characters} characters, ${releaseNotesCheck.bytes} bytes)`,
-      releaseNotesProvenance.status === "passed"
-        ? `- changelog provenance: passed (${releaseNotesProvenance.base}..${releaseNotesProvenance.target})`
-        : `- changelog provenance: skipped (${releaseNotesProvenance.reason})`,
+      `- changelog provenance: passed (${releaseNotesProvenance.base}..${releaseNotesProvenance.target})`,
       `- ${
         formatShippedBaselineExclusions(releaseNotesProvenance.shippedBaselines) ||
         "Shipped baseline exclusions: none"

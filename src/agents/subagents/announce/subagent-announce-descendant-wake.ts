@@ -12,6 +12,7 @@ import {
   runAnnounceDeliveryWithRetry,
   resolveSubagentAnnounceTimeoutMs,
 } from "./subagent-announce-delivery.js";
+import { hasUsableSessionEntry } from "./subagent-announce-delivery.runtime.js";
 import type {
   callSubagentLifecycleGateway,
   dispatchGatewayMethodInProcess,
@@ -24,8 +25,6 @@ type DescendantWakeDeps = {
   getRuntimeConfig: typeof getRuntimeConfig;
   replaceSubagentRunAfterSteer: typeof import("../registry/subagent-registry.js").replaceSubagentRunAfterSteerCore;
 };
-
-type UsableSessionEntryGuard = (entry: unknown) => entry is Record<string, unknown>;
 
 function isWakeContinuation(runId: string): boolean {
   const trimmed = runId.trim();
@@ -54,7 +53,6 @@ export async function runDescendantWake(params: {
   announceId: string;
   prepareCurrent: () => Promise<boolean>;
   isChildSessionEffectsAllowed: () => boolean;
-  hasUsableSessionEntry: UsableSessionEntryGuard;
   deps: DescendantWakeDeps;
   resolveGatewayContext?: GatewayContextResolver;
   signal?: AbortSignal;
@@ -74,17 +72,14 @@ export async function runDescendantWake(params: {
     return false;
   }
   const childEntry = await loadSessionEntryByKey(params.childSessionKey);
-  if (!params.hasUsableSessionEntry(childEntry)) {
+  if (!hasUsableSessionEntry(childEntry)) {
     return false;
   }
 
   const cfg = params.deps.getRuntimeConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const wakeLifecycleGeneration = getAgentEventLifecycleGeneration();
-  const wakeMessage = buildDescendantWakeMessage({
-    findings: params.findings,
-    taskLabel: params.taskLabel,
-  });
+  const wakeMessage = buildDescendantWakeMessage(params);
 
   let wakeRunId;
   try {

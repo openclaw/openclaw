@@ -34,7 +34,7 @@ describe("memory host event export recovery", () => {
         prefix: "memory-host-delayed-export-",
       });
       const { workspaceDir } = state;
-      const cfg = { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } };
+      const cfg = { agents: { entries: { main: { workspace: workspaceDir } } } };
       const event = {
         type: "memory.recall.recorded" as const,
         timestamp: "2026-09-10T12:00:00.000Z",
@@ -216,7 +216,7 @@ describe("memory host event export recovery", () => {
       );
 
       const listed = await listMemoryHostPublicArtifacts({
-        cfg: { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+        cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
       });
 
       expect(listed.some((artifact) => artifact.kind === "event-log")).toBe(true);
@@ -280,7 +280,7 @@ describe("memory host event export recovery", () => {
       );
 
       const listed = await listMemoryHostPublicArtifacts({
-        cfg: { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+        cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
       });
 
       expect(listed.some((artifact) => artifact.kind === "event-log")).toBe(false);

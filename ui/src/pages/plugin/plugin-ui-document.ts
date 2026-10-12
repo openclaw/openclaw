@@ -1,6 +1,3 @@
-import { html, nothing } from "lit";
-import { keyed } from "lit/directives/keyed.js";
-import { t } from "../../i18n/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import pluginUiBridgeChildUrl from "./plugin-ui-bridge-child.js?url&no-inline";
 import { PluginUiBridgeController } from "./plugin-ui-bridge.ts";
@@ -253,6 +250,10 @@ class PluginUiDocumentController {
   }
 }
 
+export type PluginUiFrameView =
+  | { status: "loading" | "error" }
+  | { status: "ready"; identity: string; src?: string; srcdoc?: string; sandbox: string };
+
 export class PluginUiFrameController {
   readonly bridge = new PluginUiBridgeController();
   private identity = "";
@@ -278,11 +279,9 @@ export class PluginUiFrameController {
     pluginId: string;
     tabId: string;
     path: string;
-    label: string;
     sandbox: string;
     bridgeEnabled: boolean;
-    onLoad: (event: Event) => void;
-  }) {
+  }): PluginUiFrameView {
     const identity = `${pluginTabKey({ pluginId: params.pluginId, id: params.tabId })}\0${params.path}\0${params.sandbox}\0${params.bridgeEnabled}`;
     if (this.identity !== identity) {
       this.clear();
@@ -290,38 +289,22 @@ export class PluginUiFrameController {
       this.nonce = params.bridgeEnabled ? generateUUID() : "";
     }
     if (!params.bridgeEnabled) {
-      return html`<iframe
-        class="plugin-tab-embed__frame"
-        src=${params.path}
-        title=${params.label}
-        sandbox=${params.sandbox}
-        @load=${params.onLoad}
-      ></iframe>`;
+      return { status: "ready", identity, src: params.path, sandbox: params.sandbox };
     }
-
     const documentKey = `${identity}\0${this.nonce}`;
     this.document.ensure(documentKey, params.path, this.nonce, params.sandbox);
     if (this.document.errorKey === documentKey) {
-      return html`
-        <section class="card lazy-view-state" role="status">
-          <div class="card-title">${t("pluginTabs.unavailableTitle")}</div>
-          <div class="card-sub">${t("pluginTabs.unavailableSubtitle")}</div>
-        </section>
-      `;
+      return { status: "error" };
     }
     if (this.document.current?.key !== documentKey) {
-      return nothing;
+      return { status: "loading" };
     }
-    return keyed(
+    return {
+      status: "ready",
       identity,
-      html`<iframe
-        class="plugin-tab-embed__frame"
-        srcdoc=${this.document.current.srcdoc}
-        title=${params.label}
-        sandbox=${this.document.current.sandbox}
-        @load=${params.onLoad}
-      ></iframe>`,
-    );
+      srcdoc: this.document.current.srcdoc,
+      sandbox: this.document.current.sandbox,
+    };
   }
 
   get bridgeNonce(): string {

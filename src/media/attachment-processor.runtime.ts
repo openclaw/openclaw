@@ -1,3 +1,4 @@
+import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
 import { inspectBase64 } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
@@ -35,7 +36,7 @@ export async function prepareAttachment(input: AttachmentInput): Promise<Prepare
       ? Buffer.from(input.base64, "base64")
       : undefined;
   const hints = [normalizeMimeType(input.mime), mimeTypeFromFilePath(input.label)];
-  const mime =
+  let mime =
     (await sniffMimeFromBase64(
       { ...facts, buffer },
       {
@@ -44,6 +45,17 @@ export async function prepareAttachment(input: AttachmentInput): Promise<Prepare
     )) ?? "application/octet-stream";
   if (!buffer && !mime.startsWith("image/")) {
     buffer = Buffer.from(input.base64, "base64");
+  }
+  if (
+    buffer &&
+    mime.startsWith("text/") &&
+    (!normalizeMimeType(input.mime) || normalizeMimeType(input.mime) === "application/octet-stream")
+  ) {
+    const classification = await classifyAttachmentBytes({ buffer, name: input.label });
+    if (classification.class === "text" && classification.charset) {
+      // Inferred MIME becomes a persisted content type; retain its byte-derived encoding.
+      mime = `${mime}; charset=${classification.charset}`;
+    }
   }
   return { sizeBytes: facts.decodedBytes, mime, buffer };
 }

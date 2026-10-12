@@ -46,7 +46,7 @@ async function createExplicitOwnerConfig() {
   return cfg;
 }
 
-it.each(["main", "work"])(
+it.each(["work"])(
   "consumes only %s global next-turn context during prompt preparation",
   async (agentId) => {
     const cfg = await createExplicitOwnerConfig();

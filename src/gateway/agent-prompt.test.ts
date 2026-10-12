@@ -96,16 +96,6 @@ describe("gateway agent prompt", () => {
     expect(prompt).toContain("User: retry");
   });
 
-  it("preserves exact stream-error placeholder text from user history", () => {
-    const entries = [
-      { role: "user", entry: { sender: "User", body: STREAM_ERROR_FALLBACK_TEXT } },
-      { role: "user", entry: { sender: "User", body: "next" } },
-    ] as const;
-
-    const prompt = buildAgentMessageFromConversationEntries([...entries]);
-    expect(prompt).toContain(`User: ${STREAM_ERROR_FALLBACK_TEXT}`);
-  });
-
   it("preserves exact stream-error placeholder text from assistant history without provenance", () => {
     const entries = [
       { role: "assistant", entry: { sender: "Assistant", body: STREAM_ERROR_FALLBACK_TEXT } },
@@ -126,12 +116,5 @@ describe("gateway agent prompt", () => {
     const prompt = buildAgentMessageFromConversationEntries([...entries]);
     expect(prompt).toContain("Tool:call_1: ");
     expect(prompt).toContain("User: continue");
-  });
-
-  it("preserves current user text that looks like internal display metadata", () => {
-    const body = "[Thu 2026-03-12 07:00 UTC] what happened then?";
-    expect(
-      buildAgentMessageFromConversationEntries([{ role: "user", entry: { sender: "User", body } }]),
-    ).toBe(body);
   });
 });

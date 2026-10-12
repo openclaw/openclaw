@@ -12,14 +12,6 @@ import { normalizePackageTagInput } from "../../infra/package-tag.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
 import {
-  normalizeUpdateFailureFacts,
-  type UpdateFailureFact,
-} from "../../infra/update-failure-facts.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  type FreeBsdPkgOwnershipInspection,
-} from "../../infra/update-freebsd-pkg-ownership.js";
-import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   detectGlobalInstallManagerByPresence,
@@ -27,6 +19,7 @@ import {
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
 import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
+import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
@@ -38,15 +31,19 @@ import {
 } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import {
+  createSystemPackageOwnershipInspection,
+  type SystemPackageOwnershipInspection,
+} from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../../shared/update-outcome.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 import { resolveNodeRunner } from "./node-runner.js";
 
+export { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 export { resolveNodeRunner } from "./node-runner.js";
 
 export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"> & {
@@ -91,6 +88,7 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
   tag?: string;
   sha?: string;
   timeout?: string;
+  drainTimeout?: string;
   yes?: boolean;
 };
 
@@ -117,53 +115,17 @@ export type UpdateWizardOptions = Pick<
   "runtimeRecoveryEnv" | "acceptCapabilities" | "timeout"
 >;
 
-export class UpdatePreMutationError<Reason extends string = string> extends Error {
-  readonly origin?: "candidate-admission";
-  readonly nextAction?: string;
-  readonly recoverySteps?: readonly UpdateRecoveryStep[];
-  readonly failureFacts: UpdateFailureFact[];
-  readonly #stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;
-
-  get stepResult(): Pick<UpdateRunResult, "steps" | "failedStep"> | undefined {
-    return this.#stepResult;
-  }
-
-  constructor(
-    readonly reason: Reason,
-    message: string,
-    options?: ErrorOptions & {
-      failureFacts?: readonly UpdateFailureFact[];
-      stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;
-      recoverySteps?: readonly UpdateRecoveryStep[];
-      origin?: "candidate-admission";
-      nextAction?: string;
-    },
-  ) {
-    super(message, options);
-    this.name = "UpdatePreMutationError";
-    this.origin = options?.origin;
-    this.nextAction = options?.nextAction;
-    this.recoverySteps = options?.recoverySteps;
-    // Completed attempts are diagnostics, never recovery authority or enumerable error output.
-    this.#stepResult = options?.stepResult
-      ? { steps: options.stepResult.steps, failedStep: options.stepResult.failedStep }
-      : undefined;
-    this.failureFacts = normalizeUpdateFailureFacts(
-      options?.failureFacts ?? [{ check: reason, code: reason, message }],
-    );
-  }
-}
-
-const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
-
 /** Parse the shared timeout contract without exiting an owning operation. */
-export function parseUpdateTimeoutMs(timeout?: string): number | undefined {
+export function parseUpdateTimeoutMs(
+  timeout?: string,
+  option: "--timeout" | "--drain-timeout" = "--timeout",
+): number | undefined {
   if (timeout === undefined) {
     return undefined;
   }
   const milliseconds = positiveSecondsToSafeMilliseconds(timeout.trim());
   if (milliseconds === undefined) {
-    throw new Error(INVALID_TIMEOUT_ERROR);
+    throw new Error(`${option} must be a positive integer (seconds)`);
   }
   return milliseconds;
 }
@@ -179,12 +141,6 @@ export function normalizeTag(value?: string | null): string | null {
   return normalizePackageTagInput(value, [DEFAULT_PACKAGE_NAME]);
 }
 
-function normalizeVersionTag(tag: string): string | null {
-  const trimmed = tag.trim();
-  const cleaned = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
-  return parseSemver(cleaned) ? cleaned : null;
-}
-
 export { readPackageName, readPackageVersion };
 
 export async function resolveTargetVersion(
@@ -195,8 +151,9 @@ export async function resolveTargetVersion(
   if (!canResolveRegistryVersionForPackageTarget(tag)) {
     return { version: null };
   }
-  const direct = normalizeVersionTag(tag);
-  if (direct) {
+  const trimmed = tag.trim();
+  const direct = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
+  if (parseSemver(direct)) {
     return { version: direct };
   }
   return await fetchNpmTagVersion({
@@ -215,8 +172,7 @@ export async function isGitCheckout(root: string): Promise<boolean> {
 
 export async function isEmptyDir(targetPath: string): Promise<boolean> {
   try {
-    const entries = await fs.readdir(targetPath);
-    return entries.length === 0;
+    return (await fs.readdir(targetPath)).length === 0;
   } catch {
     return false;
   }
@@ -359,6 +315,10 @@ async function cloneGitCheckoutTransactionally(
           `The clone destination or staging directory changed before publication: ${targetDir}. The replacement was left unchanged; choose an empty OPENCLAW_GIT_DIR and retry.`,
         );
       }
+      const destinationAppeared = () =>
+        new Error(
+          `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
+        );
       if (!preserveDir) {
         try {
           await fs.lstat(targetDir);
@@ -370,16 +330,12 @@ async function cloneGitCheckoutTransactionally(
           published = true;
           return targetDir;
         }
-        throw new Error(
-          `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
-        );
+        throw destinationAppeared();
       }
 
       const destinationEntries = await fs.readdir(targetDir);
       if (destinationEntries.length !== 1 || destinationEntries[0] !== path.basename(storageRoot)) {
-        throw new Error(
-          `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
-        );
+        throw destinationAppeared();
       }
 
       const entries = (await fs.readdir(stagingDir)).toSorted((a, b) =>
@@ -499,13 +455,7 @@ export async function ensureGitCheckout(params: {
         `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
       );
     }
-    return await cloneGitCheckoutTransactionally({
-      dir: params.dir,
-      env: gitEnv,
-      timeoutMs: params.timeoutMs,
-      progress: params.progress,
-      useStagedCheckout: params.useStagedCheckout,
-    });
+    return await cloneGitCheckoutTransactionally({ ...params, env: gitEnv });
   }
 
   if ((await readPackageName(params.dir)) !== DEFAULT_PACKAGE_NAME) {
@@ -522,11 +472,11 @@ export async function resolveGlobalManager(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
   timeoutMs: number;
-  pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  pkgOwnership?: SystemPackageOwnershipInspection;
   serviceUnitTarget?: string;
 }): Promise<GlobalInstallManager> {
   await (
-    params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs)
+    params.pkgOwnership ?? createSystemPackageOwnershipInspection(params.timeoutMs)
   ).assertUnowned(params.root);
   if (params.installKind !== "git") {
     if (await resolveBrewOpenClawPath(params.root)) {
@@ -645,25 +595,24 @@ export async function confirmUpdateDowngrade(params: {
     tag,
   });
   const run = opts.run!;
+  if (decision === "confirmed") {
+    return true;
+  }
+  finishUpdateRun(
+    run.runId,
+    {
+      status: "skipped",
+      reason: decision === "cancelled" ? "cancelled" : "downgrade-confirmation-required",
+    },
+    { env: run.env },
+  );
   if (decision === "confirmation-required") {
-    finishUpdateRun(
-      run.runId,
-      { status: "skipped", reason: "downgrade-confirmation-required" },
-      { env: run.env },
-    );
     defaultRuntime.error(
       "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
     );
-    defaultRuntime.exit(1);
-    return false;
+  } else if (!opts.json) {
+    defaultRuntime.log(theme.muted("Update cancelled."));
   }
-  if (decision === "cancelled") {
-    finishUpdateRun(run.runId, { status: "skipped", reason: "cancelled" }, { env: run.env });
-    if (!opts.json) {
-      defaultRuntime.log(theme.muted("Update cancelled."));
-    }
-    defaultRuntime.exit(0);
-    return false;
-  }
-  return true;
+  defaultRuntime.exit(decision === "confirmation-required" ? 1 : 0);
+  return false;
 }

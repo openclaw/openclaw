@@ -11,11 +11,11 @@ import { restoreRegisteredAgentHarnesses } from "../../agents/harness/registry.t
 import * as completionOwner from "../../agents/subagents/registry/subagent-registry-lifecycle-completion.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   cleanupSubagentRegistryPersistenceTest,
   settleSubagentRegistryPersistenceWork,
 } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   registerSubagentRun,
   claimSubagentRunKill,
@@ -147,7 +147,7 @@ async function request(
 beforeEach(async () => {
   stateDir = tempDirs.make("openclaw-reset-cleanup-");
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  cfg = { agents: { list: [{ id: "main", default: true, workspace: stateDir }] } };
+  cfg = { agents: { entries: { main: { workspace: stateDir } } } };
   setRuntimeConfigSnapshot(cfg);
   await resetSubagentRegistryForTests({ persist: false });
   attempts = 0;
@@ -498,10 +498,10 @@ test.each([false, true])(
     const agentId = "worker";
     cfg = {
       agents: {
-        list: [
-          { id: "main", default: true, workspace: stateDir },
-          { id: "worker", workspace: stateDir },
-        ],
+        entries: {
+          main: { workspace: stateDir },
+          worker: { workspace: stateDir },
+        },
       },
       session: { store: path.join(stateDir, "custom-sessions.json") },
     };

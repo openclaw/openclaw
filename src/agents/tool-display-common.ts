@@ -2,11 +2,6 @@ import {
   asPositiveFiniteNumber,
   resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-/**
- * Shared compact tool-call display helpers.
- * Redacts and summarizes arguments into short labels/details for chat and UI
- * tool update streams.
- */
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -23,7 +18,6 @@ type ToolDisplayActionSpec = {
   detailKeys?: string[];
 };
 
-/** Display metadata for a tool and optional per-action labels/details. */
 export type ToolDisplaySpec = {
   title?: string;
   label?: string;
@@ -35,12 +29,10 @@ type CoerceDisplayValueOptions = {
   includeFalsy?: boolean;
 };
 
-/** Normalize a tool name for fallback display. */
 export function normalizeToolDisplayName(name?: string): string {
   return (name ?? "tool").trim();
 }
 
-/** Convert a tool identifier into a human-readable title. */
 export function defaultTitle(name: string): string {
   const cleaned = name.replace(/_/g, " ").trim();
   if (!cleaned) {
@@ -132,8 +124,7 @@ function lookupValueByPath(args: unknown, path: string): unknown {
   return current;
 }
 
-/** Format a detail path/key into a short display label. */
-export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
+export function formatDetailKey(raw: string, overrides: Record<string, string>): string {
   const last = raw.split(".").findLast(Boolean) || raw;
   const override = overrides[last];
   if (override) {
@@ -154,12 +145,7 @@ function resolvePathArg(record: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-function resolveReadDetail(args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveReadDetail(record: Record<string, unknown>): string | undefined {
   const path = resolvePathArg(record);
   if (!path) {
     return undefined;
@@ -182,12 +168,7 @@ function resolveReadDetail(args: unknown): string | undefined {
   return `from ${path}`;
 }
 
-function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveWriteDetail(toolKey: string, record: Record<string, unknown>): string | undefined {
   const path = resolvePathArg(record) ?? normalizeOptionalString(record.url);
   if (!path) {
     return undefined;
@@ -214,12 +195,7 @@ function resolveWriteDetail(toolKey: string, args: unknown): string | undefined 
   return `${destinationPrefix} ${path}`;
 }
 
-function resolveWebSearchDetail(args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveWebSearchDetail(record: Record<string, unknown>): string | undefined {
   const queries = collectWebSearchQueries(record);
   const count =
     asPositiveFiniteNumber(record.count) ??
@@ -283,12 +259,7 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
   return [...queries];
 }
 
-function resolveWebFetchDetail(args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveWebFetchDetail(record: Record<string, unknown>): string | undefined {
   const url = normalizeOptionalString(record.url);
   if (!url) {
     return undefined;
@@ -313,7 +284,6 @@ function resolveDetailFromKeys(
   opts: {
     mode: "first" | "summary";
     coerce?: CoerceDisplayValueOptions;
-    maxEntries?: number;
     formatKey?: (raw: string) => string;
   },
 ): string | undefined {
@@ -337,9 +307,8 @@ function resolveDetailFromKeys(
   }
 
   const unique = dedupeByKey(entries, (entry) => `${entry.label}:${entry.value}`);
-  const maxEntries = opts.maxEntries ?? 8;
   const parts: string[] = [];
-  for (let index = 0; index < unique.length && index < maxEntries; index += 1) {
+  for (let index = 0; index < unique.length && index < 8; index += 1) {
     const entry = unique[index];
     if (entry) {
       parts.push(`${entry.label} ${entry.value}`);
@@ -348,7 +317,6 @@ function resolveDetailFromKeys(
   return parts.join(", ");
 }
 
-/** Resolve display verb/detail from tool args and optional display metadata. */
 export function resolveToolVerbAndDetailForArgs(params: {
   toolKey: string;
   args?: unknown;
@@ -358,7 +326,6 @@ export function resolveToolVerbAndDetailForArgs(params: {
   detailMode: "first" | "summary";
   toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
-  detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
 }): { verb?: string; detail?: string } {
   // Card arguments belong to the card renderer; generic summaries must not expose them.
@@ -368,15 +335,8 @@ export function resolveToolVerbAndDetailForArgs(params: {
   // Keep the existing read order when caller-owned options expose accessors.
   const { toolKey, args, meta } = params;
   const action = normalizeOptionalString(asRecord(params.args)?.action);
-  const {
-    spec,
-    fallbackDetailKeys,
-    detailMode,
-    toolDetailMode,
-    detailCoerce,
-    detailMaxEntries,
-    detailFormatKey,
-  } = params;
+  const { spec, fallbackDetailKeys, detailMode, toolDetailMode, detailCoerce, detailFormatKey } =
+    params;
   const actionSpec = spec && action ? (spec.actions?.[action] ?? undefined) : undefined;
   const fallbackVerb =
     toolKey === "web_search"
@@ -393,17 +353,17 @@ export function resolveToolVerbAndDetailForArgs(params: {
   if (toolKey === "exec" || toolKey === "bash" || toolKey === "shell") {
     detail = resolveExecDetail(args, { detailMode: toolDetailMode });
   }
-  if (!detail && toolKey === "read") {
-    detail = resolveReadDetail(args);
-  }
-  if (!detail && (toolKey === "write" || toolKey === "edit" || toolKey === "attach")) {
-    detail = resolveWriteDetail(toolKey, args);
-  }
-  if (!detail && toolKey === "web_search") {
-    detail = resolveWebSearchDetail(args);
-  }
-  if (!detail && toolKey === "web_fetch") {
-    detail = resolveWebFetchDetail(args);
+  const record = asRecord(args);
+  if (record && !detail) {
+    if (toolKey === "read") {
+      detail = resolveReadDetail(record);
+    } else if (toolKey === "write" || toolKey === "edit" || toolKey === "attach") {
+      detail = resolveWriteDetail(toolKey, record);
+    } else if (toolKey === "web_search") {
+      detail = resolveWebSearchDetail(record);
+    } else if (toolKey === "web_fetch") {
+      detail = resolveWebFetchDetail(record);
+    }
   }
 
   const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? fallbackDetailKeys ?? [];
@@ -411,7 +371,6 @@ export function resolveToolVerbAndDetailForArgs(params: {
     detail = resolveDetailFromKeys(args, detailKeys, {
       mode: detailMode,
       coerce: detailCoerce,
-      maxEntries: detailMaxEntries,
       formatKey: detailFormatKey,
     });
   }

@@ -15,7 +15,7 @@ import type {
   BoardSnapshot,
   BoardWidgetDeclared,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
 import { resolveManagedGitHubProfileDir } from "../../agents/github-tool-identity.js";
 import { createTestBoardStore } from "../../boards/board-store.test-support.js";
@@ -29,6 +29,7 @@ import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import * as processExec from "../../process/exec.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import * as lazyPromise from "../../shared/lazy-promise.js";
 import {
   createOpenClawTestState,
@@ -94,6 +95,7 @@ describe("board authenticated GitHub Actions", () => {
   const account = vi.fn(async () => json({ id: 100, login: "fixture-user", avatar_url: null }));
   const native = vi.fn<typeof processExec.runCommandBuffered>();
   const credentialDirs = new Set<string>();
+  const workScopes: AsyncWorkScope[] = [];
 
   const boardSessionKey = (agentId = "main") => `agent:${agentId}:runs-${caseNumber}`;
 
@@ -137,7 +139,7 @@ describe("board authenticated GitHub Actions", () => {
     state.envVars.GITHUB_ENTERPRISE_TOKEN = undefined;
     state.applyEnv();
     config = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       tools: { exec: { mode: "full" }, github: { profileId } },
       gateway: { controlUi: { github: { token: "synthetic-preview-only" } } },
     };
@@ -158,11 +160,15 @@ describe("board authenticated GitHub Actions", () => {
   });
 
   function createGitHubBoardHarness() {
+    const work = new AsyncWorkScope();
+    workScopes.push(work);
     return createBoardHarness(undefined, {}, boardStore, {
       getRuntimeConfig: () => config,
+      trackExecution: (execute) => work.track(execute),
     });
   }
   afterEach(async () => {
+    await Promise.all(workScopes.splice(0).map((work) => work.drain()));
     clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -331,7 +337,7 @@ describe("board authenticated GitHub Actions", () => {
           controller.abort();
         }
         if (changed === "agent") {
-          config.agents = { entries: { other: { default: true } } };
+          config.agents = { entries: { other: {} } };
         }
         if (changed === "routing") {
           config.session = { scope: "global", mainKey: `runs-${caseNumber}` };
@@ -541,6 +547,52 @@ describe("board authenticated GitHub Actions", () => {
     expect(actionCalls()).toHaveLength(4);
   });
 
+  it.for(["success", "failure"] as const)(
+    "returns expired Actions while one background refresh settles with %s",
+    async (outcome, { signal }) => {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const { read } = await reader();
+      expect((await read()).mock.calls[0]).toEqual([true, result]);
+      clock.mockReturnValue(now + 30_001);
+      const started = createDeferred();
+      const release = createDeferred();
+      const updated = { ...result, workflow_runs: [{ ...run, conclusion: "failure" }] };
+      actions = async () => {
+        started.resolve();
+        await release.promise;
+        return outcome === "success" ? json(updated) : new Response(token, { status: 503 });
+      };
+      const pending = read();
+      try {
+        await withinTest(started.promise, signal);
+        expect((await withinTest(pending, signal)).mock.calls[0]).toEqual([
+          true,
+          { ...result, stale: true },
+        ]);
+        expect((await read()).mock.calls[0]).toEqual([true, { ...result, stale: true }]);
+        expect(actionCalls()).toHaveLength(2);
+      } finally {
+        release.resolve();
+        await pending;
+        await AsyncWorkScope.runWhenAllIdle(
+          () => workScopes,
+          async () => {},
+        );
+      }
+      const response = await read();
+      if (outcome === "success") {
+        expect(response.mock.calls[0]).toEqual([true, updated]);
+        expect(actionCalls()).toHaveLength(2);
+      } else {
+        expect(response.mock.calls[0]?.[0]).toBe(false);
+        expect(response.mock.calls[0]?.[2]?.message).toContain("request failed");
+        expect(JSON.stringify(response.mock.calls)).not.toContain(token);
+        expect(actionCalls()).toHaveLength(3);
+      }
+    },
+  );
+
   it.each(["session ownership", "token"] as const)(
     "rejects changed %s across an awaited fetch",
     async (changed) => {
@@ -557,7 +609,7 @@ describe("board authenticated GitHub Actions", () => {
       if (changed === "token") {
         await writeCredential("system", profileId, "synthetic-rotated-token");
       } else {
-        config.agents = { entries: { other: { default: true } } };
+        config.agents = { entries: { other: {} } };
       }
       release.resolve();
       expect((await pending).mock.calls[0]?.[0]).toBe(false);

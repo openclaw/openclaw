@@ -46,14 +46,15 @@ async function createPane(presence: PresenceEntry[]) {
   return { pane, context, state, update: vi.spyOn(pane, "performUpdate") };
 }
 
-it("keeps an idle pane unchanged for presence heartbeats and unrelated viewers while retaining fresh facts", async () => {
-  const { pane, update } = await createPane([
-    person("self"),
-    person("Riley"),
-    person("Alex", { watchedSessions: ["agent:main:other"] }),
-  ]);
-  const next = {
-    presence: [
+it.each([
+  {
+    name: "heartbeats and unrelated viewers",
+    previous: [
+      person("self"),
+      person("Riley"),
+      person("Alex", { watchedSessions: ["agent:main:other"] }),
+    ],
+    next: [
       person("Alex", {
         ts: 2,
         watchedSessions: ["agent:main:elsewhere"],
@@ -70,17 +71,8 @@ it("keeps an idle pane unchanged for presence heartbeats and unrelated viewers w
       }),
       person("self", { ts: 2, lastInputSeconds: 10 }),
     ],
-  };
-
-  pane.presencePayload = next;
-  await settleLitElement(pane);
-
-  expect(update).not.toHaveBeenCalled();
-  expect(pane.presencePayload).toBe(next);
-  expect(pane.chatProps?.userName).toBe("self");
-});
-
-it.each([
+    updates: 0,
+  },
   {
     name: "viewer leaves",
     previous: [person("self"), person("Riley")],
@@ -114,15 +106,19 @@ it.each([
     previous: [person("self")],
     next: [person("self"), person("Riley", { watchedSessions: [] })],
   },
-])("redraws when $name", async ({ previous, next }) => {
-  const { pane, update } = await createPane(previous);
-
-  pane.presencePayload = { presence: next };
-  await settleLitElement(pane);
-
-  expect(update).toHaveBeenCalledOnce();
-  expect(pane.presencePayload?.presence).toBe(next);
-});
+])(
+  "updates presentation only when visible facts change: $name",
+  async ({ previous, next, updates = 1 }) => {
+    const { pane, update } = await createPane(previous);
+    const payload = { presence: next };
+    pane.presencePayload = payload;
+    await settleLitElement(pane);
+    expect(update).toHaveBeenCalledTimes(updates);
+    expect(pane.presencePayload).toBe(payload);
+    expect(pane.presencePayload?.presence).toBe(next);
+    expect(pane.chatProps?.userName).toBe("self");
+  },
+);
 
 it("refreshes the fallback self identity and defers to the authoritative profile", async () => {
   const { pane, context, update } = await createPane([person("self", { watchedSessions: [] })]);

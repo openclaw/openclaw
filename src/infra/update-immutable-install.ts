@@ -5,97 +5,112 @@ import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
-import { packageActivationRuntimeIdentity } from "./package-update-activation-paths.js";
+import {
+  packageActivationRuntimeIdentity,
+  resolveImmutableRecoveryCommand,
+} from "./package-update-activation-paths.js";
+import type { ImmutableUpdateCoverage } from "./update-immutable-inspection.js";
 import { readImmutableInstallRecord } from "./update-immutable-install-record.js";
 import type {
   ImmutableInstallDescriptor,
   ImmutableInstallRecord,
 } from "./update-immutable-install-schema.js";
+import {
+  assertImmutableDescriptorCurrent,
+  readImmutableLayout,
+  directoryIdentity,
+} from "./update-immutable-layout.js";
+import { withImmutableUpdateOwner } from "./update-immutable-owner.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 import type { StepFactory } from "./update-runner-git-commands.js";
 import type { CommandRunner } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 const SHA = /^[a-f0-9]{40}$/u;
+// Only owner-authored reason codes belong in broadly visible status, never stored error text.
+const PUBLIC_ACTIVATION_FAILURES = new Set([
+  "activation-interrupted",
+  "candidate-start-failed",
+  "candidate-still-starting",
+  "candidate-verification-failed",
+  "candidate-verification-pending",
+  "post-start-canary-unverified",
+  "post-start-generation-unverified",
+  "predecessor-verification-failed",
+  "recovery-verification-pending",
+  "rollback-verification-pending",
+  "verification-pending",
+]);
 const SOURCE = "https://github.com/openclaw/openclaw.git";
 
-function directoryIdentity(file: string): string {
-  const stat = fsSync.lstatSync(file);
-  if (!stat.isDirectory() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) {
-    throw new Error(`Immutable installation directory must be root-owned and protected: ${file}`);
-  }
-  return `${stat.dev}:${stat.ino}`;
+function inspectEntry(file: string, allowNotDirectory = false) {
+  return fs.lstat(file).catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT") || (allowNotDirectory && hasErrnoCode(error, "ENOTDIR"))) {
+      return null;
+    }
+    throw error;
+  });
 }
 
-function readLayout(root: string) {
-  if (fsSync.realpathSync(root) !== root) {
-    throw new Error("Immutable installation must have a canonical physical root.");
-  }
-  const rootIdentity = directoryIdentity(root);
-  const releases = path.join(root, "releases");
-  const releasesIdentity = directoryIdentity(releases);
-  const pointer = path.join(root, "current");
-  const stat = fsSync.lstatSync(pointer);
-  const target = stat.isSymbolicLink() ? fsSync.readlinkSync(pointer) : "";
-  const generationPath = path.resolve(root, target);
-  const sha = path.basename(generationPath);
-  if (
-    !stat.isSymbolicLink() ||
-    stat.uid !== 0 ||
-    !SHA.test(sha) ||
-    path.dirname(generationPath) !== releases
-  ) {
-    throw new Error(
-      "Immutable current must select a root-owned direct releases/<40-hex SHA> generation.",
-    );
-  }
-  const identity = directoryIdentity(generationPath);
-  if (
-    fsSync.realpathSync(pointer) !== generationPath ||
-    rootIdentity.split(":")[0] !== releasesIdentity.split(":")[0] ||
-    identity.split(":")[0] !== releasesIdentity.split(":")[0]
-  ) {
-    throw new Error("Immutable release layout must be contained on one filesystem.");
-  }
-  return {
-    rootIdentity,
-    releasesIdentity,
-    current: { sha, path: generationPath, identity, pointerIdentity: `${stat.dev}:${stat.ino}` },
-  };
-}
-
-function assertDescriptorCurrent(descriptor: ImmutableInstallDescriptor): void {
-  const layout = readLayout(descriptor.root);
-  if (
-    layout.rootIdentity !== descriptor.rootIdentity ||
-    layout.releasesIdentity !== descriptor.releasesIdentity ||
-    layout.current.sha !== descriptor.current.sha ||
-    layout.current.path !== descriptor.current.path ||
-    layout.current.identity !== descriptor.current.identity ||
-    layout.current.pointerIdentity !== descriptor.current.pointerIdentity ||
-    packageActivationRuntimeIdentity(descriptor.runtime.path) !== descriptor.runtime.identity
-  ) {
-    throw new Error("Immutable installation changed since adoption; current was not modified.");
-  }
-}
-
-function project(record: ImmutableInstallRecord): UpdateImmutableInstall {
+export function projectImmutableInstall(record: ImmutableInstallRecord): UpdateImmutableInstall {
   const { descriptor, prepared } = record;
-  return {
+  const result: UpdateImmutableInstall = {
     root: descriptor.root,
     currentSha: descriptor.current.sha,
     currentPath: descriptor.current.path,
-    ...(prepared
-      ? {
-          prepared: {
-            sha: prepared.sha,
-            path: prepared.path,
-            buildDigest: prepared.buildDigest,
-            preparedAtMs: prepared.preparedAtMs,
-          },
-        }
-      : {}),
+    ...(descriptor.activationEnabled ? { activationEnabled: true } : {}),
   };
+  const operation = record.activation?.operation;
+  if (operation) {
+    result.activation = {
+      operationId: operation.operationId,
+      phase: operation.phase,
+      previousSha: operation.previous.sha,
+      candidateSha: operation.candidate.sha,
+      ...(operation.failure !== undefined
+        ? {
+            failure: PUBLIC_ACTIVATION_FAILURES.has(operation.failure)
+              ? operation.failure
+              : "details-withheld",
+          }
+        : {}),
+      recoveryCommand: resolveImmutableRecoveryCommand(operation.recovery, descriptor),
+    };
+  }
+  const lastResult = record.activation?.lastResult;
+  if (lastResult) {
+    result.lastActivation = {
+      operationId: lastResult.operationId,
+      outcome: lastResult.outcome,
+      selectedSha: lastResult.selectedSha,
+      verifiedAtMs: lastResult.verifiedAtMs,
+      ...(lastResult.gateway
+        ? {
+            gateway: {
+              pid: lastResult.gateway.pid,
+              bootId: lastResult.gateway.bootId,
+              version: lastResult.gateway.version,
+              buildId: lastResult.gateway.buildId,
+            },
+          }
+        : {}),
+    };
+  }
+  if (prepared) {
+    result.prepared = {
+      sha: prepared.sha,
+      path: prepared.path,
+      buildDigest: prepared.buildDigest,
+      preparedAtMs: prepared.preparedAtMs,
+    };
+  }
+  if (descriptor.releaseRetention) {
+    result.releaseRetention = {
+      ...descriptor.releaseRetention,
+      generations: record.releases ?? [],
+    };
+  }
+  return result;
 }
 
 async function installationRoot(input: string): Promise<string | null> {
@@ -107,31 +122,16 @@ async function installationRoot(input: string): Promise<string | null> {
     return path.dirname(path.dirname(root));
   }
   if (path.basename(root) === "current") {
-    const stat = await fs.lstat(root).catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return null;
-      }
-      throw error;
-    });
+    const stat = await inspectEntry(root);
     if (stat?.isSymbolicLink()) {
       return path.dirname(root);
     }
   }
-  const current = await fs.lstat(path.join(root, "current")).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
-      return null;
-    }
-    throw error;
-  });
+  const current = await inspectEntry(path.join(root, "current"), true);
   if (!current) {
     return null;
   }
-  const releases = await fs.lstat(path.join(root, "releases")).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const releases = await inspectEntry(path.join(root, "releases"));
   return releases ? root : null;
 }
 
@@ -149,8 +149,27 @@ export async function inspectImmutableInstall(
       "Immutable release layout is not adopted. Use openclaw update adopt-immutable after its previous updater has stopped.",
     );
   }
-  assertDescriptorCurrent(record.descriptor);
-  return project(record);
+  const operation = record.activation?.operation;
+  if (operation?.pointerIntent) {
+    const layout = readImmutableLayout(record.descriptor.root);
+    const intent = operation.pointerIntent;
+    const selected =
+      intent.targetSha === operation.candidate.sha ? operation.candidate : operation.previous;
+    if (
+      layout.current.pointerIdentity === intent.temporaryIdentity &&
+      layout.current.sha === selected.sha &&
+      layout.current.identity === selected.identity
+    ) {
+      const descriptor = {
+        ...record.descriptor,
+        current: { ...layout.current, buildDigest: selected.buildDigest },
+      };
+      assertImmutableDescriptorCurrent(descriptor);
+      return projectImmutableInstall({ ...record, descriptor });
+    }
+  }
+  assertImmutableDescriptorCurrent(record.descriptor);
+  return projectImmutableInstall(record);
 }
 
 function requireUpdater(): void {
@@ -161,64 +180,43 @@ function requireUpdater(): void {
   }
 }
 
-async function withPreparationOwner<T>(
-  root: string,
-  run: (assertCurrent: () => void) => Promise<T>,
-): Promise<T> {
-  const { acquireFileLock } = await import("./file-lock.js");
-  const rootIdentity = directoryIdentity(root);
-  const lock = await acquireFileLock(path.join(root, ".openclaw-immutable-prepare"), {
-    retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
-    stale: Number.MAX_SAFE_INTEGER,
-    staleRecovery: "fail-closed",
-  });
-  const identity = fsSync.lstatSync(lock.lockPath);
-  const assertCurrent = () => {
-    const current = fsSync.lstatSync(lock.lockPath);
-    if (
-      directoryIdentity(root) !== rootIdentity ||
-      current.dev !== identity.dev ||
-      current.ino !== identity.ino
-    ) {
-      throw new Error("Immutable preparation ownership changed.");
-    }
-  };
-  let settled = true;
-  try {
-    return await run(assertCurrent);
-  } catch (error) {
-    settled = !hasCommandProcessCleanupError(error);
-    if (!settled) {
-      throw new Error(
-        `Preparation processes did not settle. Inspect the retained lock ${lock.lockPath} before another update.`,
-        { cause: error },
-      );
-    }
-    throw error;
-  } finally {
-    if (settled) {
-      await lock.release();
-    }
-  }
-}
-
 export async function adoptImmutableInstall(params: {
   root: string;
   service: ImmutableInstallDescriptor["service"];
   runtime: string;
+  build?: ImmutableInstallDescriptor["build"];
   previousUpdaterStopped: true;
+  enableActivation?: boolean;
+  inspectReleaseRetention?: boolean;
 }): Promise<UpdateImmutableInstall> {
   requireUpdater();
-  const { installImmutableLauncher, verifyImmutableGeneration } =
-    await import("./update-immutable-generation.js");
+  const {
+    installImmutableLauncher,
+    verifyImmutableGeneration,
+    assertImmutableGenerationControlVersion,
+  } = await import("./update-immutable-generation.js");
   const { verifyImmutableService } = await import("./update-immutable-service.js");
   const { ImmutableInstallDescriptorSchema } = await import("./update-immutable-install-schema.js");
   if (!params.previousUpdaterStopped) {
     throw new Error("The previous updater must be stopped before adoption.");
   }
   const root = await fs.realpath(params.root);
-  return withPreparationOwner(root, async (assertOwner) => {
-    const layout = readLayout(root);
+  if (params.inspectReleaseRetention) {
+    if (!params.enableActivation) {
+      throw new Error("Release retention inspection requires --enable-activation.");
+    }
+    // Check the installed bridge before executor admission can create metadata.
+    const layout = readImmutableLayout(root);
+    await assertImmutableGenerationControlVersion(layout.current.path, 3);
+    const existing = await readImmutableInstallRecord(root);
+    if (existing?.activation?.operation || existing?.descriptor.version === 1) {
+      throw new Error(
+        "Complete version-2 bridge activation and recovery before adopting retention inspection.",
+      );
+    }
+  }
+  return withImmutableUpdateOwner(root, async (assertOwner) => {
+    const layout = readImmutableLayout(root);
     const runtime = await fs.realpath(params.runtime);
     const runtimeStat = await fs.lstat(runtime);
     if (
@@ -237,7 +235,18 @@ export async function adoptImmutableInstall(params: {
     }
     const generation = await verifyImmutableGeneration(layout.current.path, layout.current.sha);
     const descriptor: ImmutableInstallDescriptor = {
-      version: 1,
+      version: params.inspectReleaseRetention ? 3 : params.enableActivation ? 2 : 1,
+      ...(params.enableActivation ? { activationEnabled: true as const } : {}),
+      ...(params.inspectReleaseRetention
+        ? {
+            releaseRetention: {
+              version: 1 as const,
+              mode: "inspect" as const,
+              keepVerifiedGenerations: 3 as const,
+              pins: [],
+            },
+          }
+        : {}),
       kind: "immutable",
       root,
       ...layout,
@@ -245,19 +254,140 @@ export async function adoptImmutableInstall(params: {
       service: params.service,
       runtime: { path: runtime, identity: packageActivationRuntimeIdentity(runtime) },
       source: SOURCE,
+      ...(params.build ? { build: params.build } : {}),
     };
     ImmutableInstallDescriptorSchema.parse(descriptor);
     const assertCurrent = () => {
       assertOwner();
-      assertDescriptorCurrent(descriptor);
+      assertImmutableDescriptorCurrent(descriptor);
     };
+    const {
+      createImmutableInstallRecord,
+      updateImmutableInstallRecord,
+      assertImmutableInstallRecordCurrent,
+    } = await import("./package-update-activation-immutable.js");
+    const existing = await readImmutableInstallRecord(root);
+    if (existing?.descriptor.releaseRetention) {
+      descriptor.version = existing.descriptor.version;
+      descriptor.activationEnabled = existing.descriptor.activationEnabled;
+      descriptor.releaseRetention = existing.descriptor.releaseRetention;
+    }
+    if (descriptor.version === 3) {
+      await assertImmutableGenerationControlVersion(layout.current.path, 3);
+    }
+    assertCurrent();
+    if (existing) {
+      if (existing.activation?.operation) {
+        throw new Error("Immutable activation recovery is pending; run openclaw update recover.");
+      }
+      const { isDeepStrictEqual } = await import("node:util");
+      const {
+        version: _version,
+        activationEnabled: _enabled,
+        current: previous,
+        releaseRetention: _retention,
+        ...original
+      } = existing.descriptor;
+      const {
+        version: _nextVersion,
+        activationEnabled: _nextEnabled,
+        current: selected,
+        releaseRetention: _nextRetention,
+        ...requested
+      } = descriptor;
+      const retentionUpgrade =
+        params.inspectReleaseRetention && !existing.descriptor.releaseRetention;
+      const upgrade =
+        (params.enableActivation && existing.descriptor.version === 1) || retentionUpgrade;
+      if (
+        !isDeepStrictEqual(original, requested) ||
+        ((!upgrade || retentionUpgrade) && !isDeepStrictEqual(previous, selected))
+      ) {
+        throw new Error("Existing immutable adoption differs; preserve its original owner.");
+      }
+      if (upgrade) {
+        const { withGatewayServiceOperationLock } =
+          await import("../daemon/service-operation-lock.js");
+        const { inspectImmutableActivationService, assertImmutableServiceProcessCurrent } =
+          await import("./update-immutable-service.js");
+        return withGatewayServiceOperationLock(
+          { OPENCLAW_SYSTEMD_UNIT: descriptor.service.unit },
+          async (assertNative) => {
+            const assertUpgrade = () => {
+              assertCurrent();
+              assertNative();
+              assertImmutableInstallRecordCurrent(existing, assertCurrent);
+              if (directoryIdentity(previous.path) !== previous.identity) {
+                throw new Error(
+                  "Previous sealed immutable generation changed; adoption is unchanged.",
+                );
+              }
+            };
+            assertUpgrade();
+            const retained =
+              previous.path === selected.path
+                ? generation
+                : await verifyImmutableGeneration(previous.path, previous.sha);
+            assertUpgrade();
+            if (
+              retained.identity !== previous.identity ||
+              retained.buildDigest !== previous.buildDigest
+            ) {
+              throw new Error(
+                "Previous sealed immutable generation changed; adoption is unchanged.",
+              );
+            }
+            const service = await inspectImmutableActivationService({
+              descriptor,
+              generationPath: selected.path,
+              assertCurrent: assertUpgrade,
+            });
+            const assertServing = () => {
+              assertUpgrade();
+              assertImmutableServiceProcessCurrent(service);
+            };
+            assertServing();
+            await installImmutableLauncher({
+              root,
+              runtimePath: runtime,
+              upgrade: {
+                version: existing.descriptor.version === 1 ? 1 : 2,
+                assertCurrent: assertServing,
+              },
+            });
+            assertServing();
+            const prepared = existing.prepared;
+            const selectedPrepared =
+              prepared?.sha === selected.sha &&
+              prepared.path === selected.path &&
+              prepared.identity === selected.identity &&
+              prepared.buildDigest === selected.buildDigest;
+            const { pointerIdentity: _pointerIdentity, ...predecessor } = previous;
+            return projectImmutableInstall(
+              updateImmutableInstallRecord(
+                existing,
+                {
+                  ...existing,
+                  descriptor,
+                  prepared: selectedPrepared ? null : prepared,
+                  ...(previous.sha !== selected.sha
+                    ? { activation: { ...existing.activation, previous: predecessor } }
+                    : {}),
+                },
+                assertServing,
+              ),
+            );
+          },
+        );
+      }
+    }
     await verifyImmutableService(descriptor.service, root, descriptor.current.path, runtime);
     assertCurrent();
     await installImmutableLauncher({ root, runtimePath: runtime });
     assertCurrent();
-    const { createImmutableInstallRecord } =
-      await import("./package-update-activation-immutable.js");
-    return project(createImmutableInstallRecord(descriptor, assertCurrent));
+    return projectImmutableInstall(
+      existing ?? createImmutableInstallRecord(descriptor, assertCurrent),
+    );
   });
 }
 
@@ -268,9 +398,10 @@ export type ImmutableUpdateResult = {
   targetSha?: string;
   steps: UpdateStepResult[];
   warnings: string[];
+  coverage?: ImmutableUpdateCoverage;
 };
 
-/** Prepare only. Pointer publication, Doctor, drain, and service activation belong to slice 2. */
+/** Build and record a sealed generation without stopping or selecting it. */
 export async function prepareImmutableUpdate(params: {
   root: string;
   sha?: string;
@@ -288,20 +419,51 @@ export async function prepareImmutableUpdate(params: {
     status: ImmutableUpdateResult["status"],
     reason?: string,
   ): ImmutableUpdateResult => ({ status, reason, installation, targetSha, steps, warnings });
+  const preparedResult = (record: ImmutableInstallRecord): ImmutableUpdateResult => ({
+    ...result("prepared", "activation unavailable"),
+    installation: projectImmutableInstall(record),
+  });
   try {
     if (params.sha !== undefined && !SHA.test(params.sha)) {
       throw new Error("--sha requires a full lowercase 40-hex commit SHA.");
     }
     const { buildUpdateCommandRunner, runStep } = await import("./update-runner-command.js");
-    const { resolveImmutableGenerationEnv, sealImmutableGeneration, verifyImmutableGeneration } =
-      await import("./update-immutable-generation.js");
+    const {
+      copyImmutableGeneration,
+      resolveImmutableGenerationEnv,
+      sealImmutableGeneration,
+      verifyImmutableGeneration,
+      assertImmutableGenerationControlVersion,
+    } = await import("./update-immutable-generation.js");
     const runner = await buildUpdateCommandRunner();
-    const defaultCommandEnv = resolveImmutableGenerationEnv(runner.defaultCommandEnv);
+    const defaultCommandEnv = resolveImmutableGenerationEnv({
+      PATH: "/usr/bin:/bin",
+      LANG: "C.UTF-8",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_NO_REPLACE_OBJECTS: "1",
+    });
     const runCommand: CommandRunner = (argv, options) =>
-      runner.runCommand(argv, {
-        ...options,
-        env: resolveImmutableGenerationEnv({ ...defaultCommandEnv, ...options.env }),
-      });
+      runner.runCommand(
+        argv[0] === "git"
+          ? [
+              "git",
+              "--no-lazy-fetch",
+              "-c",
+              "core.fsmonitor=false",
+              "-c",
+              "core.hooksPath=/dev/null",
+              "-c",
+              "submodule.recurse=false",
+              ...argv.slice(1),
+            ]
+          : argv,
+        {
+          ...options,
+          baseEnv: {},
+          env: resolveImmutableGenerationEnv({ ...defaultCommandEnv, ...options.env }),
+        },
+      );
     const timeoutMs = params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS;
     const step: StepFactory = (name, argv, cwd, env) => ({
       name,
@@ -335,18 +497,24 @@ export async function prepareImmutableUpdate(params: {
       targetSha = match[1];
     }
     if (params.dryRun) {
-      return result("dry-run", "preparation-only; activation unavailable");
+      const { inspectImmutableUpdateCoverage } = await import("./update-immutable-inspection.js");
+      return {
+        ...result("dry-run", "inspection-only; no preparation or activation"),
+        coverage: await inspectImmutableUpdateCoverage({ root: installation.root, targetSha }),
+      };
     }
     requireUpdater();
-    const { collectGitRuntimeErrors } = await import("./update-git-runtime.js");
     const { verifyImmutableService } = await import("./update-immutable-service.js");
-    const { runGitCandidatePreflight } = await import("./update-runner-git-preflight.js");
+    const { runImmutableBuild } = await import("./update-immutable-build.js");
     const { readGitTargetSchemaVersions } = await import("./update-runner-git-target.js");
     const selectedSha = targetSha;
-    return await withPreparationOwner(installation.root, async (assertOwner) => {
+    return await withImmutableUpdateOwner(installation.root, async (assertOwner) => {
       const record = await readImmutableInstallRecord(installation.root);
       if (!record) {
         throw new Error("Immutable adoption record disappeared.");
+      }
+      if (record.activation?.operation) {
+        throw new Error("Immutable activation recovery is pending; run openclaw update recover.");
       }
       const descriptor = record.descriptor;
       if ((await fs.realpath(process.execPath)) !== descriptor.runtime.path) {
@@ -356,15 +524,17 @@ export async function prepareImmutableUpdate(params: {
       }
       const assertCurrent = () => {
         assertOwner();
-        assertDescriptorCurrent(descriptor);
+        assertImmutableDescriptorCurrent(descriptor);
       };
+      const verifyService = () =>
+        verifyImmutableService(
+          descriptor.service,
+          descriptor.root,
+          descriptor.current.path,
+          descriptor.runtime.path,
+        );
       assertCurrent();
-      await verifyImmutableService(
-        descriptor.service,
-        descriptor.root,
-        descriptor.current.path,
-        descriptor.runtime.path,
-      );
+      await verifyService();
       const current = await verifyImmutableGeneration(
         descriptor.current.path,
         descriptor.current.sha,
@@ -373,28 +543,20 @@ export async function prepareImmutableUpdate(params: {
       if (current.buildDigest !== descriptor.current.buildDigest) {
         throw new Error("Current sealed generation has changed since adoption.");
       }
+      await assertImmutableGenerationControlVersion(descriptor.current.path, descriptor.version);
       assertCurrent();
       if (selectedSha === descriptor.current.sha) {
         return result("already-current");
       }
       const destination = path.join(descriptor.root, "releases", selectedSha);
-      if (
-        await fs.lstat(destination).then(
-          () => true,
-          (error: unknown) => {
-            if (hasErrnoCode(error, "ENOENT")) {
-              return false;
-            }
-            throw error;
-          },
-        )
-      ) {
+      if (await inspectEntry(destination)) {
         if (record.prepared?.sha !== selectedSha) {
           throw new Error(
             "Generation already exists without a matching preparation receipt; preserved for inspection.",
           );
         }
         const existing = await verifyImmutableGeneration(destination, selectedSha, runCommand);
+        await assertImmutableGenerationControlVersion(destination, descriptor.version);
         if (
           existing.identity !== record.prepared.identity ||
           existing.buildDigest !== record.prepared.buildDigest
@@ -404,130 +566,64 @@ export async function prepareImmutableUpdate(params: {
           );
         }
         assertCurrent();
-        return { ...result("prepared", "activation unavailable"), installation: project(record) };
+        return preparedResult(record);
       }
       assertCurrent();
       const stage = await fs.mkdtemp(path.join(descriptor.root, ".openclaw-immutable-"));
       let cleanupUncertain = false;
       try {
-        const source = path.join(stage, "source");
-        await command(
-          "immutable-clone",
-          ["git", "clone", "--no-checkout", "--single-branch", "--branch", "main", SOURCE, source],
-          stage,
-        );
-        await command(
-          "immutable-official-ancestry",
-          [
-            "git",
-            "-C",
-            source,
-            "merge-base",
-            "--is-ancestor",
-            selectedSha,
-            "refs/remotes/origin/main",
-          ],
-          source,
-        );
+        // The builder can populate its child, never pre-create the privileged copy target.
+        await fs.chmod(stage, 0o755);
+        const buildStage = path.join(stage, "build");
+        await fs.mkdir(buildStage, { mode: 0o700 });
+        await runImmutableBuild({
+          descriptor,
+          stage: buildStage,
+          sha: selectedSha,
+          timeoutMs,
+          workTimeoutMs: params.timeoutMs,
+          assertCurrent,
+          steps,
+        });
+        assertCurrent();
+        await fs.chmod(stage, 0o700);
+        // Copy only after the build cgroup is extinct. Root owns the materialized release,
+        // including files that pnpm linked to its unprivileged package store.
+        const candidate = path.join(stage, "sealed");
+        await copyImmutableGeneration(path.join(buildStage, "generation"), candidate);
+        await verifyImmutableGeneration(candidate, selectedSha, runCommand, { sealed: false });
         const metadata = await readGitTargetSchemaVersions({
           runCommand,
-          root: source,
+          root: candidate,
           revision: selectedSha,
           timeoutMs,
         });
         if (metadata.status !== "ok" || !metadata.schemaVersions) {
           throw new Error("Candidate schema metadata is unreadable.");
         }
-        let prepared: ImmutableInstallRecord["prepared"] = null;
-        const preflight = await runGitCandidatePreflight({
-          gitRoot: source,
-          artifactRoot: stage,
-          targetRevision: selectedSha,
-          refreshedRemotes: ["origin"],
-          beforeRuntimeVerified: false,
-          frozenLockfile: true,
-          needsCheckoutMain: false,
-          runCommand,
-          timeoutMs,
-          defaultCommandEnv: {
-            ...defaultCommandEnv,
-            PATH: `${path.dirname(descriptor.runtime.path)}${path.delimiter}${defaultCommandEnv?.PATH ?? process.env.PATH ?? ""}`,
-          },
-          steps,
-          step,
-          workStep: step,
-          workTimeoutMs: params.timeoutMs,
-          beforeCandidate: async (sha) => {
-            assertCurrent();
-            if (sha !== selectedSha) {
-              throw new Error("Immutable preparation cannot fall back to another commit.");
-            }
-          },
-          validateCandidate: async (root) => {
-            const errors = await collectGitRuntimeErrors({ root, sha: selectedSha });
-            if (errors.length) {
-              throw new Error(errors.join("; "));
-            }
-          },
-          prepareCandidate: async (built) => {
-            const candidate = path.join(stage, "generation");
-            await command(
-              "immutable-independent-git",
-              ["git", "clone", "--no-hardlinks", "--no-checkout", source, candidate],
-              stage,
-            );
-            await command(
-              "immutable-exact-checkout",
-              ["git", "-C", candidate, "checkout", "--detach", selectedSha],
-              candidate,
-            );
-            // Materialize pnpm hardlinks before sealing, preserving its shared store.
-            await fs.cp(built, candidate, {
-              recursive: true,
-              verbatimSymlinks: true,
-              filter: (file) => file !== path.join(built, ".git"),
-            });
-            await verifyImmutableGeneration(candidate, selectedSha, runCommand, { sealed: false });
-            await sealImmutableGeneration(candidate);
-            const verified = await verifyImmutableGeneration(candidate, selectedSha, runCommand);
-            await verifyImmutableService(
-              descriptor.service,
-              descriptor.root,
-              descriptor.current.path,
-              descriptor.runtime.path,
-            );
-            assertCurrent();
-            // Native publishers hold this lock; preexisting generations are never rebuilt.
-            if (fsSync.existsSync(destination)) {
-              throw new Error("Generation publication conflict; existing generation preserved.");
-            }
-            await fs.rename(candidate, destination);
-            requireDirectorySync(
-              await syncDirectory(path.dirname(destination)),
-              "Immutable releases",
-            );
-            assertCurrent();
-            prepared = {
-              sha: selectedSha,
-              path: destination,
-              ...verified,
-              preparedAtMs: Date.now(),
-              schemaVersions: metadata.schemaVersions,
-            };
-          },
-        });
-        if (preflight.status !== "ok" || !prepared) {
-          throw new Error(
-            preflight.status === "ok"
-              ? "Candidate preparation did not produce a generation."
-              : preflight.reason,
-          );
+        assertCurrent();
+        await assertImmutableGenerationControlVersion(candidate, descriptor.version);
+        await sealImmutableGeneration(candidate);
+        const verified = await verifyImmutableGeneration(candidate, selectedSha, runCommand);
+        await verifyService();
+        assertCurrent();
+        if (fsSync.existsSync(destination)) {
+          throw new Error("Generation publication conflict; existing generation preserved.");
         }
+        await fs.rename(candidate, destination);
+        requireDirectorySync(await syncDirectory(path.dirname(destination)), "Immutable releases");
+        const prepared = {
+          sha: selectedSha,
+          path: destination,
+          ...verified,
+          preparedAtMs: Date.now(),
+          schemaVersions: metadata.schemaVersions,
+        };
         assertCurrent();
         const { recordImmutablePreparedGeneration } =
           await import("./package-update-activation-immutable.js");
         const recorded = recordImmutablePreparedGeneration(record, prepared, assertCurrent);
-        return { ...result("prepared", "activation unavailable"), installation: project(recorded) };
+        return preparedResult(recorded);
       } catch (error) {
         cleanupUncertain = hasCommandProcessCleanupError(error);
         throw error;

@@ -4,17 +4,18 @@ import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { resolveForwardedNodeCompilerArgs } from "../bootstrap/node-compiler-args.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getSpawnBroker } from "../process/spawn-broker/context.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
-import {
-  runtimeProcessEntrypoints,
-  SQLITE_READONLY_CHILD_ARG,
-} from "./runtime-process-entrypoints.js";
+import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import type { SqliteReadOnlyOperations } from "./sqlite-readonly-operation-registry.js";
@@ -38,6 +39,7 @@ import {
   isSameSqliteReadOnlyWorkerLaunch,
   type SqliteReadOnlyWorkerLaunch,
 } from "./sqlite-readonly-worker-session.js";
+import { classifyWorkerRequest, trackWorkerRequest } from "./worker-request-diagnostics.js";
 
 const SLOW_HARDWARE_HEADROOM = 10;
 const SQLITE_INSPECTION_TIMEOUT_MS = 30_000 * SLOW_HARDWARE_HEADROOM;
@@ -228,15 +230,16 @@ export function runScopedSqliteInspection<T>(
 
 function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorkerOptions) {
   const { moduleUrl, runtimeGeneration } = captureRuntimeWorkerSource(
-    resolveRuntimeWorkerUrl(
-      options.mode === "content-version"
-        ? runtimeProcessEntrypoints.sqliteSourceRevision
-        : runtimeProcessEntrypoints.sqliteReadOnly,
+    resolveRuntimeProcessEntrypointUrl(
+      options.mode === "content-version" || options.mode === "file-generation"
+        ? "sqliteSourceRevision"
+        : "sqliteReadOnly",
     ),
   );
   return {
     runtimeGeneration,
     argv: [
+      ...resolveForwardedNodeCompilerArgs(),
       ...resolveRuntimeWorkerArgv(moduleUrl),
       SQLITE_READONLY_CHILD_ARG,
       ...sqliteReadOnlyWorkerRequestArgs(pathname, options),
@@ -253,9 +256,13 @@ export function captureSqliteReadOnlyWorkerLaunch(
   const broker = source === "canonical" ? getSpawnBroker() : undefined;
   return {
     runtimeGeneration: captureRuntimeWorkerSource(
-      resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly),
+      resolveRuntimeProcessEntrypointUrl("sqliteReadOnly"),
     ).runtimeGeneration,
-    env: { ...resolveNodeCompileCacheEnv(env) },
+    env: {
+      ...resolveNodeCompileCacheEnv(env),
+      // Auth readers pin this default explicitly; equivalent roots share one child.
+      OPENCLAW_STATE_DIR: resolveStateDir(env),
+    },
     cwd: tryProcessCwd() ?? tmpdir(),
     transport: broker ? { kind: "broker", owner: broker } : { kind: "native" },
   };
@@ -267,7 +274,7 @@ export function createScopedSqliteReadOnlyWorker(
     retainOnOperationError?: boolean;
   },
 ): ReturnType<typeof createSqliteReadOnlyWorkerSession> {
-  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
+  const workerUrl = resolveRuntimeProcessEntrypointUrl("sqliteReadOnly");
   // Launch facts are captured by the caller; the reusable child belongs to its scope.
   return runInDetachedAsyncContext(() =>
     createSqliteReadOnlyWorkerSession({
@@ -322,7 +329,7 @@ export function runSqliteReadOnlyWorker(
 export function runSqliteReadOnlyWorker(
   pathname: string,
   options: {
-    mode: "sync" | "async";
+    mode: "sync" | "async" | "file-generation";
     stagingRoot?: string;
     signal?: AbortSignal;
   },
@@ -337,74 +344,70 @@ export function runSqliteReadOnlyWorker(
 ): Promise<string[]>;
 export function runSqliteReadOnlyWorker(
   pathname: string,
-  options: SqliteReadOnlyWorkerOptions,
+  inputOptions: SqliteReadOnlyWorkerOptions,
 ): Promise<SqliteReadOnlyWorkerValue> {
+  const options: SqliteReadOnlyWorkerOptions =
+    (inputOptions.mode === "auth-profile-rows" || inputOptions.mode === "operation") &&
+    isArtifactPreservingStateRead("agent", pathname)
+      ? { ...inputOptions, artifactPreserving: true }
+      : inputOptions;
   if (options.mode === "reclaim") {
     // Shared reclamation belongs to the allocation owner, not its first caller's scope.
     return readOnlyWorkerScope.exit(() => runSqliteReadOnlyWorkerOnce(pathname, options));
   }
-  const scope = readOnlyWorkerScope.getStore();
-  if (!scope) {
-    return runSqliteReadOnlyWorkerOnce(pathname, options);
-  }
-  if (!scope.active) {
-    return Promise.reject(new Error("SQLite read-only worker scope closed"));
-  }
-  const scopedOptions = {
-    ...options,
-    signal: options.signal
-      ? AbortSignal.any([options.signal, scope.controller.signal])
-      : scope.controller.signal,
-  };
-  // Native backups can stall with persistent IPC on Node 26. Only artifact-
-  // preserving raw sync reads reuse a child; backups and concurrent readers
-  // stay one-shot, preserving POSIX source-lock isolation.
-  const useScopedWorker = options.mode === "sync" && !scope.busy;
-  if (useScopedWorker) {
-    scope.busy = true;
-  }
-  const readRequest =
-    scopedOptions.mode === "auth-profile-rows" || scopedOptions.mode === "operation"
-      ? {
-          options: scopedOptions,
-          launch: captureSqliteReadOnlyWorkerLaunch(scopedOptions.env, scopedOptions.source),
+  return runScopedSqliteInspection(options.signal, (signal) => {
+    const scope = readOnlyWorkerScope.getStore();
+    if (!scope) {
+      return runSqliteReadOnlyWorkerOnce(pathname, options);
+    }
+    const scopedOptions = { ...options, signal };
+    // Native backups can stall with persistent IPC on Node 26. Only artifact-
+    // preserving raw sync reads reuse a child; backups and concurrent readers
+    // stay one-shot, preserving POSIX source-lock isolation.
+    const useScopedWorker = options.mode === "sync" && !scope.busy;
+    if (useScopedWorker) {
+      scope.busy = true;
+    }
+    if (scopedOptions.mode === "auth-profile-rows" || scopedOptions.mode === "operation") {
+      const launch = captureSqliteReadOnlyWorkerLaunch(scopedOptions.env, scopedOptions.source);
+      const observation = trackSqliteRead(scopedOptions);
+      const operation = scope.readTail.then(() =>
+        runSqliteScopedReadWorker(pathname, scopedOptions, launch, scope, observation),
+      );
+      // Source locks are process-owned. Keep admitted reads serial even for different databases.
+      scope.readTail = runInDetachedAsyncContext(() =>
+        operation.then(
+          () => {},
+          () => {},
+        ),
+      );
+      return operation;
+    }
+    return (async () => {
+      if (!useScopedWorker) {
+        return runSqliteReadOnlyWorkerOnce(pathname, scopedOptions);
+      }
+      try {
+        const launch = captureSqliteReadOnlyWorkerLaunch();
+        if (!scope.worker?.compatible(launch)) {
+          await scope.worker?.close();
+          scopedOptions.signal?.throwIfAborted();
+          scope.worker = createScopedSqliteReadOnlyWorker(launch);
         }
-      : undefined;
-  const operation = readRequest
-    ? scope.readTail.then(() =>
-        runSqliteScopedReadWorker(pathname, readRequest.options, readRequest.launch, scope),
-      )
-    : (async () => {
-        if (!useScopedWorker) {
-          return runSqliteReadOnlyWorkerOnce(pathname, scopedOptions);
-        }
-        try {
-          const launch = captureSqliteReadOnlyWorkerLaunch();
-          if (!scope.worker?.compatible(launch)) {
-            await scope.worker?.close();
-            scopedOptions.signal.throwIfAborted();
-            scope.worker = createScopedSqliteReadOnlyWorker(launch);
-          }
-          return await scope.worker.run(pathname, scopedOptions);
-        } finally {
-          scope.busy = false;
-        }
-      })();
-  if (readRequest) {
-    // Source locks are process-owned. Keep admitted reads serial even for different databases.
-    scope.readTail = runInDetachedAsyncContext(() =>
-      operation.then(
-        () => {},
-        () => {},
-      ),
-    );
-  }
-  scope.pending.add(operation);
-  void operation.then(
-    () => scope.pending.delete(operation),
-    () => scope.pending.delete(operation),
+        return await scope.worker.run(pathname, scopedOptions);
+      } finally {
+        scope.busy = false;
+      }
+    })();
+  });
+}
+
+function trackSqliteRead(options: SqliteAuthProfileReadOptions | SqliteReadOnlyOperationOptions) {
+  return trackWorkerRequest(
+    "sqlite_read",
+    classifyWorkerRequest(options.mode === "operation" ? options.command.type : options.mode),
+    options.signal,
   );
-  return operation;
 }
 
 async function runSqliteScopedReadWorker(
@@ -412,66 +415,66 @@ async function runSqliteScopedReadWorker(
   options: SqliteAuthProfileReadOptions | SqliteReadOnlyOperationOptions,
   launch: SqliteReadOnlyWorkerLaunch,
   scope?: SqliteReadOnlyWorkerScope,
+  observation = trackSqliteRead(options),
 ): Promise<SqliteReadOnlyWorkerValue> {
-  options.signal?.throwIfAborted();
-  if (
-    scope?.readWorker &&
-    (scope.readWorker.source !== options.source ||
-      !isSameSqliteReadOnlyWorkerLaunch(scope.readWorker.launch, launch) ||
-      scope.readWorker.session.isRetired())
-  ) {
-    await scope.readWorker.session.close();
-    scope.readWorker = undefined;
+  try {
     options.signal?.throwIfAborted();
-  }
-  let worker = scope?.readWorker?.session ?? createScopedSqliteReadOnlyWorker(launch);
-  while (true) {
-    if (scope) {
-      // A confirmed native replacement still belongs to this captured broker request.
-      scope.readWorker = { source: options.source, launch, session: worker };
-    }
-    let outcome: { value: SqliteReadOnlyWorkerValue } | { error: unknown };
-    try {
-      const value = await worker.run(pathname, options);
+    observation.started();
+    if (
+      scope?.readWorker &&
+      (scope.readWorker.source !== options.source ||
+        !isSameSqliteReadOnlyWorkerLaunch(scope.readWorker.launch, launch) ||
+        scope.readWorker.session.isRetired())
+    ) {
+      await scope.readWorker.session.close();
+      scope.readWorker = undefined;
       options.signal?.throwIfAborted();
-      outcome = { value };
-    } catch (error) {
-      outcome = { error };
     }
-    let cleanupFailure: { error: unknown } | undefined;
-    if (!scope || "error" in outcome) {
+    let worker = scope?.readWorker?.session ?? createScopedSqliteReadOnlyWorker(launch);
+    while (true) {
+      if (scope) {
+        // A confirmed native replacement still belongs to this captured broker request.
+        scope.readWorker = { source: options.source, launch, session: worker };
+      }
+      let value: SqliteReadOnlyWorkerValue;
       try {
-        await worker.close();
-        if (scope) {
-          scope.readWorker = undefined;
-        }
-      } catch (error) {
-        cleanupFailure = { error };
-      }
-    }
-    if (cleanupFailure) {
-      if ("error" in outcome) {
-        throw new AggregateError(
-          [outcome.error, cleanupFailure.error],
-          options.mode === "auth-profile-rows"
-            ? "Auth read and child cleanup failed"
-            : "SQLite read and child cleanup failed",
-          { cause: outcome.error },
-        );
-      }
-      throw cleanupFailure.error;
-    }
-    if ("error" in outcome) {
-      if (worker.notStarted && hasErrnoCode(outcome.error, "ERR_SPAWN_BROKER_UNAVAILABLE")) {
+        value = await worker.run(pathname, options);
         options.signal?.throwIfAborted();
-        // A confirmed refusal has no child to replay. Preserve the captured launch context.
-        worker = worker.createNativeReplacement();
-        continue;
+      } catch (error) {
+        let cleanupFailure: { error: unknown } | undefined;
+        try {
+          await worker.close();
+          if (scope) {
+            scope.readWorker = undefined;
+          }
+        } catch (cleanupError) {
+          cleanupFailure = { error: cleanupError };
+        }
+        if (cleanupFailure) {
+          throw new AggregateError(
+            [error, cleanupFailure.error],
+            options.mode === "auth-profile-rows"
+              ? "Auth read and child cleanup failed"
+              : "SQLite read and child cleanup failed",
+            { cause: error },
+          );
+        }
+        if (worker.notStarted && hasErrnoCode(error, "ERR_SPAWN_BROKER_UNAVAILABLE")) {
+          options.signal?.throwIfAborted();
+          // A confirmed refusal has no child to replay. Preserve the captured launch context.
+          worker = worker.createNativeReplacement();
+          continue;
+        }
+        throw error;
       }
-      throw outcome.error;
+      if (!scope) {
+        await worker.close();
+      }
+      options.signal?.throwIfAborted();
+      return value;
     }
-    options.signal?.throwIfAborted();
-    return outcome.value;
+  } finally {
+    observation.completed();
   }
 }
 
@@ -534,11 +537,19 @@ export function runOneShotSqliteInspection<T>(params: {
   cwd?: string;
   stoppedFailure: string;
   interrupt?: (child: ChildProcess) => void;
-  read: (output: SqliteReadOnlyWorkerOutput, deadlineReached: boolean) => T;
+  read: (
+    output: Extract<SqliteReadOnlyWorkerOutput, { kind: "launched" }>,
+    deadlineReached: boolean,
+  ) => T;
 }): Promise<T> {
   const { timeoutMs, size } = readSqliteInspectionBudget(params.operation, params.pathname);
   return new Promise<T>((resolve, reject) => {
-    let output: SqliteReadOnlyWorkerOutput = { stderr: "", stdout: "" };
+    let output: Extract<SqliteReadOnlyWorkerOutput, { kind: "launched" }> = {
+      kind: "launched",
+      stderr: "",
+      stdout: "",
+      status: null,
+    };
     let stopped = false;
     let deadlineReached = false;
     const child = execFile(
@@ -558,6 +569,8 @@ export function runOneShotSqliteInspection<T>(params: {
           deadlineReached = true;
         }
         output = {
+          kind: "launched",
+          status: child.exitCode,
           failure: error
             ? stopped
               ? params.stoppedFailure
@@ -568,6 +581,7 @@ export function runOneShotSqliteInspection<T>(params: {
             : undefined,
           stderr,
           stdout,
+          cause: error ?? undefined,
         };
       },
     );
@@ -621,7 +635,7 @@ export function runOneShotSqliteInspection<T>(params: {
 export function runSqliteReadOnlyWorkerSync(
   pathname: string,
   stagingRoot: string | undefined,
-  mode: "sync" | "content-version" = "sync",
+  mode: "sync" | "content-version" | "file-generation" = "sync",
 ): string {
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
   const started = log.isEnabled("trace") ? performance.now() : undefined;
@@ -639,15 +653,26 @@ export function runSqliteReadOnlyWorkerSync(
   if (started !== undefined) {
     log.trace(`SQLite read-only snapshot child durationMs=${performance.now() - started}`);
   }
-  const failure = result.error
-    ? hasErrnoCode(result.error, "ETIMEDOUT")
-      ? sqliteInspectionTimeoutError("read-only snapshot", pathname, timeoutMs, size).message
-      : `failed to start: ${result.error.message}`
-    : result.status === 0
-      ? undefined
-      : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`;
-  return readSqliteReadOnlyWorkerValue(
-    { failure, stderr: result.stderr, stdout: result.stdout },
-    mode,
-  );
+  // A spawnSync error does not carry a readable result; Node may not have created its pipes.
+  const output: SqliteReadOnlyWorkerOutput = result.error
+    ? {
+        kind: "launch-failed",
+        error: new Error(
+          hasErrnoCode(result.error, "ETIMEDOUT")
+            ? sqliteInspectionTimeoutError("read-only snapshot", pathname, timeoutMs, size).message
+            : `SQLite read-only worker failed to start for ${pathname}: ${result.error.message}`,
+          { cause: result.error },
+        ),
+      }
+    : {
+        kind: "launched",
+        stdout: result.stdout,
+        stderr: result.stderr,
+        status: result.status,
+        failure:
+          result.status === 0
+            ? undefined
+            : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`,
+      };
+  return readSqliteReadOnlyWorkerValue(output, mode);
 }

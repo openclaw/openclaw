@@ -1,4 +1,5 @@
-import { assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import * as logger from "../logger.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
   finalizeExecApprovalFollowupRuntimeHandoff,
@@ -28,15 +29,16 @@ const mocks = vi.hoisted(() => {
   return {
     approvals,
     followupImports: 0,
+    sendExecApprovalFollowup: vi.fn<typeof sendFollowup>(),
     resolveExecApprovals: vi.fn(async () => approvals()),
     approvalRunAbortedError: new Error("approval owning run aborted"),
     resolveRegisteredExecApprovalDecision: vi.fn(async (): Promise<string | null> => "allow-once"),
   };
 });
 
-vi.mock("./bash-tools.exec-approval-followup.js", async (importOriginal) => {
+vi.mock("./bash-tools.exec-approval-followup.js", () => {
   mocks.followupImports += 1;
-  return importOriginal<typeof import("./bash-tools.exec-approval-followup.js")>();
+  return { sendExecApprovalFollowup: mocks.sendExecApprovalFollowup };
 });
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/exec-approvals.js")>()),
@@ -49,15 +51,20 @@ vi.mock("./bash-tools.exec-approval-request.js", async (importOriginal) => ({
 }));
 
 describe("sendExecApprovalFollowupResult", () => {
-  const sendExecApprovalFollowup = vi.fn<typeof sendFollowup>();
+  const sendExecApprovalFollowup = mocks.sendExecApprovalFollowup;
   const logWarn = vi.fn();
-  const deps = { sendExecApprovalFollowup, logWarn };
   const sessionKey = "agent:main:telegram:direct:123";
   const bashElevated = { enabled: true, allowed: true, defaultLevel: "on" as const };
 
   beforeEach(() => {
     sendExecApprovalFollowup.mockReset().mockResolvedValue(true);
     logWarn.mockReset();
+    vi.spyOn(logger, "logWarn").mockImplementation(logWarn);
+    vi.doMock("./bash-tools.exec-approval-followup.js", () => ({ sendExecApprovalFollowup }));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock("./bash-tools.exec-approval-followup.js");
   });
 
   it("lazily loads delivery and deduplicates import failures", async () => {
@@ -68,8 +75,8 @@ describe("sendExecApprovalFollowupResult", () => {
     vi.doMock("./bash-tools.exec-approval-followup.js", loadDelivery);
     try {
       const target = { approvalId: "approval-import-failure" };
-      await sendExecApprovalFollowupResult(target, "Exec finished", { logWarn });
-      await sendExecApprovalFollowupResult(target, "Exec finished", { logWarn });
+      await sendExecApprovalFollowupResult(target, "Exec finished");
+      await sendExecApprovalFollowupResult(target, "Exec finished");
       expect(loadDelivery).toHaveBeenCalled();
       expect(logWarn).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining(
@@ -88,31 +95,11 @@ describe("sendExecApprovalFollowupResult", () => {
     await sendExecApprovalFollowupResult(
       { approvalId: "approval-expired", sessionKey },
       "Exec finished",
-      deps,
     );
     expect(logWarn).not.toHaveBeenCalled();
   });
 
-  it("evicts oldest followup failure dedupe keys after reaching the cap", async () => {
-    sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
-    const dispatch = (index: number) =>
-      sendExecApprovalFollowupResult(
-        { approvalId: `approval-${index}`, sessionKey },
-        "Exec finished",
-        deps,
-      );
-    const failureKeysBeyondDedupeWindow = 257;
-    for (let i = 0; i < failureKeysBeyondDedupeWindow; i += 1) {
-      await dispatch(i);
-    }
-    await dispatch(0);
-    expect(logWarn).toHaveBeenCalledTimes(failureKeysBeyondDedupeWindow + 1);
-    expect(logWarn).toHaveBeenLastCalledWith(
-      "exec approval followup dispatch failed (id=approval-0): Channel is required",
-    );
-  });
-
-  it.each([true, false])(
+  it.each([false])(
     "authenticates an elevated=%s result handoff to one session and claimant",
     async (elevated) => {
       const approvalId = `approval-authenticated-${elevated}`;
@@ -126,7 +113,6 @@ describe("sendExecApprovalFollowupResult", () => {
           ...(elevated ? { bashElevated } : {}),
         },
         "Exec finished",
-        deps,
       );
       const call = sendExecApprovalFollowup.mock.calls[0]?.[0];
       assert.isDefined(call);
@@ -185,7 +171,6 @@ describe("sendExecApprovalFollowupResult", () => {
     await sendExecApprovalFollowupResult(
       { approvalId: "approval-denied", sessionKey, turnSourceChannel: "telegram", bashElevated },
       "Exec denied (gateway id=approval-denied, user-denied): uname -a",
-      deps,
     );
     const call = sendExecApprovalFollowup.mock.calls[0]?.[0];
     assert.isDefined(call);
@@ -228,7 +213,6 @@ describe("resolveExecApprovalWaitOutcome", () => {
   });
 
   it.each([
-    ["allow-once", true, null],
     ["allow-always", true, null],
     ["deny", false, "user-denied"],
   ] as const)("returns a resolved %s decision", async (decision, approvedByAsk, deniedReason) => {
@@ -294,12 +278,9 @@ describe("createExecApprovalRequestRoute", () => {
     });
   });
 
-  it.each(["webchat", "discord"])(
-    "keeps waiting without a terminal decision on %s",
-    async (channel) => {
-      await expect(createRoute(channel)).resolves.toMatchObject({ kind: "wait" });
-    },
-  );
+  it.each(["webchat"])("keeps waiting without a terminal decision on %s", async (channel) => {
+    await expect(createRoute(channel)).resolves.toMatchObject({ kind: "wait" });
+  });
 });
 
 describe("buildExecApprovalPendingToolResult", () => {

@@ -234,16 +234,13 @@ export function outboxStorageScope(host: RecoveryHost): string | undefined {
     ? JSON.stringify([host.settings?.gatewayUrl?.trim() || "default", owner])
     : undefined;
 }
-export function observeOutboxRecoveryOwner(host: RecoveryHost): string | undefined {
-  return readOfflineStorageScope(host);
-}
 
 /** Explicit legacy review may assign unowned input, but never another account's input. */
 export function outboxPayloadCanRecover(host: RecoveryHost, item: ChatQueueItem): boolean {
   return (
     (!item.storageScope || item.storageScope === outboxStorageScope(host)) &&
     (!item.attachmentPayload ||
-      item.attachmentPayload.recoveryScope === observeOutboxRecoveryOwner(host))
+      item.attachmentPayload.recoveryScope === readOfflineStorageScope(host))
   );
 }
 

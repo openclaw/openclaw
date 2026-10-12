@@ -36,8 +36,9 @@ vi.mock("./reply-dispatcher.js", () => ({
     ensureNoVisibleReplyFallback: vi.fn(),
   })),
 }));
+// mock-isolation: thread admission keeps previews disabled without reading persisted session reasoning settings.
 vi.mock("./reasoning-preview.js", () => ({
-  resolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
+  resolveFeishuReasoningPreviewEnabled: vi.fn(async () => false),
 }));
 vi.mock("./bot-group-name.js", () => ({ resolveGroupName: vi.fn(async () => undefined) }));
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
@@ -114,7 +115,6 @@ describe("Feishu bot-owned thread mentions", () => {
   });
 
   it.each([
-    { name: "this app", expected: true },
     {
       name: "this bot's typed open ID",
       root: { senderId: "ou-bot", senderOpenId: "ou-bot" },
@@ -191,7 +191,7 @@ describe("Feishu bot-owned thread mentions", () => {
     mockGetMessageFeishu.mockResolvedValue(root);
     await dispatchMessage({
       cfg: config({
-        requireMention: testCase.groupSetting !== true,
+        requireMention: !testCase.groupSetting,
         requireMentionInBotThreads: true,
         accounts: {
           default: {

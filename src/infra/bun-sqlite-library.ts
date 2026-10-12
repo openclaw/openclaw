@@ -5,6 +5,7 @@ import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worke
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { probeSqliteNativeClose } from "./bun-sqlite-close-probe.js";
 import { parseDiagnosticEnvFlags } from "./diagnostic-flags-env.js";
+import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 
 export type SqliteLibrarySelection =
@@ -20,23 +21,15 @@ type SelectionOptions = { explicitPath?: string };
 type LibraryProbe = { version: string; extensionLoadingSupported: boolean };
 const WORKER_SELECTION_KEY = "openclaw.bunSqliteLibrarySelection";
 const WORKER_CAPABILITIES_KEY = "openclaw.sqliteRuntimeCapabilities";
+export const SQLITE_NATIVE_RUNTIME_ADMISSION_KEY = "openclaw.sqliteNativeRuntimeAdmission";
+export const SQLITE_CANONICAL_DEFINITIONS_KEY =
+  "openclaw.agentCanonicalValidationSchemaDefinitions";
+export const SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY = "openclaw.sqliteExpectedSchemaContracts.v1";
 
 type SqliteCloseProbeResult = Awaited<ReturnType<typeof probeSqliteNativeClose>>;
 export type SqliteRuntimeCapabilities = SqliteCloseProbeResult & Readonly<{ decided: boolean }>;
 
-type CapabilityDependencies = {
-  isBun: boolean;
-  platform: string;
-  isMainThread: boolean;
-  inherited?: SqliteRuntimeCapabilities;
-  select: () => unknown;
-  probe: () => Promise<SqliteCloseProbeResult>;
-  publish: (value: SqliteRuntimeCapabilities) => void;
-  warn: (message: string) => void;
-  forceConservative?: boolean;
-};
-
-function createCapabilities(deps: CapabilityDependencies) {
+function createCapabilities(select: () => unknown) {
   let decision: SqliteRuntimeCapabilities | undefined;
   let initialization: Promise<SqliteRuntimeCapabilities> | undefined;
   let earlyTopologyOwners = 0;
@@ -48,10 +41,11 @@ function createCapabilities(deps: CapabilityDependencies) {
   function decide(value: SqliteRuntimeCapabilities): SqliteRuntimeCapabilities {
     if (!decision) {
       decision = Object.freeze(value);
-      deps.publish(decision);
+      setEnvironmentData(WORKER_CAPABILITIES_KEY, decision);
       if (decision.explicitSqliteCloseReleasesNativeResources && earlyTopologyOwners > 0) {
-        deps.warn(
+        process.emitWarning(
           `SQLite close became capable after ${earlyTopologyOwners} topology owners were created; those owners remain conservative`,
+          { code: "SQLITE_EARLY_TOPOLOGY" },
         );
       }
     }
@@ -64,21 +58,22 @@ function createCapabilities(deps: CapabilityDependencies) {
     if (decision) {
       return decision;
     }
-    if (!deps.isBun) {
+    if (!process.versions.bun) {
       return decide({
         explicitSqliteCloseReleasesNativeResources: true,
         decided: true,
         reason: "Node runtime",
       });
     }
-    if (deps.platform === "win32") {
+    if (process.platform === "win32") {
       return decide(conservative("Bun Windows native-close conformance is not qualified"));
     }
-    if (!deps.isMainThread) {
+    if (!isMainThread) {
       return decide({
         ...pending,
         reason: "Parent did not complete SQLite close admission",
-        ...deps.inherited,
+        // SAFETY: This owner publishes the structured-cloned fact inherited by workers.
+        ...(getEnvironmentData(WORKER_CAPABILITIES_KEY) as SqliteRuntimeCapabilities | undefined),
       });
     }
     return undefined;
@@ -96,39 +91,32 @@ function createCapabilities(deps: CapabilityDependencies) {
     },
     initialize() {
       initialization ??= (async () => {
-        deps.select();
+        select();
         const ready = settled();
         if (ready) {
           return ready;
         }
         try {
-          if (deps.forceConservative) {
+          // Wildcard diagnostics must not change the native retirement policy.
+          if (
+            parseDiagnosticEnvFlags(process.env.OPENCLAW_DIAGNOSTICS).flags.some(
+              (flag) => flag.toLowerCase() === "sqlite.close.conservative",
+            )
+          ) {
             return decide(
               conservative("SQLite close optimization disabled by internal diagnostic flag"),
             );
           }
-          return decide({ ...(await deps.probe()), decided: true });
+          const { probeSqliteNativeClose } = await import("./bun-sqlite-close-probe.js");
+          return decide({ ...(await probeSqliteNativeClose()), decided: true });
         } catch (error) {
-          return decide(conservative(`SQLite close probe failed: ${String(error)}`));
+          return decide(conservative(`SQLite close check failed: ${String(error)}`));
         }
       })();
       return initialization;
     },
   };
 }
-
-type CapabilityOptions = {
-  /** @internal Isolated admission and publication dependencies for boundary tests. */
-  internals: CapabilityDependencies & { owner?: ReturnType<typeof createCapabilities> };
-};
-type SelectionDependencies = {
-  isBun: boolean;
-  platform: string;
-  env: NodeJS.ProcessEnv;
-  exists: (path: string) => boolean;
-  probe: (path: string) => LibraryProbe;
-  select: (path: string) => void;
-};
 
 // Bun is optional: describe only the FFI symbols used at this native boundary.
 type BunFfi = {
@@ -173,7 +161,7 @@ function selectLibrary(path: string): void {
   Database.setCustomSQLite(path);
 }
 
-function createSelector(deps: SelectionDependencies) {
+function createSelector() {
   let selection: SqliteLibrarySelection | undefined;
   let failure: Error | undefined;
   return (options: SelectionOptions = {}): SqliteLibrarySelection => {
@@ -184,14 +172,14 @@ function createSelector(deps: SelectionDependencies) {
       return selection;
     }
     const override =
-      options.explicitPath ?? (deps.env.OPENCLAW_SQLITE_LIBRARY?.trim() || undefined);
-    if (!deps.isBun || deps.platform !== "darwin") {
+      options.explicitPath ?? (process.env.OPENCLAW_SQLITE_LIBRARY?.trim() || undefined);
+    if (!process.versions.bun || process.platform !== "darwin") {
       selection = override
         ? { source: "runtime", ignoredOverride: "OPENCLAW_SQLITE_LIBRARY requires Bun on macOS" }
         : { source: "runtime" };
       return selection;
     }
-    const prefix = deps.env.HOMEBREW_PREFIX?.trim();
+    const prefix = process.env.HOMEBREW_PREFIX?.trim();
     const candidates =
       override !== undefined
         ? [override]
@@ -203,15 +191,18 @@ function createSelector(deps: SelectionDependencies) {
               "/opt/local/lib/libsqlite3.dylib",
             ]),
           ];
+    const unusable: string[] = [];
     for (const path of candidates) {
       let probe: LibraryProbe;
+      let present = true;
       try {
         // dlopen decides loadability: Apple's SQLite lives in the dyld shared cache with no
         // file on disk, so a stat-first check would hide its real defect (OMIT_LOAD_EXTENSION).
         try {
-          probe = deps.probe(path);
+          probe = probeLibrary(path);
         } catch (error) {
-          throw deps.exists(path) ? error : new Error("missing file", { cause: error });
+          present = existsSync(path);
+          throw present ? error : new Error("missing file", { cause: error });
         }
         if (!isSqliteWalResetSafeVersion(probe.version)) {
           throw new Error(`SQLite version ${probe.version} below the WAL safety floor`);
@@ -221,6 +212,10 @@ function createSelector(deps: SelectionDependencies) {
         }
       } catch (error) {
         if (override === undefined) {
+          // Absent candidates are ordinary; present ones explain the refusal below.
+          if (present) {
+            unusable.push(`${path} (${error instanceof Error ? error.message : String(error)})`);
+          }
           continue;
         }
         failure = selectionError(path, error);
@@ -230,7 +225,7 @@ function createSelector(deps: SelectionDependencies) {
         // Never try another candidate after committing: Bun's hook is one-shot, even on failure.
         // Discovery trusts the user-writable prefix like the Homebrew Bun binary itself;
         // an override is operator-specified code, like memory.search.store.vector.extensionPath.
-        deps.select(path);
+        selectLibrary(path);
       } catch (error) {
         failure = selectionError(path, error);
         throw failure;
@@ -243,8 +238,15 @@ function createSelector(deps: SelectionDependencies) {
       };
       return selection;
     }
-    selection = { source: "runtime" };
-    return selection;
+    // Bun's macOS runtime library is Apple's patched system SQLite. Its read-only
+    // connections fail same-process RESERVED locks and sidecar-less WAL opens.
+    failure = new Error(
+      `No supported SQLite library for Bun on macOS (${process.arch})` +
+        (unusable.length > 0 ? `; unusable: ${unusable.join(", ")}` : "") +
+        ". Apple's system SQLite fails OpenClaw's read-only database connections. " +
+        `Install one with brew install sqlite, or set OPENCLAW_SQLITE_LIBRARY to a libsqlite3.dylib built for ${process.arch}.`,
+    );
+    throw failure;
   };
 }
 
@@ -291,14 +293,7 @@ function createRuntimeSelector(): ReturnType<typeof createSelector> {
   const isBun = Boolean(process.versions.bun);
   const sharedLibrary = isBun && process.platform === "darwin";
   const inherited = sharedLibrary && !isMainThread ? inheritedSelection() : undefined;
-  const select = createSelector({
-    isBun,
-    platform: process.platform,
-    env: process.env,
-    exists: existsSync,
-    probe: probeLibrary,
-    select: selectLibrary,
-  });
+  const select = createSelector();
   let published = false;
   return (options?: SelectionOptions) => {
     const selection = inherited ?? select(options);
@@ -320,72 +315,45 @@ function runtimeSelector(): ReturnType<typeof createSelector> & {
   );
 }
 
-function capabilities(options?: CapabilityOptions) {
-  const deps = options?.internals;
-  if (deps) {
-    return (deps.owner ??= createCapabilities(deps));
-  }
+function capabilities() {
   // Retained updater generations still call this same library-selection owner.
   const select = runtimeSelector();
-  return (select.capabilities ??= createCapabilities({
-    isBun: Boolean(process.versions.bun),
-    platform: process.platform,
-    isMainThread,
-    get inherited() {
-      // SAFETY: Only this owner publishes this key; workers receive a structured clone of its fact.
-      return getEnvironmentData(WORKER_CAPABILITIES_KEY) as SqliteRuntimeCapabilities | undefined;
-    },
-    select,
-    probe: async () => (await import("./bun-sqlite-close-probe.js")).probeSqliteNativeClose(),
-    publish: (value) => setEnvironmentData(WORKER_CAPABILITIES_KEY, value),
-    warn: (message) => process.emitWarning(message, { code: "SQLITE_EARLY_TOPOLOGY" }),
-    // Exact internal flag only: enabling diagnostic wildcards must not alter worker policy.
-    get forceConservative() {
-      return parseDiagnosticEnvFlags(process.env.OPENCLAW_DIAGNOSTICS).flags.some(
-        (flag) => flag.toLowerCase() === "sqlite.close.conservative",
-      );
-    },
-  }));
+  return (select.capabilities ??= createCapabilities(select));
 }
 
-export function getSqliteRuntimeCapabilities(
-  options?: CapabilityOptions,
-): SqliteRuntimeCapabilities {
-  return capabilities(options).get();
+export function getSqliteRuntimeCapabilities(): SqliteRuntimeCapabilities {
+  return capabilities().get();
 }
 
 /** A topology owner keeps this snapshot for placement and paired native retirement. */
-export function captureSqliteWorkerClosePolicy(options?: CapabilityOptions): boolean {
-  return capabilities(options).capture();
+export function captureSqliteWorkerClosePolicy(): boolean {
+  return capabilities().capture();
 }
 
 /** Retained supervisors forward the caller's current facts when creating each descendant. */
 export function captureSqliteWorkerEnvironmentData(): ReadonlyArray<
-  readonly [string, SqliteLibrarySelection | SqliteRuntimeCapabilities]
+  readonly [string, Parameters<typeof setEnvironmentData>[1]]
 > {
   return [
     [WORKER_SELECTION_KEY, ensureSqliteLibrarySelected()],
     [WORKER_CAPABILITIES_KEY, getSqliteRuntimeCapabilities()],
+    // Opaque owner facts include absence, which clears a retained carrier's previous snapshot.
+    [SQLITE_NATIVE_RUNTIME_ADMISSION_KEY, getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY)],
+    [SQLITE_CANONICAL_DEFINITIONS_KEY, getEnvironmentData(SQLITE_CANONICAL_DEFINITIONS_KEY)],
+    [
+      SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY,
+      getEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY),
+    ],
+    [SQLITE_DATABASE_ADMISSIONS_KEY, getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY)],
   ];
 }
 
 /** Await at runtime admission, before any consumer chooses a worker topology. */
-export function initializeSqliteRuntimeCapabilities(
-  options?: CapabilityOptions,
-): Promise<SqliteRuntimeCapabilities> {
-  return capabilities(options).initialize();
+export function initializeSqliteRuntimeCapabilities(): Promise<SqliteRuntimeCapabilities> {
+  return capabilities().initialize();
 }
 
 /** Select once, before any SQLite open; shared across CLI and bundled SDK module graphs. */
-export function ensureSqliteLibrarySelected(
-  options?: SelectionOptions & {
-    /** @internal Isolated native dependencies and memoization for boundary tests. */
-    internals?: SelectionDependencies & { selector?: ReturnType<typeof createSelector> };
-  },
-): SqliteLibrarySelection {
-  const dependencies = options?.internals;
-  const select = dependencies
-    ? (dependencies.selector ??= createSelector(dependencies))
-    : runtimeSelector();
-  return select(options);
+export function ensureSqliteLibrarySelected(options?: SelectionOptions): SqliteLibrarySelection {
+  return runtimeSelector()(options);
 }

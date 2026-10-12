@@ -72,6 +72,7 @@ export type SqliteWalMaintenance = {
   maintainPeriodic?: (
     request: SqliteWalPeriodicRequest,
     admit?: (stage: "transaction" | "commit") => void,
+    maintain?: () => void,
   ) => SqliteWalPeriodicResult;
   reclaimFreePages: (options?: SqliteWalReclamationOptions) => SqliteWalReclamationResult;
   /** Inspect this retained WAL connection, independently of checkpoint completion elsewhere. */
@@ -329,6 +330,7 @@ export function configureSqliteWalMaintenance(
   const maintainPeriodic = (
     request: SqliteWalPeriodicRequest,
     admit?: (stage: "transaction" | "commit") => void,
+    maintain?: () => void,
   ): SqliteWalPeriodicResult => {
     if (invalidated) {
       return { reclaimedPages: 0 };
@@ -341,22 +343,29 @@ export function configureSqliteWalMaintenance(
     const runTickCheckpoint = (mode: SqliteWalCheckpointMode) =>
       checkpointOwner.checkpoint(mode, { quiet });
     runMaintenance(() => {
-      const reclaimed = reclaimSqliteWalFreePages(db, runTickCheckpoint, {
-        checkpointMode: request.checkpointMode,
-        maxPages: request.maxPages,
-        beforeMutation: () => admit?.("transaction"),
-        onCommit: () => admit?.("commit"),
-      });
-      const checkpointed = reclaimed.checkpointCompleted;
-      if (
-        checkpointed &&
-        reclaimed.freePagesBefore !== null &&
-        reclaimed.remainingFreePages !== null
-      ) {
-        reclaimedPages = Math.min(
-          reclaimed.vacuumPagesRequested,
-          reclaimed.freePagesBefore - reclaimed.remainingFreePages,
-        );
+      let checkpointed: boolean;
+      if (quiet && request.checkpointMode === "PASSIVE") {
+        // SQLite never calls the busy handler for PASSIVE; this pass cannot vacuum.
+        admit?.("transaction");
+        checkpointed = runTickCheckpoint("PASSIVE");
+      } else {
+        const reclaimed = reclaimSqliteWalFreePages(db, runTickCheckpoint, {
+          checkpointMode: request.checkpointMode,
+          maxPages: request.maxPages,
+          beforeMutation: () => admit?.("transaction"),
+          onCommit: () => admit?.("commit"),
+        });
+        checkpointed = reclaimed.checkpointCompleted;
+        if (
+          checkpointed &&
+          reclaimed.freePagesBefore !== null &&
+          reclaimed.remainingFreePages !== null
+        ) {
+          reclaimedPages = Math.min(
+            reclaimed.vacuumPagesRequested,
+            reclaimed.freePagesBefore - reclaimed.remainingFreePages,
+          );
+        }
       }
       if (
         checkpointed &&
@@ -367,6 +376,15 @@ export function configureSqliteWalMaintenance(
         // until another commit. Try once without waiting for readers or writers.
         admit?.("transaction");
         runWithSqliteBusyTimeout(db, 0, () => runTickCheckpoint("TRUNCATE"));
+      }
+      if (checkpointed && request.maxPages > 0 && !request.continuation) {
+        try {
+          maintain?.();
+        } catch (error) {
+          if (!isSqliteLockError(error)) {
+            throw error;
+          }
+        }
       }
       return checkpointed;
     });
@@ -387,47 +405,42 @@ export function configureSqliteWalMaintenance(
       return budget;
     },
   );
-  if (timerIntervalMs > 0) {
+  const schedule = (phase: string, intervalMs: number, run: () => Promise<void>) =>
     runInSqliteMaintenanceContext(() =>
       scope.schedule({
-        id: `${maintenanceId}:periodic`,
-        delayMs: timerIntervalMs,
-        everyMs: timerIntervalMs,
-        run: () => {
-          // Inspect the published handle before identity admission or synchronous cleanup.
-          if (tripwireDatabasePath && splitBrainDetectionEnabled) {
-            let splitBrain: SqliteWalSplitBrainEvent | undefined;
-            try {
-              splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
-            } catch (error) {
-              splitBrainDetectionEnabled = false;
-              log.warn("SQLite WAL split-brain detection disabled", {
-                databaseLabel: options.databaseLabel,
-                databasePath: tripwireDatabasePath,
-                error: error instanceof Error ? error.message : String(error),
-              });
-            }
-            if (splitBrain) {
-              invalidated = true;
-              scope.beginClose();
-              terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
-            }
-          }
-          nextPageBudget = 512;
-          return maintain();
-        },
+        id: `${maintenanceId}:${phase}`,
+        delayMs: intervalMs,
+        everyMs: intervalMs,
+        run,
       }),
     );
+  if (timerIntervalMs > 0) {
+    schedule("periodic", timerIntervalMs, () => {
+      // Inspect the published handle before identity admission or synchronous cleanup.
+      if (tripwireDatabasePath && splitBrainDetectionEnabled) {
+        let splitBrain: SqliteWalSplitBrainEvent | undefined;
+        try {
+          splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
+        } catch (error) {
+          splitBrainDetectionEnabled = false;
+          log.warn("SQLite WAL split-brain detection disabled", {
+            databaseLabel: options.databaseLabel,
+            databasePath: tripwireDatabasePath,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        if (splitBrain) {
+          invalidated = true;
+          scope.beginClose();
+          terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
+        }
+      }
+      nextPageBudget = 512;
+      return maintain();
+    });
   }
   if (checkpointTickMs > 0) {
-    runInSqliteMaintenanceContext(() =>
-      scope.schedule({
-        id: `${maintenanceId}:tick`,
-        delayMs: checkpointTickMs,
-        everyMs: checkpointTickMs,
-        run: maintain,
-      }),
-    );
+    schedule("tick", checkpointTickMs, maintain);
   }
 
   const beginClose = () => {

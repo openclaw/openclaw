@@ -16,6 +16,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import {
   renderDeviceTalk,
@@ -23,6 +24,8 @@ import {
   type VoiceWakeEditorState,
 } from "./talk-device.ts";
 import { isTalkGptLiveModel, type TalkRealtimeSelection } from "./talk-schema.ts";
+
+registerSettingsEnglish();
 
 export type TalkRealtimeProviderOption = TalkCatalogResult["realtime"]["providers"][number];
 
@@ -119,17 +122,15 @@ export function effectiveTalkValues(
 
 function renderStatusRow(props: TalkViewProps) {
   const catalog = props.catalog;
-  if (catalog.kind === "loading") {
+  if (catalog.kind !== "ready") {
     return renderSettingsRow({
       title: t("talkPage.status.title"),
-      control: renderSettingsStatus({ kind: "muted", label: t("common.loading") }),
-    });
-  }
-  if (catalog.kind === "unavailable") {
-    return renderSettingsRow({
-      title: t("talkPage.status.title"),
-      description: t("talkPage.status.unavailableHint"),
-      control: renderSettingsStatus({ kind: "muted", label: t("talkPage.status.unavailable") }),
+      description:
+        catalog.kind === "unavailable" ? t("talkPage.status.unavailableHint") : undefined,
+      control: renderSettingsStatus({
+        kind: "muted",
+        label: t(catalog.kind === "loading" ? "common.loading" : "talkPage.status.unavailable"),
+      }),
     });
   }
   return renderSettingsRow({

@@ -11,7 +11,7 @@ import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.
 import { waitForConfirmDialogActions } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { makeChatHost } from "./chat-host.test-support.ts";
+import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { retireChatModelSelectionOwnership, switchChatModel } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
@@ -169,12 +169,10 @@ it.each([false, true])(
     expect(modal.textContent).toContain("own permissions");
     expect(modal.textContent).toContain("Gateway host");
     expect(modal.textContent).toContain("Only this chat");
-    expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(
-      1,
-    );
+    expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
     click(modal, "Continue for this chat");
     await expect(selection).resolves.toBe(!rejectRecovery);
-    const patches = host.request.mock.calls.filter(([method]) => method === "sessions.patch");
+    const patches = requestCalls(host.request, "sessions.patch");
     expect(patches).toHaveLength(2);
     expect(patches[1]?.[1]).toEqual({
       key: "global",
@@ -220,7 +218,7 @@ it.each([
   );
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   expect(host.chatError).toContain("Choose another model");
-  expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
+  expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
 });
 
 it.each([
@@ -271,7 +269,7 @@ it.each([
     click(modal, change === "cancel" ? "Cancel" : "Continue for this chat");
   }
   await expect(selection).resolves.toBe(false);
-  const patches = host.request.mock.calls.filter(([method]) => method === "sessions.patch");
+  const patches = requestCalls(host.request, "sessions.patch");
   expect(
     patches.some(([, params]) => params && typeof params === "object" && "sandboxMode" in params),
   ).toBe(false);
@@ -292,11 +290,7 @@ it("rechecks a confirmed recovery after the shared settings tail, before dispatc
     { thinkingLevel: "high" },
     { agentId: "selected-agent" },
   );
-  await waitForFast(() =>
-    expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(
-      2,
-    ),
-  );
+  await waitForFast(() => expect(requestCalls(host.request, "sessions.patch")).toHaveLength(2));
   const previousTail = getPendingChatPickerPatch(host, "global", "selected-agent");
   click(modal, "Continue for this chat");
   // Observe admission behind the held mutation before revoking UI authority.
@@ -307,7 +301,7 @@ it("rechecks a confirmed recovery after the shared settings tail, before dispatc
   held.resolve(receipt);
   await pending;
   await expect(selection).resolves.toBe(false);
-  expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(2);
+  expect(requestCalls(host.request, "sessions.patch")).toHaveLength(2);
 });
 
 it("does not open a late refusal on a replacement connection", async () => {
@@ -332,32 +326,50 @@ it("does not open a late refusal on a replacement connection", async () => {
   await expect(selection).resolves.toBe(false);
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   expect(host.chatError ?? null).toBeNull();
-  expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
+  expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
 });
 
-it("stops after one confirmed retry when native admission refuses again", async () => {
-  const { host } = fixture({ send: true, repeatRefusal: true });
-  const sending = handleSendChat(host);
-  click(await dialog(), "Continue for this chat");
-  await sending;
-  expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(2);
-  expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
-  expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-  expect(host.chatMessage).toBe("Keep this draft; never replay it");
-});
-
-it("retries the refused input without sending or overwriting a newer composer draft", async () => {
-  const { host } = fixture({ send: true });
-  const sending = handleSendChat(host);
-  const modal = await dialog();
-  host.chatMessage = "A newer draft, not yet submitted";
-  click(modal, "Continue for this chat");
-  await sending;
-  const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
-  expect(sends).toHaveLength(2);
-  expect(sends[1]?.[1]).toMatchObject({ message: "Keep this draft; never replay it" });
-  expect(host.chatMessage).toBe("A newer draft, not yet submitted");
-});
+it.each(["repeated refusal", "newer draft", "unbound session"] as const)(
+  "retries the confirmed input once with %s",
+  async (scenario) => {
+    const { host } = fixture({
+      send: true,
+      repeatRefusal: scenario === "repeated refusal",
+      unbound: scenario === "unbound session",
+    });
+    const sending = handleSendChat(host);
+    const modal = await dialog();
+    if (scenario === "newer draft") {
+      host.chatMessage = "A newer draft, not yet submitted";
+    }
+    click(modal, "Continue for this chat");
+    await sending;
+    const sends = requestCalls(host.request, "chat.send");
+    expect(sends).toHaveLength(2);
+    const patches = requestCalls(host.request, "sessions.patch");
+    expect(patches).toHaveLength(1);
+    if (scenario === "repeated refusal") {
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(host.chatMessage).toBe("Keep this draft; never replay it");
+    } else {
+      expect(sends[1]?.[1]).toMatchObject({ message: "Keep this draft; never replay it" });
+      if (scenario === "newer draft") {
+        expect(host.chatMessage).toBe("A newer draft, not yet submitted");
+      } else {
+        expect(sends[1]?.[1]).toMatchObject({ sessionId: recovery.sessionId });
+        expect(patches[0]?.[1]).toMatchObject({
+          expectedSessionId: recovery.sessionId,
+          nativeRuntimeConsent: "opencode",
+        });
+        expect(patches[0]?.[1]).not.toHaveProperty("model");
+        expect(patches[0]?.[1]).not.toHaveProperty("agentRuntime");
+        expect(host.request.mock.calls.some(([method]) => method === "sessions.create")).toBe(
+          false,
+        );
+      }
+    }
+  },
+);
 
 it.each(["newer-selection", "server-selection", "session"] as const)(
   "does not grant native send consent after %s",
@@ -389,31 +401,9 @@ it.each(["newer-selection", "server-selection", "session"] as const)(
           "nativeRuntimeConsent" in params,
       ),
     ).toBe(false);
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
   },
 );
-
-it("binds the real first-send refusal incarnation and retries without pinning the default model", async () => {
-  const { host } = fixture({ send: true, unbound: true });
-  const sending = handleSendChat(host);
-  click(await dialog(), "Continue for this chat");
-  await sending;
-  const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
-  expect(sends).toHaveLength(2);
-  expect(sends[1]?.[1]).toMatchObject({
-    message: "Keep this draft; never replay it",
-    sessionId: recovery.sessionId,
-  });
-  const patches = host.request.mock.calls.filter(([method]) => method === "sessions.patch");
-  expect(patches).toHaveLength(1);
-  expect(patches[0]?.[1]).toMatchObject({
-    expectedSessionId: recovery.sessionId,
-    nativeRuntimeConsent: "opencode",
-  });
-  expect(patches[0]?.[1]).not.toHaveProperty("model");
-  expect(patches[0]?.[1]).not.toHaveProperty("agentRuntime");
-  expect(host.request.mock.calls.some(([method]) => method === "sessions.create")).toBe(false);
-});
 
 it("does not adopt an unrelated incarnation after a first-send refusal", async () => {
   const { host } = fixture({
@@ -423,6 +413,6 @@ it("does not adopt an unrelated incarnation after a first-send refusal", async (
   });
   await handleSendChat(host);
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-  expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
-  expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toEqual([]);
+  expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
+  expect(requestCalls(host.request, "sessions.patch")).toEqual([]);
 });

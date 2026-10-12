@@ -7,8 +7,11 @@ import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
-import { registerFastContextMemoryProvider } from "./runtime.fast-context.test-support.js";
-import { createVoiceCallBaseConfig } from "./test-fixtures.js";
+import {
+  createMockSessionRuntime,
+  registerFastContextMemoryProvider,
+} from "./runtime.fast-context.test-support.js";
+import { createExternalProviderConfig, createVoiceCallBaseConfig } from "./test-fixtures.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 
 const mocks = vi.hoisted(() => ({
@@ -29,7 +32,7 @@ const mocks = vi.hoisted(() => ({
   realtimeHandlerCtorArgs: [] as unknown[][],
   realtimeHandlerRegisterToolHandler: vi.fn<RealtimeCallHandler["registerToolHandler"]>(),
   realtimeHandlerSetPublicUrl: vi.fn(),
-  resolveConfiguredRealtimeVoiceProvider: vi.fn(),
+  resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(),
   resolveRealtimeFastContextConsult: vi.fn(),
   actualRealtimeFastContextConsult: undefined as
     | typeof import("openclaw/plugin-sdk/realtime-voice").resolveRealtimeVoiceFastContextConsult
@@ -105,8 +108,9 @@ vi.mock("./webhook.js", () => ({
   },
 }));
 
+// mock-isolation: Keep provider registration and credential state outside runtime tests.
 vi.mock("./realtime-voice.runtime.js", () => ({
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveConfiguredRealtimeVoiceProviderAsync,
 }));
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
@@ -141,71 +145,6 @@ import { createVoiceCallRuntime } from "./runtime.js";
 
 function createBaseConfig(): VoiceCallConfig {
   return createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
-}
-
-function createExternalProviderConfig(params: {
-  provider: "twilio" | "telnyx" | "plivo";
-  publicUrl?: string;
-}): VoiceCallConfig {
-  const config = createVoiceCallBaseConfig({
-    provider: params.provider,
-    tunnelProvider: "none",
-  });
-  config.twilio = {
-    accountSid: "AC123",
-    authToken: "secret",
-  };
-  config.telnyx = {
-    apiKey: "key",
-    connectionId: "conn",
-    publicKey: "pub",
-  };
-  config.plivo = {
-    authId: "MA123",
-    authToken: "secret",
-  };
-  if (params.publicUrl) {
-    config.publicUrl = params.publicUrl;
-  }
-  return config;
-}
-
-type MockSessionEntry = {
-  sessionId?: string;
-  updatedAt?: number;
-  [key: string]: unknown;
-};
-
-function createMockSessionRuntime(sessionStore: Record<string, unknown>) {
-  return {
-    resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-    loadSessionStore: vi.fn(() => sessionStore),
-    saveSessionStore: vi.fn(async () => {}),
-    updateSessionStore: vi.fn(async (_storePath, mutator: (store: never) => unknown) =>
-      mutator(sessionStore as never),
-    ),
-    getSessionEntry: vi.fn(
-      ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey] as MockSessionEntry,
-    ),
-    patchSessionEntry: vi.fn(
-      async ({
-        sessionKey,
-        fallbackEntry,
-        update,
-      }: {
-        sessionKey: string;
-        fallbackEntry: MockSessionEntry;
-        update: (entry: MockSessionEntry) => Promise<MockSessionEntry> | MockSessionEntry;
-      }) => {
-        const current = (sessionStore[sessionKey] as MockSessionEntry | undefined) ?? fallbackEntry;
-        const patch = await update(current);
-        const next = { ...current, ...patch };
-        sessionStore[sessionKey] = next;
-        return next;
-      },
-    ),
-    resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-  };
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
@@ -249,7 +188,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.realtimeHandlerCtorArgs.length = 0;
     mocks.realtimeHandlerRegisterToolHandler.mockReset();
     mocks.realtimeHandlerSetPublicUrl.mockReset();
-    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
       provider: { id: "openai" },
       providerConfig: { model: "gpt-realtime" },
     });
@@ -293,8 +232,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentId: "OPERATOR",
     },
     {
-      name: "legacy default owner",
-      coreConfig: { agents: { list: [{ id: "support" }, { id: "operator", default: true }] } },
+      name: "explicit owner after another agent",
+      coreConfig: { agents: { entries: { support: {}, operator: {} } } },
+      agentId: "operator",
     },
   ])("preserves the $name for phone-call startup", async ({ coreConfig, agentId }) => {
     const runtime = await createVoiceCallRuntime({
@@ -438,6 +378,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
   it("builds realtime instructions for the agent frozen on each call", async () => {
     const config = createBaseConfig();
     config.realtime.enabled = true;
+    config.agentId = "operator";
     config.realtime.agentContext = {
       enabled: true,
       maxChars: 6000,
@@ -447,10 +388,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     const fullConfig: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "operator", default: true, identity: { name: "Main Voice" } },
-          { id: "support", identity: { name: "Support Voice" } },
-        ],
+        entries: {
+          operator: { identity: { name: "Main Voice" } },
+          support: { identity: { name: "Support Voice" } },
+        },
       },
     };
     const runtime = await createVoiceCallRuntime({
@@ -465,50 +406,58 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(mocks.realtimeHandlerCtorArgs[0]?.[4]).toBe(
       mocks.webhookGetStreamDisconnectLifecycle.mock.results[0]?.value,
     );
-    expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
+    expect(mocks.resolveConfiguredRealtimeVoiceProviderAsync).not.toHaveBeenCalled();
     if (typeof resolveCallRegistration !== "function") {
       throw new Error("expected per-call realtime registration resolver");
     }
     expect(runtime.config.agentId).toBe("operator");
-    expect(() =>
-      resolveCallRegistration({
-        callId: "unowned",
-        sessionKey: "agent:operator:voice:unowned",
-        direction: "outbound",
-        from: "+15550001111",
-        to: "+15550002222",
-      }),
-    ).toThrow("no recorded agent owner");
-    expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
-    const defaultRegistration = resolveCallRegistration({
-      callId: "call-default",
-      agentId: "operator",
-      direction: "outbound",
+    const outboundContact = {
+      direction: "outbound" as const,
       from: "+15550001111",
       to: "+15550002222",
+    };
+    await expect(
+      resolveCallRegistration({
+        ...outboundContact,
+        callId: "unowned",
+        sessionKey: "agent:operator:voice:unowned",
+      }),
+    ).rejects.toThrow("no recorded agent owner");
+    expect(mocks.resolveConfiguredRealtimeVoiceProviderAsync).not.toHaveBeenCalled();
+    const defaultRegistration = await resolveCallRegistration({
+      ...outboundContact,
+      callId: "call-default",
+      agentId: "operator",
     });
     expect(defaultRegistration.agentId).toBe("operator");
     expect(defaultRegistration.instructions).toContain("- Name: Main Voice");
     expect(defaultRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
-
-    const supportRegistration = resolveCallRegistration({
-      callId: "call-support",
-      agentId: "support",
+    const briefRegistration = await resolveCallRegistration({
+      callId: "call-brief",
       direction: "outbound",
       from: "+15550001111",
       to: "+15550002222",
+      agentId: "operator",
+      metadata: { brief: { task: "Arrange a plumber visit", approvals: "No paid work" } },
+    });
+    expect(briefRegistration.instructions).toContain("Arrange a plumber visit");
+    expect(briefRegistration.instructions).toContain("No paid work");
+    expect(defaultRegistration.instructions).not.toContain("Arrange a plumber visit");
+
+    const supportRegistration = await resolveCallRegistration({
+      ...outboundContact,
+      callId: "call-support",
+      agentId: "support",
     });
     expect(supportRegistration.agentId).toBe("support");
     expect(supportRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
     expect(supportRegistration.instructions).toContain("- Name: Support Voice");
     expect(supportRegistration.instructions).not.toContain("Main Voice");
 
-    const unknownRegistration = resolveCallRegistration({
+    const unknownRegistration = await resolveCallRegistration({
+      ...outboundContact,
       callId: "call-unknown",
       agentId: "unknown",
-      direction: "outbound",
-      from: "+15550001111",
-      to: "+15550002222",
     });
     expect(unknownRegistration.instructions).not.toContain("Configured identity:");
     expect(unknownRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
@@ -627,7 +576,11 @@ describe("createVoiceCallRuntime lifecycle", () => {
       direction: "outbound",
       from: "+15550001234",
       to: "+15550009999",
-      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
+      metadata: {
+        requesterSessionKey: "agent:main:discord:channel:general",
+        brief: { task: "Check shipment reference ABC" },
+        ownerInstructions: ["Ask for tomorrow delivery"],
+      },
       transcript: [{ speaker: "user", text: "Can you check shipment status?" }],
     });
 
@@ -678,8 +631,15 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "x_search",
       "memory_search",
       "memory_get",
+      "voice_call",
     ]);
+    expect(consultParams.toolBindings).toEqual({
+      voice_call: { kind: "active-call", callId: "call-1" },
+    });
     expect(consultParams.extraSystemPrompt).toContain("one or two bounded read-only queries");
+    expect(consultParams.extraSystemPrompt).toContain('bound call id is "call-1"');
+    expect(consultParams.extraSystemPrompt).toContain("Check shipment reference ABC");
+    expect(consultParams.extraSystemPrompt).toContain("Ask for tomorrow delivery");
     expect(consultParams.prompt).toContain("Caller: Can you check shipment status?");
     expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
   });

@@ -21,7 +21,7 @@ import {
 } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import { importCodexThreadHistoryToTranscript } from "./transcript-mirror.js";
 import {
   createForkTestRuntime,
@@ -33,8 +33,8 @@ import {
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   ...(await importOriginal()),
-  deleteSessionUpstreamLink: vi.fn(),
-  upsertSessionUpstreamLink: vi.fn(() => true),
+  deleteSessionUpstreamLinkAsync: vi.fn(),
+  upsertSessionUpstreamLinkAsync: vi.fn(() => true),
 }));
 
 import { forkCodexUpstreamSession } from "./upstream-session-fork.js";
@@ -54,10 +54,7 @@ describe("persistent upstream fork continuation", () => {
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
-        list: [
-          { id: "main", agentDir },
-          { id: "source", agentDir: sourceAgentDir },
-        ],
+        entries: { main: { agentDir }, source: { agentDir: sourceAgentDir } },
       },
       session: { store: path.join(root, "openclaw-agent.sqlite") },
     };

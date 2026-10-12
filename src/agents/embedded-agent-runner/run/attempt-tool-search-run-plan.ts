@@ -23,14 +23,6 @@ function hasExplicitlyAllowedClientTool(params: {
   return names.some((name) => matchers.some((matches) => matches(name)));
 }
 
-function collectOpenClawCapabilityToolNames(
-  tools: CollectAllowedToolNamesParams["tools"],
-): Set<string> {
-  return collectAllowedToolNames({
-    tools: tools.filter((tool) => getPluginToolMeta(tool)?.pluginId !== "bundle-mcp"),
-  });
-}
-
 /**
  * Builds the complete tool-search allowlist plan for one run. Visible tools use
  * compacted prompt state, while replay tools use uncompacted state.
@@ -57,10 +49,12 @@ export function buildToolSearchRunPlan(params: {
     tools: params.uncompactedTools,
     clientTools: params.clientTools,
   });
-  const capabilityToolNames = collectOpenClawCapabilityToolNames([
-    ...(params.deferredToolsCallable ? params.uncompactedTools : params.visibleTools),
-    ...(params.catalogCapabilityTools ?? []),
-  ]);
+  const capabilityToolNames = collectAllowedToolNames({
+    tools: [
+      ...(params.deferredToolsCallable ? params.uncompactedTools : params.visibleTools),
+      ...(params.catalogCapabilityTools ?? []),
+    ].filter((tool) => getPluginToolMeta(tool)?.pluginId !== "bundle-mcp"),
+  });
   if (params.controlsEnabled) {
     // A control that was visible in the compacted prompt must remain allowed
     // during replay even when the uncompacted tool set would otherwise omit it.
@@ -96,25 +90,17 @@ export function buildToolSearchRunPlan(params: {
       (controlName) => !explicitControlAllowlistNames.has(normalizeToolPolicyName(controlName)),
     ),
   );
-  const explicitlyAllowedClientTool = hasExplicitlyAllowedClientTool({
-    clientTools: params.clientTools,
-    explicitAllowlistSources: params.explicitAllowlistSources,
-  });
+  const explicitlyAllowedClientTool = hasExplicitlyAllowedClientTool(params);
   const emptyAllowlistVisibleToolNames = params.deferredToolsCallable
     ? collectAllowedToolNames({ tools: params.visibleTools })
     : visibleAllowedToolNames;
   // The guard needs presence, not catalog-sized synthetic names. Auto-added
   // controls alone must not conceal an explicit allowlist that matched nothing.
-  let hasCallableTools =
+  const hasCallableTools =
     params.catalogToolCount > 0 ||
     ((params.clientToolsCataloged || params.deferredToolsCallable === true) &&
-      explicitlyAllowedClientTool);
-  for (const toolName of emptyAllowlistVisibleToolNames) {
-    if (!autoAddedControlNames.has(toolName)) {
-      hasCallableTools = true;
-      break;
-    }
-  }
+      explicitlyAllowedClientTool) ||
+    [...emptyAllowlistVisibleToolNames].some((toolName) => !autoAddedControlNames.has(toolName));
   return {
     visibleAllowedToolNames,
     replayAllowedToolNames,

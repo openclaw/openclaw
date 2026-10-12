@@ -139,7 +139,7 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs into the agent main session). With the default `session.groupScope: "per-group"`, group sessions are isolated per JID (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Channels/Newsletters can be explicit outbound targets via their native `@newsletter` JID, using channel session metadata (`agent:<agentId>:whatsapp:channel:<jid>`) rather than DM semantics.
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, lowercase variants). Prefer host-level proxy config over per-channel settings.
-- Media uploads use the same proxy environment, with `NO_PROXY` evaluated for each actual upload host independently of the WebSocket destination.
+- On Node and Bun, media uploads use the same proxy environment and managed HTTPS-proxy trust, with `NO_PROXY` evaluated for each actual upload and redirect host independently of the WebSocket destination.
 - Media proxy URLs must use HTTP or HTTPS. Invalid media proxy settings fail uploads without blocking login or text messaging.
 
 ## Call the current requester with MeowCaller (experimental)
@@ -183,7 +183,7 @@ mkdir -p "$HOME/.local/bin"
 go build -o "$HOME/.local/bin/meowcaller" ./cmd/meowcaller
 ```
 
-    Ensure `$HOME/.local/bin` is on the gateway service's `PATH`; restart the Gateway if you changed its service environment. This revision has explicit `pair` and send-only `notify` commands; `notify` opens no microphone, speaker, video device, or diagnostic capture. Do not substitute the upstream example CLI's `play` command.
+    Add `$HOME/.local/bin` to the gateway service's `PATH`; restart the Gateway if you changed its service environment. This revision has explicit `pair` and send-only `notify` commands; `notify` opens no microphone, speaker, video device, or diagnostic capture. Do not substitute the upstream example CLI's `play` command.
 
   </Step>
 
@@ -237,7 +237,7 @@ WhatsApp approval reactions require explicit approvers in `allowFrom` (or `"*"`)
 
 ## Question reactions
 
-For an `ask_user` prompt with one non-secret, single-select question and one to four options, WhatsApp shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw maps the number to the canonical option through the Gateway; stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only. Normal WhatsApp DM/group admission rules authorize the reacting sender.
+For an `ask_user` prompt with one non-secret, single-select question and one to four options, WhatsApp shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw maps the number to the stored option through the Gateway; stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only. Normal WhatsApp DM/group admission rules authorize the reacting sender.
 
 ## Plugin hooks and privacy
 
@@ -356,7 +356,7 @@ WhatsApp supports persistent ACP bindings via top-level `bindings[]`:
 }
 ```
 
-Direct chats match E.164 numbers; groups match WhatsApp group JIDs. Group allowlists, sender policy, and mention/activation gating run before OpenClaw ensures the bound ACP session exists. A matched binding owns the route — broadcast groups do not fan that turn out to ordinary WhatsApp sessions.
+Direct chats match E.164 numbers; groups match WhatsApp group JIDs. Group allowlists, sender policy, and mention/activation gating run before OpenClaw creates the bound ACP session if needed. A matched binding owns the route — broadcast groups do not fan that turn out to ordinary WhatsApp sessions.
 
 ### Personal-number and self-chat behavior
 
@@ -369,7 +369,7 @@ The implicit self-number allowance applies only to DMs, not group allowlists.
 
 Self-chat safeguards are enabled by `true` and disabled by `false`. When the setting is unset, OpenClaw enables them if the linked self number appears in the configured `allowFrom`. These safeguards skip read receipts, suppress native self-mention triggers, and supply an identity reply prefix when no response prefix is configured.
 
-A liveness probe sent to your own number can therefore become agent input with `selfChatMode` unset or `true`. Set `selfChatMode: false` if you want to exclude those self-originated DMs.
+A liveness check sent to your own number can therefore become agent input with `selfChatMode` unset or `true`. Set `selfChatMode: false` if you want to exclude those self-originated DMs.
 
 ## Messaging and delivery
 
@@ -550,14 +550,17 @@ opt-in status surface described above.
 
   <Accordion title="Credential paths and legacy compatibility">
     - current auth path: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (backup: `creds.json.bak`)
-    - legacy default auth in `~/.openclaw/credentials/` is still recognized/migrated for default-account flows
+    - Doctor moves implicit legacy default auth from `~/.openclaw/credentials/` into the account directory after preserving exact private `.migrated` backups. Runtime account selection uses the account directory; run `openclaw doctor --fix` after replacing an older installation directly.
+    - Explicit `authDir` settings remain authoritative, including an account that deliberately uses the shared credentials root. Doctor leaves those directories in place. Differing current and legacy credentials stay intact with an actionable conflict warning; Doctor never mixes two credential sets.
+    - Doctor records a credential migration receipt before writing the account directory. If an interrupted import's complete destination is later missing or changed, Doctor preserves the remaining sources and backups and asks for explicit recovery. It does not recreate a logged-out account.
+    - Account-directory credentials still work on OpenClaw 2026.9.7. Shared-root repair needs a host with offline Doctor migration authority and source backups. If Doctor asks you to upgrade the host, update OpenClaw core before retrying; the plugin leaves the original credentials untouched.
 
   </Accordion>
 
   <Accordion title="Logout behavior">
     `openclaw channels logout --channel whatsapp [--account <id>]` clears WhatsApp auth state for that account. When a gateway is reachable, logout stops the live listener for that account first, so the linked session stops receiving messages before the next restart. `openclaw channels remove --channel whatsapp` also stops the live listener before disabling or deleting account config.
 
-    In legacy auth directories, `oauth.json` is preserved while Baileys auth files are removed.
+    Logout leaves explicitly configured credential directories outside the managed account tree in place. It never deletes unrelated OAuth credentials from the shared root.
 
   </Accordion>
 </AccordionGroup>

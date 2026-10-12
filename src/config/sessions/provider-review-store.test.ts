@@ -1,6 +1,7 @@
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { readExistingAgentSchemaMeta } from "../../state/openclaw-agent-db-metadata.js";
@@ -222,18 +223,13 @@ it("rolls back a clear when current authority is revoked at commit", async () =>
       },
       { providerReviewMutation: true },
     );
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
     let current = true;
-    const admitted = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            current = false;
-          }
-          return callback(request, grant);
-        }, attachment),
-      );
+    const admitted = probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "commit") {
+        current = false;
+      }
+      return callback(request, grant);
+    });
     try {
       await expect(
         compareSessionProviderReview(target, {

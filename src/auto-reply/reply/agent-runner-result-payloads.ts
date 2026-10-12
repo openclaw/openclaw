@@ -63,10 +63,14 @@ import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
-import { buildWaitingStatusPayload } from "./waiting-status.js";
+import {
+  attachWaitingStatusProgressContinuation,
+  buildWaitingStatusPayload,
+} from "./waiting-status.js";
 export async function prepareReplyAgentPayloads(state: {
   context: FinalizeReplyAgentRunInput;
   accounting: AccountedAgentTurn;
@@ -268,18 +272,15 @@ export async function prepareReplyAgentPayloads(state: {
   const applyDeliveredReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const isGeneratedToolWarning = (payload: ReplyPayload) =>
     getReplyPayloadMetadata(payload)?.toolErrorWarning !== undefined;
+  const isPayloadLaneEnabled = (payload: ReplyPayload) =>
+    (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
+    (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true);
   const applyFinalReplyToMode = (payload: ReplyPayload) => {
-    const isDisabledReasoningLane =
-      payload.isReasoning === true && opts?.reasoningPayloadsEnabled !== true;
-    const isDisabledCommentaryLane =
-      payload.isCommentary === true && opts?.commentaryPayloadsEnabled !== true;
+    const laneEnabled = isPayloadLaneEnabled(payload);
     const isFilteredPayload =
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) === null;
     const shouldDeferToolWarning = waitingStatusPayload && isGeneratedToolWarning(payload);
-    return isDisabledReasoningLane ||
-      isDisabledCommentaryLane ||
-      isFilteredPayload ||
-      shouldDeferToolWarning
+    return !laneEnabled || isFilteredPayload || shouldDeferToolWarning
       ? payload
       : applyDeliveredReplyToMode(payload);
   };
@@ -314,16 +315,6 @@ export async function prepareReplyAgentPayloads(state: {
     didLogHeartbeatStrip = result.didLogHeartbeatStrip;
     return result.replyPayloads;
   };
-  const returnPreparedFallbackPayload = async (
-    payload: ReplyPayload,
-  ): Promise<ReplyPayload | undefined> => {
-    const [preparedPayload] = await buildFinalPayloads([payload]);
-    if (!preparedPayload) {
-      return undefined;
-    }
-    await signalTypingIfNeeded([preparedPayload], typingSignals);
-    return returnWithQueuedFollowupDrain(preparedPayload);
-  };
   const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
     const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
       fallbackTransition,
@@ -342,7 +333,12 @@ export async function prepareReplyAgentPayloads(state: {
       ),
     );
     opts?.onAgentRunTerminalOutcome?.("failed");
-    return returnPreparedFallbackPayload(silentFallbackFailurePayload);
+    const [preparedPayload] = await buildFinalPayloads([silentFallbackFailurePayload]);
+    if (!preparedPayload) {
+      return undefined;
+    }
+    await signalTypingIfNeeded([preparedPayload], typingSignals);
+    return returnWithQueuedFollowupDrain(preparedPayload);
   };
   const finishEmptyReply = async () => {
     if (completion.outcome === "silent" || completion.outcome === "blocked") {
@@ -385,6 +381,12 @@ export async function prepareReplyAgentPayloads(state: {
         cfg,
       })
     : null;
+  const fallbackModels = {
+    selectedProvider,
+    selectedModel,
+    activeProvider: sessionModel.provider,
+    activeModel: sessionModel.model,
+  };
   if (fallbackNoticeChanged && fallbackTransition.fallbackTransitioned) {
     emitAgentEvent({
       runId,
@@ -392,10 +394,7 @@ export async function prepareReplyAgentPayloads(state: {
       stream: "lifecycle",
       data: {
         phase: "fallback",
-        selectedProvider,
-        selectedModel,
-        activeProvider: sessionModel.provider,
-        activeModel: sessionModel.model,
+        ...fallbackModels,
         reasonSummary: fallbackTransition.reasonSummary,
         attemptSummaries: fallbackTransition.attemptSummaries,
         attempts: fallbackAttempts,
@@ -403,10 +402,7 @@ export async function prepareReplyAgentPayloads(state: {
     });
     if (shouldDeliverFallbackNotice && !providerPolicyRetrySucceeded) {
       fallbackNoticeText = buildFallbackNotice({
-        selectedProvider,
-        selectedModel,
-        activeProvider: sessionModel.provider,
-        activeModel: sessionModel.model,
+        ...fallbackModels,
         attempts: fallbackAttempts,
         cfg,
       });
@@ -419,10 +415,7 @@ export async function prepareReplyAgentPayloads(state: {
       stream: "lifecycle",
       data: {
         phase: "fallback_cleared",
-        selectedProvider,
-        selectedModel,
-        activeProvider: sessionModel.provider,
-        activeModel: sessionModel.model,
+        ...fallbackModels,
         previousActiveModel: fallbackTransition.previousState.activeModel,
       },
     });
@@ -443,9 +436,46 @@ export async function prepareReplyAgentPayloads(state: {
       ]
     : [];
 
-  // Drain any late tool/block deliveries before deciding there's "nothing to send".
-  // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
-  // keep the typing indicator stuck.
+  const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
+  if (isDiagnosticsEnabled(cfg) && hasBillableUsage(diagnosticUsage)) {
+    const contextUsedTokens = deriveContextPromptTokens({
+      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+      promptTokens,
+      usage,
+    });
+    const costUsd = estimateAggregateUsageCost({
+      usage: diagnosticUsage,
+      provider: providerUsed,
+      model: modelUsed,
+      config: cfg,
+      agentDir: followupRun.run.agentDir,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      ...(runResult.diagnosticTrace
+        ? {
+            trace: freezeDiagnosticTraceContext(
+              createChildDiagnosticTraceContext(runResult.diagnosticTrace),
+            ),
+          }
+        : {}),
+      sessionKey,
+      sessionId: followupRun.run.sessionId,
+      channel: replyToChannel,
+      agentId: followupRun.run.agentId,
+      provider: providerUsed,
+      model: modelUsed,
+      usage: toDiagnosticUsage(diagnosticUsage),
+      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+      context: {
+        limit: contextTokensUsed,
+        ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
+      },
+      costUsd,
+      durationMs: Date.now() - runStartedAt,
+    });
+  }
+
   if (
     payloadArray.length === 0 &&
     fallbackNoticePayloads.length === 0 &&
@@ -458,11 +488,7 @@ export async function prepareReplyAgentPayloads(state: {
 
   const payloadCandidates = (
     fallbackNoticePayloads.length > 0 ? [...fallbackNoticePayloads, ...payloadArray] : payloadArray
-  ).filter(
-    (payload) =>
-      (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
-      (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true),
-  );
+  ).filter(isPayloadLaneEnabled);
   let replyPayloads = await buildFinalPayloads(payloadCandidates);
   if (sourceReplyDelivery !== "delivered" && completion.outcome === "delivered") {
     await opts?.onObservedReplyDelivery?.();
@@ -528,8 +554,7 @@ export async function prepareReplyAgentPayloads(state: {
   const hasVisibleReplyPayload = replyPayloads.some(
     (payload) =>
       !isReplyPayloadStatusNotice(payload) &&
-      (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
-      (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true) &&
+      isPayloadLaneEnabled(payload) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
   const hasDeliveredBlockStream = Boolean(blockReplyPipeline?.didStream());
@@ -561,10 +586,26 @@ export async function prepareReplyAgentPayloads(state: {
       ? appendUnscheduledReminderNote(replyPayloads)
       : replyPayloads;
 
+  const statusPayload = guardedReplyPayloads.find(
+    (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
+  );
+  // Media admission owns runs under the tools' runtime policy key, not a shared main key.
+  const mediaSessionKey =
+    implicitContinuation && !continuationOwner
+      ? (runtimePolicySessionKey ?? sessionKey ?? followupRun.run.sessionKey)
+      : undefined;
+  if (statusPayload) {
+    await attachWaitingStatusProgressContinuation({
+      payload: statusPayload,
+      acceptedSessionSpawns: runResult.acceptedSessionSpawns,
+      mediaRequester: mediaSessionKey
+        ? { sessionKey: mediaSessionKey, agentId: followupRun.run.agentId }
+        : undefined,
+      operation: replyOperation,
+    });
+  }
+
   if (continuationOwner) {
-    const statusPayload = guardedReplyPayloads.find(
-      (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
-    );
     const acceptedSessionSpawns = runResult.acceptedSessionSpawns;
     const requesterSessionKey = sessionKey ?? followupRun.run.sessionKey;
     if (!requesterSessionKey || !acceptedSessionSpawns?.length || !statusPayload) {
@@ -625,46 +666,6 @@ export async function prepareReplyAgentPayloads(state: {
   }
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
-  const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
-  if (isDiagnosticsEnabled(cfg) && hasBillableUsage(diagnosticUsage)) {
-    const contextUsedTokens = deriveContextPromptTokens({
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      promptTokens,
-      usage,
-    });
-    const costUsd = estimateAggregateUsageCost({
-      usage: diagnosticUsage,
-      provider: providerUsed,
-      model: modelUsed,
-      config: cfg,
-      agentDir: followupRun.run.agentDir,
-    });
-    emitTrustedDiagnosticEvent({
-      type: "model.usage",
-      ...(runResult.diagnosticTrace
-        ? {
-            trace: freezeDiagnosticTraceContext(
-              createChildDiagnosticTraceContext(runResult.diagnosticTrace),
-            ),
-          }
-        : {}),
-      sessionKey,
-      sessionId: followupRun.run.sessionId,
-      channel: replyToChannel,
-      agentId: followupRun.run.agentId,
-      provider: providerUsed,
-      model: modelUsed,
-      usage: toDiagnosticUsage(diagnosticUsage),
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      context: {
-        limit: contextTokensUsed,
-        ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
-      },
-      costUsd,
-      durationMs: Date.now() - runStartedAt,
-    });
-  }
-
   const responseUsageSessionRaw =
     activeSessionEntry?.responseUsage ??
     (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
@@ -683,13 +684,16 @@ export async function prepareReplyAgentPayloads(state: {
   // Refresh inherited verbosity even when it started off: session preferences
   // and plugin diagnostics may change while the model runs.
   if (followupRun.run.verboseLevelOverride !== "off" || followupRun.run.traceAuthorized === true) {
-    activeSessionEntry = refreshSessionEntryFromStore({
-      storePath,
-      sessionKey,
-      fallbackEntry: activeSessionEntry,
-      activeSessionStore,
-      expectedGeneration: accounting.expectedSession,
-    });
+    activeSessionEntry = context.completion
+      ? await context.completion.refresh()
+      : await refreshSessionEntryFromStore({
+          storePath,
+          sessionKey,
+          fallbackEntry: activeSessionEntry,
+          activeSessionStore,
+          expectedGeneration: accounting.expectedSession,
+          reader: getReplyOperationSessionReader(replyOperation),
+        });
   }
 
   return {

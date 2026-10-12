@@ -1,13 +1,21 @@
-import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
-import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
-import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
-import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
+import { prepareCombinedSessionStoreForGatewayAsync } from "../config/sessions/combined-store-gateway-read.js";
+import { mergeCombinedSessionStore } from "../config/sessions/combined-store-gateway.js";
+import type {
+  CombinedSessionStoreScopeTargets,
+  GatewaySessionStoreDiscovery,
+} from "../config/sessions/combined-store.types.js";
+import type { SessionEntrySummary } from "../config/sessions/session-accessor.types.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
-import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { createSessionMembershipProjection } from "./session-membership-projection.js";
 import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { readSessionRowEntry as readStoredSessionRowEntry } from "./session-row-projection-materialize.js";
@@ -262,6 +270,9 @@ export function createSessionRowEntryReadAccess(
     row.membership = new Set();
   };
   const readSessionRowEntry = (row: records.Row) => {
+    if (row.publishedSource && row.storedEntry && row.sharingEntry === row.storedEntry) {
+      return row.storedEntry;
+    }
     const entry = membership.withPreparedParticipantRead(() => readStoredSessionRowEntry(row));
     if (
       row.storedEntry &&
@@ -287,24 +298,114 @@ export function createSessionRowEntryReadAccess(
       const read = {
         sources,
         replaced,
-        loadCombinedStore(
+        async loadCombinedStore<T>(
           cfg: OpenClawConfig,
           discovery: GatewaySessionStoreDiscovery,
-        ): ReturnType<typeof loadCombinedSessionStoreForGatewayCore> {
-          return loadCombinedSessionStoreForGatewayCore(cfg, {
+          consume: (
+            load: () => ReturnType<typeof mergeCombinedSessionStore>,
+            scopes: CombinedSessionStoreScopeTargets,
+          ) => T,
+        ): Promise<T> {
+          const options = {
             discovery,
             includeIncognito: false,
-            preserveSentinelOwners: "physical",
-            loadEntries: read.loadEntries,
-            onStoreLoaded(target, agentId, owner) {
-              const source = sources.get(target.storePath);
-              if (source) {
-                source.agentId = agentId;
-                source.discoveryAgentId = owner?.agentId ?? null;
-                source.discoveryOrder = owner?.order;
-              }
-            },
+            preserveSentinelOwners: "physical" as const,
+          };
+          const { prepared: preparedStore, scopes } =
+            await prepareCombinedSessionStoreForGatewayAsync(cfg, options, [
+              ...new Set([...listAgentIds(cfg), ...[...rows.values()].map((row) => row.agentId)]),
+            ]);
+          // Pin every physical source before the first worker request yields.
+          const captures = preparedStore.reads.flatMap(({ storeTarget: physical }) => {
+            const file = readDatabasePathIdentitySync(physical.storePath);
+            if (!file.key.startsWith("file:")) {
+              return [];
+            }
+            const identity = file.key.slice("file:".length);
+            return [
+              {
+                target: physical,
+                file,
+                previous: findStoreGeneration(stores, physical.storePath, {
+                  identity,
+                  birthtime: file.birthtime,
+                }),
+              },
+            ];
           });
+          return await withSessionHistoryWorkerDatabases(
+            captures.map(({ target, file }) => ({
+              agentId: target.agentId,
+              path: file.canonicalPath,
+              requestedPaths: [target.storePath],
+              env: params.env,
+            })),
+            async (owners) => {
+              const entries = new Map<string, SessionEntrySummary[]>();
+              for (const [index, { target, file, previous }] of captures.entries()) {
+                const prepared = previous
+                  ? undefined
+                  : await owners[index]!.readStoreProjection({
+                      env: { ...(params.env ?? process.env) },
+                      expectedIdentity: file,
+                    });
+                const source = previous ?? prepared?.source;
+                if (!source) {
+                  continue;
+                }
+                sources.set(target.storePath, {
+                  target,
+                  agentId: previous?.agentId ?? target.agentId,
+                  discoveryAgentId: null,
+                  identity: source.identity,
+                  birthtime: source.birthtime,
+                  filename: source.filename,
+                });
+                if (prepared) {
+                  replaced.add(target.storePath);
+                  entries.set(target.storePath, prepared.entries);
+                }
+              }
+              // Reject replaced sources before publishing their rows and sharing metadata.
+              for (const [index, { target, file }] of captures.entries()) {
+                owners[index]!.assertCurrent();
+                assertExistingDatabaseIdentity(target.storePath, file.key, file.birthtime);
+              }
+              return consume(
+                () =>
+                  mergeCombinedSessionStore(
+                    cfg,
+                    {
+                      ...options,
+                      onStoreLoaded(target, agentId, owner) {
+                        const source = sources.get(target.storePath);
+                        if (source) {
+                          source.agentId = agentId;
+                          source.discoveryAgentId = owner?.agentId ?? null;
+                          source.discoveryOrder = owner?.order;
+                        }
+                      },
+                    },
+                    preparedStore,
+                    (target) => {
+                      const previous = captures.find(
+                        (capture) => capture.target.storePath === target.storePath,
+                      )?.previous;
+                      if (previous) {
+                        return [...(byStore.get(previous.target.storePath) ?? [])].flatMap((id) => {
+                          const row = rows.get(id);
+                          const entry = row && (row.storedEntry ?? readSessionRowEntry(row));
+                          return row && entry ? [{ sessionKey: row.key, entry }] : [];
+                        });
+                      }
+                      return entries.get(target.storePath) ?? [];
+                    },
+                  ),
+                scopes!,
+              );
+            },
+            projectionLane,
+          );
         },
         updateMembership() {
           membership.updateTargets(
@@ -318,38 +419,6 @@ export function createSessionRowEntryReadAccess(
               filename: source.filename,
             })),
           );
-        },
-        loadEntries: (
-          target: records.Row["storeTarget"],
-          projection: SessionEntryListScope["projection"],
-        ) => {
-          const opened = withOpenClawAgentDatabaseReadOnly(readOpenClawAgentDatabaseIdentity, {
-            agentId: target.agentId,
-            path: target.storePath,
-            env: params.env,
-          });
-          if (!opened.found) {
-            return [];
-          }
-          const previous = findStoreGeneration(stores, target.storePath, opened.value);
-          sources.set(target.storePath, {
-            target,
-            agentId: previous?.agentId ?? target.agentId,
-            discoveryAgentId: null,
-            identity: opened.value.identity,
-            birthtime: opened.value.birthtime,
-            filename: opened.value.filename,
-          });
-          if (previous) {
-            return [...(byStore.get(previous.target.storePath) ?? [])].flatMap((id) => {
-              const row = rows.get(id);
-              const entry = row && (row.storedEntry ?? readSessionRowEntry(row));
-              return row && entry ? [{ sessionKey: row.key, entry }] : [];
-            });
-          }
-          replaced.add(target.storePath);
-          const entryScope = { ...target, projection, clone: false, env: params.env };
-          return listSessionEntriesReadOnly(entryScope, { deferParticipants: true });
         },
       };
       return read;

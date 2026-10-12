@@ -86,17 +86,6 @@ export type Ipv6SpecialUseBlockOptions = {
   allowUniqueLocalRange?: boolean;
 };
 
-function stripIpv6Brackets(value: string): string {
-  if (value.startsWith("[") && value.endsWith("]")) {
-    return value.slice(1, -1);
-  }
-  return value;
-}
-
-function isNumericIpv4LiteralPart(value: string): boolean {
-  return /^[0-9]+$/.test(value) || /^0x[0-9a-f]+$/i.test(value);
-}
-
 /** Type guard for parsed IPv4 addresses. */
 export function isIpv4Address(address: ParsedIpAddress): address is ipaddr.IPv4 {
   return address.kind() === "ipv4";
@@ -118,7 +107,7 @@ function normalizeIpParseInput(raw: string | undefined): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  return stripIpv6Brackets(trimmed);
+  return trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
 }
 
 /** Parses canonical IPv4/IPv6 literals, rejecting legacy IPv4 shorthand forms. */
@@ -167,7 +156,9 @@ export function isLegacyIpv4Literal(raw: string | undefined): boolean {
     return false;
   }
   const parts = normalized.split(".");
-  return parts.length <= 4 && parts.every(isNumericIpv4LiteralPart);
+  return (
+    parts.length <= 4 && parts.every((part) => /^[0-9]+$/.test(part) || /^0x[0-9a-f]+$/i.test(part))
+  );
 }
 
 /** True when a canonical IP literal is loopback, including IPv4-mapped IPv6. */
@@ -313,12 +304,9 @@ function decodeIpv4FromHextets(high: number, low: number): ipaddr.IPv4 {
   return ipaddr.IPv4.parse(octets.join("."));
 }
 
-function isRfc8215Nat64LocalUsePrefix(parts: Ipv6Hextets): boolean {
-  return parts[0] === 0x0064 && parts[1] === 0xff9b && parts[2] === 0x0001;
-}
-
 function isRfc8215Nat64LocalUseAddress(address: ipaddr.IPv6): boolean {
-  return isRfc8215Nat64LocalUsePrefix(expectIpv6Hextets(address.parts));
+  const parts = expectIpv6Hextets(address.parts);
+  return parts[0] === 0x0064 && parts[1] === 0xff9b && parts[2] === 0x0001;
 }
 
 /** Extracts the embedded IPv4 address from mapped and transition IPv6 prefixes. */

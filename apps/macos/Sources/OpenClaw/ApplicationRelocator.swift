@@ -5,13 +5,6 @@ import Foundation
 import OSLog
 import Security
 
-@_silgen_name("csops")
-private func csops(
-    _: pid_t,
-    _: UInt32,
-    _: UnsafeMutableRawPointer?,
-    _: Int) -> Int32
-
 @MainActor
 enum ApplicationRelocator {
     struct ApplicationIdentity: Equatable, Sendable {
@@ -74,14 +67,11 @@ enum ApplicationRelocator {
         }
     }
 
-    struct ReplacementHandoffPolicy: Equatable, Sendable {
-        let maximumAttempts: Int
-        let initialBackoffSeconds: Int
-        let maximumBackoffSeconds: Int
-        let baseTimeoutMilliseconds: Int32
-        let maximumTimeoutMilliseconds: Int32
+    enum ReplacementHandoffPolicy {
+        static let maximumAttempts = 3
+        private static let baseTimeoutMilliseconds: Int32 = 15000
 
-        func failureAction(
+        static func failureAction(
             failedAttempt: Int,
             hasKeepAliveSupervisor: Bool) -> ReplacementHandoffFailureAction
         {
@@ -89,13 +79,11 @@ enum ApplicationRelocator {
                 return hasKeepAliveSupervisor ? .terminateForSupervisor : .stopMonitoring
             }
             let exponent = max(0, failedAttempt - 1)
-            let backoff = min(
-                self.maximumBackoffSeconds,
-                self.initialBackoffSeconds * (1 << exponent))
+            let backoff = min(8, 2 * (1 << exponent))
             return .retry(after: .seconds(backoff))
         }
 
-        func timeoutMilliseconds(
+        static func timeoutMilliseconds(
             loadAverage: Double?,
             activeProcessorCount: Int) -> Int32
         {
@@ -108,7 +96,7 @@ enum ApplicationRelocator {
             let multiplier = min(4, max(1, loadPerProcessor))
             let scaled = Double(self.baseTimeoutMilliseconds) * multiplier
             let rounded = ceil(scaled / 5000) * 5000
-            return min(self.maximumTimeoutMilliseconds, Int32(rounded))
+            return min(60000, Int32(rounded))
         }
     }
 
@@ -136,15 +124,14 @@ enum ApplicationRelocator {
     private struct BundleReplacementSnapshot: Sendable {
         let bundleURL: URL
         let bundleIdentifier: String
-        let executableURL: URL
         let codeDirectoryHash: Data
         let requirementData: Data
     }
 
-    private struct ReplacementEvaluation: Sendable {
-        let action: ReplacementAction
-        let launchReference: BundleFileReference?
-        let launchCodeDirectoryHash: Data?
+    enum ReplacementEvaluation: Sendable {
+        case unchanged
+        case waitForTrustedReplacement
+        case relaunch(BundleFileReference, Data)
     }
 
     private enum ReplacementScheduleResult {
@@ -163,12 +150,6 @@ enum ApplicationRelocator {
     private static var inheritedReplacementSupervisor: KeepAliveSupervisor?
     private static var supervisorRestorationWatcher: Process?
     private static var authenticatedReplacementSourceBundleURL: URL?
-    nonisolated static let replacementHandoffPolicy = ReplacementHandoffPolicy(
-        maximumAttempts: 3,
-        initialBackoffSeconds: 2,
-        maximumBackoffSeconds: 8,
-        baseTimeoutMilliseconds: 15000,
-        maximumTimeoutMilliseconds: 60000)
     private nonisolated static let replacementSourceBundleEnvironmentKey = "OPENCLAW_REPLACEMENT_SOURCE_BUNDLE"
     private nonisolated static let replacementParentPIDEnvironmentKey = "OPENCLAW_REPLACEMENT_PARENT_PID"
     private nonisolated static let replacementCodeHashEnvironmentKey = "OPENCLAW_REPLACEMENT_CODE_HASH"
@@ -191,22 +172,18 @@ enum ApplicationRelocator {
         }
 
         if let currentIdentity = environment.currentIdentity {
-            for candidate in environment.candidates {
+            let trustedCandidates = environment.candidates.filter {
+                $0.isTrusted && $0.identity?.bundleIdentifier == currentIdentity.bundleIdentifier
+            }
+            for candidate in trustedCandidates {
                 guard let installedIdentity = candidate.identity,
-                      candidate.isTrusted,
-                      installedIdentity.bundleIdentifier == currentIdentity.bundleIdentifier,
                       installedIdentity.buildVersion.compare(currentIdentity.buildVersion, options: .numeric) !=
                       .orderedAscending
                 else { continue }
                 return .handOff(candidate.url)
             }
 
-            for candidate in environment.candidates {
-                guard candidate.isWritable,
-                      candidate.isTrusted,
-                      let installedIdentity = candidate.identity,
-                      installedIdentity.bundleIdentifier == currentIdentity.bundleIdentifier
-                else { continue }
+            if let candidate = trustedCandidates.first(where: \.isWritable) {
                 return .offerInstall(destination: candidate.url, replacing: true)
             }
         }
@@ -316,12 +293,7 @@ enum ApplicationRelocator {
         fileManager: FileManager = .default,
         processInfo: ProcessInfo = .processInfo) -> Bool
     {
-        #if DEBUG
-        let debugBuild = true
-        #else
-        let debugBuild = false
-        #endif
-        if debugBuild || processInfo.isRunningTests || processInfo.isPreview {
+        if CLIInstallBuild.isDebug || processInfo.isRunningTests || processInfo.isPreview {
             return true
         }
 
@@ -355,10 +327,6 @@ extension ApplicationRelocator {
         homeDirectory: URL) -> KeepAliveSupervisor?
     {
         guard let serviceName = xpcServiceName?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !serviceName.isEmpty,
-              serviceName != "0",
-              !serviceName.hasPrefix("application."),
-              URL(fileURLWithPath: serviceName).lastPathComponent == serviceName,
               let executableURL
         else {
             return nil
@@ -438,7 +406,7 @@ extension ApplicationRelocator {
               parentPID == getppid(),
               let expectedHashText = environment[replacementCodeHashEnvironmentKey],
               let expectedHash = Data(base64Encoded: expectedHashText),
-              expectedHash == kernelCodeDirectoryHash(),
+              expectedHash == ProcessIdentity.codeDirectoryHash(pid: getpid()),
               let readyFDText = environment[replacementReadyFDEnvironmentKey],
               let readyFD = Int32(readyFDText),
               readyFD >= 3,
@@ -573,11 +541,6 @@ extension ApplicationRelocator {
                 } ?? false,
                 identity: installedBundle.flatMap(self.identity(for:)))
         }
-        #if DEBUG
-        let debugBuild = true
-        #else
-        let debugBuild = false
-        #endif
         let isReadOnlyVolume = (try? bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?
             .volumeIsReadOnly ?? false
         return Environment(
@@ -586,7 +549,7 @@ extension ApplicationRelocator {
             currentIdentity: self.identity(for: bundle),
             candidates: candidates,
             isReadOnlyVolume: isReadOnlyVolume,
-            isDebugOrTesting: debugBuild || processInfo.isRunningTests || processInfo.isPreview)
+            isDebugOrTesting: CLIInstallBuild.isDebug || processInfo.isRunningTests || processInfo.isPreview)
     }
 
     private static func identity(for bundle: Bundle) -> ApplicationIdentity? {
@@ -605,13 +568,7 @@ extension ApplicationRelocator {
     private static func startBundleReplacementMonitoring(bundle: Bundle, at monitoredBundleURL: URL) {
         self.bundleReplacementRecoveryTask?.cancel()
         self.bundleReplacementRecoveryTask = nil
-        self.bundleReplacementSource?.cancel()
-        self.bundleReplacementSource = nil
-        self.bundleReplacementSnapshot = nil
-        self.bundleReplacementCheckPending = false
-        self.bundleReplacementHandoffInProgress = false
-        self.bundleReplacementHandoffAttempt = 0
-        self.bundleReplacementHandoffTargetHash = nil
+        self.disableBundleReplacementMonitoring()
 
         let bundleURL = monitoredBundleURL.standardizedFileURL
         guard bundleURL.pathExtension == "app",
@@ -627,7 +584,6 @@ extension ApplicationRelocator {
         self.bundleReplacementSnapshot = BundleReplacementSnapshot(
             bundleURL: bundleURL,
             bundleIdentifier: bundleIdentifier,
-            executableURL: installedApp.executableURL,
             codeDirectoryHash: runningIdentity.codeDirectoryHash,
             requirementData: runningIdentity.requirementData)
 
@@ -681,7 +637,7 @@ extension ApplicationRelocator {
                 let evaluation = await Task.detached(priority: .utility) {
                     self.replacementEvaluationOnDisk(for: snapshot)
                 }.value
-                switch evaluation.action {
+                switch evaluation {
                 case .unchanged:
                     self.bundleReplacementHandoffAttempt = 0
                     self.bundleReplacementHandoffTargetHash = nil
@@ -698,20 +654,14 @@ extension ApplicationRelocator {
                     attempt += 1
                     try? await Task.sleep(for: retryDelay)
                     guard !Task.isCancelled else { return }
-                case .relaunch:
-                    guard let launchReference = evaluation.launchReference,
-                          let launchCodeDirectoryHash = evaluation.launchCodeDirectoryHash
-                    else {
-                        try? await Task.sleep(for: .milliseconds(250))
-                        continue
-                    }
+                case let .relaunch(launchReference, launchCodeDirectoryHash):
                     if self.bundleReplacementHandoffTargetHash != launchCodeDirectoryHash {
                         self.bundleReplacementHandoffTargetHash = launchCodeDirectoryHash
                         self.bundleReplacementHandoffAttempt = 0
                     }
                     self.bundleReplacementHandoffAttempt += 1
                     let handoffAttempt = self.bundleReplacementHandoffAttempt
-                    let maximumAttempts = self.replacementHandoffPolicy.maximumAttempts
+                    let maximumAttempts = ReplacementHandoffPolicy.maximumAttempts
                     self.bundleReplacementCheckPending = false
                     self.logger.notice(
                         "Relaunching trusted replacement (attempt \(handoffAttempt)/\(maximumAttempts))")
@@ -739,21 +689,11 @@ extension ApplicationRelocator {
     private nonisolated static func replacementEvaluationOnDisk(
         for snapshot: BundleReplacementSnapshot) -> ReplacementEvaluation
     {
-        guard let installedApp = applicationOnDisk(at: snapshot.bundleURL) else {
-            return ReplacementEvaluation(
-                action: .waitForTrustedReplacement,
-                launchReference: nil,
-                launchCodeDirectoryHash: nil)
-        }
-        guard let launchReference = bundleFileReference(
-            bundleURL: snapshot.bundleURL,
-            executableURL: installedApp.executableURL)
-        else {
-            return ReplacementEvaluation(
-                action: .waitForTrustedReplacement,
-                launchReference: nil,
-                launchCodeDirectoryHash: nil)
-        }
+        guard let installedApp = applicationOnDisk(at: snapshot.bundleURL),
+              let launchReference = bundleFileReference(
+                  bundleURL: snapshot.bundleURL,
+                  executableURL: installedApp.executableURL)
+        else { return .waitForTrustedReplacement }
         let sameBundleIdentifier = installedApp.bundleIdentifier == snapshot.bundleIdentifier
         let installedCodeDirectoryHash = self.trustedCodeDirectoryHash(
             at: snapshot.bundleURL,
@@ -763,22 +703,19 @@ extension ApplicationRelocator {
         // afterward so the launch reference can only name that validated bundle.
         guard self.bundleFileReference(
             bundleURL: snapshot.bundleURL,
-            executableURL: installedApp.executableURL) == launchReference
-        else {
-            return ReplacementEvaluation(
-                action: .waitForTrustedReplacement,
-                launchReference: nil,
-                launchCodeDirectoryHash: nil)
-        }
-        let action = self.replacementAction(
+            executableURL: installedApp.executableURL) == launchReference,
+            let installedCodeDirectoryHash
+        else { return .waitForTrustedReplacement }
+        switch self.replacementAction(
             launchedCodeDirectoryHash: snapshot.codeDirectoryHash,
             installedCodeDirectoryHash: installedCodeDirectoryHash,
             sameBundleIdentifier: sameBundleIdentifier,
-            trusted: installedCodeDirectoryHash != nil)
-        return ReplacementEvaluation(
-            action: action,
-            launchReference: action == .relaunch ? launchReference : nil,
-            launchCodeDirectoryHash: action == .relaunch ? installedCodeDirectoryHash : nil)
+            trusted: true)
+        {
+        case .unchanged: return .unchanged
+        case .waitForTrustedReplacement: return .waitForTrustedReplacement
+        case .relaunch: return .relaunch(launchReference, installedCodeDirectoryHash)
+        }
     }
 
     nonisolated static func bundleFileReference(
@@ -816,7 +753,7 @@ extension ApplicationRelocator {
     private static func runningCodeIdentity(
         bundleIdentifier: String) -> (codeDirectoryHash: Data, requirementData: Data)?
     {
-        guard let codeDirectoryHash = kernelCodeDirectoryHash(),
+        guard let codeDirectoryHash = ProcessIdentity.codeDirectoryHash(pid: getpid()),
               let teamIdentifier = kernelTeamIdentifier(),
               let requirementString = developerIDRequirementString(
                   bundleIdentifier: bundleIdentifier,
@@ -844,14 +781,6 @@ extension ApplicationRelocator {
             "certificate 1[field.1.2.840.113635.100.6.2.6] exists and " +
             "certificate leaf[field.1.2.840.113635.100.6.1.13] exists and " +
             "certificate leaf[subject.OU] = \"\(teamIdentifier)\""
-    }
-
-    private static func kernelCodeDirectoryHash() -> Data? {
-        var bytes = [UInt8](repeating: 0, count: 20)
-        let result = bytes.withUnsafeMutableBytes {
-            csops(getpid(), 5, $0.baseAddress, $0.count)
-        }
-        return result == 0 ? Data(bytes) : nil
     }
 
     private static func kernelTeamIdentifier() -> String? {
@@ -1081,7 +1010,7 @@ extension ApplicationRelocator {
             return .failed(supervisor: supervisor)
         }
 
-        let timeoutMilliseconds = self.replacementHandoffPolicy.timeoutMilliseconds(
+        let timeoutMilliseconds = ReplacementHandoffPolicy.timeoutMilliseconds(
             loadAverage: self.currentSystemLoadAverage(),
             activeProcessorCount: processInfo.activeProcessorCount)
         Task { @MainActor in
@@ -1116,7 +1045,7 @@ extension ApplicationRelocator {
         supervisor: KeepAliveSupervisor?,
         reason: String) async
     {
-        let action = self.replacementHandoffPolicy.failureAction(
+        let action = ReplacementHandoffPolicy.failureAction(
             failedAttempt: attempt,
             hasKeepAliveSupervisor: supervisor != nil)
         if action.isTerminal,
@@ -1130,7 +1059,7 @@ extension ApplicationRelocator {
         switch action {
         case let .retry(delay):
             self.bundleReplacementCheckPending = true
-            let maximumAttempts = self.replacementHandoffPolicy.maximumAttempts
+            let maximumAttempts = ReplacementHandoffPolicy.maximumAttempts
             self.logger.error(
                 "Replacement handoff failed: \(reason, privacy: .public); attempt \(attempt)/\(maximumAttempts)")
             do {
@@ -1180,20 +1109,18 @@ extension ApplicationRelocator {
         if self.bundleReplacementCheckPending { return true }
         return self.shouldContinueReplacementRecovery(
             afterFailedTarget: failedTargetHash,
-            latestAction: evaluation.action,
-            latestTargetHash: evaluation.launchCodeDirectoryHash)
+            latestEvaluation: evaluation)
     }
 
     nonisolated static func shouldContinueReplacementRecovery(
         afterFailedTarget failedTargetHash: Data,
-        latestAction: ReplacementAction,
-        latestTargetHash: Data?) -> Bool
+        latestEvaluation: ReplacementEvaluation) -> Bool
     {
-        switch latestAction {
+        switch latestEvaluation {
         case .unchanged, .waitForTrustedReplacement:
             true
-        case .relaunch:
-            latestTargetHash != failedTargetHash
+        case let .relaunch(_, hash):
+            hash != failedTargetHash
         }
     }
 
@@ -1220,6 +1147,11 @@ extension ApplicationRelocator {
         guard pipe(&descriptors) == 0 else { return nil }
         let readDescriptor = descriptors[0]
         let writeDescriptor = descriptors[1]
+        var spawnResult: Int32 = -1
+        defer {
+            if spawnResult != 0 { Darwin.close(readDescriptor) }
+            Darwin.close(writeDescriptor)
+        }
 
         var environmentAssignments = [
             "\(replacementSourceBundleEnvironmentKey)=\(sourceBundleURL.path)",
@@ -1238,68 +1170,37 @@ extension ApplicationRelocator {
         }
         // The detached child is no longer owned by the current launchd job. Do not
         // let it inherit that job's identity and attempt a second bootout later.
-        let arguments = [
-            "/usr/bin/env",
-            "-u",
+        let arguments = ["/usr/bin/env"] + [
             "XPC_SERVICE_NAME",
-            "-u",
             replacementSourceBundleEnvironmentKey,
-            "-u",
             replacementParentPIDEnvironmentKey,
-            "-u",
             replacementCodeHashEnvironmentKey,
-            "-u",
             replacementReadyFDEnvironmentKey,
-            "-u",
             replacementBootoutTargetEnvironmentKey,
-            "-u",
             replacementSupervisorLabelEnvironmentKey,
-            "-u",
             replacementSupervisorPlistEnvironmentKey,
-        ] + environmentAssignments +
+        ].flatMap { ["-u", $0] } + environmentAssignments +
             [launchReference.executableURL.path] + forwardedArguments
         var cArguments = arguments.map { strdup($0) } + [nil]
         defer { cArguments.compactMap(\.self).forEach { free($0) } }
 
         var fileActions: posix_spawn_file_actions_t?
+        guard posix_spawn_file_actions_init(&fileActions) == 0 else { return nil }
+        defer { posix_spawn_file_actions_destroy(&fileActions) }
         var attributes: posix_spawnattr_t?
-        guard posix_spawn_file_actions_init(&fileActions) == 0,
-              posix_spawnattr_init(&attributes) == 0
-        else {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
-        }
-        defer {
-            posix_spawn_file_actions_destroy(&fileActions)
-            posix_spawnattr_destroy(&attributes)
-        }
+        guard posix_spawnattr_init(&attributes) == 0 else { return nil }
+        defer { posix_spawnattr_destroy(&attributes) }
         guard posix_spawn_file_actions_adddup2(&fileActions, writeDescriptor, childReadyDescriptor) == 0,
               posix_spawnattr_setflags(
                   &attributes,
                   Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0
-        else {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
-        }
-        if readDescriptor != childReadyDescriptor,
-           posix_spawn_file_actions_addclose(&fileActions, readDescriptor) != 0
-        {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
-        }
-        if writeDescriptor != childReadyDescriptor,
-           posix_spawn_file_actions_addclose(&fileActions, writeDescriptor) != 0
-        {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
+        else { return nil }
+        for descriptor in descriptors where descriptor != childReadyDescriptor {
+            guard posix_spawn_file_actions_addclose(&fileActions, descriptor) == 0 else { return nil }
         }
 
         var processIdentifier = pid_t()
-        let spawnResult = cArguments.withUnsafeMutableBufferPointer { buffer in
+        spawnResult = cArguments.withUnsafeMutableBufferPointer { buffer in
             posix_spawn(
                 &processIdentifier,
                 "/usr/bin/env",
@@ -1308,11 +1209,7 @@ extension ApplicationRelocator {
                 buffer.baseAddress,
                 environ)
         }
-        Darwin.close(writeDescriptor)
-        guard spawnResult == 0 else {
-            Darwin.close(readDescriptor)
-            return nil
-        }
+        guard spawnResult == 0 else { return nil }
         return (processIdentifier, readDescriptor)
     }
 

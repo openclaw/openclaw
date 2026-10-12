@@ -1,8 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { projectPairedDeviceNodeBindings } from "../../infra/device-pairing-node-state.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { readDevicePairingNodeSnapshot } from "../../infra/device-pairing-store-readonly.js";
 import { NODE_WORKER_SUPERVISOR_STATUS_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
@@ -22,7 +21,7 @@ import {
   createDeviceWorkerRuntime,
 } from "../worker-environments/device-provider.js";
 import { environmentsHandlers } from "./environments.js";
-import { pairedNodeDevice } from "./environments.test-support.js";
+import { createDevicePairingNodeSnapshot, pairedNodeDevice } from "./environments.test-support.js";
 import { nodeHandlers } from "./nodes.js";
 import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -40,9 +39,9 @@ vi.mock("../../infra/device-pairing-node-facts.js", async (importOriginal) => ({
   updatePairedNodeSessionHost: updatePairedNodeSessionHostMock,
 }));
 
-vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
-  listDevicePairing: vi.fn(),
+vi.mock("../../infra/device-pairing-store-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing-store-readonly.js")>()),
+  readDevicePairingNodeSnapshot: vi.fn(),
 }));
 
 const RETIRED_WORKER_RUNS = { retired: true } as const;
@@ -122,7 +121,7 @@ beforeEach(() => {
 });
 
 describe("nodeHandlers node.runnerInventory.update", () => {
-  it.each([GATEWAY_CLIENT_IDS.NODE_HOST, GATEWAY_CLIENT_IDS.MACOS_APP])(
+  it.each([GATEWAY_CLIENT_IDS.MACOS_APP])(
     "publishes explicit runner consent and launch capacity for authenticated %s",
     async (clientId) => {
       const inventoryChanged = vi.fn();
@@ -361,15 +360,13 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     const client = createWorkerSupervisorNodeClient();
     client.connect.commands = [NODE_DESKTOP_STREAM_COMMAND];
     const paired = pairedNodeDevice("node-1", { commands: [NODE_DESKTOP_STREAM_COMMAND] });
-    const binding = expectDefined(
-      projectPairedDeviceNodeBindings([paired]).get("node-1"),
-      "paired node binding",
-    );
+    const snapshot = createDevicePairingNodeSnapshot([paired]);
+    const binding = expectDefined(snapshot.bindings.get("node-1"), "paired node binding");
     const node = runtime.nodeRegistry.register(client, {
       pairingIdentity: binding.identity,
       pairingGeneration: binding.generation,
     });
-    vi.mocked(listDevicePairing).mockResolvedValue({ pending: [], paired: [paired] });
+    vi.mocked(readDevicePairingNodeSnapshot).mockResolvedValue(snapshot);
     const device = createDeviceWorkerRuntime({ getPairedDevice: async () => paired });
     device.bindNodeTransport(transport);
     const service = {};

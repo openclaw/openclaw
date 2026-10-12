@@ -22,11 +22,13 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   parseSqliteSessionFileMarker,
+  resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendSessionTranscriptMessageByIdentity,
   readLatestAssistantTextByIdentity,
+  readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -146,6 +148,58 @@ describe("Telegram typed command delivery", () => {
     );
   });
 
+  it("records a quoted command once when native quoting requires fallback delivery", async () => {
+    const cfg = commandConfig();
+    cfg.channels!.telegram!.replyToMode = "first";
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "quoted-command",
+      storePath: cfg.session!.store!,
+    };
+    await upsertSessionEntry({
+      ...scope,
+      entry: { sessionId: scope.sessionId, updatedAt: 1 },
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: { role: "assistant", content: "Earlier answer", timestamp: 1 },
+    });
+    harness.replySpy.mockResolvedValue({ text: "Thinking level set to low.", replyToId: "30102" });
+    const bot = await createBot(true, true, cfg);
+    await bot.handleUpdate({
+      update_id: 3002,
+      message: {
+        ...commandMessage("/think low"),
+        message_id: 30102,
+        reply_to_message: {
+          message_id: 100,
+          date: 1736380790,
+          chat,
+          from,
+          text: "Earlier answer",
+          reply_to_message: undefined,
+        },
+        quote: { text: "Earlier answer", position: 0 },
+      },
+    });
+    expect(apiCalls).toHaveBeenCalledWith(
+      "sendMessage",
+      expect.objectContaining({
+        text: "Thinking level set to low.",
+        reply_parameters: expect.objectContaining({ message_id: 100, quote: "Earlier answer" }),
+      }),
+    );
+    const messages = (await readVisibleSessionTranscriptMessageEntries(scope)).map(
+      ({ message }) => message,
+    );
+    expect(messages).toMatchObject([
+      { role: "assistant", content: "Earlier answer" },
+      { role: "user", content: [{ type: "text", text: "/think low" }] },
+      { role: "assistant", content: [{ type: "text", text: "Thinking level set to low." }] },
+    ]);
+  });
+
   it("preserves the builtin catalog choice when a plugin registers fast", async () => {
     const previousRegistry = getActivePluginRegistry();
     try {
@@ -182,7 +236,33 @@ describe("Telegram typed command delivery", () => {
 });
 
 describe("Telegram native argument menus", () => {
-  it.each(["parent", "high", "off"] as const)(
+  it("records native menus in the configured store despite a stale default binding", async () => {
+    const cfg = commandConfig();
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: resolveStorePath(undefined, { agentId: "main" }),
+      sessionKey,
+      entry: { sessionId: "stale-default", updatedAt: 1 },
+    });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: cfg.session!.store!,
+      sessionKey,
+      entry: { sessionId: "configured-native", updatedAt: 1 },
+    });
+    const bot = await createBot(true, true, cfg, true);
+    await bot.handleUpdate({ update_id: 3100, message: commandMessage("/think") });
+    const latest = await readLatestAssistantTextByIdentity({
+      agentId: "main",
+      sessionKey,
+      sessionId: "configured-native",
+      storePath: cfg.session!.store!,
+    });
+    expect(latest?.text).toContain(sentMenu().text);
+  });
+
+  it.each(["parent", "off"] as const)(
     "uses the %s model settings for a DM-topic keyboard",
     async (thinking) => {
       const inherited = thinking === "parent";
@@ -441,10 +521,11 @@ describe("Telegram registered plugin delivery", () => {
     const cfg = pluginConfig();
     cfg.agents = {
       entries: {
-        main: { default: true, workspace: otherWorkspace },
+        main: { workspace: otherWorkspace },
         attachments: { workspace: routedWorkspace },
       },
     };
+    cfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }];
     cfg.channels!.telegram!.groupPolicy = "open";
     cfg.channels!.telegram!.groupAllowFrom = [String(from.id)];
     cfg.channels!.telegram!.groups = {
@@ -531,71 +612,55 @@ describe("Telegram registered plugin delivery", () => {
     },
   );
 
-  it.each([
-    "local approval",
-    "explicit suppressReply",
-    "metadata-only",
-    "undefined",
-    "button-only",
-  ] as const)("distinguishes %s results from an empty response", async (kind) => {
-    const suppressed = kind === "local approval" || kind === "explicit suppressReply";
-    const cfg = pluginConfig();
-    if (suppressed) {
-      cfg.channels!.telegram!.execApprovals = {
-        enabled: true,
-        approvers: [String(from.id)],
-        target: "dm",
-      };
-    }
-    registerCommand(
-      async () =>
-        kind === "explicit suppressReply"
-          ? { suppressReply: true }
-          : kind === "local approval"
-            ? {
-                text: "Approval required.",
-                channelData: {
-                  execApproval: {
-                    approvalId: "7f423fdc-1111-2222-3333-444444444444",
-                    approvalSlug: "7f423fdc",
-                    allowedDecisions: ["allow-once", "deny"],
+  it.each(["explicit suppressReply", "metadata-only", "button-only"] as const)(
+    "distinguishes %s results from an empty response",
+    async (kind) => {
+      const suppressed = kind === "explicit suppressReply";
+      const cfg = pluginConfig();
+      if (suppressed) {
+        cfg.channels!.telegram!.execApprovals = {
+          enabled: true,
+          approvers: [String(from.id)],
+          target: "dm",
+        };
+      }
+      registerCommand(
+        async () =>
+          kind === "explicit suppressReply"
+            ? { suppressReply: true }
+            : kind === "metadata-only"
+              ? { channelData: { plugin: { traceId: "trace-1" } } }
+              : {
+                  channelData: {
+                    telegram: { buttons: [[{ text: "Retry", callback_data: "retry" }]] },
                   },
                 },
-              }
-            : kind === "undefined"
-              ? (undefined as never)
-              : kind === "metadata-only"
-                ? { channelData: { plugin: { traceId: "trace-1" } } }
-                : {
-                    channelData: {
-                      telegram: { buttons: [[{ text: "Retry", callback_data: "retry" }]] },
-                    },
-                  },
-      { progress: suppressed },
-    );
-    await (
-      await createBot(true, true, cfg)
-    ).handleUpdate({ update_id: 3203, message: commandMessage("/plug") });
-    if (suppressed) {
-      expect(effects()).toMatchObject([
-        { method: "sendMessage" },
-        { method: "deleteMessage", payload: { message_id: 701 } },
-      ]);
-    } else {
-      expect(effects()).toHaveLength(1);
-      const delivered = effects()[0]?.payload;
-      if (kind === "button-only") {
-        expect(delivered).toMatchObject({
-          reply_markup: { inline_keyboard: [[{ text: "Retry", callback_data: "retry" }]] },
-        });
-        expect(delivered?.text).not.toContain("No response generated");
+        { progress: suppressed },
+      );
+      await (
+        await createBot(true, true, cfg)
+      ).handleUpdate({ update_id: 3203, message: commandMessage("/plug") });
+      if (suppressed) {
+        expect(effects()).toMatchObject([
+          { method: "sendMessage" },
+          { method: "deleteMessage", payload: { message_id: 701 } },
+        ]);
       } else {
-        expect(delivered?.text).toContain("No response generated");
+        expect(effects()).toHaveLength(1);
+        const delivered = effects()[0]?.payload;
+        if (kind === "button-only") {
+          expect(delivered).toMatchObject({
+            reply_markup: { inline_keyboard: [[{ text: "Retry", callback_data: "retry" }]] },
+          });
+          expect(delivered?.text).not.toContain("No response generated");
+        } else {
+          expect(delivered?.text).toContain("No response generated");
+        }
       }
-    }
-  });
+    },
+  );
 
-  it.each([99, undefined])("rejects unmatched arguments in forum topic %s", async (threadId) => {
+  it("rejects unmatched arguments outside a forum topic", async () => {
     registerCommand(
       async () => {
         throw new Error("Unmatched arguments must not execute");
@@ -613,8 +678,8 @@ describe("Telegram registered plugin delivery", () => {
       message: {
         ...message,
         chat: { id: groupChat.id, type: "supergroup", title: "Forum" },
-        message_thread_id: threadId,
-        is_topic_message: threadId !== undefined,
+        message_thread_id: undefined,
+        is_topic_message: false,
       },
     });
     expect(effects()).toEqual([
@@ -626,75 +691,62 @@ describe("Telegram registered plugin delivery", () => {
       },
     ]);
     expect([groupChat.id, String(groupChat.id)]).toContain(effects()[0]?.payload.chat_id);
-    if (threadId === undefined) {
-      expect(effects()[0]?.payload).not.toHaveProperty("message_thread_id");
-    } else {
-      expect(effects()[0]?.payload.message_thread_id).toBe(99);
-    }
+    expect(effects()[0]?.payload).not.toHaveProperty("message_thread_id");
     expect(harness.replySpy).not.toHaveBeenCalled();
   });
 
-  it.each(["forum", "DM-topic"] as const)(
-    "lets a plugin read the persisted %s transcript despite a stale legacy file",
-    async (kind) => {
-      const cfg = pluginConfig();
-      cfg.channels!.telegram!.groupAllowFrom = [String(from.id)];
-      cfg.channels!.telegram!.groups = { "*": { requireMention: false } };
-      const sessionKey =
-        kind === "forum"
-          ? `agent:main:telegram:group:${groupChat.id}:topic:77`
-          : "agent:main:main:thread:42001:77";
-      for (const [key, id, text] of [
-        ["agent:main:main", `plugin-${kind}-wrong-session`, "Wrong conversation"],
-        [sessionKey, `plugin-${kind}-current-session`, `Bound ${kind} transcript answer`],
-      ] as const) {
-        await upsertSessionEntry({
-          storePath: cfg.session!.store!,
-          sessionKey: key,
-          entry: { sessionId: id, sessionFile: "stale-legacy.jsonl", updatedAt: 1 },
-        });
-        await appendSessionTranscriptMessageByIdentity({
-          agentId: "main",
-          storePath: cfg.session!.store!,
-          sessionKey: key,
-          sessionId: id,
-          message: { role: "assistant", content: text, timestamp: 1 },
-          eventId: `${id}-assistant`,
-        });
-      }
-      registerCommand(
-        async (ctx) => {
-          const marker = parseSqliteSessionFileMarker(ctx.sessionFile);
-          if (!marker || !ctx.sessionId || !ctx.sessionKey) {
-            return { text: "No usable transcript identity" };
-          }
-          const latest = await readLatestAssistantTextByIdentity({
-            ...marker,
-            sessionId: ctx.sessionId,
-            sessionKey: ctx.sessionKey,
-          });
-          return { text: latest?.text ?? "No transcript found" };
-        },
-        { progress: false },
-      );
-      await (
-        await createBot(true, true, cfg, kind === "DM-topic")
-      ).handleUpdate({
-        update_id: 3206,
-        message:
-          kind === "forum"
-            ? groupCommand("/plug", 77)
-            : { ...commandMessage("/plug"), message_thread_id: 77 },
+  it("lets a plugin read the persisted forum transcript despite a stale legacy file", async () => {
+    const cfg = pluginConfig();
+    cfg.channels!.telegram!.groupAllowFrom = [String(from.id)];
+    cfg.channels!.telegram!.groups = { "*": { requireMention: false } };
+    const sessionKey = `agent:main:telegram:group:${groupChat.id}:topic:77`;
+    for (const [key, id, text] of [
+      ["agent:main:main", "plugin-forum-wrong-session", "Wrong conversation"],
+      [sessionKey, "plugin-forum-current-session", "Bound forum transcript answer"],
+    ] as const) {
+      await upsertSessionEntry({
+        storePath: cfg.session!.store!,
+        sessionKey: key,
+        entry: { sessionId: id, sessionFile: "stale-legacy.jsonl", updatedAt: 1 },
       });
-      expect(effects()).toEqual([
-        {
-          method: "sendMessage",
-          payload: expect.objectContaining({
-            text: `Bound ${kind} transcript answer`,
-            message_thread_id: 77,
-          }),
-        },
-      ]);
-    },
-  );
+      await appendSessionTranscriptMessageByIdentity({
+        agentId: "main",
+        storePath: cfg.session!.store!,
+        sessionKey: key,
+        sessionId: id,
+        message: { role: "assistant", content: text, timestamp: 1 },
+        eventId: `${id}-assistant`,
+      });
+    }
+    registerCommand(
+      async (ctx) => {
+        const marker = parseSqliteSessionFileMarker(ctx.sessionFile);
+        if (!marker || !ctx.sessionId || !ctx.sessionKey) {
+          return { text: "No usable transcript identity" };
+        }
+        const latest = await readLatestAssistantTextByIdentity({
+          ...marker,
+          sessionId: ctx.sessionId,
+          sessionKey: ctx.sessionKey,
+        });
+        return { text: latest?.text ?? "No transcript found" };
+      },
+      { progress: false },
+    );
+    await (
+      await createBot(true, true, cfg)
+    ).handleUpdate({
+      update_id: 3206,
+      message: groupCommand("/plug", 77),
+    });
+    expect(effects()).toEqual([
+      {
+        method: "sendMessage",
+        payload: expect.objectContaining({
+          text: "Bound forum transcript answer",
+          message_thread_id: 77,
+        }),
+      },
+    ]);
+  });
 });

@@ -1,6 +1,7 @@
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
@@ -14,6 +15,7 @@ import {
 } from "../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry, SessionContextBudgetStatus } from "../config/sessions/types.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
@@ -109,6 +111,66 @@ describe("buildStatusText prepared context windows", () => {
     });
   }
 
+  it.each([
+    { name: "current discovered limits", window: 262_144, expected: "45k/262k" },
+    { name: "unknown limits", window: undefined, expected: "45k/?" },
+    {
+      name: "another runtime's limits",
+      window: 262_144,
+      nativeRuntime: "other-runtime",
+      expected: "45k/?",
+    },
+    {
+      name: "API limits for a native runtime",
+      window: 262_144,
+      resolvedHarness: "fixture-native",
+      expected: "45k/?",
+    },
+  ])("renders $name without reusing a stale cache or estimate", async (scenario) => {
+    const provider = "ollama";
+    const model = "qwen3:8b";
+    const key = providerContextTokenCacheKey(provider, model);
+    const caches = getContextWindowCaches();
+    const cacheMaps = [caches.discoveredTokenCache, caches.contextWindowCache];
+    const previous = cacheMaps.map((cache) => cache.get(key));
+    for (const cache of cacheMaps) {
+      cache.set(key, 128_000);
+    }
+    try {
+      const parts = await renderPreparedStatus({
+        provider,
+        model,
+        resolvedHarness: scenario.resolvedHarness ?? "openclaw",
+        contextTokens: 200_000,
+        thinkingCatalog: [
+          {
+            provider,
+            id: model,
+            nativeRuntime: scenario.nativeRuntime,
+            contextWindow: scenario.window,
+            contextTokens: scenario.window,
+          },
+        ],
+      });
+
+      expect(parts.text).toContain(`Context: ${scenario.expected}`);
+      const table = parts.presentation.blocks.find((block) => block.type === "table");
+      expect(table?.type === "table" ? table.rows : []).toContainEqual([
+        "📚 Context",
+        expect.stringContaining(scenario.expected),
+      ]);
+    } finally {
+      cacheMaps.forEach((cache, index) => {
+        const value = previous[index];
+        if (value === undefined) {
+          cache.delete(key);
+        } else {
+          cache.set(key, value);
+        }
+      });
+    }
+  });
+
   it("renders the agent thinking default ahead of model and global defaults", async () => {
     const parts = await renderPreparedStatus({
       cfg: {
@@ -198,6 +260,7 @@ describe("buildStatusText prepared context windows", () => {
   async function renderTerminalFallback(
     params: {
       entry?: Partial<InternalSessionEntry>;
+      live?: boolean;
       message?: Record<string, unknown>;
       laterMessage?: Record<string, unknown>;
       status?: Partial<StatusTextParams>;
@@ -245,15 +308,25 @@ describe("buildStatusText prepared context windows", () => {
         append(params.laterMessage);
       }
       const original = loadSessionEntryReadOnly(scope);
-      const parts = await renderPreparedStatus({
-        sessionEntry: original,
-        sessionKey: scope.sessionKey,
-        storePath: scope.storePath,
-        contextTokens: 1_000_000,
-        ...params.status,
-      });
-      expect(loadSessionEntryReadOnly(scope)).toEqual(original);
-      return parts;
+      const runId = "current-live-run";
+      if (params.live) {
+        registerAgentRunContext(runId, { ...scope, projectSessionActive: true });
+      }
+      try {
+        const parts = await renderPreparedStatus({
+          sessionEntry: original,
+          sessionKey: scope.sessionKey,
+          storePath: scope.storePath,
+          contextTokens: 1_000_000,
+          ...params.status,
+        });
+        expect(loadSessionEntryReadOnly(scope)).toEqual(original);
+        return parts;
+      } finally {
+        if (params.live) {
+          clearAgentRunContext(runId);
+        }
+      }
     });
   }
 
@@ -299,7 +372,7 @@ describe("buildStatusText prepared context windows", () => {
   );
 
   it.each([
-    ["running session", { entry: { status: "running" } }],
+    ["running session", { live: true }],
     ["missing run", { entry: { lastRunId: undefined } }],
     ["failed assistant", { message: { stopReason: "error" } }],
     ["hidden assistant", { message: { content: [] } }],
@@ -356,17 +429,17 @@ describe("buildStatusText prepared context windows", () => {
     expect(readTail).not.toHaveBeenCalled();
   });
 
-  it("retains the incoming prepared cap when it already belongs to the terminal pair", async () => {
+  it("uses the admitted effective cap for the terminal pair", async () => {
     const parts = await renderTerminalFallback({
       entry: { providerOverride: "deepseek", modelOverride: "deepseek-v4-flash" },
       status: {
         provider: "fallback",
         model: "small-model",
-        contextTokens: 96_000,
         thinkingCatalog: catalog.map(({ provider, id, contextWindow }) => ({
           provider,
           id,
           contextWindow,
+          contextTokens: id === "small-model" ? 96_000 : contextWindow,
         })),
       },
     });

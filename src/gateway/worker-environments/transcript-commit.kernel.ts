@@ -1,10 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { SessionManagerCore } from "../../agents/sessions/session-manager-core.js";
-import type {
-  SessionTranscriptContextVersion,
-  SessionTranscriptWriteScope,
-} from "../../config/sessions/session-accessor.sqlite-contract.js";
+import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import {
   loadSessionEntry,
   replaceSessionEntrySync,
@@ -16,37 +13,21 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptMessageSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-
-export type CommittedAgentMessage = Extract<
-  AgentMessage,
-  { role: "assistant" | "toolResult" | "user" }
-> & { idempotencyKey: string };
-type AppliedTranscriptMessage = {
-  appended: boolean;
-  message: AgentMessage;
-  messageId: string;
-  messageSeq?: number;
-};
-export type ApplyTranscriptCommitResult =
-  | { ok: true; messages: AppliedTranscriptMessage[]; lifecycleRevision: string | undefined }
-  | { ok: false; reason: "invalid-batch" | "session-not-attached" | "stale-base-leaf" };
+import { readTranscriptMessageIdempotencyKey } from "../session-transcript-entry-message.js";
+import type {
+  AppliedTranscriptMessage,
+  ApplyTranscriptCommitResult,
+  CommittedAgentMessage,
+  TranscriptCommitInput,
+} from "./transcript-commit.types.js";
 type PersistedCommitResolution =
   | { kind: "ambiguous" | "missing" }
   | { kind: "found"; messages: AppliedTranscriptMessage[] };
-export type TranscriptCommitInput = {
-  scope: Omit<SessionTranscriptWriteScope, "env"> & SessionTranscriptRuntimeTarget;
-  lifecycleRevision: string | undefined;
-  requestedBaseLeafId: string | null;
-  recoverPersistedBatch: boolean;
-  messages: readonly CommittedAgentMessage[];
-  cwd: string;
-};
 export type PreparedTranscriptCommit = {
   result: ApplyTranscriptCommitResult;
   version?: SessionTranscriptContextVersion;
@@ -54,42 +35,36 @@ export type PreparedTranscriptCommit = {
   parentId: string | null;
 };
 
-function readMessageIdempotencyKey(message: unknown): string | undefined {
-  if (!isRecord(message)) {
-    return undefined;
-  }
-  const value = message.idempotencyKey;
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 export function isCommittedAgentMessage(message: unknown): message is CommittedAgentMessage {
   if (!isRecord(message)) {
     return false;
   }
   const role = message.role;
   return (
-    (role === "user" || role === "assistant" || role === "toolResult") &&
-    readMessageIdempotencyKey(message) !== undefined
+    (role === "user" ||
+      role === "assistant" ||
+      role === "toolResult" ||
+      (role === "custom" &&
+        (message.customType === "openclaw.runtime-context" ||
+          message.customType === "openclaw.system-update"))) &&
+    readTranscriptMessageIdempotencyKey(message) !== undefined
   );
 }
 
 function resolveActiveCommitPrefix(params: {
   baseLeafId: string | null;
-  manager: SessionManagerCore;
+  activeBranch: ReturnType<SessionManagerCore["getBranch"]>;
+  activeLeafId: string | null;
   messages: readonly AgentMessage[];
 }):
   | {
-      activeVisibleEntryCount: number;
       ok: true;
       recoveredMessages: AppliedTranscriptMessage[];
     }
   | { ok: false } {
-  const activeBranch = params.manager.getBranch();
-  const activeVisibleEntryCount = activeBranch.filter(
-    (entry) => entry.type === "message" || entry.type === "compaction",
-  ).length;
-  if (params.manager.getLeafId() === params.baseLeafId) {
-    return { activeVisibleEntryCount, ok: true, recoveredMessages: [] };
+  const { activeBranch } = params;
+  if (params.activeLeafId === params.baseLeafId) {
+    return { ok: true, recoveredMessages: [] };
   }
 
   const baseIndex =
@@ -107,12 +82,12 @@ function resolveActiveCommitPrefix(params: {
 
   const recoveredMessages: AppliedTranscriptMessage[] = [];
   for (const [index, entry] of activeSuffix.slice(0, params.messages.length).entries()) {
-    const expectedKey = readMessageIdempotencyKey(params.messages[index]);
+    const expectedKey = readTranscriptMessageIdempotencyKey(params.messages[index])?.trim();
     if (
       entry.type !== "message" ||
       !expectedKey ||
       !isCommittedAgentMessage(entry.message) ||
-      readMessageIdempotencyKey(entry.message) !== expectedKey
+      readTranscriptMessageIdempotencyKey(entry.message)?.trim() !== expectedKey
     ) {
       return { ok: false };
     }
@@ -122,7 +97,7 @@ function resolveActiveCommitPrefix(params: {
       messageId: entry.id,
     });
   }
-  return { activeVisibleEntryCount, ok: true, recoveredMessages };
+  return { ok: true, recoveredMessages };
 }
 
 function resolvePersistedCommitAcrossDag(params: {
@@ -150,7 +125,7 @@ function resolvePersistedCommitAcrossDag(params: {
       completedPaths.push(path);
       return;
     }
-    const expectedKey = readMessageIdempotencyKey(params.messages[messageIndex]);
+    const expectedKey = readTranscriptMessageIdempotencyKey(params.messages[messageIndex])?.trim();
     if (!expectedKey) {
       return;
     }
@@ -158,7 +133,7 @@ function resolvePersistedCommitAcrossDag(params: {
       if (
         entry.type !== "message" ||
         !isCommittedAgentMessage(entry.message) ||
-        readMessageIdempotencyKey(entry.message) !== expectedKey
+        readTranscriptMessageIdempotencyKey(entry.message)?.trim() !== expectedKey
       ) {
         continue;
       }
@@ -199,15 +174,34 @@ export function prepareTranscriptCommit(input: TranscriptCommitInput): PreparedT
     assertCurrentSessionTranscriptHeader(findSessionTranscriptHeader(snapshot.events));
   }
   const manager = new SessionManagerCore(input.cwd, undefined, snapshot.events);
+  const activeBranch = manager.getBranch();
+  const activeVisibleEntries = activeBranch.filter(
+    (event) => event.type === "message" || event.type === "compaction",
+  );
   const plan = (
     result: ApplyTranscriptCommitResult,
     nextMessageSeq = 0,
-  ): PreparedTranscriptCommit => ({
-    result,
-    version: snapshot.version,
-    nextMessageSeq,
-    parentId: manager.getAppendParentId(),
-  });
+  ): PreparedTranscriptCommit => {
+    let applied = result;
+    if (result.ok && result.messages.length > 0) {
+      const activeSequences = new Map(
+        activeVisibleEntries.map((event, index) => [event.id, index + 1]),
+      );
+      applied = {
+        ...result,
+        messages: result.messages.map((message) => {
+          const messageSeq = activeSequences.get(message.messageId);
+          return messageSeq === undefined ? message : { ...message, messageSeq };
+        }),
+      };
+    }
+    return {
+      result: applied,
+      version: snapshot.version,
+      nextMessageSeq,
+      parentId: manager.getAppendParentId(),
+    };
+  };
   if (input.recoverPersistedBatch) {
     const recovered = resolvePersistedCommitAcrossDag({
       baseLeafId: input.requestedBaseLeafId,
@@ -227,7 +221,8 @@ export function prepareTranscriptCommit(input: TranscriptCommitInput): PreparedT
   }
   const prefix = resolveActiveCommitPrefix({
     baseLeafId: input.requestedBaseLeafId,
-    manager,
+    activeBranch,
+    activeLeafId: manager.getLeafId(),
     messages: input.messages,
   });
   return prefix.ok
@@ -237,7 +232,7 @@ export function prepareTranscriptCommit(input: TranscriptCommitInput): PreparedT
           messages: prefix.recoveredMessages,
           lifecycleRevision: entry.lifecycleRevision,
         },
-        prefix.activeVisibleEntryCount,
+        activeVisibleEntries.length,
       )
     : plan({ ok: false, reason: "stale-base-leaf" });
 }
@@ -280,8 +275,8 @@ export function applyPreparedTranscriptCommit(
     !freshMessages.every(
       (message, index) =>
         isCommittedAgentMessage(message) &&
-        readMessageIdempotencyKey(message) ===
-          readMessageIdempotencyKey(input.messages[recoveredCount + index]),
+        readTranscriptMessageIdempotencyKey(message)?.trim() ===
+          readTranscriptMessageIdempotencyKey(input.messages[recoveredCount + index])?.trim(),
     )
   ) {
     return { ok: false, reason: "invalid-batch" };

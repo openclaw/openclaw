@@ -166,12 +166,9 @@ export function isUnresolvedSecretInputError(value: unknown): value is Unresolve
 }
 
 /** Throw when a secret field still contains an unresolved SecretRef at a read site. */
-export function assertSecretInputResolved(params: {
-  value: unknown;
-  refValue?: unknown;
-  defaults?: SecretDefaults;
-  path: string;
-}): void {
+export function assertSecretInputResolved(
+  params: Omit<Parameters<typeof resolveSecretInputString>[0], "mode">,
+): void {
   const { ref } = resolveSecretInputRef(params);
   if (!ref) {
     return;
@@ -214,12 +211,9 @@ export function resolveSecretInputString(params: {
 }
 
 /** Return a strict literal secret value, throwing if the field still points at a SecretRef. */
-export function normalizeResolvedSecretInputString(params: {
-  value: unknown;
-  refValue?: unknown;
-  defaults?: SecretDefaults;
-  path: string;
-}): string | undefined {
+export function normalizeResolvedSecretInputString(
+  params: Parameters<typeof assertSecretInputResolved>[0],
+): string | undefined {
   return resolveSecretInputString({
     ...params,
     mode: "strict",

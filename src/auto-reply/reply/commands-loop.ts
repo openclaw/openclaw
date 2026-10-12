@@ -91,19 +91,15 @@ export const handleLoopCommand: CommandHandler = defineAuthorizedTextCommand(
     } catch {
       everyMs = undefined;
     }
-    if (everyMs !== undefined) {
-      if (everyMs < LOOP_MIN_INTERVAL_MS) {
-        return directReply(`${LOOP_USAGE} Minimum interval 30s.`);
-      }
-      const prompt = spec.slice(firstToken.length).trim();
-      if (!prompt) {
-        return directReply(LOOP_USAGE);
-      }
-      applyCommandTextToParams(params, buildLoopWorkOrder(prompt, params.sessionKey, everyMs));
-      return { shouldContinue: true };
+    if (everyMs !== undefined && everyMs < LOOP_MIN_INTERVAL_MS) {
+      return directReply(`${LOOP_USAGE} Minimum interval 30s.`);
+    }
+    const prompt = everyMs === undefined ? spec : spec.slice(firstToken.length).trim();
+    if (!prompt) {
+      return directReply(LOOP_USAGE);
     }
 
-    applyCommandTextToParams(params, buildLoopWorkOrder(spec, params.sessionKey));
+    applyCommandTextToParams(params, buildLoopWorkOrder(prompt, params.sessionKey, everyMs));
     return { shouldContinue: true };
   },
 );

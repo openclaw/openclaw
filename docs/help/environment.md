@@ -262,12 +262,12 @@ before login startup files run. Bash reads `/etc/profile` and the first availabl
 profile (`~/.bash_profile`, `~/.bash_login`, or `~/.profile`). Many login profiles also source
 `~/.bashrc`. Keep those files quiet and bounded because their output, long-running work, or
 failures can affect OpenClaw startup. Other shells use noninteractive login startup (`-l -c`).
-The probe runs in its own session, detached from your terminal, so startup files get no job
+The check runs in its own session, detached from your terminal, so startup files get no job
 control and cannot take over the terminal that runs OpenClaw.
 This interactive Bash mode is limited to explicit shell env imports. Automatic executable PATH
 discovery during ordinary Gateway commands remains noninteractive.
 
-Successful probes are cached. If a probe fails, the next shell environment or PATH lookup tries again.
+Successful checks are cached. If a check fails, the next shell environment or PATH lookup tries again.
 
 ## Exec shell snapshots
 
@@ -278,7 +278,7 @@ snapshots or redirect the snapshot cache.
 
 ## Runtime-injected env vars
 
-Gateway port-listener diagnostics and lock-owner identity probes run native utilities with
+Gateway port-listener diagnostics and lock-owner identity checks run native utilities with
 a limited environment containing executable paths, OS bootstrap and account directories,
 temporary directories, and known locale and timezone settings. These children do not inherit provider credentials,
 application tokens, proxies, runtime injection variables, or arbitrary application settings.

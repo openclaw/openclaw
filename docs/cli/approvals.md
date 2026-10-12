@@ -108,8 +108,8 @@ openclaw approvals grants revoke <grant-id>
 
 The list shows the owning automation, the exact command, the use count, and
 each grant's state (until revoked, expires in N days, expired, or revoked).
-Revocation is idempotent and takes effect at the next occurrence's spawn
-boundary — that occurrence prompts again. Editing or deleting the automation
+Repeating a revocation has no additional effect. It takes effect at the next
+occurrence's spawn boundary — that occurrence prompts again. Editing or deleting the automation
 invalidates its grants without needing an explicit revoke.
 
 The CLI reads the unified approval record to select its kind, checks the requested decision against the record's allowed decisions, and then calls the unified resolver. A first successful decision exits `0`. Repeating the recorded decision also exits `0` and reports `already resolved (same decision)`. A conflicting decision, missing approval, expired approval, or decision unavailable for that approval kind prints a clear error and exits non-zero.

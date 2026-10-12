@@ -26,22 +26,30 @@ describe("pinned pnpm cold bootstrap", () => {
   }) => {
     const f = createPnpmArchiveFixture(command);
     const archives = fs.readdirSync(f.registry);
-    for (const name of archives) {
-      fs.copyFileSync(path.join(f.registry, name), path.join(f.image, name));
-    }
-    for (const [index, source] of ["image", "store", "registry"].entries()) {
-      if (source === "store") {
-        for (const name of archives) {
+    const phases = [
+      { source: "image", corruptStore: [] },
+      { source: "store", corruptStore: [] },
+      { source: "image", corruptStore: archives },
+      ...archives.map((name) => ({ source: "registry", corruptStore: [name] })),
+    ];
+    let downloads = 0;
+    for (const [index, { source, corruptStore }] of phases.entries()) {
+      for (const name of archives) {
+        if (source === "image") {
+          fs.copyFileSync(path.join(f.registry, name), path.join(f.image, name));
+        } else {
           fs.writeFileSync(path.join(f.image, name), "corrupt image");
         }
-      } else if (source === "registry") {
-        for (const name of archives) {
-          fs.writeFileSync(path.join(f.store, "toolchain", name), "corrupt store");
-        }
       }
-      const result = await f.run();
+      for (const name of corruptStore) {
+        fs.writeFileSync(path.join(f.store, "toolchain", name), "corrupt store");
+      }
+      const result = await f.run(
+        source === "registry" ? {} : { COREPACK_ENABLE_NETWORK: "0", CURL_FIXTURE_EXIT: "35" },
+      );
       expect(result.status, result.stderr).toBe(0);
-      const root = path.join(result.stdout.trim(), "v1/pnpm/12.5.1");
+      expect(result.stdout.trim()).not.toBe("");
+      const root = path.join(result.stdout.trim(), "v1/pnpm/12.9.0");
       expect(fs.readFileSync(path.join(root, "pnpm"), "utf8")).toBe("wrapper-fixture\n");
       expect(
         fs.readFileSync(path.join(root, "node_modules/@pnpm/exe.linux-x64/pnpm"), "utf8"),
@@ -52,6 +60,10 @@ describe("pinned pnpm cold bootstrap", () => {
         hash: f.spec.split("+")[1],
       });
       expect(fs.existsSync(f.calls)).toBe(source === "registry");
+      if (source === "registry") {
+        downloads += 1;
+        expect(fs.readFileSync(f.calls, "utf8").trim().split("\n")).toHaveLength(downloads);
+      }
       expect(fs.readdirSync(f.runner)).toHaveLength(index + 1);
       for (const name of archives) {
         expect(fs.readFileSync(path.join(f.store, "toolchain", name))).toEqual(
@@ -116,7 +128,7 @@ describe("pinned pnpm cold bootstrap", () => {
         let wrapperAttempts = 0;
         server.on("request", (request, response) => {
           const name = path.basename(request.url ?? "");
-          if (name === "pnpm-12.5.1.tgz" && ++wrapperAttempts <= failures) {
+          if (name === "pnpm-12.9.0.tgz" && ++wrapperAttempts <= failures) {
             if (status === null) {
               request.socket.destroy();
               return;
@@ -131,10 +143,10 @@ describe("pinned pnpm cold bootstrap", () => {
         if (succeeds) {
           expect(result.status, result.stderr).toBe(0);
           expect(
-            fs.readFileSync(path.join(result.stdout.trim(), "v1/pnpm/12.5.1/pnpm"), "utf8"),
+            fs.readFileSync(path.join(result.stdout.trim(), "v1/pnpm/12.9.0/pnpm"), "utf8"),
           ).toBe("wrapper-fixture\n");
-          expect(fs.readFileSync(path.join(f.store, "toolchain/pnpm-12.5.1.tgz"))).toEqual(
-            fs.readFileSync(path.join(f.registry, "pnpm-12.5.1.tgz")),
+          expect(fs.readFileSync(path.join(f.store, "toolchain/pnpm-12.9.0.tgz"))).toEqual(
+            fs.readFileSync(path.join(f.registry, "pnpm-12.9.0.tgz")),
           );
         } else {
           expect(result.status).not.toBe(0);
@@ -154,65 +166,7 @@ describe("pinned pnpm cold bootstrap", () => {
     });
   });
 
-  it("uses authenticated image bytes without making a network request", async ({ command }) => {
-    const f = createPnpmArchiveFixture(command);
-    for (const name of fs.readdirSync(f.registry)) {
-      fs.copyFileSync(path.join(f.registry, name), path.join(f.image, name));
-    }
-    const result = await f.run({ COREPACK_ENABLE_NETWORK: "0" });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).not.toBe("");
-    expect(fs.existsSync(f.calls)).toBe(false);
-  });
-
-  it("bootstraps from the warmed store while archive downloads are unavailable", async ({
-    command,
-  }) => {
-    const f = createPnpmArchiveFixture(command);
-    const cold = await f.run();
-    expect(cold.status, cold.stderr).toBe(0);
-    fs.unlinkSync(f.calls);
-    fs.rmSync(cold.stdout.trim(), { recursive: true });
-    const warm = await f.run({ CURL_FIXTURE_EXIT: "35", COREPACK_ENABLE_NETWORK: "0" });
-    expect(warm.status, warm.stderr).toBe(0);
-    expect(warm.stdout.trim()).not.toBe("");
-    expect(fs.existsSync(f.calls)).toBe(false);
-    expect(fs.readFileSync(path.join(warm.stdout.trim(), "v1/pnpm/12.5.1/pnpm"), "utf8")).toBe(
-      "wrapper-fixture\n",
-    );
-  });
-
-  it.for([
-    { name: "pnpm-12.5.1.tgz", fallback: "registry" },
-    { name: "exe.linux-x64-12.5.1.tgz", fallback: "registry" },
-    { name: "pnpm-12.5.1.tgz", fallback: "image" },
-    { name: "exe.linux-x64-12.5.1.tgz", fallback: "image" },
-  ])(
-    "repairs unauthenticated cached $name through the $fallback",
-    async ({ name, fallback }, { command }) => {
-      const f = createPnpmArchiveFixture(command);
-      const cold = await f.run();
-      expect(cold.status, cold.stderr).toBe(0);
-      fs.unlinkSync(f.calls);
-      fs.writeFileSync(path.join(f.store, "toolchain", name), "substituted bytes");
-      if (fallback === "image") {
-        for (const archive of fs.readdirSync(f.registry)) {
-          fs.copyFileSync(path.join(f.registry, archive), path.join(f.image, archive));
-        }
-      }
-      const repaired = await f.run();
-      expect(repaired.status, repaired.stderr).toBe(0);
-      const calls = fs.existsSync(f.calls)
-        ? fs.readFileSync(f.calls, "utf8").trim().split("\n")
-        : [];
-      expect(calls).toHaveLength(fallback === "registry" ? 1 : 0);
-      expect(fs.readFileSync(path.join(f.store, "toolchain", name))).toEqual(
-        fs.readFileSync(path.join(f.registry, name)),
-      );
-    },
-  );
-
-  it.for(["pnpm-12.5.1.tgz", "exe.linux-x64-12.5.1.tgz"])(
+  it.for(["pnpm-12.9.0.tgz", "exe.linux-x64-12.9.0.tgz"])(
     "rejects substituted downloaded %s and removes incomplete state",
     async (name, { command }) => {
       const f = createPnpmArchiveFixture(command);
@@ -245,12 +199,13 @@ describe("pinned pnpm cold bootstrap", () => {
     command,
   }) => {
     const f = createPnpmArchiveFixture(command);
-    for (const spec of [f.spec.replace("12.5.1", "12.5.2"), f.spec.replace(/.$/u, "z")]) {
+    for (const spec of [f.spec.replace("12.9.0", "12.9.1"), f.spec.replace(/.$/u, "z")]) {
       const result = await f.run({}, spec);
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("");
     }
     expect(fs.existsSync(f.calls)).toBe(false);
+    expect(fs.readdirSync(f.runner)).toEqual([]);
   });
 });
 
@@ -299,7 +254,7 @@ describe("pnpm version output owns its failure", () => {
       fs.readFileSync(".github/actions/setup-pnpm-store-cache/action.yml", "utf8"),
     );
     const step = action.runs.steps.find((entry: { id?: string }) => entry.id === "pnpm-version");
-    const run = `pnpm() { if [ ${status} -eq 0 ]; then printf '12.5.1\\n'; else return ${status}; fi; }\n${step.run}`;
+    const run = `pnpm() { if [ ${status} -eq 0 ]; then printf '12.9.0\\n'; else return ${status}; fi; }\n${step.run}`;
     const result = await command.run(
       "bash",
       ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", run],
@@ -311,6 +266,6 @@ describe("pnpm version output owns its failure", () => {
     );
     expect(result.error, "pnpm version action subprocess").toBeUndefined();
     expect(result.status, result.stderr).toBe(status);
-    expect(fs.readFileSync(output, "utf8")).toBe(status === 0 ? "pnpm-version=12.5.1\n" : "");
+    expect(fs.readFileSync(output, "utf8")).toBe(status === 0 ? "pnpm-version=12.9.0\n" : "");
   });
 });

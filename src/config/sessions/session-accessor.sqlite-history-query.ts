@@ -1,12 +1,11 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import { sql } from "kysely";
 import type {
   SessionTranscriptDisplayDeltaResult,
   SessionTranscriptMessageByIdOptions,
 } from "../../gateway/session-transcript-read.types.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { hasSqlitePostCommitScope } from "../../infra/sqlite-post-commit.js";
+import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
@@ -25,6 +24,7 @@ import {
   readDisplayableActiveEventById,
   readDisplayableActiveResetMetadataById,
   readHistoricalHistoryAnchorPage,
+  readHistoricalHistoryPrecedingEvent,
   resolveHistoricalHistoryEvent,
 } from "./session-accessor.sqlite-history-interval.js";
 import {
@@ -38,17 +38,14 @@ import {
 } from "./session-accessor.sqlite-history-projection.js";
 import {
   getActiveTranscriptKysely,
+  readSnapshotEventRows,
   type SessionTranscriptMessageAnchorPage,
   type SessionTranscriptMessageEventPage,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
+import { readTranscriptRawDeltaFromProjection } from "./session-accessor.sqlite-raw-delta-read.js";
 import {
-  createTranscriptRawDeltaCursor,
-  readTranscriptRawDeltaFromProjection,
-} from "./session-accessor.sqlite-raw-delta-read.js";
-import {
-  assertVisibleMessageRangeJson,
   hasUnindexedVisibleMessages,
   iterateVisibleMessageRange,
   iterateVisibleMessageMetadata,
@@ -56,8 +53,9 @@ import {
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
+import { createTranscriptRawDeltaCursor } from "./session-transcript-raw-cursor.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { readTranscriptPayload } from "./transcript-payload.js";
 
 const recentHistoryWindows = new Map<
   string,
@@ -68,41 +66,6 @@ const recentHistoryWindows = new Map<
   }
 >();
 
-/** Reads physical event rows in this snapshot: selected seqs, or every off-active-path row. */
-function readSnapshotEventRows(
-  projection: CurrentTranscriptProjection,
-  selection: { eventSeqs: readonly number[] } | "off-active-path",
-) {
-  const sessionId = projection.resolved.sessionId;
-  const query = getActiveTranscriptKysely(projection.database)
-    .selectFrom("transcript_events as event")
-    .select(["event.seq", transcriptEventJsonSql(projection.database.db, "event").as("event_json")])
-    .where("event.session_id", "=", sessionId);
-  return executeSqliteQuerySync(
-    projection.database.db,
-    selection === "off-active-path"
-      ? query
-          .where((eb) =>
-            eb.not(
-              eb.exists(
-                eb
-                  .selectFrom("session_transcript_active_events as active")
-                  .select("active.event_seq")
-                  .where("active.session_id", "=", sessionId)
-                  .whereRef("active.event_seq", "=", "event.seq"),
-              ),
-            ),
-          )
-          .orderBy("event.seq", "asc")
-      : query.where(
-          "event.seq",
-          "in",
-          /* kysely-allow-raw: boundaries were selected in this snapshot; bind their physical rows once. */
-          sql<number>`(SELECT value FROM json_each(${JSON.stringify(selection.eventSeqs)}))`,
-        ),
-  ).rows;
-}
-
 function readBoundaryEvents(
   projection: CurrentTranscriptProjection,
   boundaries: Iterable<VisibleHistoryBoundary>,
@@ -112,9 +75,9 @@ function readBoundaryEvents(
     return new Map();
   }
   return new Map(
-    readSnapshotEventRows(projection, { eventSeqs }).map((row) => [
+    readSnapshotEventRows(projection, eventSeqs).map((row) => [
       row.seq,
-      parseStoredTranscriptEvent(row.event_json),
+      parseStoredTranscriptEvent(readTranscriptPayload(row)),
     ]),
   );
 }
@@ -328,27 +291,6 @@ export function readTranscriptDisplayDeltaFromProjection(
   return { ...result, activeLeafEntryId: projection.state.leafEventId, events };
 }
 
-export function readSessionTranscriptHistoryEventsFromProjection(
-  projection: CurrentTranscriptProjection,
-): SessionTranscriptMessageEvent[] {
-  const history = resolveVisibleHistoryProjection(projection);
-  return readVisibleHistoryRange(projection, 0, history.total, history);
-}
-
-/**
- * Events outside the active path, such as branches left by rewind or switch. They stay
- * switchable, so retention owners must see them; retired active ancestors stay excluded.
- */
-export function readOffPathSessionTranscriptEventsFromProjection(
-  projection: CurrentTranscriptProjection,
-): SessionTranscriptMessageEvent[] {
-  return readSnapshotEventRows(projection, "off-active-path").map((row) => ({
-    event: parseStoredTranscriptEvent(row.event_json),
-    eventSeq: row.seq,
-    seq: row.seq + 1,
-  }));
-}
-
 function readRecentHistoryInSnapshot(
   projection: CurrentTranscriptProjection,
   history: VisibleHistoryProjection,
@@ -415,7 +357,7 @@ export function readRecentSessionTranscriptHistoryEventsFromProjection(
     );
   if (
     !projection.generation ||
-    hasSqlitePostCommitScope(projection.database.db) ||
+    hasUncommittedSqliteWrites(projection.database.db) ||
     projection.database.db.location() === null ||
     options.expectedReadWindow ||
     resolveSessionTranscriptReadFence(projection.resolved)
@@ -544,7 +486,8 @@ export function readSessionTranscriptHistoryEventByIdFromProjection(
   projection: CurrentTranscriptProjection,
   eventId: string,
   options: SessionTranscriptMessageByIdOptions = {},
-): SessionTranscriptMessageById | undefined {
+  needsPreceding?: (event: SessionTranscriptMessageEvent) => boolean,
+): (SessionTranscriptMessageById & { preceding?: SessionTranscriptMessageEvent }) | undefined {
   const history = resolveVisibleHistoryProjection(projection);
   const resolved = resolveHistoryEventById(projection, eventId, history, options.maxBytes);
   const event: SessionTranscriptMessageById | undefined =
@@ -557,10 +500,17 @@ export function readSessionTranscriptHistoryEventByIdFromProjection(
   if (!event) {
     return undefined;
   }
-  return positionTranscriptDisplayEvents(projection, history.displaySource, [event])[0];
+  const preceding = needsPreceding?.(event)
+    ? resolved && "historical" in resolved
+      ? readHistoricalHistoryPrecedingEvent(projection, resolved.historical, event)
+      : readVisibleHistoryRange(projection, Math.max(0, event.seq - 2), event.seq - 1, history)[0]
+    : undefined;
+  return positionTranscriptDisplayEvents(projection, history.displaySource, [
+    { ...event, ...(preceding ? { preceding } : {}) },
+  ])[0];
 }
 
-/** Select ID candidates and projected-history presence from one validated snapshot. */
+/** Select ID candidates and projected-history presence from one admitted snapshot. */
 export function readSessionTranscriptHistoryEventLookupFromProjection(
   projection: CurrentTranscriptProjection,
   eventId: string,
@@ -579,7 +529,6 @@ export function readSessionTranscriptHistoryEventLookupFromProjection(
       hasDisplayMessages: events.some((row) => isVisibleTranscriptRecord(row.event)),
     };
   }
-  assertVisibleMessageRangeJson(projection, range.messageStart, range.messageEnd);
   const boundaryEvents = readBoundaryEvents(projection, range.boundaries.values());
   let first: SessionTranscriptMessageEvent | undefined;
   let hasDisplayMessages = false;

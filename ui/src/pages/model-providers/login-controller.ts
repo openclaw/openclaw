@@ -1,19 +1,15 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
-import { createRef, ref } from "lit/directives/ref.js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type { ModelAuthStatusResult, SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { WizardLoginController } from "../../components/wizard-login-controller.ts";
-import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig, resolveModelPrimary } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
 import { canonicalModelAuthProviderId, loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import type {
   ModelSetupWizardRunner,
   ModelSetupWizardCompletion,
@@ -21,7 +17,7 @@ import type {
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
 import { buildLoginProviders } from "./login-providers.ts";
-import { renderProviderAccountSummary } from "./profiles-view.ts";
+import type { ControllerHost } from "./page-controller.ts";
 import "../../styles/model-providers.css";
 registerSettingsEnglish();
 
@@ -40,7 +36,7 @@ type LoginControllerOptions = {
   onManualProvider?: (authChoice: string) => void;
 };
 
-export class ModelProviderLoginController implements ReactiveController {
+export class ModelProviderLoginController {
   private picker:
     | ({
         providers?: string[];
@@ -54,8 +50,8 @@ export class ModelProviderLoginController implements ReactiveController {
       ))
     | null = null;
   private inventoryRequest: AbortController | undefined;
-  private readonly searchInput = createRef<HTMLInputElement>();
-  private readonly methodChoices = createRef<HTMLElement>();
+  private searchInput: HTMLInputElement | undefined;
+  private methodChoices: HTMLElement | undefined;
   private focusPicker: "search" | "method" | null = null;
   private generation = 0;
   private mutationActive = false;
@@ -66,7 +62,7 @@ export class ModelProviderLoginController implements ReactiveController {
   private readonly wizard: WizardLoginController;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: ControllerHost,
     private readonly options: LoginControllerOptions,
   ) {
     host.addController(this);
@@ -104,10 +100,8 @@ export class ModelProviderLoginController implements ReactiveController {
 
   get pageActions() {
     return {
-      selectedAgentId: this.options.getScope().agentId,
       onConnect: () => this.open(),
       connectDisabled: !this.options.canStart() || this.busy,
-      login: this.render(),
       loginMessage: this.message,
     };
   }
@@ -146,7 +140,7 @@ export class ModelProviderLoginController implements ReactiveController {
     return { model, provider: canonicalModelAuthProviderId(modelProvider), authProvider };
   }
 
-  renderRecovery() {
+  recoveryView() {
     const selection = this.missingSelection();
     const providers = this.options
       .getScope()
@@ -155,18 +149,12 @@ export class ModelProviderLoginController implements ReactiveController {
       )
       .map((capability) => capability.provider);
     return selection
-      ? html`<div class="callout warning" role="status" data-models-account-recovery>
-          <p>${t("modelProviders.login.missingSelection", { model: selection.model })}</p>
-          <button
-            class="btn"
-            data-models-recover-account
-            ?disabled=${!this.options.canStart() || this.busy}
-            @click=${() => void this.open(providers)}
-          >
-            ${t("modelProviders.login.chooseAccount")}
-          </button>
-        </div>`
-      : nothing;
+      ? {
+          model: selection.model,
+          disabled: !this.options.canStart() || this.busy,
+          onChoose: () => void this.open(providers),
+        }
+      : null;
   }
 
   private async activateSavedProfile(profileId: string, modelRef: string): Promise<void> {
@@ -228,7 +216,8 @@ export class ModelProviderLoginController implements ReactiveController {
         this.options.canContinue()
       );
     };
-    this.picker = { phase: "loading", providers, providerId: "", query: "", isCurrent };
+    const picker = { providers, providerId: "", query: "", isCurrent };
+    this.picker = { ...picker, phase: "loading" };
     this.focusPicker = null;
     this.message = undefined;
     this.host.requestUpdate();
@@ -247,12 +236,10 @@ export class ModelProviderLoginController implements ReactiveController {
             ? available[0]
             : undefined;
         this.picker = {
+          ...picker,
           phase: "ready",
-          providers,
           authStatus,
           providerId: provider?.id ?? "",
-          query: "",
-          isCurrent,
         };
         // An awaited inventory mounts the modal before its inputs exist.
         if (!scope.authStatus) {
@@ -262,11 +249,8 @@ export class ModelProviderLoginController implements ReactiveController {
     } catch (error) {
       if (isCurrent()) {
         this.picker = {
+          ...picker,
           phase: "error",
-          isCurrent,
-          providers,
-          providerId: "",
-          query: "",
           message: formatUiError(error, t("modelProviders.requestFailed")),
         };
       }
@@ -304,285 +288,144 @@ export class ModelProviderLoginController implements ReactiveController {
     if (!this.focusPicker || !this.picker) {
       return;
     }
-    const choices = this.methodChoices.value;
+    const choices = this.methodChoices;
     const target =
       this.focusPicker === "search"
-        ? this.searchInput.value
+        ? this.searchInput
         : (choices?.querySelector<HTMLElement>("button") ?? choices);
     this.focusPicker = null;
     target?.focus({ preventScroll: true });
   }
 
-  render() {
-    const picker = this.picker;
-    if (picker) {
-      const canSelect = () =>
-        this.picker === picker && picker.phase === "ready" && picker.isCurrent();
-      const groups =
-        picker.phase === "ready" ? this.loginProviders(picker.providers, picker.authStatus) : [];
-      const provider = groups.find((group) => group.id === picker.providerId);
-      const accounts =
-        provider && picker.phase === "ready"
-          ? buildModelProviderCards({
-              authStatus: picker.authStatus,
-              models: null,
-              providerUsage: null,
-              costByProvider: null,
-            }).filter((card) =>
-              provider.authProviders.some(
-                (owner) => card.id === canonicalModelAuthProviderId(owner),
-              ),
-            )
-          : [];
-      const docsUrl =
-        provider?.choices.find((choice) => choice.docsUrl)?.docsUrl ??
-        "https://docs.openclaw.ai/concepts/model-providers";
-      const missing = this.missingSelection();
-      const recovery =
-        missing && accounts.some((card) => card.id === missing.provider) ? missing : null;
-      const query = picker.query.trim().toLocaleLowerCase();
-      const matches = groups.filter((group) =>
-        [
-          group.id,
-          group.label,
-          ...(group.apiKeyProvider ? [t("modelProviders.status.apiKey")] : []),
-          ...group.choices.flatMap((choice) => [choice.label, choice.hint ?? ""]),
-        ].some((text) => text.toLocaleLowerCase().includes(query)),
-      );
-      return html`
-        <openclaw-modal-dialog
-          label=${provider?.label ?? t("modelProviders.login.title")}
-          @modal-cancel=${() => this.reset()}
-        >
-          <div class="model-setup-wizard model-provider-login">
-            <div class="model-setup-wizard__header">
-              <h2 class="model-provider-login__provider">
-                ${provider ? html`${renderProviderBrandIcon(provider.id, { className: "model-providers__icon" })} ${provider.label}` : t("modelProviders.login.title")}
-              </h2>
-            </div>
-            <div class="model-setup-wizard__body">
-              <p>
-                ${
-                  recovery
-                    ? t("modelProviders.login.useAccountDescription", { model: recovery.model })
-                    : this.options.onManualProvider
-                      ? t("modelProviders.login.setupDescription")
-                      : t("modelProviders.login.description")
-                }
-              </p>
-              ${
-                picker.phase === "loading"
-                  ? html`<div role="status">${t("common.loading")}</div>`
-                  : picker.phase === "error"
-                    ? html`<div role="alert">${picker.message}</div>`
-                    : provider
-                      ? html`
-                          ${
-                            picker.phase === "ready" && picker.authStatus.unavailable
-                              ? html`<p role="status">${picker.authStatus.unavailable.message}</p>`
-                              : renderProviderAccountSummary(
-                                  accounts,
-                                  recovery
-                                    ? {
-                                        authProvider: recovery.authProvider,
-                                        disabled: !picker.isCurrent() || !this.options.canStart(),
-                                        onUse: (profileId) => {
-                                          if (this.picker === picker && picker.isCurrent()) {
-                                            void this.activateSavedProfile(
-                                              profileId,
-                                              recovery.model,
-                                            );
-                                          }
-                                        },
-                                      }
-                                    : undefined,
-                                )
-                          }
-                          <section class="model-provider-login__methods" ${ref(this.methodChoices)}>
-                            <h3>${t("modelProviders.login.connectAccount")}</h3>
-                            <div data-models-login-choice>
-                              ${provider.choices.map(
-                                (selected) => html`
-                                  <button
-                                    type="button"
-                                    class="btn model-provider-login__option"
-                                    ?disabled=${picker.phase !== "ready" || !picker.isCurrent()}
-                                    @click=${() => {
-                                      if (!canSelect()) {
-                                        return;
-                                      }
-                                      if (selected.kind === "setup-secret") {
-                                        this.reset();
-                                        this.options.onManualProvider?.(selected.id);
-                                        return;
-                                      }
-                                      this.picker = null;
-                                      this.mode = "auth";
-                                      this.refreshWarning = null;
-                                      this.runner.prepareSignIn(selected.kind, selected.label);
-                                      void this.run(() =>
-                                        this.runner.start(selected.id, "models.authLogin"),
-                                      );
-                                    }}
-                                  >
-                                    <span class="model-provider-login__copy">
-                                      <strong>${selected.label}</strong>
-                                      ${selected.hint ? html`<span>${selected.hint}</span>` : nothing}
-                                    </span>
-                                  </button>
-                                `,
-                              )}
-                            </div>
-                            ${
-                              provider.apiKeyProvider
-                                ? html`
-                                    <button
-                                      type="button"
-                                      class="btn model-provider-login__option"
-                                      data-models-login-api-key
-                                      ?disabled=${picker.phase !== "ready" || !picker.isCurrent()}
-                                      @click=${() => {
-                                        if (!canSelect() || !provider.apiKeyProvider) {
-                                          return;
-                                        }
-                                        this.reset();
-                                        this.options.onApiKey?.(provider.apiKeyProvider);
-                                      }}
-                                    >
-                                      <span class="model-provider-login__copy">
-                                        <strong>${t("modelProviders.status.apiKey")}</strong>
-                                        <span>${t("modelProviders.login.apiKeyHint")}</span>
-                                      </span>
-                                    </button>
-                                  `
-                                : nothing
-                            }
-                            <a
-                              class="learn-more-link"
-                              href=${docsUrl}
-                              target=${EXTERNAL_LINK_TARGET}
-                              rel=${buildExternalLinkRel()}
-                              >${t("modelProviders.login.compareMethods")}</a
-                            >
-                          </section>
-                        `
-                      : html`
-                          <label class="field">
-                            <span>${t("modelProviders.search")}</span>
-                            <input
-                              type="search"
-                              data-models-login-search
-                              autofocus
-                              autocomplete="off"
-                              ${ref(this.searchInput)}
-                              .value=${picker.query}
-                              @input=${(event: Event) => {
-                                // SAFETY: This handler is attached directly to the search input.
-                                picker.query = (event.currentTarget as HTMLInputElement).value;
-                                this.host.requestUpdate();
-                              }}
-                            />
-                          </label>
-                          <ul
-                            class="model-provider-login__providers"
-                            aria-label=${t("modelSetup.manual.provider")}
-                          >
-                            ${matches.map(
-                              (group) => html`
-                                <li>
-                                  <button
-                                    type="button"
-                                    class="btn model-provider-login__option"
-                                    data-models-login-provider=${group.id}
-                                    ?disabled=${picker.phase !== "ready" || !picker.isCurrent()}
-                                    @click=${() => {
-                                      if (!canSelect()) {
-                                        return;
-                                      }
-                                      picker.providerId = group.id;
-                                      this.focusPicker = "method";
-                                      this.host.requestUpdate();
-                                    }}
-                                  >
-                                    ${renderProviderBrandIcon(group.id, { className: "model-providers__icon" })}
-                                    <span class="model-provider-login__copy">
-                                      <strong>${group.label}</strong>
-                                      <span>
-                                        ${[
-                                          ...group.choices.map((choice) => choice.label),
-                                          ...(group.apiKeyProvider
-                                            ? [t("modelProviders.status.apiKey")]
-                                            : []),
-                                        ].join(" · ")}
-                                      </span>
-                                    </span>
-                                  </button>
-                                </li>
-                              `,
-                            )}
-                          </ul>
-                          ${
-                            matches.length
-                              ? nothing
-                              : html`
-                                  <p class="muted" role="status">
-                                    ${t(query ? "modelProviders.noMatches" : "modelProviders.login.noProviders")}
-                                  </p>
-                                `
-                          }
-                        `
-              }
-            </div>
-            <div class="model-setup-wizard__footer">
-              ${
-                provider
-                  ? html`
-                      <button
-                        class="btn model-provider-login__secondary"
-                        data-models-login-back
-                        @click=${() => {
-                          if (!canSelect()) {
-                            return;
-                          }
-                          picker.providers = undefined;
-                          picker.providerId = "";
-                          this.focusPicker = "search";
-                          this.host.requestUpdate();
-                        }}
-                      >
-                        ${t("common.back")}
-                      </button>
-                    `
-                  : !picker.providers && this.options.onDiscover
-                    ? html`
-                        <button
-                          class="btn model-provider-login__secondary"
-                          data-models-login-discover
-                          ?disabled=${!picker.isCurrent()}
-                          @click=${() => {
-                            if (this.picker !== picker || !picker.isCurrent()) {
-                              return;
-                            }
-                            this.reset();
-                            this.options.onDiscover?.();
-                          }}
-                        >
-                          ${t("modelProviders.login.discover")}
-                        </button>
-                      `
-                    : nothing
-              }
-              <button class="btn" @click=${() => this.reset()}>${t("common.cancel")}</button>
-            </div>
-          </div>
-        </openclaw-modal-dialog>
-      `;
-    }
-    return this.wizard.render({
+  setSearchInput(element: HTMLInputElement): void {
+    this.searchInput = element;
+  }
+
+  setMethodChoices(element: HTMLElement): void {
+    this.methodChoices = element;
+  }
+
+  get wizardViewProps() {
+    return this.wizard.viewProps({
       mode: this.mode,
       busy: this.mutationActive,
       refreshWarning: this.refreshWarning,
     });
+  }
+
+  pickerView() {
+    const picker = this.picker;
+    if (!picker) {
+      return null;
+    }
+    const canSelect = () =>
+      this.picker === picker && picker.phase === "ready" && picker.isCurrent();
+    const groups =
+      picker.phase === "ready" ? this.loginProviders(picker.providers, picker.authStatus) : [];
+    const provider = groups.find((group) => group.id === picker.providerId);
+    const accounts =
+      provider && picker.phase === "ready"
+        ? buildModelProviderCards({
+            authStatus: picker.authStatus,
+            models: null,
+            providerUsage: null,
+            costByProvider: null,
+          }).filter((card) =>
+            provider.authProviders.some((owner) => card.id === canonicalModelAuthProviderId(owner)),
+          )
+        : [];
+    const docsUrl =
+      provider?.choices.find((choice) => choice.docsUrl)?.docsUrl ??
+      "https://docs.openclaw.ai/concepts/model-providers";
+    const missing = this.missingSelection();
+    const recovery =
+      missing && accounts.some((card) => card.id === missing.provider) ? missing : null;
+    const query = picker.query.trim().toLocaleLowerCase();
+    const matches = groups.filter((group) =>
+      [
+        group.id,
+        group.label,
+        ...(group.apiKeyProvider ? [t("modelProviders.status.apiKey")] : []),
+        ...group.choices.flatMap((choice) => [choice.label, choice.hint ?? ""]),
+      ].some((text) => text.toLocaleLowerCase().includes(query)),
+    );
+
+    return {
+      phase: picker.phase,
+      error: picker.phase === "error" ? picker.message : undefined,
+      unavailable: picker.phase === "ready" ? picker.authStatus.unavailable : undefined,
+      query: picker.query,
+      provider,
+      accounts,
+      recovery,
+      docsUrl,
+      matches,
+      disabled: picker.phase !== "ready" || !picker.isCurrent(),
+      canStart: this.options.canStart(),
+      showDiscover: !picker.providers && Boolean(this.options.onDiscover),
+      discoverDisabled: !picker.isCurrent(),
+      description: recovery
+        ? t("modelProviders.login.useAccountDescription", { model: recovery.model })
+        : this.options.onManualProvider
+          ? t("modelProviders.login.setupDescription")
+          : t("modelProviders.login.description"),
+      onClose: () => this.reset(),
+      onQuery: (value: string) => {
+        picker.query = value;
+        this.host.requestUpdate();
+      },
+      onProvider: (providerId: string) => {
+        if (!canSelect()) {
+          return;
+        }
+        picker.providerId = providerId;
+        this.focusPicker = "method";
+        this.host.requestUpdate();
+      },
+      onChoice: (selected: (typeof groups)[number]["choices"][number]) => {
+        if (!canSelect()) {
+          return;
+        }
+        if (selected.kind === "setup-secret") {
+          this.reset();
+          this.options.onManualProvider?.(selected.id);
+          return;
+        }
+        this.picker = null;
+        this.mode = "auth";
+        this.refreshWarning = null;
+        this.runner.prepareSignIn(selected.kind, selected.label);
+        void this.run(() => this.runner.start(selected.id, "models.authLogin"));
+      },
+      onApiKey: () => {
+        if (!canSelect() || !provider?.apiKeyProvider) {
+          return;
+        }
+        this.reset();
+        this.options.onApiKey?.(provider.apiKeyProvider);
+      },
+      onUseProfile: (profileId: string) => {
+        if (recovery && this.picker === picker && picker.isCurrent()) {
+          void this.activateSavedProfile(profileId, recovery.model);
+        }
+      },
+      onDiscover: () => {
+        if (this.picker !== picker || !picker.isCurrent()) {
+          return;
+        }
+        this.reset();
+        this.options.onDiscover?.();
+      },
+      onBack: () => {
+        if (!canSelect()) {
+          return;
+        }
+        picker.providers = undefined;
+        picker.providerId = "";
+        this.focusPicker = "search";
+        this.host.requestUpdate();
+      },
+    };
   }
 
   private async complete(completion: ModelSetupWizardCompletion): Promise<void> {

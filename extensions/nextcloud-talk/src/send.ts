@@ -29,18 +29,16 @@ function collapseErrorSnippet(text: string): string {
 
 type NextcloudTalkSendOpts = {
   cfg: CoreConfig;
-  baseUrl?: string;
   secret?: string;
   accountId?: string;
   replyTo?: string;
-  verbose?: boolean;
   timeoutMs?: number;
 };
 
 function resolveNextcloudTalkSendContext(opts: NextcloudTalkSendOpts) {
   const cfg = requireRuntimeConfig(opts.cfg, "Nextcloud Talk send") as CoreConfig;
   const account = resolveNextcloudTalkAccount({ cfg, accountId: opts.accountId });
-  const baseUrl = opts.baseUrl?.trim() ?? account.baseUrl;
+  const baseUrl = account.baseUrl;
   const secret = opts.secret?.trim() ?? account.secret;
 
   if (!baseUrl) {
@@ -88,14 +86,7 @@ export async function sendMessageNextcloudTalk(
     accountId: account.accountId,
   });
   const message = convertMarkdownTables(text.trim(), tableMode);
-
-  const body: Record<string, unknown> = {
-    message,
-  };
-  if (opts.replyTo) {
-    body.replyTo = opts.replyTo;
-  }
-  const bodyStr = JSON.stringify(body);
+  const body = JSON.stringify({ message, replyTo: opts.replyTo || undefined });
 
   // Nextcloud Talk verifies signature against the extracted message text,
   // not the full JSON body. See ChecksumVerificationService.php:
@@ -120,10 +111,12 @@ export async function sendMessageNextcloudTalk(
         "X-Nextcloud-Talk-Bot-Random": random,
         "X-Nextcloud-Talk-Bot-Signature": signature,
       },
-      body: bodyStr,
+      body,
     },
     auditContext: "nextcloud-talk-send",
-    policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
+    policy: ssrfPolicyFromPrivateNetworkOptIn(
+      account.config.network?.dangerouslyAllowPrivateNetwork,
+    ),
     timeoutMs: opts.timeoutMs ?? NEXTCLOUD_TALK_SEND_TIMEOUT_MS,
   });
 
@@ -169,10 +162,6 @@ export async function sendMessageNextcloudTalk(
     } catch {
       // Response parsing failed (including an over-limit body), but the message
       // was already accepted by the server, so keep the "unknown" receipt.
-    }
-
-    if (opts.verbose) {
-      console.log(`[nextcloud-talk] Sent message ${messageId} to room ${roomToken}`);
     }
 
     getOptionalNextcloudTalkRuntime()?.channel.activity.record({
@@ -237,7 +226,9 @@ export async function sendReactionNextcloudTalk(
       body,
     },
     auditContext: "nextcloud-talk-reaction",
-    policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
+    policy: ssrfPolicyFromPrivateNetworkOptIn(
+      account.config.network?.dangerouslyAllowPrivateNetwork,
+    ),
     timeoutMs: opts.timeoutMs ?? NEXTCLOUD_TALK_SEND_TIMEOUT_MS,
   });
 

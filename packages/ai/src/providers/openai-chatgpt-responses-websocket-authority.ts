@@ -10,28 +10,22 @@ export interface CodexWebSocketAuthority {
   normalizedHeaders: ReadonlyArray<readonly [string, string]>;
 }
 
-function createCodexWebSocketAuthority(
-  transportHost: AiTransportHost,
-  baseUrl: string | undefined,
-  headers: Headers,
-): CodexWebSocketAuthority {
-  return {
-    transportHost,
-    url: resolveCodexWebSocketUrl(baseUrl),
-    headers,
-    normalizedHeaders: Array.from(headers.entries()).filter(([name]) => name !== "traceparent"),
-  };
-}
-
 export function resolveCodexWebSocketAuthority(params: {
   transport: string;
   transportHost: AiTransportHost;
   baseUrl: string | undefined;
   headers: () => Headers;
 }): CodexWebSocketAuthority | undefined {
-  return params.transport === "sse"
-    ? undefined
-    : createCodexWebSocketAuthority(params.transportHost, params.baseUrl, params.headers());
+  if (params.transport === "sse") {
+    return undefined;
+  }
+  const headers = params.headers();
+  return {
+    transportHost: params.transportHost,
+    url: resolveCodexWebSocketUrl(params.baseUrl),
+    headers,
+    normalizedHeaders: Array.from(headers.entries()).filter(([name]) => name !== "traceparent"),
+  };
 }
 
 export function buildCodexWebSocketHeaders(baseHeaders: Headers, requestId: string): Headers {

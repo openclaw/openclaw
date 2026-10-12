@@ -1,9 +1,6 @@
 import { normalizePluginHostHookId, type PluginControlUiDescriptor } from "./host-hooks.js";
 
-type NormalizedControlUiBridgeCapabilities = Pick<
-  PluginControlUiDescriptor,
-  "sessionActions" | "allowChatNavigation"
->;
+type NormalizedControlUiBridgeCapabilities = Pick<PluginControlUiDescriptor, "sessionActions">;
 
 export function normalizeControlUiBridgeCapabilities(
   descriptor: PluginControlUiDescriptor,
@@ -15,17 +12,13 @@ export function normalizeControlUiBridgeCapabilities(
   const sessionActions = rawActions?.map((actionId) =>
     typeof actionId === "string" ? normalizePluginHostHookId(actionId) : "",
   );
-  const allowChatNavigation = descriptor.allowChatNavigation;
   if (
     sessionActions?.some((actionId) => !actionId) ||
-    (allowChatNavigation !== undefined && typeof allowChatNavigation !== "boolean") ||
-    (descriptor.surface !== "tab" &&
-      ((sessionActions?.length ?? 0) > 0 || allowChatNavigation !== undefined))
+    (descriptor.surface !== "tab" && (sessionActions?.length ?? 0) > 0)
   ) {
     return null;
   }
   return {
     ...(sessionActions !== undefined ? { sessionActions: [...new Set(sessionActions)] } : {}),
-    ...(allowChatNavigation !== undefined ? { allowChatNavigation } : {}),
   };
 }

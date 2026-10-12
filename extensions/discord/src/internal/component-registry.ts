@@ -1,4 +1,4 @@
-import { parseCustomId } from "./components.js";
+import { parseCustomId } from "./components.base.js";
 
 export class ComponentRegistry<
   T extends { customId: string; customIdParser?: typeof parseCustomId; type?: number },
@@ -8,16 +8,12 @@ export class ComponentRegistry<
 
   register(entry: T): void {
     const key = (entry.customIdParser ?? parseCustomId)(entry.customId).key;
-    if (key === "*") {
-      if (!this.wildcardEntries.includes(entry)) {
-        this.wildcardEntries.push(entry);
-      }
-      return;
-    }
-    const entries = this.entries.get(key) ?? [];
+    const entries = key === "*" ? this.wildcardEntries : (this.entries.get(key) ?? []);
     if (!entries.includes(entry)) {
       entries.push(entry);
-      this.entries.set(key, entries);
+      if (key !== "*") {
+        this.entries.set(key, entries);
+      }
     }
   }
 

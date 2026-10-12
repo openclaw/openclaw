@@ -231,10 +231,12 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
       name: "confirmed running",
       result: printed("running", "\texit timeout = 20\n\tpid = 4242\n"),
       warnings: [],
+      timeoutMs: 325_000,
     },
     {
       name: "failed inspection",
       result: unavailable,
+      timeoutMs: 15_000,
       warnings: [
         expect.stringContaining("Unable to inspect the launchd job"),
         "Retaining the startup shutdown budget of 15000ms because the current supervisor stop timeout could not be confirmed.",
@@ -244,23 +246,27 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
       name: "defaulted deadline",
       result: printed("SIGTERMed", "\tpid = 4242\n"),
       warnings: [expect.stringContaining("its exit timeout is missing or invalid")],
+      timeoutMs: 15_000,
     },
-  ])("retains the launchd startup budget only after $name", async ({ result, warnings }) => {
-    delete process.env.OPENCLAW_SUPERVISOR_MODE;
-    execLaunchctl.mockResolvedValue(result);
-    const warn = vi.fn();
-    const budget = await resolveGatewayShutdownBudget(
-      "launchd",
-      { info: vi.fn(), warn },
-      {
-        previous: { timeoutMs: 15_000, nativeStopBudget: true },
-        acceptedAtMs: Number.MAX_SAFE_INTEGER,
-      },
-    );
-    expect(budget.timeoutMs).toBe(15_000);
-    expect(budget.nativeStopBudget).toBe(true);
-    expect(warn.mock.calls).toEqual(warnings.map((message) => [message]));
-  });
+  ])(
+    "retains the launchd startup budget only after $name",
+    async ({ result, warnings, timeoutMs }) => {
+      delete process.env.OPENCLAW_SUPERVISOR_MODE;
+      execLaunchctl.mockResolvedValue(result);
+      const warn = vi.fn();
+      const budget = await resolveGatewayShutdownBudget(
+        "launchd",
+        { info: vi.fn(), warn },
+        {
+          previous: { timeoutMs: 15_000, nativeStopBudget: true },
+          acceptedAtMs: Number.MAX_SAFE_INTEGER,
+        },
+      );
+      expect(budget.timeoutMs).toBe(timeoutMs);
+      expect(budget.nativeStopBudget).toBe(true);
+      expect(warn.mock.calls).toEqual(warnings.map((message) => [message]));
+    },
+  );
 
   it.each(["startup", "unmanaged stop"])(
     "does not inspect a launchd job during %s",

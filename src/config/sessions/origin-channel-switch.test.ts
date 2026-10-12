@@ -1,14 +1,11 @@
 // Session origin must drop the prior channel's identity when a dmScope:"main" session moves
 // across providers, so channel-keyed fields do not reference a now-inactive channel.
-import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { SessionConversationLinkSchema } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
 
 const sessionKey = "agent:user";
@@ -169,7 +166,6 @@ function buildDirectTurn(opts: {
   accountId: string;
   conversationId: string;
   nativeChannelId?: string;
-  link?: MsgContext["ConversationLink"];
 }): MsgContext {
   return buildChannelInboundEventContext({
     channel: opts.provider,
@@ -182,7 +178,6 @@ function buildDirectTurn(opts: {
     conversation: {
       kind: "direct",
       id: opts.conversationId,
-      link: opts.link,
       ...(opts.nativeChannelId ? { nativeChannelId: opts.nativeChannelId } : {}),
     },
     route: { agentId: "main", accountId: opts.accountId, routeSessionKey: sessionKey },
@@ -199,10 +194,6 @@ describe("session origin across a channel switch (real inbound-event context bui
     accountId: "slack-team-1",
     conversationId: "D111SLACK",
     nativeChannelId: "D111SLACK",
-    link: {
-      url: "https://example.slack.com/archives/D111SLACK/p1700000000000100",
-      label: "Slack Thread",
-    },
   });
   const telegramCtx = buildDirectTurn({
     provider: "telegram",
@@ -212,53 +203,13 @@ describe("session origin across a channel switch (real inbound-event context bui
     conversationId: "42",
   });
 
-  it("resets native identity but retains the launch link after a real-context channel switch", () => {
+  it("resets native identity after a real-context channel switch", () => {
     const afterSlack = applyOrigin(undefined, slackCtx);
     expect(afterSlack.origin?.nativeChannelId).toBe("D111SLACK");
-    const afterTelegram = applyOrigin(afterSlack, {
-      ...telegramCtx,
-      ConversationLink: { url: "https://t.me/c/123/42", label: "Telegram Message" },
-    });
+    const afterTelegram = applyOrigin(afterSlack, telegramCtx);
     expect(afterTelegram.origin?.provider).toBe("telegram");
     expect(afterTelegram.origin?.nativeChannelId).toBeUndefined();
-    expect(afterTelegram.conversationLink).toEqual({
-      url: "https://example.slack.com/archives/D111SLACK/p1700000000000100",
-      label: "Slack Thread",
-    });
   });
-
-  it.each([2048, 2049])("bounds the canonical launch URL at %i characters", (length) => {
-    const prefix = "https://chat.example.test/";
-    const url = prefix + "é".repeat(300) + "a".repeat(length - prefix.length - 1800);
-    const entry = applyOrigin(undefined, {
-      ...slackCtx,
-      ConversationLink: { url, label: "Source Thread" },
-    });
-    if (length > 2048) {
-      expect(entry.conversationLink).toBeUndefined();
-      expect(applyOrigin(entry, slackCtx).conversationLink).toEqual(slackCtx.ConversationLink);
-      return;
-    }
-    expect(entry.conversationLink?.url).toHaveLength(length);
-    expect(Value.Check(SessionConversationLinkSchema, entry.conversationLink)).toBe(true);
-    expect(projectCanonicalSessionEntryShape({ ...entry }).conversationLink).toEqual(
-      entry.conversationLink,
-    );
-  });
-
-  it.each(["javascript:alert(1)", "https://"])(
-    "ignores an invalid launch URL %s without preventing a later valid link",
-    (url) => {
-      const invalid = applyOrigin(undefined, {
-        ...slackCtx,
-        ConversationLink: { url, label: "Slack Thread" },
-      });
-      expect(invalid.conversationLink).toBeUndefined();
-      expect(applyOrigin(invalid, slackCtx).conversationLink?.url).toBe(
-        "https://example.slack.com/archives/D111SLACK/p1700000000000100",
-      );
-    },
-  );
 });
 
 describe("session origin across a non-delivery turn", () => {

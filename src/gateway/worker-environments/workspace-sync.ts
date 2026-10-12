@@ -1,11 +1,17 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { isWorkspaceInspectionCommand } from "../../worker/workspace-inspection-protocol.js";
-import { type PreparedWorkerSsh, runWorkerSshCandidates, workerSshCommandOptions } from "./ssh.js";
+import {
+  type PreparedWorkerSsh,
+  runWorkerSshCandidates,
+  workerSshCommand,
+  workerSshCommandOptions,
+} from "./ssh.js";
 import type {
   WorkerTunnelHandle,
   WorkerWorkspaceCommand,
@@ -57,7 +63,6 @@ import {
   workerWorkspaceCommandSucceeded as success,
   workerWorkspaceRsyncRemoteCommand,
   workerWorkspaceRsyncReceiverEntryPath,
-  workerWorkspaceSshArgv,
   workspaceSyncError,
   type WorkerWorkspaceActionsOptions,
 } from "./workspace-sync-helpers.js";
@@ -105,29 +110,11 @@ export function createWorkerWorkspaceActions(
   ): Promise<PreparedWorkerSsh> => {
     signal?.throwIfAborted();
     const operation = withTimeout(options.waitForPrepared(), timeoutMs, { message });
-    if (!signal) {
-      return await operation;
-    }
-    return await new Promise<PreparedWorkerSsh>((resolve, reject) => {
-      const onAbort = () => {
-        try {
-          signal.throwIfAborted();
-        } catch (error) {
-          reject(
-            error instanceof Error
-              ? error
-              : new Error("Worker workspace command aborted", { cause: error }),
-          );
-        }
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      if (signal.aborted) {
-        onAbort();
-      }
-      void operation.then(resolve, reject).finally(() => {
-        signal.removeEventListener("abort", onAbort);
-      });
-    });
+    return await racePromiseWithAbortSignal(operation, signal, (abortedSignal) =>
+      abortedSignal.reason instanceof Error
+        ? abortedSignal.reason
+        : new Error("Worker workspace command aborted", { cause: abortedSignal.reason }),
+    );
   };
 
   const runTask = (argv: string[], opts: CommandOptions) => track(options.runner.run(argv, opts));
@@ -196,7 +183,7 @@ export function createWorkerWorkspaceActions(
     // commands must stay pinned to one transport attempt.
     if (command.transportRetry === "never") {
       const operation = runTask(
-        workerWorkspaceSshArgv(prepared, command.argv),
+        workerSshCommand(prepared, command.argv),
         commandOptions(remainingCommandTimeoutMs()),
       );
       command.onDispatchReady?.();
@@ -208,7 +195,7 @@ export function createWorkerWorkspaceActions(
       async (port, remainingTimeoutMs) => {
         command.assertCurrent?.();
         return await runTask(
-          workerWorkspaceSshArgv(prepared, command.argv, port),
+          workerSshCommand(prepared, command.argv, port),
           commandOptions(remainingTimeoutMs),
         );
       },
@@ -395,7 +382,7 @@ export function createWorkerWorkspaceActions(
                 request.authorize?.();
                 const resetNonce = randomBytes(16).toString("hex");
                 const reset = await runTask(
-                  workerWorkspaceSshArgv(
+                  workerSshCommand(
                     prepared,
                     [
                       "node",

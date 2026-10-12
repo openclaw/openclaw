@@ -2,7 +2,7 @@ import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   formatInboundMediaUnavailableText,
   recordChannelBotPairLoopAndCheckSuppression,
-  resolveChannelInboundRouteEnvelope,
+  createChannelInboundEnvelopeBuilderAsync,
   toInboundMediaFactsWithMetadata,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -11,6 +11,7 @@ import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gate
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -119,7 +120,7 @@ async function processGoogleChatEvent(
     return;
   }
 
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: config,
     channel: "googlechat",
     accountId: account.accountId,
@@ -216,6 +217,7 @@ async function processGoogleChatEvent(
     ? space.displayName || `space:${spaceId}`
     : senderName || `user:${senderId}`;
   const timestampMs = resolveGoogleChatTimestampMs(event.eventTime);
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: config, route });
   const body = buildEnvelope({
     channel: "Google Chat",
     from: fromLabel,

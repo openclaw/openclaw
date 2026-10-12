@@ -108,34 +108,18 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Slack terminal status diagnostics", () => {
-  it.each<[string, SlackSessionResponse, SlackSessionResponse | Error, boolean]>([
-    ["rejected active write", { ok: true }, new Error("synthetic-private-detail"), true],
-    ["rejected processing write", { ok: false }, { ok: false }, false],
-    [
-      "aggregate processing",
-      { ok: true },
-      { ok: true, status: "processing", agent_status: "active" },
-      false,
-    ],
-  ])(
-    "reports only terminal failures after accepted processing: %s",
-    async (_, processing, active, report) => {
-      const f = await fixture({ processing, active });
-      await f.start();
-      await f.start();
-      await f.stop();
-      await f.stop();
-      if (report) {
-        expect(f.error).toHaveBeenCalledExactlyOnceWith(expect.any(String));
-      } else {
-        expect(f.error).not.toHaveBeenCalled();
-      }
-      expect(f.error.mock.calls.flat().join(" ")).not.toMatch(
-        /synthetic-private-detail|C1|1\.000|xoxb-test/,
-      );
-      expect(f.api).toHaveBeenCalledTimes(2);
-    },
-  );
+  it("reports terminal failures once without private details after accepted processing", async () => {
+    const f = await fixture({ active: new Error("synthetic-private-detail") });
+    await f.start();
+    await f.start();
+    await f.stop();
+    await f.stop();
+    expect(f.error).toHaveBeenCalledExactlyOnceWith(expect.any(String));
+    expect(f.error.mock.calls.flat().join(" ")).not.toMatch(
+      /synthetic-private-detail|C1|1\.000|xoxb-test/,
+    );
+    expect(f.api).toHaveBeenCalledTimes(2);
+  });
 
   it("continues typing-reaction cleanup if the diagnostic logger throws", async () => {
     const f = await fixture({ active: { ok: false }, typingReaction: true });

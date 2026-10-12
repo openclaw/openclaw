@@ -1,3 +1,4 @@
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { findConfiguredProviderModel } from "../../config/model-provider-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -29,11 +30,7 @@ import {
   resolveProviderModelInput,
   sanitizeModelHeaders,
 } from "./model.inline-provider.js";
-import {
-  normalizeResolvedModel,
-  type ProviderRuntimeHooks,
-  resolveProviderRequestTimeoutMs,
-} from "./model.provider-hooks.js";
+import { normalizeResolvedModel, type ProviderRuntimeHooks } from "./model.provider-hooks.js";
 import { resolveProviderTransport } from "./model.provider-transport.js";
 import type { ManifestModelCatalogProviderAliasMetadata } from "./model.static-catalog.js";
 
@@ -48,9 +45,11 @@ export function buildConfiguredFallbackModel(params: {
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model | undefined {
-  const { provider, modelId, cfg, workspaceDir, runtimeHooks } = params;
+  const { provider, modelId, cfg } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
+  const requestTimeoutMs = finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds, {
+    floorSeconds: true,
+  });
   const configuredModel = findConfiguredProviderModel(
     providerConfig,
     provider,
@@ -66,16 +65,10 @@ export function buildConfiguredFallbackModel(params: {
     staticCatalogModel?.mediaInput,
     configuredModel?.mediaInput,
   );
-  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
-    stripSecretRefMarkers: true,
-  });
+  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers);
   const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
-  const staticCatalogHeaders = sanitizeModelHeaders(staticCatalogModel?.headers, {
-    stripSecretRefMarkers: true,
-  });
-  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
-    stripSecretRefMarkers: true,
-  });
+  const staticCatalogHeaders = sanitizeModelHeaders(staticCatalogModel?.headers);
+  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers);
   const resolvedParams = mergeConfiguredRuntimeModelParams({
     ...params,
     discoveredParams: staticCatalogModel?.params,
@@ -89,8 +82,7 @@ export function buildConfiguredFallbackModel(params: {
   const manifestAliasBaseUrl = normalizeOptionalString(manifestAliasTransport?.baseUrl);
   const staticCatalogBaseUrl = normalizeOptionalString(staticCatalogModel?.baseUrl);
   const fallbackTransport = resolveProviderTransport({
-    provider,
-    modelId,
+    ...params,
     api:
       normalizeResolvedTransportApi(configuredModel?.api) ??
       providerConfiguredApi ??
@@ -106,9 +98,6 @@ export function buildConfiguredFallbackModel(params: {
       providerConfiguredBaseUrl ??
       manifestAliasBaseUrl ??
       staticCatalogBaseUrl,
-    cfg,
-    workspaceDir,
-    runtimeHooks,
   });
   if (
     !hasConfiguredModelRouteSupport({

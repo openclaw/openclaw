@@ -14,7 +14,6 @@ struct ExecApprovalEvaluation {
     let allowAlwaysPatterns: [ExecAllowAlwaysPattern]
     let allowlistMatches: [ExecAllowlistEntry]
     let allowlistAuthorizationSatisfied: Bool
-    let allowlistSatisfied: Bool
     let allowlistMatch: ExecAllowlistEntry?
     let skillTrust: SkillBinsCache.Snapshot?
     let policySnapshot: ExecApprovalPolicySnapshot
@@ -93,9 +92,9 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
 
     init(portable: OpenClawSystemRunApprovalPolicySnapshot) {
         self.init(
-            security: ExecSecurity(rawValue: portable.security.rawValue)!,
-            ask: ExecAsk(rawValue: portable.ask.rawValue)!,
-            askFallback: ExecSecurity(rawValue: portable.askFallback.rawValue)!,
+            security: portable.security,
+            ask: portable.ask,
+            askFallback: portable.askFallback,
             autoAllowSkills: portable.autoAllowSkills,
             allowlist: portable.allowlistRules.map { rule in
                 ExecAllowlistEntry(
@@ -290,7 +289,6 @@ enum ExecApprovalEvaluator {
             allowAlwaysPatterns: allowAlwaysPatterns,
             allowlistMatches: allowlistMatches,
             allowlistAuthorizationSatisfied: allowlistAuthorizationSatisfied,
-            allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: allowlistSatisfied ? allowlistMatches.first : nil,
             skillTrust: skillTrust,
             policySnapshot: ExecApprovalPolicySnapshot(resolved: approvals))

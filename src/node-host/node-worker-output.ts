@@ -6,14 +6,9 @@ import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 export const NODE_WORKER_STDOUT_MAX_BYTES = 64 * 1024;
 export const NODE_WORKER_STDERR_MAX_BYTES = 4 * 1024;
 
-export type NodeWorkerCredentialScrubber = {
-  maxRepresentationBytes: number;
-  scrub: (text: string) => string;
-};
+export type NodeWorkerCredentialScrubber = ReturnType<typeof createNodeWorkerCredentialScrubber>;
 
-export function createNodeWorkerCredentialScrubber(
-  credentials: string | readonly string[],
-): NodeWorkerCredentialScrubber {
+export function createNodeWorkerCredentialScrubber(credentials: string | readonly string[]) {
   const values = typeof credentials === "string" ? [credentials] : credentials;
   const representations = new Set(
     values.flatMap((credential) => [
@@ -27,7 +22,7 @@ export function createNodeWorkerCredentialScrubber(
     maxRepresentationBytes: Math.max(
       ...ordered.map((representation) => Buffer.byteLength(representation, "utf8")),
     ),
-    scrub: (text) => {
+    scrub: (text: string) => {
       let scrubbed = text;
       for (const representation of ordered) {
         scrubbed = scrubbed.replaceAll(representation, "[REDACTED]");
@@ -54,20 +49,19 @@ export function sanitizeNodeWorkerDiagnostic(
   return truncateUtf8Suffix(oneLine || fallback, NODE_WORKER_STDERR_MAX_BYTES);
 }
 
-export function parseNodeWorkerOutputJson(
+export function parseNodeWorkerOutput(
   raw: string,
   scrubCredential: (text: string) => string,
-): string {
+): unknown {
   const redacted = redactLaunchText(raw, scrubCredential);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(redacted) as unknown;
+    parsed = JSON.parse(redacted);
   } catch (error) {
     throw new Error("worker returned invalid JSON output", { cause: error });
   }
-  const result = JSON.stringify(parsed);
-  if (Buffer.byteLength(result, "utf8") > NODE_WORKER_STDOUT_MAX_BYTES) {
+  if (Buffer.byteLength(JSON.stringify(parsed), "utf8") > NODE_WORKER_STDOUT_MAX_BYTES) {
     throw new Error(`worker result exceeded ${NODE_WORKER_STDOUT_MAX_BYTES} bytes`);
   }
-  return result;
+  return parsed;
 }

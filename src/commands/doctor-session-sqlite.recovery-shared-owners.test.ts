@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { updateSessionEntry } from "../config/sessions/session-accessor.entry-mutation.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
 import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
 import {
@@ -178,9 +179,13 @@ describe("runDoctorSessionSqlite", () => {
         const manifest = readMigrationManifest(manifestPath);
         manifest.targets = manifest.targets.filter((target) => target.agentId !== "main");
         writeSessionSqliteMigrationManifest({ manifestPath, manifest });
-        await expect(
-          runDoctorSessionSqlite({ cfg, env, agent: "main", mode: "import" }),
-        ).rejects.toThrow("Restored session index evidence cannot be verified");
+        const deferred = await runDoctorSessionSqlite({ cfg, env, agent: "main", mode: "import" });
+        expect(deferred.targets.flatMap((target) => target.issues)).toContainEqual(
+          expect.objectContaining({
+            code: "legacy_import_deferred",
+            message: expect.stringContaining("Restored session index evidence cannot be verified"),
+          }),
+        );
         for (const { scope, entry } of current) {
           expect(loadSessionEntry(scope)).toEqual(entry);
         }
@@ -445,9 +450,11 @@ function createSharedRecoveryFixture(params: {
   if (!params.separateIndexes) {
     fs.writeFileSync(storePath, JSON.stringify(records));
   }
-  const cfg = {
+  const cfg: OpenClawConfig = {
     agents: {
-      entries: Object.fromEntries(owners.map((owner) => [owner, { default: owner === "main" }])),
+      ownership: "explicit",
+      defaults: { sessionStore: { agentId: "main" } },
+      entries: Object.fromEntries(owners.map((owner) => [owner, {}])),
     },
     session: { store: storePath },
   };

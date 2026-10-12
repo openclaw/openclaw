@@ -1,10 +1,17 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
-import * as schemaContract from "../infra/sqlite-schema-contract.js";
-import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
+import {
+  admitSqliteSchema,
+  adoptSqliteSchemaFacts,
+  getAdmittedSqliteSchemaFacts,
+  registerSqliteSchemaMutationListener,
+} from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
@@ -14,10 +21,13 @@ const schemaSql = extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "standing_
   endMarker: "CREATE TABLE IF NOT EXISTS session_transcript_index_state (",
   includeEndMarker: false,
 });
+const creatorColumnSql =
+  "  creator_sender TEXT CHECK (creator_sender IS NULL OR length(trim(creator_sender)) > 0),\n";
 const databases: DatabaseSync[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function open(admitted = true) {
-  const db = openNodeSqliteDatabase(":memory:");
+function open(admitted = true, filename = ":memory:") {
+  const db = openNodeSqliteDatabase(filename);
   databases.push(db);
   if (admitted) {
     admitSqliteSchema(db);
@@ -30,15 +40,15 @@ function managed<T>(db: DatabaseSync, run: () => T) {
 }
 
 function expectHotEnsure(db: DatabaseSync) {
+  // A genuine DDL commit starts a new admitted generation on its next use.
+  ensure(db);
   const exec = vi.spyOn(db, "exec");
   const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
   try {
-    managed(db, () => ensure(db));
-    managed(db, () => ensure(db));
-    expect(exec.mock.calls.filter(([sql]) => /CREATE|ALTER|DROP/iu.test(sql))).toEqual([]);
-    expect(
-      reads.queries.filter((sql) => /sqlite_schema|table_info|index_list|index_xinfo/iu.test(sql)),
-    ).toEqual([]);
+    ensure(db, (run) => managed(db, run));
+    ensure(db, (run) => managed(db, run));
+    expect(exec).not.toHaveBeenCalled();
+    expect(reads.queries).toEqual([]);
   } finally {
     reads.restore();
     exec.mockRestore();
@@ -55,51 +65,53 @@ afterEach(() => {
 });
 
 describe("standing-intent schema admission", () => {
-  it.each(["standalone", "managed"] as const)(
-    "retains post-COMMIT facts after a %s first ensure",
-    (owner) => {
-      const db = open();
-      if (owner === "managed") {
-        managed(db, () => ensure(db));
-      } else {
-        ensure(db);
+  it("reuses admitted schema facts across repeated bindings without SQL or write admission", () => {
+    const filename = path.join(tempDirs.make("standing-intents-reopen-"), "agent.sqlite");
+    const original = open(false, filename);
+    original.exec(schemaSql);
+    admitSqliteSchema(original);
+    const facts = getAdmittedSqliteSchemaFacts(original)!;
+    original.close();
+    const db = open(true, filename);
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(db, schemaMutation);
+    const exec = vi.spyOn(db, "exec");
+    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      for (let index = 0; index < 3; index += 1) {
+        expect(adoptSqliteSchemaFacts(db, structuredClone(facts))).toBe(true);
+        ensure(db, (run) => managed(db, run));
       }
-      expectHotEnsure(db);
-      expect(schemaContract.collectSqliteSchemaIssues(db, schemaSql)).toEqual([]);
-    },
-  );
+      expect(schemaMutation).not.toHaveBeenCalled();
+      expect(exec).not.toHaveBeenCalled();
+      expect(reads.queries).toEqual([]);
+    } finally {
+      reads.restore();
+      exec.mockRestore();
+    }
+  });
 
-  it("repairs legacy creator provenance and missing index/trigger before admitting the group", () => {
+  it("retains the supplied write owner's refusal and retries first-use installation", () => {
     const db = open();
-    db.exec(
-      schemaSql.replace(
-        "  creator_sender TEXT CHECK (creator_sender IS NULL OR length(trim(creator_sender)) > 0),\n",
-        "",
+    const refused = new Error("schema owner revoked");
+    expect(() =>
+      ensure(db, (run) =>
+        managed(db, () => {
+          run();
+          throw refused;
+        }),
       ),
-    );
-    db.exec(
-      "DROP INDEX idx_standing_intents_scope; DROP TRIGGER standing_intents_fts_after_update;",
-    );
-    managed(db, () => ensure(db));
+    ).toThrow(refused);
     expect(
-      db
-        .prepare("PRAGMA table_info(standing_intents)")
-        .all()
-        .map((row) => row.name),
-    ).toContain("creator_sender");
-    expect(
-      db
-        .prepare("SELECT name FROM sqlite_schema WHERE name IN (?, ?) ORDER BY name")
-        .all("idx_standing_intents_scope", "standing_intents_fts_after_update"),
-    ).toEqual([
-      { name: "idx_standing_intents_scope" },
-      { name: "standing_intents_fts_after_update" },
-    ]);
+      db.prepare("SELECT name FROM main.sqlite_schema WHERE name = 'standing_intents'").get(),
+    ).toBeUndefined();
+    ensure(db, (run) => managed(db, run));
+    expect(collectSqliteSchemaIssues(db, schemaSql)).toEqual([]);
     expectHotEnsure(db);
   });
 
-  it.each(["outer", "savepoint"] as const)(
-    "retries schema rolled back by its %s owner",
+  it.each(["outer", "savepoint", "native DDL conflict"] as const)(
+    "retries schema after %s rollback",
     (owner) => {
       const db = open();
       const failure = new Error("rollback the schema owner");
@@ -110,7 +122,10 @@ describe("standing-intent schema admission", () => {
             throw failure;
           }),
         ).toThrow(failure);
-      if (owner === "outer") {
+      if (owner === "native DDL conflict") {
+        db.exec("CREATE TABLE idx_standing_intents_scope (id INTEGER)");
+        expect(() => managed(db, () => ensure(db))).toThrow(/idx_standing_intents_scope/u);
+      } else if (owner === "outer") {
         rolledBack();
       } else {
         managed(db, rolledBack);
@@ -118,98 +133,73 @@ describe("standing-intent schema admission", () => {
       expect(
         db.prepare("SELECT name FROM sqlite_schema WHERE name = 'standing_intents'").get(),
       ).toBeUndefined();
+      if (owner === "native DDL conflict") {
+        db.exec("DROP TABLE idx_standing_intents_scope");
+      }
       managed(db, () => ensure(db));
-      expect(schemaContract.collectSqliteSchemaIssues(db, schemaSql)).toEqual([]);
+      expect(collectSqliteSchemaIssues(db, schemaSql)).toEqual([]);
       expectHotEnsure(db);
     },
   );
 
   it.each([
-    ["creator column", "ALTER TABLE standing_intents DROP COLUMN creator_sender"],
-    ["index", "DROP INDEX idx_standing_intents_scope"],
-    ["trigger", "DROP TRIGGER standing_intents_fts_after_update"],
-  ])("does not cache post-ensure removal of the %s", (_name, mutation) => {
-    const db = open();
-    managed(db, () => {
+    ["creator column", "ALTER TABLE standing_intents DROP COLUMN creator_sender", "transaction"],
+    ["index", "DROP INDEX idx_standing_intents_scope", "later DDL"],
+    ["trigger", "DROP TRIGGER standing_intents_fts_after_update", "later DDL"],
+    ["creator column", "ALTER TABLE standing_intents DROP COLUMN creator_sender", "sibling DDL"],
+    ["index", "DROP INDEX idx_standing_intents_scope", "sibling DDL"],
+    ["trigger", "DROP TRIGGER standing_intents_fts_after_update", "sibling DDL"],
+  ])("does not cache removal of the %s (%s, %s)", (_name, mutation, phase) => {
+    const filename =
+      phase === "sibling DDL"
+        ? path.join(tempDirs.make("standing-intents-sibling-schema-"), "agent.sqlite")
+        : ":memory:";
+    const db = open(true, filename);
+    if (phase === "sibling DDL") {
       ensure(db);
+      const peer = open(true, filename);
+      peer.exec(mutation);
+    } else if (phase === "later DDL") {
+      managed(db, () => ensure(db));
       db.exec(mutation);
-    });
-    expect(schemaContract.collectSqliteSchemaIssues(db, schemaSql).length).toBeGreaterThan(0);
-    managed(db, () => ensure(db));
-    expect(schemaContract.collectSqliteSchemaIssues(db, schemaSql)).toEqual([]);
-    expectHotEnsure(db);
-  });
-
-  it("revokes a warmed admission after later DDL", () => {
-    const db = open();
-    managed(db, () => ensure(db));
-    db.exec("DROP INDEX idx_standing_intents_scope");
-    managed(db, () => ensure(db));
-    expect(schemaContract.collectSqliteSchemaIssues(db, schemaSql)).toEqual([]);
-    expectHotEnsure(db);
-  });
-
-  it("does not publish facts changed after the post-commit schema inspection", () => {
-    const db = open();
-    const collect = schemaContract.collectSqliteSchemaIssues;
-    const inspection = vi
-      .spyOn(schemaContract, "collectSqliteSchemaIssues")
-      .mockImplementationOnce((...args) => {
-        const issues = collect(...args);
-        db.exec("DROP INDEX idx_standing_intents_scope");
-        return issues;
+    } else {
+      managed(db, () => {
+        ensure(db);
+        db.exec(mutation);
       });
-    try {
-      managed(db, () => ensure(db));
-      expect(inspection).toHaveBeenCalledOnce();
-    } finally {
-      inspection.mockRestore();
     }
-    expect(schemaContract.collectSqliteSchemaIssues(db, schemaSql).length).toBeGreaterThan(0);
-    managed(db, () => ensure(db));
-    expect(schemaContract.collectSqliteSchemaIssues(db, schemaSql)).toEqual([]);
+    expect(collectSqliteSchemaIssues(db, schemaSql).length).toBeGreaterThan(0);
+    ensure(db);
+    expect(collectSqliteSchemaIssues(db, schemaSql)).toEqual([]);
     expectHotEnsure(db);
   });
 
-  it("preserves a native first-use DDL failure and retries after the conflict is removed", () => {
-    const db = open();
-    db.exec("CREATE TABLE idx_standing_intents_scope (id INTEGER)");
-    expect(() => managed(db, () => ensure(db))).toThrow(/idx_standing_intents_scope/u);
-    expect(
-      db.prepare("SELECT name FROM sqlite_schema WHERE name = 'standing_intents'").get(),
-    ).toBeUndefined();
-    db.exec("DROP TABLE idx_standing_intents_scope");
-    managed(db, () => ensure(db));
-    expect(schemaContract.collectSqliteSchemaIssues(db, schemaSql)).toEqual([]);
-    expectHotEnsure(db);
-  });
+  it.each(["missing table", "missing creator", "complete"] as const)(
+    "keeps the %s repair in main when a TEMP table shadows its name",
+    (shape) => {
+      const db = open();
+      if (shape !== "missing table") {
+        db.exec(shape === "complete" ? schemaSql : schemaSql.replace(creatorColumnSql, ""));
+      }
+      db.exec("CREATE TEMP TABLE standing_intents (temp_only TEXT)");
+      ensure(db);
+      expect(collectSqliteSchemaIssues(db, schemaSql)).toEqual([]);
+      expect(db.prepare("PRAGMA temp.table_info(standing_intents)").all()).toEqual([
+        expect.objectContaining({ name: "temp_only" }),
+      ]);
+      expectHotEnsure(db);
+    },
+  );
 
-  it("leaves cache admission unrecorded when the optional post-commit inspection throws", () => {
+  it("does not admit a generated creator column as the canonical writable column", () => {
     const db = open();
-    const inspection = vi
-      .spyOn(schemaContract, "collectSqliteSchemaIssues")
-      .mockImplementationOnce(() => {
-        throw new Error("synthetic native inspection failure");
-      });
-    try {
-      expect(() => managed(db, () => ensure(db))).not.toThrow();
-      expect(inspection).toHaveBeenCalledOnce();
-    } finally {
-      inspection.mockRestore();
-    }
-    expect(schemaContract.collectSqliteSchemaIssues(db, schemaSql)).toEqual([]);
-    const exec = vi.spyOn(db, "exec");
-    try {
-      managed(db, () => ensure(db));
-      expect(
-        exec.mock.calls.some(([sql]) =>
-          sql.includes("CREATE TABLE IF NOT EXISTS standing_intents"),
-        ),
-      ).toBe(true);
-    } finally {
-      exec.mockRestore();
-    }
-    expectHotEnsure(db);
+    db.exec(
+      schemaSql.replace(
+        creatorColumnSql,
+        "  creator_sender TEXT GENERATED ALWAYS AS ('synthetic') VIRTUAL,\n",
+      ),
+    );
+    expect(() => ensure(db)).toThrow(/duplicate column name: creator_sender/u);
   });
 
   it("does not persist cache state from an unmanaged transaction or unadmitted connection", () => {
@@ -226,7 +216,7 @@ describe("standing-intent schema admission", () => {
       ensure(unadmitted);
       expect(
         exec.mock.calls.some(([sql]) =>
-          sql.includes("CREATE TABLE IF NOT EXISTS standing_intents"),
+          sql.includes("CREATE TABLE IF NOT EXISTS main.standing_intents"),
         ),
       ).toBe(true);
     } finally {

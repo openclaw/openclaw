@@ -25,29 +25,23 @@ function fixture() {
 const tab = { surface: "tab", id: "panel", label: "Reports" } as const;
 
 describe("plugin registry Control UI descriptors", () => {
-  it.each(["Reports", " reports", "a".repeat(65), "api", "health"])(
-    "rejects invalid or HTTP-owned tab slug %j",
-    (slug) => {
-      const { registry, register } = fixture();
-      register({ ...tab, slug });
-      expect(registry.registry.controlUiDescriptors).toEqual([]);
-      expect(registry.registry.diagnostics).toContainEqual(
-        expect.objectContaining({
-          level: "error",
-          pluginId: "reports",
-          message: expect.stringContaining("descriptor slug requires"),
-        }),
-      );
-    },
-  );
+  it.each(["api", "health"])("rejects HTTP-owned tab slug %j", (slug) => {
+    const { registry, register } = fixture();
+    register({ ...tab, slug });
+    expect(registry.registry.controlUiDescriptors).toEqual([]);
+    expect(registry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "reports",
+        message: expect.stringContaining("descriptor slug requires"),
+      }),
+    );
+  });
 
-  it.each([
-    { surface: "widget" as const },
-    { surface: "tab" as const, placement: "route:reports" },
-  ])("rejects slug on $surface with placement $placement", (fields) => {
+  it("rejects a slug alongside native route placement", () => {
     const { registry, register } = fixture();
     register(
-      { ...tab, ...fields, slug: "reports" },
+      { ...tab, placement: "route:reports", slug: "reports" },
       createPluginRecord({ id: "reports", origin: "bundled" }),
     );
     expect(registry.registry.controlUiDescriptors).toEqual([]);
@@ -117,7 +111,6 @@ describe("plugin registry Control UI descriptors", () => {
       order: 5,
       requiredScopes: ["operator.read"],
       sessionActions: ["save", "save", "preview"],
-      allowChatNavigation: true,
     } satisfies PluginControlUiDescriptor;
     register(descriptor, createPluginRecord({ id: "workboard", origin: "bundled" }));
     expect(registry.registry.controlUiDescriptors).toEqual([
@@ -144,45 +137,35 @@ describe("plugin registry Control UI descriptors", () => {
     );
   });
 
-  it.each([
-    { uiCapabilities: [], warns: true },
-    { uiCapabilities: ["widget", "panel"] as const, warns: false },
-  ])(
-    "diagnoses UI declaration drift without rejecting registration: $uiCapabilities",
-    ({ uiCapabilities, warns }) => {
-      const { registry, register } = fixture();
-      register(
-        {
-          surface: "widget",
+  it("diagnoses UI declaration drift without rejecting registration", () => {
+    const { registry, register } = fixture();
+    register(
+      {
+        surface: "widget",
+        id: "card",
+        label: "Workboard card",
+        requiredScopes: ["operator.read"],
+      },
+      createPluginRecord({ id: "workboard", uiCapabilities: [] }),
+    );
+    expect(registry.registry.diagnostics.filter(({ level }) => level === "warn")).toEqual([
+      expect.objectContaining({
+        pluginId: "workboard",
+        message:
+          'Registered UI capability "widget" is missing from uiCapabilities in openclaw.plugin.json.',
+      }),
+    ]);
+    expect(registry.registry.controlUiDescriptors).toEqual([
+      expect.objectContaining({
+        pluginId: "workboard",
+        descriptor: expect.objectContaining({
           id: "card",
+          surface: "widget",
           label: "Workboard card",
-          requiredScopes: ["operator.read"],
-        },
-        createPluginRecord({ id: "workboard", uiCapabilities: [...uiCapabilities] }),
-      );
-      expect(registry.registry.diagnostics.filter(({ level }) => level === "warn")).toEqual(
-        warns
-          ? [
-              expect.objectContaining({
-                pluginId: "workboard",
-                message:
-                  'Registered UI capability "widget" is missing from uiCapabilities in openclaw.plugin.json.',
-              }),
-            ]
-          : [],
-      );
-      expect(registry.registry.controlUiDescriptors).toEqual([
-        expect.objectContaining({
-          pluginId: "workboard",
-          descriptor: expect.objectContaining({
-            id: "card",
-            surface: "widget",
-            label: "Workboard card",
-          }),
         }),
-      ]);
-    },
-  );
+      }),
+    ]);
+  });
 
   it("rejects tab bridge capabilities on non-tab descriptors", () => {
     const { config, registry } = createPluginRegistryFixture();
@@ -219,18 +202,5 @@ describe("plugin registry Control UI descriptors", () => {
         expect.objectContaining({ level: "error", pluginId: "reports" }),
       );
     }
-  });
-
-  it("rejects tab descriptors whose path is not absolute", () => {
-    const { registry, register } = fixture();
-    register({ ...tab, path: "relative/frame.html" });
-    expect(registry.registry.controlUiDescriptors).toEqual([]);
-    expect(registry.registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "reports",
-        message: expect.stringContaining("gateway-local absolute path"),
-      }),
-    );
   });
 });

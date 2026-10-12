@@ -19,7 +19,7 @@ type BoardWidgetSandboxHostOptions = {
   controlUiBaseUrl?: string;
   client?: BoardWidgetBridgeGatewayClient;
   resolveFrameUrl: BoardWidgetFrameUrl;
-  confirmPrompt: (text: string) => boolean;
+  confirmPrompt: (text: string) => boolean | Promise<boolean>;
   onFrameUrl: (url: string) => void;
   onLoadFailed: (widget: BoardWidget) => void;
   onUnauthorized: (widget: BoardWidget) => void;
@@ -58,7 +58,7 @@ export class BoardWidgetSandboxHost {
   private offeredTicket = "";
   private readonly documentHost: WidgetSandboxHost;
   private requestGeneration = 0;
-  private readonly pendingRequests = new Map<string, number>();
+  private readonly pendingRequests = new Set<string>();
 
   constructor(private options: BoardWidgetSandboxHostOptions) {
     this.documentHost = new WidgetSandboxHost(this.documentOptions());
@@ -251,7 +251,7 @@ export class BoardWidgetSandboxHost {
     }
     const generation = this.requestGeneration;
     const frame = this.options.frame;
-    this.pendingRequests.set(data.id, generation);
+    this.pendingRequests.add(data.id);
     void this.bridgeController
       .handle(data, {
         // Only the injected wrapper owns this port, and it posts prompt
@@ -274,7 +274,7 @@ export class BoardWidgetSandboxHost {
     result?: unknown,
     error?: string,
   ): void {
-    if (generation !== this.requestGeneration || this.pendingRequests.get(id) !== generation) {
+    if (generation !== this.requestGeneration || !this.pendingRequests.has(id)) {
       return;
     }
     this.pendingRequests.delete(id);
@@ -282,10 +282,8 @@ export class BoardWidgetSandboxHost {
   }
 
   private cancelPendingRequests(error: string): void {
-    for (const [id, generation] of this.pendingRequests) {
-      if (generation === this.requestGeneration) {
-        this.postResponse(id, false, undefined, error);
-      }
+    for (const id of this.pendingRequests) {
+      this.postResponse(id, false, undefined, error);
     }
     this.pendingRequests.clear();
   }

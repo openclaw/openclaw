@@ -780,11 +780,10 @@ async function renderSourceRootHelpText(
   } satisfies RootHelpRenderOptions;
   const inlineModule = [
     `const mod = await import(${JSON.stringify(moduleUrl)});`,
-    "if (typeof mod.renderRootHelpText !== 'function') {",
-    `  throw new Error(${JSON.stringify("Source root-help module does not export renderRootHelpText.")});`,
+    "if (typeof mod.outputRootHelp !== 'function') {",
+    `  throw new Error(${JSON.stringify("Source root-help module does not export outputRootHelp.")});`,
     "}",
-    `const output = await mod.renderRootHelpText(${JSON.stringify(renderOptions)});`,
-    "process.stdout.write(output);",
+    `await mod.outputRootHelp(${JSON.stringify(renderOptions)});`,
     "process.exit(0);",
   ].join("\n");
   return await spawnText(["--import", "tsx", "--input-type=module", "--eval", inlineModule], {

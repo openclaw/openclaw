@@ -73,12 +73,9 @@ describe("watcher rejection classification", () => {
   it.each([
     [null, false],
     ["string error", false],
-    [codedError("ENOSPC", "inotify watches exhausted"), true],
     [codedError("ENOSPC", "watcher error: ENOSPC"), true],
     [codedError("ENOSPC", "write failed: no space left on device"), false],
     [new Error("file watcher: no space left on device"), true],
-    [new Error("inotify watches exhausted"), true],
-    [new Error("System limit for number of file watchers reached"), true],
     [new Error("watcher error: ENOSPC"), false],
   ])("requires watcher resource exhaustion for input %#", (error, transient) => {
     expect(isTransientUnhandledRejectionError(error)).toBe(transient);

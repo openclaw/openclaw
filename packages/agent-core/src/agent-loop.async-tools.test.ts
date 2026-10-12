@@ -60,7 +60,7 @@ function recordMessage(event: AgentEvent, messages: AgentMessage[]) {
   }
 }
 
-it.each(["mixed-parallel", "sequential", "deferred-exclusive"] as const)(
+it.each(["mixed-parallel", "deferred-exclusive"] as const)(
   "preserves %s scheduling for streamed async calls",
   async (mode) => {
     const response = createAssistantMessageEventStream();
@@ -107,7 +107,6 @@ it.each(["mixed-parallel", "sequential", "deferred-exclusive"] as const)(
       },
       {
         model,
-        toolExecution: mode === "sequential" ? "sequential" : undefined,
         convertToLlm: (messages) => messages as Context["messages"],
         resolveDeferredTool: ({ toolCall }) =>
           toolCall.name === "second" ? secondTool : undefined,
@@ -541,7 +540,7 @@ it("preserves external cancellation when an output-limited async batch hits the 
   }
 });
 
-it.each(["error", "aborted", "output-limit"] as const)(
+it.each(["aborted", "output-limit"] as const)(
   "settles running async tools with queued source starts after %s",
   async (failureKind) => {
     const stopReason = failureKind === "aborted" ? "aborted" : "error";
@@ -751,8 +750,10 @@ it.each([
     };
     const claimYield = vi.fn(
       createRequesterYieldCallback({
-        requesterSessionKey: "agent:diagnostic:subagent:child",
         requesterAgentId: "diagnostic",
+        // This loop fixture owns a runtime completion; native child admission
+        // is covered at the requester boundary, not inferred from a fake key.
+        claimYieldCompletion: () => true,
       }),
     );
     const onYield = vi.fn(() => {

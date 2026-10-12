@@ -1,4 +1,3 @@
-/** Builds final reply payloads after sanitization, media normalization, and dedupe. */
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -22,7 +21,6 @@ import {
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
-import { formatBunFetchSocketError, isBunFetchSocketError } from "./agent-runner-utils.js";
 import { createBlockReplyContentKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
@@ -31,8 +29,9 @@ import { applyReplyThreading, resolveReplyThreadingPayloads } from "./reply-payl
 import { createReplyDeliveryContext } from "./reply-threading.js";
 
 const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
-  () => import("./reply-payloads-dedupe.runtime.js"),
+  () => import("./reply-payloads-dedupe.js"),
 );
+const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 
 async function normalizeSentMediaUrlsForDedupe(params: {
   sentMediaUrls: readonly string[];
@@ -128,7 +127,6 @@ function copyPayloadWithSanitizedText(
   return next;
 }
 
-/** Builds final outbound payloads from agent output and message-tool delivery evidence. */
 export async function buildReplyPayloads(params: {
   config?: OpenClawConfig;
   payloads: ReplyPayload[];
@@ -169,8 +167,9 @@ export async function buildReplyPayloads(params: {
     for (const payload of params.payloads) {
       let text = payload.text;
 
-      if (payload.isError && text && isBunFetchSocketError(text)) {
-        text = formatBunFetchSocketError();
+      if (payload.isError && text && BUN_FETCH_SOCKET_ERROR_RE.test(text)) {
+        text =
+          "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
       }
 
       if (text?.includes("HEARTBEAT_OK")) {
@@ -322,12 +321,9 @@ export async function buildReplyPayloads(params: {
       continue;
     }
     const assistantMessageIndex = getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex;
-    const fragments = directTextFragmentsByAssistantMessage.get(assistantMessageIndex);
-    if (fragments) {
-      fragments.push(sentText);
-    } else {
-      directTextFragmentsByAssistantMessage.set(assistantMessageIndex, [sentText]);
-    }
+    const fragments = directTextFragmentsByAssistantMessage.get(assistantMessageIndex) ?? [];
+    fragments.push(sentText);
+    directTextFragmentsByAssistantMessage.set(assistantMessageIndex, fragments);
   }
   const isDirectBlockRetryBlocked = (payload: ReplyPayload) => {
     if (getReplyPayloadMetadata(payload)?.blockReplySources) {
@@ -378,10 +374,7 @@ export async function buildReplyPayloads(params: {
       const wasSent = hasRichContent
         ? params.blockReplyPipeline?.hasSentExactPayload?.(payload)
         : params.blockReplyPipeline?.hasSentPayload(payload) || isDirectTextRetryBlocked(payload);
-      if (wasSent) {
-        return null;
-      }
-      return payload;
+      return wasSent ? null : payload;
     }
     if (!reply.trimmedText) {
       return payload;

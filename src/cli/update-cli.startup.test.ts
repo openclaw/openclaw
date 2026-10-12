@@ -13,7 +13,15 @@ vi.mock("./update-cli/wizard.js", unavailableRuntime);
 
 it("keeps update help available without loading execution dependencies", async () => {
   const { registerUpdateCli } = await import("./update-cli.js");
-  for (const leaf of [undefined, "status", "repair", "finalize", "wizard", "adopt-immutable"]) {
+  for (const leaf of [
+    undefined,
+    "status",
+    "repair",
+    "finalize",
+    "wizard",
+    "adopt-immutable",
+    "recover",
+  ]) {
     let output = "";
     const program = new Command()
       .name("openclaw")

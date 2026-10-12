@@ -1,12 +1,10 @@
 :root {
-  /* Background - Deep, rich dark with layered depth */
   --bg: #0e1015;
   --bg-accent: #13151b;
   --bg-elevated: #191c24;
   --bg-hover: #1f2330;
   --bg-muted: #1f2330;
 
-  /* Card / Surface - Clear hierarchy between levels */
   --card: #161920;
   --card-foreground: #f0f0f2;
   --card-highlight: rgba(255, 255, 255, 0.04);
@@ -15,7 +13,6 @@
   --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
   --session-hovercard-progress-surface: color-mix(in srgb, var(--card) 58%, var(--bg) 42%);
 
-  /* Panel */
   --panel: #0e1015;
   --panel-strong: #191c24;
   --panel-hover: #1f2330;
@@ -39,7 +36,6 @@
   --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
   --github-item-hover-bg: color-mix(in srgb, var(--text) 10%, var(--bg));
 
-  /* Border - Whisper-thin, barely there */
   --border: #1e2028;
   --border-strong: #2e3040;
   --border-hover: #3e4050;
@@ -58,10 +54,7 @@
   --rail-header-action-active-color: var(--accent);
   --rail-header-action-disabled-opacity: 0.4;
   --rail-header-action-gap: 2px;
-  --rail-header-copy-gap: 2px;
   --rail-header-background: var(--bg);
-  --rail-header-eyebrow-size: var(--control-ui-text-xs);
-  --rail-header-eyebrow-letter-spacing: 0.04em;
   --rail-header-title-size: var(--control-ui-text-sm);
   --rail-header-title-weight: 600;
   --rail-divider-color: var(--border);
@@ -119,7 +112,6 @@
   --primary-hover: var(--primary);
   --primary-foreground: #ffffff;
 
-  /* Secondary */
   --secondary: #161920;
   --secondary-foreground: #f0f0f2;
   --accent-2: #14b8a6;
@@ -134,6 +126,8 @@
   --qr-text: #444444;
   --media-bg: #000000;
   --media-foreground: #ffffff;
+  --media-control-bg: rgba(255, 255, 255, 0.16);
+  --media-control-bg-hover: rgba(255, 255, 255, 0.22);
   --exec-highlight: #f97316;
   --moon-highlight: #fef3c7;
   --moon-base: #fbbf24;
@@ -209,12 +203,10 @@
   --info-subtle: rgba(96, 165, 250, 0.08);
   --pr-merged: #a78bfa;
 
-  /* Focus */
   --focus: rgba(255, 92, 92, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
-  /* Grid */
   --grid-line: rgba(255, 255, 255, 0.03);
 
   /* GitHub syntax palette shared by highlighted code and file previews. */
@@ -259,7 +251,6 @@
   --wa-form-control-hint-color: var(--muted);
   --wa-form-control-placeholder-color: var(--muted);
 
-  /* Typography */
   --mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-shortcut: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Symbol", sans-serif;
@@ -279,7 +270,6 @@
   --chat-text-size: var(--control-ui-text-md);
   --chat-block-gap: var(--chat-text-size);
 
-  /* Shadows - Subtle, layered depth */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
@@ -312,7 +302,8 @@
      surfaces. Board layout math mirrors this value numerically. */
   --widget-frame-inset: var(--space-3);
 
-  /* Radii - Slightly larger for modern feel */
+  --sidebar-nav-row-height: 32px;
+
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
@@ -351,7 +342,6 @@
   --menu-padding: 4px;
   --menu-selected: color-mix(in srgb, var(--text) 8%, transparent);
 
-  /* Transitions - Crisp and responsive */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -373,7 +363,6 @@
     var(--shell-canvas-height) - var(--safe-area-top) - var(--shell-safe-area-bottom)
   );
 
-  /* Layering */
   --z-dropdown: 100;
   --z-toast: 2000;
 
@@ -557,6 +546,8 @@
 /* Light theme tokens apply to every light-mode family. */
 /* Defaults must lose to named palettes even when their link precedes the app CSS. */
 :root:where([data-theme-mode="light"]) {
+  --media-control-bg: rgba(12, 16, 24, 0.64);
+  --media-control-bg-hover: rgba(12, 16, 24, 0.78);
   /*
    * Warm paper light mode - terracotta accent on ivory
    *
@@ -690,7 +681,6 @@
   --hljs-deletion: #a40e26;
   --hljs-addition: #116329;
 
-  /* Light shadows - Subtle, warm-tinted */
   --shadow-sm: 0 1px 2px rgba(60, 42, 24, 0.05);
   --shadow-md: 0 4px 12px rgba(60, 42, 24, 0.07);
   --shadow-lg: 0 12px 28px rgba(60, 42, 24, 0.09);
@@ -1065,7 +1055,6 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   background-clip: content-box;
 }
 
-/* Animations - Polished with spring feel */
 @keyframes rise {
   from {
     opacity: 0;
@@ -1129,7 +1118,6 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   }
 }
 
-/* Skeleton loading primitives */
 .skeleton {
   position: relative;
   overflow: hidden;
@@ -1201,7 +1189,6 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   }
 }
 
-/* Focus visible styles */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
+import type { SessionDataController } from "../components/session-data-controller.ts";
 import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import {
@@ -16,31 +17,27 @@ import "../components/app-sidebar.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
+import type { ShellViewHost } from "./app-shell-view.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import { loadSettings } from "./settings.ts";
 import "./app-host.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 
-type PairingShell = HTMLElement & {
-  runtime?: ApplicationRuntime;
-  render: () => TemplateResult;
-  routeState: {
-    routeId?: string;
-    location?: { pathname: string; search: string; hash: string };
+type PairingShell = HTMLElement &
+  Pick<ShellViewHost, "devicePairSetup" | "settingsSidebar"> & {
+    runtime?: ApplicationRuntime;
+    render: () => TemplateResult;
+    routeState: {
+      routeId?: string;
+      location?: { pathname: string; search: string; hash: string };
+    };
+    outboxStoreRuntime: OutboxStoreRuntime | null;
+    openNewSession: (agentId: string) => void;
   };
-  devicePairSetupRenderer: unknown;
-  devicePairSetupLoadFailed: boolean;
-  loadDevicePairSetupRenderer: () => void;
-  settingsSidebarRenderer: unknown;
-  settingsSidebarLoadFailed: boolean;
-  loadSettingsSidebarRenderer: () => void;
-  retrySettingsSidebarRenderer: () => void;
-  outboxStoreRuntime: OutboxStoreRuntime | null;
-  openNewSession: (agentId: string) => void;
-};
 
 type PairingSidebar = LitElement & {
+  sessionData: SessionDataController;
   render: () => TemplateResult;
   canPairDevice: boolean;
   onPairMobile?: () => void;
@@ -252,12 +249,15 @@ describe("application shell pairing access", () => {
       const { shell, renderSidebar, container, overlaySnapshot } = createPairingShell({
         auth: { role: "operator", scopes: ["operator.admin"] },
       });
+      // This render-isolation case observes an ordinary conversation in the All list,
+      // not the compact Home control, which no longer has a row endcap.
+      const sessionKey = "agent:main:queued";
       let storedOutboxes = {
         total: 1,
         sessions: [
           {
             agentId: "main",
-            sessionKey: "agent:main:main",
+            sessionKey,
             hasComposerDraft: true,
             outboxAttentionCount: 1,
           },
@@ -280,6 +280,27 @@ describe("application shell pairing access", () => {
       await settleLitElements([sidebar, topbar]);
       await vi.dynamicImportSettled();
       await settleLitElements([sidebar, topbar]);
+      sidebar.sessionData.sessionsResult = {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { model: null, modelProvider: null, contextTokens: null },
+        sessions: [{ key: sessionKey, agentId: "main", kind: "direct", updatedAt: 1 }],
+      };
+      sidebar.sessionData.sessionsAgentId = "main";
+      sidebar.requestUpdate();
+      await settleLitElements([sidebar, topbar]);
+      const conversation = () =>
+        sidebar.querySelector<HTMLElement>(
+          `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
+        );
+      expect(conversation()).not.toBeNull();
+      if (withOutboxes) {
+        expect(
+          conversation()?.querySelector(".session-row-badge--attention")?.textContent,
+        ).toContain("1");
+        expect(conversation()?.querySelector(".session-row-badge--draft")).not.toBeNull();
+      }
       expect(sidebar.isUpdatePending).toBe(false);
       const sidebarText = sidebar.textContent;
       const topbarText = topbar.textContent;
@@ -294,19 +315,17 @@ describe("application shell pairing access", () => {
       expect(renderTopbarChild).not.toHaveBeenCalled();
       expect(sidebar.textContent).toBe(sidebarText);
       expect(topbar.textContent).toBe(topbarText);
-      expect(sidebar.storedOutboxes?.attentionCountForSession("agent:main:main") ?? 0).toBe(
+      expect(sidebar.storedOutboxes?.attentionCountForSession(sessionKey) ?? 0).toBe(
         withOutboxes ? 1 : 0,
       );
-      expect(sidebar.storedOutboxes?.hasSessionDraft("agent:main:main") ?? false).toBe(
-        withOutboxes,
-      );
+      expect(sidebar.storedOutboxes?.hasSessionDraft(sessionKey) ?? false).toBe(withOutboxes);
       if (withOutboxes) {
         storedOutboxes = {
           total: 2,
           sessions: [
             {
               agentId: "main",
-              sessionKey: "agent:main:main",
+              sessionKey,
               hasComposerDraft: false,
               outboxAttentionCount: 2,
             },
@@ -317,8 +336,10 @@ describe("application shell pairing access", () => {
         render(shell.render(), container);
         await settleLitElements([sidebar, topbar]);
         expect(renderSidebarChild).toHaveBeenCalledOnce();
-        expect(sidebar.querySelector(".session-row-badge--attention")?.textContent).toContain("2");
-        expect(sidebar.querySelector(".session-row-badge--draft")).toBeNull();
+        expect(
+          conversation()?.querySelector(".session-row-badge--attention")?.textContent,
+        ).toContain("2");
+        expect(conversation()?.querySelector(".session-row-badge--draft")).toBeNull();
       }
     },
   );
@@ -421,137 +442,103 @@ describe("application shell pairing access", () => {
     { name: "read-only", auth: { role: "operator", scopes: ["operator.read"] }, canPair: false },
     { name: "write-only", auth: { role: "operator", scopes: ["operator.write"] }, canPair: false },
     { name: "explicitly ungranted", auth: { role: "operator", scopes: [] }, canPair: false },
-  ])("gates the sidebar pairing entry for a $name operator", ({ auth, canPair }) => {
-    const { renderSidebar } = createPairingShell({ auth });
-
-    expect(renderSidebar().canPairDevice).toBe(canPair);
-  });
-
-  it("keeps the pairing entry accessible after admin becomes pairing-only", () => {
-    const { snapshot, openDevicePairSetup, renderSidebar } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    });
-    expect(renderSidebar().canPairDevice).toBe(true);
-
-    snapshot.hello = {
-      auth: { role: "operator", scopes: ["operator.pairing"] },
-    } as ApplicationGatewaySnapshot["hello"];
-    const sidebar = renderSidebar();
-
-    expect(sidebar.canPairDevice).toBe(true);
-    sidebar.onPairMobile?.();
-    expect(openDevicePairSetup).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the pairing entry disabled while the gateway is disconnected", () => {
-    const { renderSidebar } = createPairingShell({
+    {
+      name: "disconnected",
       auth: { role: "operator", scopes: ["operator.pairing"] },
       connected: false,
-    });
-
-    expect(renderSidebar().canPairDevice).toBe(false);
+      canPair: false,
+    },
+    {
+      name: "admin becoming pairing-only",
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      nextAuth: { role: "operator", scopes: ["operator.pairing"] },
+      canPair: true,
+    },
+  ])("gates the sidebar pairing entry for a $name operator", (scenario) => {
+    const { snapshot, openDevicePairSetup, renderSidebar } = createPairingShell(scenario);
+    expect(renderSidebar().canPairDevice).toBe(scenario.canPair);
+    if (scenario.nextAuth) {
+      snapshot.hello = { auth: scenario.nextAuth } as ApplicationGatewaySnapshot["hello"];
+      const sidebar = renderSidebar();
+      expect(sidebar.canPairDevice).toBe(true);
+      sidebar.onPairMobile?.();
+      expect(openDevicePairSetup).toHaveBeenCalledOnce();
+    }
   });
 
-  it("keeps a failed pairing dialog load visible and retryable", () => {
-    const { shell, renderSidebar, container } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.pairing"] },
-      setupCode: "pair-mobile-secret",
-    });
-    renderSidebar();
-
-    // Force the rejected-chunk state the shell reaches when the lazy pairing
-    // import fails while its overlay is already open.
-    shell.devicePairSetupRenderer = null;
-    shell.devicePairSetupLoadFailed = true;
-    render(shell.render(), container);
-
-    const dialog = container.querySelector<HTMLElement>(".device-pair-setup");
-    expect(dialog?.textContent).toContain("Could not load the pairing dialog");
-    const actions = [
-      ...container.querySelectorAll<HTMLButtonElement>(".device-pair-setup__footer button"),
-    ];
-    expect(actions.map((button) => button.textContent?.trim())).toEqual(["Retry", "Close"]);
-
-    actions[0]?.click();
-
-    expect(shell.devicePairSetupLoadFailed).toBe(false);
-  });
-
-  it("keeps the pairing dialog visible while its lazy renderer is loading", () => {
+  it.each([false, true])("keeps the lazy pairing dialog visible (failed: %s)", (failed) => {
     const { shell, renderSidebar, container } = createPairingShell({
       auth: { role: "operator", scopes: ["operator.pairing"] },
       setupCode: "pair-mobile-secret",
     });
     const loadRenderer = vi.fn();
-    shell.devicePairSetupRenderer = null;
-    shell.devicePairSetupLoadFailed = false;
-    shell.loadDevicePairSetupRenderer = loadRenderer;
-
+    if (failed) {
+      renderSidebar();
+    } else {
+      shell.devicePairSetup.load = loadRenderer;
+    }
+    shell.devicePairSetup.renderer = null;
+    shell.devicePairSetup.failed = failed;
     renderSidebar();
-
     const dialog = container.querySelector<HTMLElement>(".device-pair-setup");
-    expect(dialog?.getAttribute("aria-busy")).toBe("true");
-    expect(dialog?.textContent).toContain("Loading…");
-    expect(loadRenderer).toHaveBeenCalledOnce();
+    if (failed) {
+      expect(dialog?.textContent).toContain("Could not load the pairing dialog");
+      const actions = [
+        ...container.querySelectorAll<HTMLButtonElement>(".device-pair-setup__footer button"),
+      ];
+      expect(actions.map((button) => button.textContent?.trim())).toEqual(["Retry", "Close"]);
+      actions[0]?.click();
+      expect(shell.devicePairSetup.failed).toBe(false);
+    } else {
+      expect(dialog?.getAttribute("aria-busy")).toBe("true");
+      expect(dialog?.textContent).toContain("Loading…");
+      expect(loadRenderer).toHaveBeenCalledOnce();
+    }
   });
 
-  it("keeps settings navigation visibly loading while its renderer downloads", () => {
+  it.each([false, true])("keeps lazy settings navigation visible (failed: %s)", (failed) => {
     const { shell, container } = createPairingShell({ auth: { role: "operator" } });
     const loadRenderer = vi.fn();
     shell.routeState = {
       routeId: "profile",
       location: { pathname: "/settings/profile", search: "", hash: "" },
     };
-    shell.settingsSidebarRenderer = null;
-    shell.settingsSidebarLoadFailed = false;
-    shell.loadSettingsSidebarRenderer = loadRenderer;
-
+    shell.settingsSidebar.renderer = null;
+    shell.settingsSidebar.failed = failed;
+    if (failed) {
+      shell.settingsSidebar.retry = loadRenderer;
+    } else {
+      shell.settingsSidebar.load = loadRenderer;
+    }
     render(shell.render(), container);
-
     const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
-    expect(sidebar?.getAttribute("aria-busy")).toBe("true");
-    const loadingSkeleton = sidebar?.querySelector<HTMLElement>(
-      '.settings-sidebar__loading[role="status"][aria-busy="true"]',
-    );
-    expect(loadingSkeleton?.getAttribute("aria-label")).toBe("Loading…");
-    // Legacy operator auth (no scopes) resolves to admin access, so the skeleton
-    // must draw the full admin navigation.
-    const expectedItems = visibleSettingsNavigationGroups(true).reduce(
-      (count, group) => count + group.routes.length,
-      0,
-    );
-    expect(loadingSkeleton?.querySelectorAll(".settings-sidebar__loading-item")).toHaveLength(
-      expectedItems,
-    );
-    expect(
-      loadingSkeleton?.querySelectorAll(
-        ".settings-sidebar__loading-item .settings-sidebar__loading-icon",
-      ),
-    ).toHaveLength(expectedItems);
+    if (failed) {
+      expect(sidebar?.getAttribute("aria-busy")).toBeNull();
+      expect(sidebar?.textContent).toContain("Settings navigation could not load.");
+      const retry = [...(sidebar?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
+        (button) => button.textContent?.trim() === "Retry",
+      );
+      retry?.click();
+    } else {
+      expect(sidebar?.getAttribute("aria-busy")).toBe("true");
+      const skeleton = sidebar?.querySelector<HTMLElement>(
+        '.settings-sidebar__loading[role="status"][aria-busy="true"]',
+      );
+      expect(skeleton?.getAttribute("aria-label")).toBe("Loading…");
+      const expectedItems = visibleSettingsNavigationGroups(true).reduce(
+        (count, group) => count + group.routes.length,
+        0,
+      );
+      expect(skeleton?.querySelectorAll(".settings-sidebar__loading-item")).toHaveLength(
+        expectedItems,
+      );
+      expect(
+        skeleton?.querySelectorAll(
+          ".settings-sidebar__loading-item .settings-sidebar__loading-icon",
+        ),
+      ).toHaveLength(expectedItems);
+    }
     expect(loadRenderer).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a failed settings navigation load visible and retryable", () => {
-    const { shell, container } = createPairingShell({ auth: { role: "operator" } });
-    const retryRenderer = vi.fn();
-    shell.routeState = {
-      routeId: "profile",
-      location: { pathname: "/settings/profile", search: "", hash: "" },
-    };
-    shell.settingsSidebarRenderer = null;
-    shell.settingsSidebarLoadFailed = true;
-    shell.retrySettingsSidebarRenderer = retryRenderer;
-
-    render(shell.render(), container);
-
-    const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
-    expect(sidebar?.getAttribute("aria-busy")).toBeNull();
-    expect(sidebar?.textContent).toContain("Settings navigation could not load.");
-    const retry = [...(sidebar?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
-      (button) => button.textContent?.trim() === "Retry",
-    );
-    retry?.click();
-    expect(retryRenderer).toHaveBeenCalledOnce();
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {

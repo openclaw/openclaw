@@ -17,8 +17,8 @@ function sqliteTranscriptJsonlByteSize() {
     + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes");
 }
 
-function createTranscriptStatsQuery(database: Pick<OpenClawAgentDatabase, "db">) {
-  const db = getSessionKysely(database.db);
+const transcriptStatsQuery = createSqliteQueryCache((database) => {
+  const db = getSessionKysely(database);
   return prepareSqliteQuerySync<
     string,
     {
@@ -31,7 +31,7 @@ function createTranscriptStatsQuery(database: Pick<OpenClawAgentDatabase, "db">)
       transcript_observed_at: number | null;
       transcript_updated_at: number | null;
     }
-  >(database.db, (parameter) =>
+  >(database, (parameter) =>
     db
       .selectFrom(
         db
@@ -73,33 +73,23 @@ function createTranscriptStatsQuery(database: Pick<OpenClawAgentDatabase, "db">)
         "session.transcript_updated_at",
       ]),
   );
-}
-
-const transcriptStatsQuery = createSqliteQueryCache((db) => createTranscriptStatsQuery({ db }));
+});
 
 /** Reads transcript freshness and byte size without materializing event rows. */
 export function readTranscriptStatsFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ): SessionTranscriptStats {
-  return runSqliteDeferredTransactionSync(
-    database.db,
-    () => {
-      const row = transcriptStatsQuery(database.db)(sessionId).rows[0];
-      return {
-        eventCount: row?.cold_event_count ?? row?.event_count ?? 0,
-        ...(row?.transcript_updated_at != null
-          ? { lastMutationAtMs: row.transcript_updated_at }
-          : {}),
-        ...(row?.transcript_observed_at != null
-          ? { lastObservedMutationAtMs: row.transcript_observed_at }
-          : {}),
-        maxSeq: row?.cold_last_seq ?? row?.max_seq ?? 0,
-        sizeBytes: row?.cold_raw_bytes ?? row?.size_bytes ?? 0,
-      };
-    },
-    { operationLabel: "session transcript stats" },
-  );
+  const row = transcriptStatsQuery(database.db)(sessionId).rows[0];
+  return {
+    eventCount: row?.cold_event_count ?? row?.event_count ?? 0,
+    ...(row?.transcript_updated_at != null ? { lastMutationAtMs: row.transcript_updated_at } : {}),
+    ...(row?.transcript_observed_at != null
+      ? { lastObservedMutationAtMs: row.transcript_observed_at }
+      : {}),
+    maxSeq: row?.cold_last_seq ?? row?.max_seq ?? 0,
+    sizeBytes: row?.cold_raw_bytes ?? row?.size_bytes ?? 0,
+  };
 }
 
 function readTranscriptStatsChunkFromDatabase(

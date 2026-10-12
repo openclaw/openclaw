@@ -101,7 +101,7 @@ suite.define(() => {
               frames.push({
                 top: shell.offsetTop,
                 height: shell.getBoundingClientRect().height,
-                card: shell.querySelector(".session-progress-card--composer") !== null,
+                card: shell.querySelector('[data-progress-card-placement="composer"]') !== null,
               });
               if (--remaining === 0) {
                 complete();
@@ -131,10 +131,12 @@ suite.define(() => {
             });
           }
           if (outcome === "card") {
-            await page.locator(".session-progress-card--composer").waitFor();
+            await page
+              .locator('[data-progress-card-placement="details"]')
+              .waitFor({ state: "attached" });
           }
           await expect
-            .poll(() => page.locator(".agent-chat__progress-float--loading").count())
+            .poll(() => page.locator('openclaw-chat-details-progress [role="status"]').count())
             .toBe(0);
           expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(
             true,
@@ -154,7 +156,11 @@ suite.define(() => {
               }
             }
           }
-          expect(frames.every((frame) => frame.card === (outcome === "card"))).toBe(true);
+          expect(frames.every((frame) => !frame.card)).toBe(true);
+          expect(await page.locator(".chat-details-toggle").getAttribute("aria-expanded")).toBe(
+            "false",
+          );
+          expect(await page.locator('.chat-details[role="dialog"]').isVisible()).toBe(false);
           expect(
             Math.max(...frames.map((frame) => frame.height)) -
               Math.min(...frames.map((frame) => frame.height)),
@@ -227,7 +233,9 @@ suite.define(() => {
             await gateway.resolveDeferred("progressCard.get", {
               card: { sessionKey, revision: 1, updatedAt: 1, markdown: "Initial task progress" },
             });
-            await page.locator(".session-progress-card--composer").waitFor();
+            await page
+              .locator('[data-progress-card-placement="details"]')
+              .waitFor({ state: "attached" });
           }
           expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(
             true,

@@ -162,12 +162,21 @@ async function withNotification(
 describe("session notification authority", () => {
   afterEach(drainSessionToolsFixture);
 
-  it.each(["operator.sessions.write", "operator.write"] as const)(
-    "queues an owned-child notification for %s through the real tool and router",
-    async (scope) => {
+  it.each([
+    ["operator.sessions.write", TARGET, true],
+    ["operator.write", TARGET, true],
+    ["operator.sessions.write", FOREIGN, false],
+  ] as const)(
+    "authorizes %s notification to %s (allowed: %s)",
+    async (scope, sessionKey, allowed) => {
       await withSlowProjectionStartup(() =>
         withNotification(scope, async ({ notify, revoke }) => {
-          await expect(notify()).resolves.toMatchObject({
+          if (!allowed) {
+            await expect(notify(sessionKey)).rejects.toThrow(/own session|not allowed/);
+            expect(drainSystemEvents(sessionKey)).toEqual([]);
+            return;
+          }
+          await expect(notify(sessionKey)).resolves.toMatchObject({
             details: {
               status: "queued",
               sessionKey: TARGET,
@@ -185,13 +194,6 @@ describe("session notification authority", () => {
       );
     },
   );
-
-  it("denies a visible child now owned by another person", async () => {
-    await withNotification("operator.sessions.write", async ({ notify }) => {
-      await expect(notify(FOREIGN)).rejects.toThrow(/own session|not allowed/);
-      expect(drainSystemEvents(FOREIGN)).toEqual([]);
-    });
-  });
 
   it.each(["source revoked", "role changed", "target deleted"] as const)(
     "cannot queue when %s during notification authorization",

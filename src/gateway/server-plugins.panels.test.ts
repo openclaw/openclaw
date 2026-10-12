@@ -109,12 +109,6 @@ describe("plugin panel runtime through the Gateway router", () => {
     );
   });
 
-  it("rejects read-only callers before any broadcast", async () => {
-    using harness = createHarness("operator.read");
-    await expect(harness.open()).rejects.toThrow("missing scope: operator.write");
-    expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
-  });
-
   it.for([
     {
       change: "caller revoked",

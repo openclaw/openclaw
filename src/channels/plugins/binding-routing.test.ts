@@ -15,7 +15,11 @@ import {
   inspectRuntimeConversationBindingRoute,
   type RuntimeConversationBindingRouteResult,
 } from "./binding-routing.js";
-import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
+const acpReadiness = vi.hoisted(() => vi.fn());
+// mock-isolation: Readiness timeout tests must not initialize ACP backend registries or Gateway reset state.
+vi.mock("./acp-stateful-target-driver.js", () => ({
+  ensureConfiguredAcpBindingTargetReady: acpReadiness,
+}));
 
 function createRoute(): ResolvedAgentRoute {
   const result: RuntimeConversationBindingRouteResult = {
@@ -136,7 +140,7 @@ describe("runtime conversation binding route", () => {
     (mainKey) => {
       const ordinaryRoute = resolveAgentRoute({
         cfg: {
-          agents: { list: [{ id: "main" }, { id: "review" }] },
+          agents: { entries: { main: {}, review: {} } },
           bindings: [{ agentId: "main", match: { channel: "demo" } }],
           session: { mainKey },
         },
@@ -360,28 +364,18 @@ describe("runtime conversation binding route", () => {
 });
 
 describe("ensureConfiguredBindingRouteReady", () => {
-  let unregisterDriver: (() => void) | undefined;
-
   afterEach(() => {
     vi.useRealTimers();
-    unregisterDriver?.();
+    acpReadiness.mockReset();
   });
 
   it("returns a bounded failure when target readiness never settles", async () => {
     vi.useFakeTimers();
-    unregisterDriver = registerStatefulBindingTargetDriver({
-      id: "slow",
-      ensureReady: async () => await new Promise<never>(() => {}),
-      ensureSession: async () => ({
-        ok: false,
-        sessionKey: "agent:slow:binding",
-        error: "not used",
-      }),
-    });
+    acpReadiness.mockImplementation(async () => await new Promise<never>(() => {}));
 
     const resultPromise = ensureConfiguredBindingRouteReady({
       cfg: {} as never,
-      bindingResolution: { statefulTarget: { driverId: "slow" } } as never,
+      bindingResolution: { statefulTarget: { driverId: "acp" } } as never,
     });
 
     await vi.advanceTimersByTimeAsync(30_000);

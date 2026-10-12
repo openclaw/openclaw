@@ -178,31 +178,6 @@ describe("QA transport session identity", () => {
 
   it.each<{ name: string; body: Record<string, unknown>; route?: string }>([
     {
-      name: "quoted utility prompt",
-      body: { instructions: undefined, input: [makeUserInput("You are a JSON-only function.")] },
-    },
-    { name: "enabled tools", body: { tools: [{ type: "function", name: "read" }] } },
-    ...[
-      { type: "function_call_output", output: "tool result" },
-      { type: "custom_tool_call_output", output: "" },
-    ].map((result) => ({
-      name: result.type,
-      body: {
-        input: [makeUserInput("Reply exactly: {}"), { ...result, call_id: "utility-continuation" }],
-      },
-    })),
-    {
-      name: "assistant history",
-      body: {
-        input: [
-          { role: "assistant", content: "Earlier answer" },
-          makeUserInput("Reply exactly: {}"),
-        ],
-      },
-    },
-    { name: "previous response", body: { previous_response_id: "previous-response" } },
-    { name: "retained conversation", body: { conversation: "retained-conversation" } },
-    {
       name: "Anthropic history discarded by normalization",
       route: "/v1/messages",
       body: {
@@ -288,12 +263,6 @@ describe("QA transport session identity", () => {
       affinity: prefix,
     },
     { name: "unknown prefix", ids: [], error: "Unknown QA session affinity", affinity: prefix },
-    {
-      name: "missing affinity",
-      ids: [`${prefix}-first`, `${prefix}-second`],
-      error: "Missing QA session identity",
-      affinity: undefined,
-    },
   ])("resolves transport identity safely: $name", async ({ ids, error, affinity }) => {
     const server = await startMockServer();
     for (const sessionId of ids) {

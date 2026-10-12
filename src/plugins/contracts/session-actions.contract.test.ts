@@ -518,8 +518,8 @@ describe("plugin session actions", () => {
       },
     });
     setActivePluginRegistry(registry.registry);
-    const entered = createDeferredCore<void>();
-    const ready = createDeferredCore<void>();
+    const entered = createDeferredCore();
+    const ready = createDeferredCore();
     const pending = callPluginSessionActionForTest({
       body: sessionActionBody("prepared-scope-fixture", "approve", {
         sessionKey: MAIN_SESSION_KEY,

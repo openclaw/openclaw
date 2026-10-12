@@ -1,4 +1,3 @@
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   ErrorCodes,
   errorShape,
@@ -8,8 +7,10 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isSessionMember, type SessionEntry } from "../config/sessions.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -26,12 +27,18 @@ import {
 } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
+import { captureIncognitoSessionMutationFacts } from "./session-sharing-incognito.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
-  prepareGatewaySessionStoreTargetsReadOnly,
+  withGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreCache,
 } from "./session-utils-store-lookup.js";
+import {
+  withQualifiedGatewaySessionStoreTarget,
+  type GatewaySessionStoreSelection,
+} from "./session-utils-store-retained.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 
 export type SessionSharingTarget = {
@@ -90,6 +97,23 @@ export function isSessionVisibilityAllowed(
   return allowedSessionVisibilities(cfg).includes(visibility);
 }
 
+function captureSessionSharingIncognitoTarget(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+}) {
+  if (!isIncognitoSessionKey(params.sessionKey)) {
+    return undefined;
+  }
+  const { agentId, canonicalKey } = resolveSessionStoreIdentity(params);
+  const binding = captureIncognitoSessionBinding({
+    agentId,
+    sessionKey: canonicalKey,
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+  });
+  return binding && { binding, canonicalKey };
+}
+
 export function resolveSessionSharingTarget(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -97,7 +121,16 @@ export function resolveSessionSharingTarget(params: {
   exactRead?: boolean;
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  onReadSource?: (source: CapturedSessionEntryReadSource) => void;
 }): SessionSharingTarget | null {
+  const captured = captureSessionSharingIncognitoTarget(params);
+  if (captured) {
+    return captureIncognitoSessionMutationFacts(
+      captured.binding,
+      captured.canonicalKey,
+      true,
+    ).readCurrent().target;
+  }
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.sessionKey,
@@ -112,7 +145,68 @@ export function resolveSessionSharingTarget(params: {
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
+  if (target.capturedReadSource) {
+    params.onReadSource?.(target.capturedReadSource);
+  }
   return toSessionSharingTarget(target);
+}
+
+/** Fresh entry and membership consumed under the existing physical reader owner. */
+export async function withSessionSharingTarget<T>(
+  params: { cfg: OpenClawConfig; sessionKey: string; agentId?: string },
+  consume: (facts: {
+    selection?: GatewaySessionStoreSelection;
+    target: SessionSharingTarget | null;
+    storageTarget: Pick<SessionSharingTarget, "agentId" | "canonicalKey" | "storePath">;
+    members: readonly import("../config/sessions/session-membership-facts.types.js").SessionMember[];
+    assertCurrent: () => void;
+  }) => T,
+  retainedSelection?: GatewaySessionStoreSelection,
+): Promise<T> {
+  // Prepared sharing must enforce the same configured physical target as synchronous reads.
+  captureSessionSharingIncognitoTarget(params);
+  const read: Parameters<typeof withGatewaySessionStoreTarget<T>>[1] = (
+    selected,
+    membership,
+    assertCurrent,
+    _related,
+    selection,
+  ) => {
+    const target = toSessionSharingTarget(selected);
+    return consume({
+      selection,
+      target,
+      storageTarget: {
+        agentId: selected.agentId,
+        canonicalKey: selected.canonicalKey,
+        storePath: selected.storePath,
+      },
+      members: target ? (membership.get(target.storeKey) ?? []) : [],
+      assertCurrent,
+    });
+  };
+  if (retainedSelection) {
+    return withQualifiedGatewaySessionStoreTarget({
+      target: retainedSelection.target,
+      logicalStorePath: retainedSelection.logicalStorePath,
+      env: retainedSelection.env,
+      preparedSource: retainedSelection.source,
+      includeMembership: true,
+      readOptions: { snapshotFields: [], lifecycleSessionKey: undefined },
+      consume: (target, membership, assertCurrent) =>
+        read(target, membership, assertCurrent, [], retainedSelection),
+    });
+  }
+  return withGatewaySessionStoreTarget(
+    {
+      cfg: params.cfg,
+      key: params.sessionKey,
+      agentId: params.agentId,
+      projection: "list",
+      includeMembership: true,
+    },
+    read,
+  );
 }
 
 function toSessionSharingTarget(
@@ -130,27 +224,6 @@ function toSessionSharingTarget(
         readSource: target.capturedReadSource,
       }
     : null;
-}
-
-/** Prepare one synchronous batch while retaining each target's failure for ordered consumption. */
-export function prepareSessionSharingTargets(params: {
-  cfg: OpenClawConfig;
-  targets: readonly { sessionKey: string; agentId?: string }[];
-}): Array<Result<SessionSharingTarget | null, unknown>> {
-  return prepareGatewaySessionStoreTargetsReadOnly({
-    cfg: params.cfg,
-    targets: params.targets.map(({ sessionKey, agentId }) => ({ key: sessionKey, agentId })),
-    projection: "list",
-  }).map((result) => {
-    if (!result.ok) {
-      return result;
-    }
-    try {
-      return ok(toSessionSharingTarget(result.value));
-    } catch (error) {
-      return err(error);
-    }
-  });
 }
 
 export type SessionSharingRoleParams = {
@@ -308,6 +381,7 @@ export function authorizePreparedSessionMutation(
   prepared: {
     policy: GatewayOperatorRoleDefinition | undefined;
     aliases: ReadonlySet<string>;
+    authorizesAgentRun?: boolean;
   },
 ): ErrorShape | null {
   return authorizeSessionMutationTarget(params, () => facts.target, {
@@ -323,16 +397,18 @@ function authorizeSessionMutationTarget(
     policy: GatewayOperatorRoleDefinition | undefined;
     aliases: ReadonlySet<string>;
     membership: ReadonlySet<string>;
+    authorizesAgentRun?: boolean;
   },
 ): ErrorShape | null {
-  if (isGatewayAdmin(params.client) && !params.cfg.gateway?.roles) {
+  const authorizesAgentRun = prepared?.authorizesAgentRun !== false;
+  if (isGatewayAdmin(params.client) && (!authorizesAgentRun || !params.cfg.gateway?.roles)) {
     return null;
   }
   if (isGatewayClientProfilePending(params.client)) {
     return authenticatedProfileUnavailableError();
   }
   const target = readTarget();
-  if (target) {
+  if (target && authorizesAgentRun) {
     const agentError = authorizeSessionAgentRun(
       { cfg: params.cfg, client: params.client, target },
       prepared,
@@ -428,7 +504,7 @@ export function authorizeSessionAgentRun(
 }
 
 export function authorizeSessionSharingTarget(
-  params: SessionSharingRoleParams & { requireOwner?: boolean },
+  params: SessionSharingRoleParams & { requireOwner?: boolean; ownerAction?: string },
   prepared?: { value: ReturnType<typeof operatorSessionCap>; role: SessionSharingRole },
 ): ErrorShape | null {
   const visibility = resolveSessionVisibility(params.target.entry);
@@ -442,7 +518,7 @@ export function authorizeSessionSharingTarget(
   if (params.requireOwner && !canManageSessionSharing(role)) {
     return errorShape(
       ErrorCodes.FORBIDDEN,
-      "Only the session creator or an admin can archive or restore this session.",
+      `Only the session creator or an admin can ${params.ownerAction ?? "archive or restore this session"}.`,
     );
   }
   const capped = sessionCap === "view" || sessionCap === "suggest";

@@ -425,9 +425,29 @@ export async function renderLoginGate(
   return gateway;
 }
 
-async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
+export async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
+  if (lastError === null) {
+    // Auth failure can render the gate while startup still owns the connecting splash.
+    await page.waitForFunction(
+      () =>
+        document.querySelector<HTMLElement & { startupPending: boolean }>("openclaw-app")
+          ?.startupPending === false,
+    );
+  }
   await page.evaluate(async (failureMessage) => {
     await customElements.whenDefined("openclaw-login-gate");
+    const app = document.querySelector<
+      HTMLElement & {
+        runtime: { context: { gateway: { stop(): void } } };
+        requestUpdate(): void;
+        updateComplete: Promise<unknown>;
+      }
+    >("openclaw-app")!;
+    if (failureMessage === null) {
+      // The app must also own the no-error state before it can render the gate again.
+      app.runtime.context.gateway.stop();
+      await app.updateComplete;
+    }
     // Keep the production app wrapper: it owns the safe-area and viewport budget.
     const gate = document.querySelector("openclaw-login-gate") as
       | (HTMLElement & { props: Record<string, unknown>; updateComplete: Promise<unknown> })
@@ -451,5 +471,10 @@ async function mountLoginGate(page: Page, lastError: string | null): Promise<voi
       onConnect: gate.props.onConnect,
     };
     await gate.updateComplete;
+    if (failureMessage === null) {
+      app.requestUpdate();
+      await app.updateComplete;
+      await gate.updateComplete;
+    }
   }, lastError);
 }

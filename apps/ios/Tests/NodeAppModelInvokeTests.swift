@@ -9,6 +9,42 @@ import UserNotifications
 @testable import OpenClawChatUI
 @testable import OpenClawKit
 
+private func parseWatchExecApprovalResolvePayload(
+    _ payload: [String: Any], transport: String) throws -> WatchExecApprovalResolveEvent?
+{
+    guard case let .execApprovalResolve(event)? = try WatchMessagingPayloadCodec.parseInboundPayload(
+        payload, transport: transport)
+    else { return nil }
+    return event
+}
+
+private func parseWatchExecApprovalSnapshotRequestPayload(
+    _ payload: [String: Any], transport: String) throws -> WatchExecApprovalSnapshotRequestEvent?
+{
+    guard case let .execApprovalSnapshotRequest(event)? = try WatchMessagingPayloadCodec.parseInboundPayload(
+        payload, transport: transport)
+    else { return nil }
+    return event
+}
+
+private func parseWatchAppSnapshotRequestPayload(
+    _ payload: [String: Any], transport: String) throws -> WatchAppSnapshotRequestEvent?
+{
+    guard case let .appSnapshotRequest(event)? = try WatchMessagingPayloadCodec.parseInboundPayload(
+        payload, transport: transport)
+    else { return nil }
+    return event
+}
+
+private func parseWatchAppCommandPayload(
+    _ payload: [String: Any], transport: String) throws -> WatchAppCommandEvent?
+{
+    guard case let .appCommand(event)? = try WatchMessagingPayloadCodec.parseInboundPayload(
+        payload, transport: transport)
+    else { return nil }
+    return event
+}
+
 @MainActor
 private final class MockVoiceNoteAudioCapture: VoiceNoteAudioCapture {
     private(set) var cancelCallCount = 0
@@ -5327,7 +5363,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         watchService.emitExecApprovalSnapshotRequest(
             makeWatchApprovalSnapshotRequest("snapshot-canonical", sentAt: 224))
         try await TestWait.observed("Watch acknowledgment after canonical readback") {
-            watchService.lastSentExecApprovalSnapshot?.requestId == "snapshot-canonical"
+            watchService.lastSentExecApprovalSnapshot?.requestId == "snapshot-canonical" &&
+                watchService.lastSentExecApprovalSnapshot?.approvals.isEmpty == true &&
+                watchService.lastSentExecApprovalResolved?.approvalId == "approval-watch-stale-cache"
         }
 
         #expect(watchService.lastSentExecApprovalSnapshot?.approvals.isEmpty == true)
@@ -8609,7 +8647,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(encodedApproval["gatewayStableID"] as? String == "gateway-a")
         #expect(encodedApproval["warningText"] as? String == "Review shell expansion")
 
-        let reply = try #require(WatchMessagingPayloadCodec.parseExecApprovalResolvePayload([
+        let reply = try #require(try parseWatchExecApprovalResolvePayload([
             "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
             "replyId": "reply-a",
             "approvalId": "approval-a",
@@ -8638,7 +8676,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let heldApprovalID = "\u{0085}held-approval-a\u{0085}"
         let activeResolutionAttemptID = "\u{0085}resolution-attempt-a\u{0085}"
         let snapshotRequest = try #require(
-            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
                 "requestId": requestID,
                 "gatewayStableID": "gateway-a",
@@ -8679,39 +8717,39 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         }
         // Shipped Watch binaries request snapshots with neither requestId nor heldApprovals.
         let shippedShapeRequest = try #require(
-            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
             ], transport: "sendMessage"))
         #expect(!shippedShapeRequest.requestId.isEmpty)
         #expect(shippedShapeRequest.heldApprovals.isEmpty)
         #expect(shippedShapeRequest.gatewayStableID == nil)
         let missingHeldApprovalsRequest = try #require(
-            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
                 "requestId": "missing-held-approvals",
             ], transport: "applicationContext"))
         #expect(missingHeldApprovalsRequest.requestId == "missing-held-approvals")
         #expect(missingHeldApprovalsRequest.heldApprovals.isEmpty)
         let missingRequestIdRequest = try #require(
-            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
                 "heldApprovals": [],
             ], transport: "applicationContext"))
         #expect(!missingRequestIdRequest.requestId.isEmpty)
         let emptyRequestIdRequest = try #require(
-            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
                 "requestId": "",
                 "heldApprovals": [],
             ], transport: "applicationContext"))
         #expect(!emptyRequestIdRequest.requestId.isEmpty)
         // A present heldApprovals key keeps strict rejection when malformed.
-        #expect(WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+        #expect(try parseWatchExecApprovalSnapshotRequestPayload([
             "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
             "requestId": "malformed-held-approvals-shape",
             "heldApprovals": "not-an-array",
         ], transport: "applicationContext") == nil)
-        #expect(WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+        #expect(try parseWatchExecApprovalSnapshotRequestPayload([
             "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
             "requestId": "malformed-held-approval",
             "heldApprovals": [
@@ -8719,7 +8757,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 ["approvalId": ""],
             ],
         ], transport: "applicationContext") == nil)
-        #expect(WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+        #expect(try parseWatchExecApprovalSnapshotRequestPayload([
             "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
             "requestId": "malformed-attempt",
             "heldApprovals": [[
@@ -8742,7 +8780,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let encodedApproval = try #require(prompt["approval"] as? [String: Any])
         let encodedApprovalID = try #require(encodedApproval["id"] as? String)
         let encodedGatewayID = try #require(encodedApproval["gatewayStableID"] as? String)
-        let reply = try #require(WatchMessagingPayloadCodec.parseExecApprovalResolvePayload([
+        let reply = try #require(try parseWatchExecApprovalResolvePayload([
             "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
             "replyId": replyID,
             "approvalId": encodedApprovalID,
@@ -8770,24 +8808,24 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let sentAtMs: Int64 = 1_725_000_000_123
         let encodedTimestamp = NSNumber(value: sentAtMs)
 
-        let resolution = try #require(WatchMessagingPayloadCodec.parseExecApprovalResolvePayload([
+        let resolution = try #require(try parseWatchExecApprovalResolvePayload([
             "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
             "approvalId": "approval-a",
             "decision": OpenClawWatchExecApprovalDecision.allowOnce.rawValue,
             "sentAtMs": encodedTimestamp,
         ], transport: "sendMessage"))
         let approvalSnapshotRequest = try #require(
-            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
                 "requestId": "timestamp-request",
                 "sentAtMs": encodedTimestamp,
                 "heldApprovals": [],
             ], transport: "sendMessage"))
-        let appSnapshotRequest = try #require(WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload([
+        let appSnapshotRequest = try #require(try parseWatchAppSnapshotRequestPayload([
             "type": OpenClawWatchPayloadType.appSnapshotRequest.rawValue,
             "sentAtMs": encodedTimestamp,
         ], transport: "sendMessage"))
-        let appCommand = try #require(WatchMessagingPayloadCodec.parseAppCommandPayload([
+        let appCommand = try #require(try parseWatchAppCommandPayload([
             "type": OpenClawWatchPayloadType.appCommand.rawValue,
             "command": OpenClawWatchAppCommand.refresh.rawValue,
             "sentAtMs": encodedTimestamp,

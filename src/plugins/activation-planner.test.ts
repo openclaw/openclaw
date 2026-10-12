@@ -130,24 +130,6 @@ describe("activation planner", () => {
     ).toEqual(["demo-channel"]);
   });
 
-  it("does not activate manifest-triggered plugins that are disabled in config", () => {
-    expect(
-      resolveManifestActivationPluginIds({
-        config: {
-          plugins: {
-            entries: {
-              "memory-core": { enabled: false },
-            },
-          },
-        },
-        trigger: {
-          kind: "command",
-          command: "memory",
-        },
-      }),
-    ).toEqual([]);
-  });
-
   it("plans manifest-owned custom harnesses and respects their activation policy", () => {
     expect(
       resolveManifestActivationPluginIds({

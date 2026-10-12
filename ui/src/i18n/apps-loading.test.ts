@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
+
+// mock-isolation: Cold catalog imports test page-owned copy, without registering child elements.
+vi.mock("../components/native-chrome-setup.ts", () => ({}));
 
 const loadI18n = useLazyEnglishTest();
 
@@ -13,7 +16,7 @@ describe("Apps English loading", () => {
       surface: "command palette",
       load: () => import("../components/command-palette-catalog-search.ts"),
     },
-    { surface: "device settings", load: () => import("../pages/device/device-page.ts") },
+    { surface: "device settings", load: () => import("../pages/device/device-page.tsx") },
   ])("loads complete fallback copy before $surface can render", async ({ load }) => {
     const { manager } = await loadI18n();
     expect(manager.t("tabs.apps")).toBe("Apps");

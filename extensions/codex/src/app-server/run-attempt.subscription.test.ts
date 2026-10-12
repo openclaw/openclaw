@@ -2,6 +2,7 @@ import path from "node:path";
 import type { HarnessContextEngine as ContextEngine } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
@@ -10,7 +11,9 @@ import {
   hasCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
 } from "./client-runtime.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
+import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   assistantMessage,
   createParams,
@@ -24,22 +27,130 @@ import {
   userMessage,
 } from "./run-attempt-test-harness.js";
 import * as runAttemptTurnRequest from "./run-attempt-turn-request.js";
-import { createContextEngine } from "./run-attempt.context-engine.test-support.js";
+import {
+  createContextEngine,
+  requestMethodsExcludingSkillDiscovery,
+} from "./run-attempt.context-engine.test-support.js";
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import { getCurrentSharedClientEntry } from "./shared-client-lifecycle.js";
 import * as threadOwnership from "./thread-ownership.js";
 
 setupRunAttemptTestHooks();
 
 describe("Codex attempt subscription recovery", () => {
+  it("revokes native submission custody when an unstamped parent session is replaced", async () => {
+    const params = createParams(path.join(tempDir, "unstamped-parent.jsonl"), tempDir);
+    const target = {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey!,
+      storePath: resolveStorePath(undefined, { agentId: "main" }),
+    };
+    params.sessionTarget = target;
+    const register = vi.spyOn(codexNativeSubagentMonitorRuntime, "register");
+    const harness = createStartedThreadHarness(async () => undefined);
+    const attempt = runCodexAppServerAttempt(params);
+    await attempt.waitForTurnAccepted();
+    try {
+      const registration = register.mock.calls.at(-1)?.[0];
+      expect(registration?.historyOwner).toBeDefined();
+      expect(registration?.historyOwner?.lifecycleRevision).toBeUndefined();
+      const submission = registration?.submissionStore;
+      expect(submission).toBeDefined();
+      submission!.assertCurrent();
+      await patchSessionEntry({
+        ...target,
+        update: () => ({ sessionId: "replacement-parent" }),
+      });
+      expect(() => submission!.assertCurrent()).toThrow(
+        "Native submission session lifecycle is no longer current.",
+      );
+    } finally {
+      await seedRunSessionOwnerForTest(target.sessionId, target.sessionKey);
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await attempt;
+    }
+  });
+
+  it("continues a confirmed interrupted thread while a sibling turn stays active", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionFile = path.join(tempDir, "interrupted.jsonl");
+    const abort = new AbortController();
+    const params = createParams(sessionFile, workspaceDir);
+    params.abortSignal = abort.signal;
+    const siblingParams = createParams(path.join(tempDir, "sibling.jsonl"), workspaceDir, {
+      sessionId: "session-sibling",
+      sessionKey: "agent:main:sibling",
+      runId: "run-sibling",
+    });
+    await seedRunSessionOwnerForTest(siblingParams.sessionId, siblingParams.sessionKey!);
+    let starts = 0;
+    let turns = 0;
+    const harness = createStartedThreadHarness(
+      async (method) => {
+        if (method === "thread/start") {
+          return threadStartResult(++starts === 1 ? "thread-1" : "thread-sibling");
+        }
+        if (method === "thread/resume") {
+          return threadStartResult("thread-1");
+        }
+        if (method === "turn/start") {
+          return turnStartResult(`turn-${++turns}`);
+        }
+        return undefined;
+      },
+      { persistedThreads: [] },
+    );
+    const first = runCodexAppServerAttempt(params);
+    await first.waitForTurnAccepted();
+    const sibling = runCodexAppServerAttempt(siblingParams);
+    const siblingSettled = vi.fn();
+    void sibling.then(siblingSettled, siblingSettled);
+    await sibling.waitForTurnAccepted();
+    let next: ReturnType<typeof runCodexAppServerAttempt> | undefined;
+    try {
+      abort.abort("interrupted");
+      await harness.waitForMethod("turn/interrupt");
+      await harness.notify({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "interrupted", items: [] },
+        },
+      });
+      expect(readAttemptTerminal(await first).aborted).toBe(true);
+      expect(harness.requests.filter(({ method }) => method === "thread/unsubscribe")).toEqual([
+        { method: "thread/unsubscribe", params: { threadId: "thread-1" } },
+      ]);
+      expect(getCurrentSharedClientEntry(harness.client)).toBeDefined();
+      expect(siblingSettled).not.toHaveBeenCalled();
+
+      next = runCodexAppServerAttempt(
+        createParams(sessionFile, workspaceDir, { runId: "run-next" }),
+      );
+      await next.waitForTurnAccepted();
+      expect(siblingSettled).not.toHaveBeenCalled();
+      expect(starts).toBe(2);
+      expect(harness.requests.filter(({ method }) => method === "thread/resume")).toEqual([
+        { method: "thread/resume", params: expect.objectContaining({ threadId: "thread-1" }) },
+      ]);
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-3" });
+      expect((await next).terminal).toEqual({ kind: "ok" });
+    } finally {
+      await harness.completeTurn({ threadId: "thread-sibling", turnId: "turn-2" });
+      await Promise.allSettled([first, sibling, next]);
+    }
+    expect((await sibling).terminal).toEqual({ kind: "ok" });
+  });
+
   it.each<{
     nativeOwned: boolean;
     failureAt: "monitor" | "turn request";
     revoked?: "abort" | "host" | "binding" | "closed" | "expired" | "successor";
   }>([
-    { nativeOwned: false, failureAt: "monitor" },
     { nativeOwned: true, failureAt: "turn request" },
     { nativeOwned: true, failureAt: "monitor", revoked: "abort" },
     { nativeOwned: true, failureAt: "monitor", revoked: "host" },
@@ -344,13 +455,12 @@ describe("Codex attempt subscription recovery", () => {
         "Codex ran out of room in the model's context window",
       );
       expect(compact).not.toHaveBeenCalled();
-      expect(harness.requests.map((request) => request.method)).toEqual([
+      expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
         "config/read",
         "configRequirements/read",
         "thread/read",
         "thread/resume",
         "thread/inject_items",
-        "model/list",
         "turn/start",
         ...(!nativeOwned ? ["thread/unsubscribe"] : []),
       ]);

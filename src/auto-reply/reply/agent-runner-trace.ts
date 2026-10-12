@@ -114,16 +114,12 @@ function formatFallbackChainTraceBlock(
   return `🔎 Fallback Chain:\n~~~text\n${body}\n~~~`;
 }
 
-function toSnakeCase(value: string): string {
-  return value
+function resolveMetadataSegmentKey(label: string): string {
+  const normalized = label
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
-}
-
-function resolveMetadataSegmentKey(label: string): string {
-  const normalized = toSnakeCase(label);
   if (normalized === "conversation_info") {
     return "conversation_metadata";
   }
@@ -144,9 +140,6 @@ export function derivePromptSegments(
   const segments = new Map<string, number>();
   let userChars = 0;
   const addChars = (key: string, chars: number) => {
-    if (!chars || chars <= 0) {
-      return;
-    }
     segments.set(key, (segments.get(key) ?? 0) + chars);
   };
   let index = 0;
@@ -210,7 +203,7 @@ function formatPromptSegmentsTraceBlock(
   if (typeof totalPromptText === "string" && totalPromptText.length > 0) {
     lines.push(`totalPromptText=${totalPromptText.length.toLocaleString()} chars`);
   }
-  return lines.length > 0 ? `🔎 Prompt Segments:\n~~~text\n${lines.join("\n")}\n~~~` : undefined;
+  return `🔎 Prompt Segments:\n~~~text\n${lines.join("\n")}\n~~~`;
 }
 
 function formatToolSummaryTraceBlock(

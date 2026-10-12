@@ -1,3 +1,5 @@
+import { raceWithTimeout } from "@openclaw/retry";
+
 const PLUGIN_ICON_RASTER_SIZE = 256;
 const PLUGIN_ICON_SVG_DECODE_TIMEOUT_MS = 5_000;
 const PLUGIN_ICON_SVG_MAX_ELEMENTS = 4;
@@ -22,6 +24,39 @@ const SVG_COLOR_VALUE_RE = /^(?:none|currentColor|#[0-9a-f]{3,8})$/iu;
 const SVG_NUMBER_VALUE_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu;
 const SVG_NUMBER_LIST_RE = /^[0-9eE+.,\s-]+$/u;
 const SVG_PATH_VALUE_RE = /^[0-9a-zA-Z+.,\s-]+$/u;
+const SVG_ATTRIBUTE_PATTERNS = new Map<string, RegExp>([
+  ["d", SVG_PATH_VALUE_RE],
+  ["points", SVG_NUMBER_LIST_RE],
+  ["viewBox", SVG_NUMBER_LIST_RE],
+  ["fill", SVG_COLOR_VALUE_RE],
+  ["stroke", SVG_COLOR_VALUE_RE],
+  ["clip-rule", /^(?:evenodd|nonzero)$/u],
+  ["fill-rule", /^(?:evenodd|nonzero)$/u],
+  ["stroke-linecap", /^(?:butt|round|square)$/u],
+  ["stroke-linejoin", /^(?:bevel|miter|round)$/u],
+  ["transform", /^(?:\s*(?:matrix|rotate|scale|skewX|skewY|translate)\(\s*[0-9eE+.,\s-]+\)\s*)+$/u],
+  ["cx", SVG_NUMBER_VALUE_RE],
+  ["cy", SVG_NUMBER_VALUE_RE],
+  ["height", SVG_NUMBER_VALUE_RE],
+  ["opacity", SVG_NUMBER_VALUE_RE],
+  ["r", SVG_NUMBER_VALUE_RE],
+  ["rx", SVG_NUMBER_VALUE_RE],
+  ["ry", SVG_NUMBER_VALUE_RE],
+  ["stroke-miterlimit", SVG_NUMBER_VALUE_RE],
+  ["stroke-width", SVG_NUMBER_VALUE_RE],
+  ["width", SVG_NUMBER_VALUE_RE],
+  ["x", SVG_NUMBER_VALUE_RE],
+  ["x1", SVG_NUMBER_VALUE_RE],
+  ["x2", SVG_NUMBER_VALUE_RE],
+  ["y", SVG_NUMBER_VALUE_RE],
+  ["y1", SVG_NUMBER_VALUE_RE],
+  ["y2", SVG_NUMBER_VALUE_RE],
+  ["preserveAspectRatio", /^(?:none|x(?:Min|Mid|Max)Y(?:Min|Mid|Max)(?:\s+(?:meet|slice))?)$/u],
+  ["aria-hidden", /^(?:false|true)$/u],
+  ["focusable", /^(?:false|true)$/u],
+  ["role", /^img$/u],
+  ["aria-label", /^[^<>&]{0,256}$/u],
+]);
 
 function parseSvgNumber(value: string): number | null {
   if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:px)?$/iu.test(value.trim())) {
@@ -36,85 +71,30 @@ function isSafeSvgAttribute(attribute: Attr): boolean {
     return false;
   }
   const value = attribute.value.trim();
-  switch (attribute.name) {
-    case "d":
-      return SVG_PATH_VALUE_RE.test(value);
-    case "points":
-    case "viewBox":
-      return SVG_NUMBER_LIST_RE.test(value);
-    case "fill":
-    case "stroke":
-      return SVG_COLOR_VALUE_RE.test(value);
-    case "clip-rule":
-    case "fill-rule":
-      return /^(?:evenodd|nonzero)$/u.test(value);
-    case "stroke-linecap":
-      return /^(?:butt|round|square)$/u.test(value);
-    case "stroke-linejoin":
-      return /^(?:bevel|miter|round)$/u.test(value);
-    case "transform":
-      return /^(?:\s*(?:matrix|rotate|scale|skewX|skewY|translate)\(\s*[0-9eE+.,\s-]+\)\s*)+$/u.test(
-        value,
-      );
-    case "cx":
-    case "cy":
-    case "height":
-    case "opacity":
-    case "r":
-    case "rx":
-    case "ry":
-    case "stroke-miterlimit":
-    case "stroke-width":
-    case "width":
-    case "x":
-    case "x1":
-    case "x2":
-    case "y":
-    case "y1":
-    case "y2":
-      return SVG_NUMBER_VALUE_RE.test(value);
-    case "preserveAspectRatio":
-      return /^(?:none|x(?:Min|Mid|Max)Y(?:Min|Mid|Max)(?:\s+(?:meet|slice))?)$/u.test(value);
-    case "xmlns":
-      return value === SVG_NAMESPACE;
-    case "aria-hidden":
-    case "focusable":
-      return /^(?:false|true)$/u.test(value);
-    case "role":
-      return value === "img";
-    case "aria-label":
-      return /^[^<>&]{0,256}$/u.test(value);
-    default:
-      return false;
+  if (attribute.name === "xmlns") {
+    return value === SVG_NAMESPACE;
   }
+  return SVG_ATTRIBUTE_PATTERNS.get(attribute.name)?.test(value) ?? false;
 }
 
 async function loadSvgImage(url: string): Promise<HTMLImageElement> {
   const image = new Image();
   image.decoding = "async";
-  await new Promise<void>((resolve, reject) => {
-    const timeout = window.setTimeout(() => {
+  await raceWithTimeout(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        image.addEventListener("load", () => resolve(), { once: true });
+        image.addEventListener("error", () => reject(new Error("plugin SVG decode failed")), {
+          once: true,
+        });
+        image.src = url;
+      }),
+    PLUGIN_ICON_SVG_DECODE_TIMEOUT_MS,
+    () => {
       image.src = "";
-      reject(new Error("plugin SVG decode timed out"));
-    }, PLUGIN_ICON_SVG_DECODE_TIMEOUT_MS);
-    image.addEventListener(
-      "load",
-      () => {
-        window.clearTimeout(timeout);
-        resolve();
-      },
-      { once: true },
-    );
-    image.addEventListener(
-      "error",
-      () => {
-        window.clearTimeout(timeout);
-        reject(new Error("plugin SVG decode failed"));
-      },
-      { once: true },
-    );
-    image.src = url;
-  });
+      throw new Error("plugin SVG decode timed out");
+    },
+  );
   return image;
 }
 

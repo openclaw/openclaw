@@ -1,4 +1,3 @@
-// Provides canonical default config values and model/provider defaults.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   collectManifestModelIdNormalizationPolicies,
@@ -41,7 +40,6 @@ type ProviderPolicyDefaultsOptions = {
 const defaultWarnState: WarnState = { warned: false };
 
 export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
-  // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
   opus: "anthropic/claude-opus-5-5",
   sonnet: "anthropic/claude-sonnet-5-5",
 
@@ -49,7 +47,6 @@ export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   "gpt-mini": "openai/gpt-5.4-mini",
   "gpt-nano": "openai/gpt-5.4-nano",
 
-  // Google Gemini (3.x — flash-lite is GA; pro and flash are still preview)
   gemini: "google/gemini-3.1-pro-preview",
   "gemini-flash": "google/gemini-3-flash-preview",
   "gemini-flash-lite": "google/gemini-3.1-flash-lite",
@@ -376,32 +373,34 @@ export function applyModelDefaults(
   }
 
   let nextAgents = nextCfg.agents;
-  const rawAgentList = nextAgents?.list;
-  if (Array.isArray(rawAgentList)) {
-    let listMutated = false;
-    const agentList = rawAgentList.map((agent) => {
-      if (!isRecord(agent)) {
-        return agent;
-      }
-      let nextAgent = agent;
-      if (Object.hasOwn(agent, "model")) {
-        const normalizedModel = normalizeAgentModelSelectionForConfig(agent.model);
-        if (normalizedModel !== agent.model) {
-          nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
-          listMutated = true;
+  const agentEntries = nextAgents?.entries;
+  if (agentEntries) {
+    let entriesMutated = false;
+    const entries = Object.fromEntries(
+      Object.entries(agentEntries).map(([id, agent]) => {
+        if (!isRecord(agent)) {
+          return [id, agent];
         }
-      }
-      if (isRecord(agent.models)) {
-        const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
-        if (normalizedModels !== agent.models) {
-          nextAgent = { ...nextAgent, models: normalizedModels };
-          listMutated = true;
+        let nextAgent = agent;
+        if (Object.hasOwn(agent, "model")) {
+          const normalizedModel = normalizeAgentModelSelectionForConfig(agent.model);
+          if (normalizedModel !== agent.model) {
+            nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
+            entriesMutated = true;
+          }
         }
-      }
-      return nextAgent;
-    });
-    if (listMutated) {
-      nextAgents = { ...nextAgents, list: agentList };
+        if (isRecord(agent.models)) {
+          const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
+          if (normalizedModels !== agent.models) {
+            nextAgent = { ...nextAgent, models: normalizedModels };
+            entriesMutated = true;
+          }
+        }
+        return [id, nextAgent];
+      }),
+    );
+    if (entriesMutated) {
+      nextAgents = { ...nextAgents, entries };
       mutated = true;
     }
   }

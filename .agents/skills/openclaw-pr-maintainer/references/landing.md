@@ -142,6 +142,8 @@ existing landing authority. Preserve any accepted merge receipt and use native
 recovery before replacing its head; never erase an outcome or blindly resubmit
 an accepted or uncertain request. GitHub's head precondition applies only when
 the request is submitted, and a collaborator push can leave auto-merge enabled.
+If GitHub merged such a pushed head, record the receipt with
+`merge-recover ... --merged-head <SHA>` instead of fighting the drift refusal.
 Treat a changed head as new review work, never as the original approved head.
 
 When completed hosted evidence is specifically needed, clear the pending-mode
@@ -201,15 +203,50 @@ verifier rechecks live authority, enforced reviews, security, and exact CI evide
 after the final REST reread. Missing or changed evidence still refuses before
 intent. This adds no implicit admin route or mutation retry.
 
-#### Explicitly approved pre-existing failures
+#### Authorized pre-existing failures
 
-When the operator specifically authorizes ignoring independently attributed
-pre-existing CI failures, use the same flags and `github_pending` preparation.
+A scoped instruction to land a PR authorizes the inherited-failure exception
+when every remaining failure is independently attributed to the baseline. Do
+not ask for another confirmation just because CI is inherited red. Use the same
+`--admin-evidence` and `--confirmed-operator-admin` flags and `github_pending`
+preparation; the confirmation records the operator-authorized exception, not
+a claim that the executing bot is an administrator. A readiness question,
+uncertain attribution, or a PR-caused failure does not select this route.
 Keep `tests.result: "fail"` in the exact-head review and add `tests.preExistingCi`
 with `head`, numeric `runId` and `runAttempt`, and a nonempty `reason`. A READY
 review can retain that exception; ordinary merge admission still rejects it.
 The confirmed admin route must verify the same head and failed attempt. Product
 findings, enforced reviews, and security requirements are never waived.
+
+An executing account that is not an organization/repository admin may use this
+exception when it has repository write permission, active organization
+membership, and live GitHub bypass authority for every effective CI gate
+ruleset. The native verifier reads `current_user_can_bypass` with the actual
+writer: `always` and `pull_requests_only` qualify. Each qualifying ruleset must
+be an active, repository-owned branch ruleset containing only the
+`openclaw/ci-gate` required check from GitHub Actions (integration `15368`).
+Mixed review/security rulesets, missing or changed policy, and unavailable or
+revoked grants refuse admission. The verifier rereads policy and delegated
+authority after CI/security inspection and retains the writer, repository ID,
+ruleset IDs and bypass modes in the existing outcome. It does not accept a
+caller-supplied grant, change GitHub permissions, or grant the prior-success
+conflict-resolution exception to a delegated writer.
+
+GitHub administrators provision any missing grant through the repository
+ruleset owner, preferably with a dedicated CI-bypass team and pull-request-only
+mode. Inspect existing grants before changing them; never add the bot to an
+organization-admin role or broaden review/security bypass to enable this path.
+Task authorization remains the existing operator-invocation contract; a
+GitHub bypass grant is execution capability, not an authenticated human approval.
+
+Delegation does not remove the policy-reader requirement. The writer must still
+obtain authoritative classic-protection absence through the existing supported
+API. GitHub can return a generic `404 Not Found` to a non-admin even when the
+repository is readable. GraphQL `branchProtectionRule: null` and an empty
+`branchProtectionRules` connection can also hide real protection; they are not
+absence proofs. If policy is unavailable, stop before intent and report the
+missing policy-read capability. Do not upgrade the writer, substitute credentials,
+or introduce a caller-attested policy snapshot to get through this guard.
 
 Use the existing version-1 admin evidence with
 `changeKind: "pre-existing-failure"`. Here `priorHead` is the recorded main
@@ -343,8 +380,10 @@ intent and landing-parent audit retain their original main anchor. Already-selec
 REST completes its final observation and main materialization before one final
 live authority verification. GraphQL retains its post-authority local-only reread,
 including late REST fallback; a newly unavailable main there is a pre-dispatch
-refusal. Neither path fetches after final authority verification. Crabbox admission
-and retained-outcome reconciliation keep their existing strict main binding.
+refusal. Neither path fetches after final authority verification. Crabbox admission also verifies forward main ancestry and the candidate tree. If its final proof observes newer main, it discards that authority decision before materializing or settling the new tip, then repeats full live verification within the same three-round admin limit. The tested proof base remains pinned while the live PR base is checked for forward ancestry; active organization membership is the final live authority read.
+
+`OPENCLAW_PR_STRICT_DRIFT=1` restores strict main stability on every landing
+route. Retained-outcome reconciliation keeps its existing strict main binding.
 A fork run with an empty GitHub PR association must match the current PR's exact
 head, branch, and source repository identity as well as that check-run; an
 explicit association with another PR is rejected. The retained result names
@@ -410,6 +449,32 @@ A lost cancellation response is observation-only on retry; never send a second
 cancellation blindly. Only confirmed retirement allows head repair. Existing
 land authority covers this recovery; do not ask again or replace the PR merely
 because its submission response was lost.
+
+### Receipt for an auto-merged pushed head
+
+If GitHub already merged a collaborator's pushed head, inspect the PR timeline
+and main history, then explicitly select that exact head:
+
+```bash
+scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery --merged-head <SHA>
+```
+
+This requires the exact current retained accepted non-queue auto intent without
+any cancellation record, the MERGED PR's retained identity/base and authoritative
+head, strict descent from the prepared head, and a landed commit reachable from
+authoritative main with a tree reconstructed under the retained method. Squash
+receipts require one landed parent. The CAS successor records `phase: merged`,
+`landed`, and `headDrift {actor, outcome, mergedHead}` while preserving `head`
+and retaining the pushed head as a parent. It never dispatches, cancels, re-arms,
+or clears refs. Stale OIDs, identity/base/method drift, unselected or unrelated
+heads, OPEN/CLOSED PRs, unaccepted or cancelled intents, other routes, and
+unreachable or mismatched receipts stay blocked. `merge-run` can then reconcile;
+after ownership-checked cleanup, use the new outcome OID with
+`scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion`.
+Its completion comment names both the prepared and merged heads.
+
+### Replacement after confirmed retirement
+
 Then repair and push the branch, refresh review and preparation, and wait for
 completed CI. Use the current retained outcome OID and explicitly reviewed head:
 
@@ -495,8 +560,14 @@ replaying an accepted or uncertain request.
 A failed or timed-out merge response can still mean GitHub merged it. Reconcile
 remote state and ancestry before retrying. Verify the final merge commit is on
 current main; do not count a draft, pending check, or local summary as landing.
-After `merge-run` removes its worktree, switch command execution back to a
-persistent checkout. Once the requested outcome and required verification are
+Run closeout from a persistent checkout only after the owning session has exited
+or released its cwd. Changing a child command's cwd does not move its parent
+agent or shell; never remove a worktree containing a live process's cwd, including
+any subdirectory. Native cleanup refuses observed cwd holders. Preserve that
+refusal; do not bypass it with raw `git worktree remove`, `rm`, or a custom script.
+If your own session still holds the worktree, finish the report with its retained
+path and defer removal to a later closeout after the session ends.
+Once the requested outcome and required verification are
 complete, remove task-owned test logs, receipts, proof archives, and scratch.
 This includes `.crabbox` outputs and task-owned archives under `.local` or
 temporary directories. Existing published PR evidence needs no local duplicate.

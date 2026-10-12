@@ -3,6 +3,8 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { buildAbortedAgentPayload } from "../agent-turn/agent-dedupe.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import {
   isChatAbortTerminalPersistenceSettled,
@@ -44,6 +46,7 @@ type PreRegisteredAgentDedupePayload = {
   expiresAtMs?: unknown;
   ownerConnId?: unknown;
   ownerDeviceId?: unknown;
+  reservationId?: unknown;
   runId?: unknown;
   sessionKey?: unknown;
   sessionId?: unknown;
@@ -82,10 +85,7 @@ export function resolveChatAbortRequester(
   const sessionTarget = authorization?.admittedTarget;
   const assertCurrent =
     assertCallerCurrent && authorization && sessionTarget
-      ? () => {
-          assertCallerCurrent();
-          authorization.assertCurrent();
-        }
+      ? composeSessionSourceAssertion([assertCallerCurrent, authorization.assertCurrent])
       : undefined;
   assertCurrent?.();
   return {
@@ -249,6 +249,15 @@ export function writePreRegisteredAgentAbort(params: {
   }
   const endedAt = params.endedAt ?? Date.now();
   const payloadAgentId = normalizeOptionalString(params.payload.agentId);
+  // Acceptance removes the reservation; an absent controller alone cannot prove no dispatch occurred.
+  const aborted = normalizeOptionalString(params.payload.reservationId)
+    ? buildAbortedAgentPayload(params.runId, params.stopReason)
+    : {
+        runId: params.runId,
+        status: "timeout" as const,
+        summary: "aborted",
+        stopReason: params.stopReason,
+      };
   for (const key of resolvePreRegisteredAgentDedupeKeys(params.payload, params.runId)) {
     if (params.context.dedupe.get(key)?.payload !== params.expectedPayload) {
       continue;
@@ -260,13 +269,10 @@ export function writePreRegisteredAgentAbort(params: {
         ts: endedAt,
         ok: true,
         payload: {
-          runId: params.runId,
+          ...aborted,
           ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
           ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
           ...(params.payload.controlUiVisible === false ? { controlUiVisible: false } : {}),
-          status: "timeout" as const,
-          summary: "aborted",
-          stopReason: params.stopReason,
           endedAt,
         },
       },

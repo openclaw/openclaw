@@ -1,80 +1,112 @@
-import { LitElement, html, nothing } from "lit";
-import { html as staticHtml, unsafeStatic } from "lit/static-html.js";
+import { createMemo, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { McpAppUnmountGate } from "./mcp-app-unmount.ts";
 
-const targetTag = `test-mcp-app-unmount-target-${crypto.randomUUID()}`;
-const ownerTag = `test-mcp-app-unmount-owner-${crypto.randomUUID()}`;
-const siblingOwnerTag = `test-mcp-app-unmount-sibling-owner-${crypto.randomUUID()}`;
-const staticTargetTag = unsafeStatic(targetTag);
+const targetTag = "mcp-app-view";
 const teardown = vi.fn<() => Promise<void>>();
 
-class TestMcpAppUnmountTarget extends HTMLElement {
-  restartCalls = 0;
+type TestMcpAppUnmountTarget = HTMLElement & { restartCalls: number };
 
-  restartAfterTeardown() {
-    this.restartCalls += 1;
-  }
-
-  teardown() {
-    return teardown();
-  }
-}
-
-class TestMcpAppUnmountOwner extends LitElement {
-  key = "initial";
-  valueKey = "initial";
-  retainRenderedValue = false;
-  private readonly gate = new McpAppUnmountGate(this, targetTag);
-  readonly renderValue = vi.fn(() =>
-    this.valueKey === "initial"
-      ? staticHtml`<${staticTargetTag}></${staticTargetTag}><span data-value="initial">initial</span>`
-      : html`<span data-value=${this.valueKey}>${this.valueKey}</span>`,
-  );
-
-  show(key: string, valueKey = key, retainRenderedValue = false) {
-    this.key = key;
-    this.valueKey = valueKey;
-    this.retainRenderedValue = retainRenderedValue;
-    this.requestUpdate();
-  }
-
-  override render() {
-    return this.gate.render(this.key, this.renderValue, () => [this.renderRoot], {
-      retainRenderedValue: this.retainRenderedValue,
+function prepareTarget(element: Element | undefined) {
+  if (element instanceof HTMLElement) {
+    Object.assign(element, {
+      restartCalls: 0,
+      restartAfterTeardown() {
+        this.restartCalls += 1;
+      },
+      // A registered App may also tear down on disconnect; the gate must act while connected.
+      teardown: () => (element.isConnected ? teardown() : Promise.resolve()),
     });
   }
 }
 
-class TestMcpAppUnmountSiblingOwner extends LitElement {
-  private includeLeaving = true;
-  private readonly gate = new McpAppUnmountGate(this, targetTag);
-
-  removeLeaving() {
-    this.includeLeaving = false;
-    this.requestUpdate();
-  }
-
-  override render() {
-    return this.gate.render(
-      this.includeLeaving ? "both" : "retained",
-      () => staticHtml`
-        ${
-          this.includeLeaving
-            ? staticHtml`<div class="leaving"><${staticTargetTag}></${staticTargetTag}></div>`
-            : nothing
-        }
-        <${staticTargetTag} class="retained"></${staticTargetTag}>
-      `,
-      () => this.renderRoot.querySelectorAll(".leaving"),
-    );
-  }
+function mountGate(
+  renderValue: () => Node[],
+  leavingRoots: (root: HTMLElement) => Iterable<ParentNode> = (root) => [root],
+) {
+  const host = document.createElement("div");
+  const shadowRoot = host.attachShadow({ mode: "open" });
+  const root = document.createElement("div");
+  shadowRoot.append(root);
+  document.body.append(host);
+  let key = "initial";
+  let retainRenderedValue = false;
+  let requestUpdate = () => {};
+  const gate = new McpAppUnmountGate<Node[]>({ requestUpdate: () => requestUpdate() });
+  mountSolid(
+    () => {
+      const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+      requestUpdate = () => setRevision((value) => value + 1);
+      return createMemo(() => {
+        revision();
+        return gate.render(key, renderValue, () => leavingRoots(root), { retainRenderedValue });
+      });
+    },
+    { container: root },
+  );
+  return {
+    shadowRoot,
+    get updateComplete() {
+      return Promise.resolve().then(() => flush());
+    },
+    show(this: void, nextKey: string, retain = false) {
+      key = nextKey;
+      retainRenderedValue = retain;
+      requestUpdate();
+    },
+  };
 }
 
-customElements.define(targetTag, TestMcpAppUnmountTarget);
-customElements.define(ownerTag, TestMcpAppUnmountOwner);
-customElements.define(siblingOwnerTag, TestMcpAppUnmountSiblingOwner);
+function valueSpan(value: string) {
+  const span = document.createElement("span");
+  span.dataset.value = value;
+  span.textContent = value;
+  return span;
+}
+
+function mountOwner() {
+  const target = document.createElement(targetTag);
+  prepareTarget(target);
+  const initial = valueSpan("initial");
+  let valueKey = "initial";
+  const renderValue = vi.fn(() =>
+    valueKey === "initial" ? [target, initial] : [valueSpan(valueKey)],
+  );
+  const owner = mountGate(renderValue);
+  const show = owner.show;
+  return Object.assign(owner, {
+    renderValue,
+    show(key: string, nextValueKey = key, retainRenderedValue = false) {
+      valueKey = nextValueKey;
+      show(key, retainRenderedValue);
+    },
+  });
+}
+
+function mountSiblingOwner() {
+  const leaving = document.createElement("div");
+  leaving.className = "leaving";
+  const target = document.createElement(targetTag);
+  prepareTarget(target);
+  leaving.append(target);
+  const retained = document.createElement(targetTag);
+  retained.className = "retained";
+  prepareTarget(retained);
+  let includeLeaving = true;
+  const owner = mountGate(
+    () => (includeLeaving ? [leaving, retained] : [retained]),
+    (root) => root.querySelectorAll(".leaving"),
+  );
+  return Object.assign(owner, {
+    removeLeaving() {
+      includeLeaving = false;
+      owner.show("retained");
+    },
+  });
+}
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -83,8 +115,7 @@ afterEach(() => {
 
 describe("McpAppUnmountGate", () => {
   it("retains the current value for an unchanged explicit owner", async () => {
-    const owner = document.createElement(ownerTag) as TestMcpAppUnmountOwner;
-    document.body.append(owner);
+    const owner = mountOwner();
     await owner.updateComplete;
     const target = owner.shadowRoot!.querySelector(targetTag);
 
@@ -103,8 +134,7 @@ describe("McpAppUnmountGate", () => {
   it("keeps the old subtree connected and coalesces replacements until teardown resolves", async () => {
     const pending = createDeferred();
     teardown.mockReturnValue(pending.promise);
-    const owner = document.createElement(ownerTag) as TestMcpAppUnmountOwner;
-    document.body.append(owner);
+    const owner = mountOwner();
     await owner.updateComplete;
     owner.renderValue.mockClear();
 
@@ -134,8 +164,7 @@ describe("McpAppUnmountGate", () => {
   it("restarts the original target when a pending transition rebounds", async () => {
     const pending = createDeferred();
     teardown.mockReturnValueOnce(pending.promise).mockResolvedValue(undefined);
-    const owner = document.createElement(ownerTag) as TestMcpAppUnmountOwner;
-    document.body.append(owner);
+    const owner = mountOwner();
     await owner.updateComplete;
     const original = owner.shadowRoot!.querySelector<TestMcpAppUnmountTarget>(targetTag)!;
 
@@ -154,8 +183,7 @@ describe("McpAppUnmountGate", () => {
   it("preserves retained siblings while removing a torn-down target", async () => {
     const pending = createDeferred();
     teardown.mockReturnValue(pending.promise);
-    const owner = document.createElement(siblingOwnerTag) as TestMcpAppUnmountSiblingOwner;
-    document.body.append(owner);
+    const owner = mountSiblingOwner();
     await owner.updateComplete;
     const leaving = owner.shadowRoot!.querySelector<TestMcpAppUnmountTarget>(
       `.leaving ${targetTag}`,
