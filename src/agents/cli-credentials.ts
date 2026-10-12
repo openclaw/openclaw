@@ -9,6 +9,10 @@ import {
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
+import {
+  attestClaudeNativeLoginOwner,
+  readClaudeNativeLoginOwner,
+} from "../plugin-sdk/provider-auth-claude-compat.js";
 import type { OAuthProvider } from "./auth-profiles/types.js";
 
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
@@ -461,4 +465,39 @@ export function readGeminiCliCredentialsCached(
   options?: CliFileCredentialOptions,
 ): GeminiCliCredential | null {
   return readCachedGemini(options);
+}
+
+/** Native login owner attested at a boundary that may wait on the network. */
+export type NativeCliLoginAttestation = {
+  /** Non-secret owner reference, set only when the provider attested the credential. */
+  owner?: string;
+  /** From this time the CLI rotates the credential before it accepts a prompt. */
+  refreshDueAt?: number;
+};
+
+/**
+ * Owner of the native login a local run of this CLI backend would use under
+ * `env`, attested by the provider for the credential itself rather than read
+ * from local account metadata. No owner when the backend has no native login or
+ * the attestation fails; callers must then treat history as unknown.
+ */
+export async function resolveNativeCliLoginOwner(
+  backendId: string,
+  /** Environment the CLI process receives; the Gateway process is not the identity source. */
+  env: NodeJS.ProcessEnv,
+): Promise<NativeCliLoginAttestation> {
+  return backendId === "claude-cli" ? await attestClaudeNativeLoginOwner({ env }) : {};
+}
+
+/**
+ * Synchronous recheck for spawn, send and commit boundaries: the owner this
+ * process already attested for the credential `env` selects now, or undefined
+ * when that credential changed since and has not been attested. Never waits on
+ * the network.
+ */
+export function readAttestedNativeCliLoginOwner(
+  backendId: string,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  return backendId === "claude-cli" ? readClaudeNativeLoginOwner({ env }) : undefined;
 }

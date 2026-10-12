@@ -357,7 +357,7 @@ describe("prepareCliRunContext", () => {
           sessionFile: sessionTarget.sessionKey,
           sessionTarget,
         },
-        { credential },
+        credential,
       );
       expect(writer).toBeDefined();
       await runWithCliHistoryWriter(writer, () =>

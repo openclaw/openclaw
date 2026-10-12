@@ -80,7 +80,9 @@ it("prepares private CLI history and refuses an unattributed append at execution
     };
     await withIncognitoSessionActor(actor, async () => {
       const writer = await prepareCliHistoryBoundary(params, {
-        credential: { type: "token", provider: "test-cli", token: "synthetic-account" },
+        type: "token",
+        provider: "test-cli",
+        token: "synthetic-account",
       });
       assert(writer);
       writer.assertReadable();

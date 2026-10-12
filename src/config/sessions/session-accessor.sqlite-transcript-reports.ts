@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -22,7 +23,11 @@ import {
 } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
-import { getCliHistoryWriter } from "./cli-history-boundary.js";
+import {
+  answerCliHistoryOwnerProbe,
+  cliHistoryWriterFacts,
+  getCliHistoryWriter,
+} from "./cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
@@ -404,28 +409,21 @@ async function withReportWorker<T>(
         cliWriter?.assertCurrent();
       };
       const { env: _env, ...workerResolved } = resolved;
-      const target: TranscriptReportWorkerTarget = {
-        resolved: workerResolved,
-        sessionEntryCurrentSource: sessionEntryCurrent?.source,
-        ...(cliWriter
-          ? {
-              cliWriter: {
-                runId: cliWriter.runId,
-                authFingerprint: cliWriter.authFingerprint,
-                lifecycleRevision: cliWriter.lifecycleRevision,
-              },
-            }
-          : {}),
-        fence: {
-          expectedLifecycleRevision: fenced.expectedLifecycleRevision,
-          expectedWriterRunId: fenced.expectedWriterRunId,
-        },
-      };
       try {
         const result = await settleReportOperation(
           async () => {
             await prepareSessionEntryReplacementDatabase(options, assertCurrent, execution);
             assertCurrent();
+            const target: TranscriptReportWorkerTarget = {
+              resolved: workerResolved,
+              sessionEntryCurrentSource: sessionEntryCurrent?.source,
+              // Account facts only: the worker asks the host to confirm the owner on each commit.
+              ...(cliWriter ? { cliWriter: cliHistoryWriterFacts(cliWriter) } : {}),
+              fence: {
+                expectedLifecycleRevision: fenced.expectedLifecycleRevision,
+                expectedWriterRunId: fenced.expectedWriterRunId,
+              },
+            };
             const databaseIdentity = execution.fileIdentity?.physicalIdentity;
             if (!databaseIdentity) {
               throw new Error("Transcript report has no prepared native database identity");
@@ -439,10 +437,18 @@ async function withReportWorker<T>(
                     runtimeProcessEntrypoints.sessionTranscriptReports,
                   ),
                   input: target,
-                  assertAdmission: (request) =>
-                    request.stage === "transaction" || request.stage === "commit"
-                      ? assertSessionEntryCurrentAdmission(request, sessionEntryCurrent)
-                      : request,
+                  assertAdmission: (request) => {
+                    const admitted =
+                      request.stage === "transaction" || request.stage === "commit"
+                        ? assertSessionEntryCurrentAdmission(request, sessionEntryCurrent)
+                        : request;
+                    // The worker's coverage check, answered by the host right before the grant.
+                    answerCliHistoryOwnerProbe(
+                      isRecord(admitted.facts) ? admitted.facts.publication : undefined,
+                      cliWriter,
+                    );
+                    return admitted;
+                  },
                 },
               );
             return settleReportOperation(

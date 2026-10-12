@@ -10,6 +10,8 @@ let readCodexCliActiveApiKey: typeof import("./cli-credentials.js").readCodexCli
 let readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCodexCliCredentialsCached;
 let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
 let readMiniMaxCliCredentialsCached: typeof import("./cli-credentials.js").readMiniMaxCliCredentialsCached;
+let resolveNativeCliLoginOwner: typeof import("./cli-credentials.js").resolveNativeCliLoginOwner;
+let readAttestedNativeCliLoginOwner: typeof import("./cli-credentials.js").readAttestedNativeCliLoginOwner;
 
 function createJwtWithExp(expSeconds: number): string {
   // Signature verification is out of scope; expiration extraction only needs a
@@ -38,6 +40,8 @@ describe("cli credentials", () => {
       readCodexCliCredentialsCached,
       readGeminiCliCredentialsCached,
       readMiniMaxCliCredentialsCached,
+      resolveNativeCliLoginOwner,
+      readAttestedNativeCliLoginOwner,
     } = await import("./cli-credentials.js"));
   });
 
@@ -512,6 +516,44 @@ describe("cli credentials", () => {
         email: "user@example.com",
       });
     } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a native login owner only for backends that own one", async () => {
+    // A readable Claude login must not leak into other backends' history ownership.
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-owner-"));
+    try {
+      vi.stubEnv("HOME", tempHome);
+      fs.mkdirSync(path.join(tempHome, ".claude"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tempHome, ".claude.json"),
+        JSON.stringify({ oauthAccount: { accountUuid: "uuid-a" } }),
+      );
+      fs.writeFileSync(
+        path.join(tempHome, ".claude", ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "synthetic",
+            expiresAt: Date.parse("2030-01-01T00:00:00Z"),
+          },
+        }),
+      );
+      const fetchFn = vi.fn(async () => Response.json({ account: { uuid: "uuid-a" } }));
+      vi.stubGlobal("fetch", fetchFn);
+      for (const backendId of ["google-gemini-cli", "codex-cli"]) {
+        expect(await resolveNativeCliLoginOwner(backendId, process.env)).toEqual({});
+        expect(readAttestedNativeCliLoginOwner(backendId, process.env)).toBeUndefined();
+      }
+      expect(fetchFn).not.toHaveBeenCalled();
+      // The Claude backend attests the same login, and only then answers the local check.
+      expect(readAttestedNativeCliLoginOwner("claude-cli", process.env)).toBeUndefined();
+      expect((await resolveNativeCliLoginOwner("claude-cli", process.env)).owner).toBe(
+        "uuid:uuid-a",
+      );
+      expect(readAttestedNativeCliLoginOwner("claude-cli", process.env)).toBe("uuid:uuid-a");
+    } finally {
+      vi.unstubAllGlobals();
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });

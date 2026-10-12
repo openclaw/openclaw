@@ -50,6 +50,8 @@ type ExecuteCliProcessOptions = {
 export async function executeCliProcess(params: {
   context: PreparedCliRunContext;
   assertCurrent: () => void;
+  /** Fresh check at each spawn and prompt send only; never called per output event. */
+  assertBoundary?: () => void;
   backend: CliBackendConfig;
   deps: CliExecuteDeps;
   events: CliEventHandlers;
@@ -256,6 +258,7 @@ export async function executeCliProcess(params: {
     } else if (context.executionTarget.kind === "plugin") {
       result = await executePluginOwnedProcess({
         context,
+        ...(params.assertBoundary ? { assertBoundary: params.assertBoundary } : {}),
         execute: context.executionTarget.execute,
         watchdogClock: params.deps.watchdogClock,
         executionCommand: params.executionCommand,
@@ -358,6 +361,7 @@ export async function executeCliProcess(params: {
           argv0: params.executionArgv0,
           timeoutMs: runParams.timeoutMs,
           noOutputTimeoutMs: params.noOutputTimeoutMs,
+          ...(params.assertBoundary ? { beforeSpawn: params.assertBoundary } : {}),
           onCancel: () => {
             processCancelled = true;
           },

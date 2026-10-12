@@ -689,6 +689,60 @@ describe("Claude native stdio boundary", () => {
     await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
   });
 
+  it("sends user input only after a fresh boundary check, not the stream check", async ({
+    signal,
+  }) => {
+    let boundaryActive = true;
+    const reason = new Error("Synthetic account reassigned before send.");
+    const liveSession = createLiveSession();
+    const context = await createContext("revoked-initialize", {
+      liveSession,
+      assertCurrent: () => {
+        if (!boundaryActive) {
+          throw reason;
+        }
+      },
+      // An always-passing stream check must never stand in for the pre-send boundary check.
+      assertStreamCurrent: () => {},
+    });
+    const running = collect(context);
+    const outcome = running.catch((error: unknown) => error);
+    try {
+      await fixtureReadyBeforeSettlement(context, "initialize.ready", running, signal);
+      boundaryActive = false;
+    } finally {
+      await writeFile(path.join(context.cwd, "initialize.release"), "release");
+    }
+    expect(await withinTest(outcome, signal)).toBe(reason);
+    await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
+  });
+
+  it("keeps an awaited hook decision on the stream check once the prompt was delivered", async () => {
+    let boundaryActive = true;
+    const approvalStarted = createDeferred<void>();
+    const approval = createDeferred<CliBackendToolPermissionResult>();
+    const context = await createContext("revoked-approval", {
+      assertCurrent: () => {
+        if (!boundaryActive) {
+          throw new Error("Boundary check must not run per event.");
+        }
+      },
+      assertStreamCurrent: () => {},
+      requestToolPermission: () => {
+        approvalStarted.resolve();
+        return approval.promise;
+      },
+    });
+    const running = collect(context);
+    await approvalStarted.promise;
+    boundaryActive = false;
+    approval.resolve({ behavior: "allow", updatedInput: { file_path: "approved.txt" } });
+    const detail = resultDetail(await running);
+    expect(detail.hookDecision).toMatchObject({
+      hookSpecificOutput: { permissionDecision: "allow" },
+    });
+  });
+
   it("reuses one child while delivering private context and host permissions for each turn", async () => {
     const liveSession = createLiveSession();
     const context = await createContext("normal", {

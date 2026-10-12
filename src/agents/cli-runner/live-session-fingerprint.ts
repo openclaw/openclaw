@@ -92,6 +92,11 @@ export function buildCliLiveSessionFingerprint(params: {
       promptToolNamesHash: context.promptToolNamesHash,
       mcpResumeHash: context.preparedBackend.mcpResumeHash ?? context.preparedBackend.mcpConfigHash,
       credentialFingerprint: context.preparedBackend.secretInput?.fingerprint,
+      // A warm child keeps the login it started with. Reuse it only while the native owner
+      // this run was prepared under is the one it was started under.
+      nativeLoginOwnerHash: context.cliHistoryWriter?.bindsNativeLogin
+        ? sha256Hex(context.cliHistoryWriter.authFingerprint)
+        : undefined,
       skillsFingerprint,
       env: Object.keys(params.env)
         .toSorted()
