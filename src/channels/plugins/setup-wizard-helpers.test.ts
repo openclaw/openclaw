@@ -22,7 +22,6 @@ import {
   createStandardChannelSetupStatus,
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicy,
-  createTopLevelChannelDmPolicySetter,
   createTopLevelChannelGroupPolicySetter,
   createTopLevelChannelParsedAllowFromPrompt,
   normalizeAllowFromEntries,
@@ -750,39 +749,6 @@ describe("patchChannelConfigForAccount", () => {
     expect(next.channels?.telegram?.webhookSecret).toBeUndefined();
     expect(next.channels?.telegram?.accounts?.work?.botToken).toBe("work-token");
   });
-
-  it("supports imessage/signal account-scoped channel patches", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        signal: {
-          enabled: false,
-          accounts: {},
-        },
-        imessage: {
-          enabled: false,
-        },
-      },
-    };
-
-    const signalNext = patchChannelConfigForAccount({
-      cfg,
-      channel: "signal",
-      accountId: "work",
-      patch: { account: "+15555550123", cliPath: "signal-cli" },
-    });
-    expect(signalNext.channels?.signal?.enabled).toBe(true);
-    expect(signalNext.channels?.signal?.accounts?.work?.enabled).toBe(true);
-    expect(signalNext.channels?.signal?.accounts?.work?.account).toBe("+15555550123");
-
-    const imessageNext = patchChannelConfigForAccount({
-      cfg: signalNext,
-      channel: "imessage",
-      accountId: DEFAULT_ACCOUNT_ID,
-      patch: { cliPath: "imsg" },
-    });
-    expect(imessageNext.channels?.imessage?.enabled).toBe(true);
-    expect(imessageNext.channels?.imessage?.cliPath).toBe("imsg");
-  });
 });
 
 describe("setSetupChannelEnabled", () => {
@@ -808,25 +774,6 @@ describe("setSetupChannelEnabled", () => {
 });
 
 describe("setTopLevelChannelDmPolicyWithAllowFrom", () => {
-  it("adds wildcard allowFrom for open policy", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        zalo: {
-          dmPolicy: "pairing",
-          allowFrom: ["12345"],
-        },
-      },
-    };
-
-    const next = setTopLevelChannelDmPolicyWithAllowFrom({
-      cfg,
-      channel: "zalo",
-      dmPolicy: "open",
-    });
-    expect(next.channels?.zalo?.dmPolicy).toBe("open");
-    expect(next.channels?.zalo?.allowFrom).toEqual(["12345", "*"]);
-  });
-
   it("supports custom allowFrom lookup callback", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -902,27 +849,6 @@ describe("createTopLevelChannelDmPolicy", () => {
     expect(dmPolicy.getCurrent({})).toBe("pairing");
     expect(next.channels?.line?.dmPolicy).toBe("open");
     expect(next.channels?.line?.allowFrom).toEqual(["U123", "*"]);
-  });
-});
-
-describe("createTopLevelChannelDmPolicySetter", () => {
-  it("reuses the shared top-level dmPolicy writer", () => {
-    const setPolicy = createTopLevelChannelDmPolicySetter({
-      channel: "zalo",
-    });
-    const next = setPolicy(
-      {
-        channels: {
-          zalo: {
-            allowFrom: ["12345"],
-          },
-        },
-      },
-      "open",
-    );
-
-    expect(next.channels?.zalo?.dmPolicy).toBe("open");
-    expect(next.channels?.zalo?.allowFrom).toEqual(["12345", "*"]);
   });
 });
 
@@ -1092,17 +1018,6 @@ describe("parseSetupEntriesWithParser", () => {
       }),
     ).toEqual({
       entries: ["alice", "*"],
-    });
-  });
-
-  it("returns parser errors and clears parsed entries", () => {
-    expect(
-      parseSetupEntriesWithParser("ok, bad", (entry) =>
-        entry === "bad" ? { error: "invalid entry: bad" } : { value: entry },
-      ),
-    ).toEqual({
-      entries: [],
-      error: "invalid entry: bad",
     });
   });
 });

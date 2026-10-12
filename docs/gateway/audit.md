@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Metadata-only activity history plus durable run identity and decision receipts"
 read_when:
   - You need a durable record of what the Gateway did without storing content
@@ -44,15 +45,18 @@ platform-send start use a lazy progress companion, while terminal message rows
 remain in the activity ledger. Run inspection merges both sources directly;
 neither is copied into the generic decision-fact table.
 
-Scheduled runs, background tasks, and task flows are owner-native sources too.
-After exact run admission, a lazy lifecycle metadata table binds the admitted
-context and execution ids to the canonical `cron_run_receipts`, `task_runs`, or
-`flow_runs` row. Inspection joins that metadata to the owner row directly and
-preserves its status, including skipped, failed, timed-out, cancelled, blocked,
-and lost outcomes. A `runId` alone never joins one of these rows to an
-execution. Legacy, missing, deleted, corrupt, or mismatched bindings remain
-unknown or absent; they never change task behavior and are never copied into
-`execution_decision_facts`.
+Scheduled runs are an owner-native source too. After exact run admission, a lazy
+lifecycle metadata table binds the admitted context and execution ids to the
+stored `cron_run_receipts` row. Inspection joins that metadata to the receipt
+directly and preserves its recorded status. New task and flow lifecycle binding
+writes and inspection joins are retired, but their existing tables and rows are
+not dropped or migrated. This removal leaves the database schemas unchanged;
+see the [versioning contract](/reference/database-schemas/versioning).
+Independent audit events and decision facts retain their existing retention
+policies; they are not reconstructed from retained Task or TaskFlow rows. A
+`runId` alone never joins an owner row to an execution. Missing, deleted, corrupt, or
+mismatched bindings remain unknown or absent; they never change execution
+behavior and are never copied into `execution_decision_facts`.
 
 ## Run identity inspection
 
@@ -136,7 +140,7 @@ an authoritative native-action callback to provide stronger evidence.
 
 Registered plugin runtime calls add bounded facts only after exact run
 admission. A `before_tool_call` hook records its own allow or block as an
-enforced plugin gate; fail-closed hook errors are denials, while a configured
+enforced plugin gate; hook errors that block execution are denials, while a configured
 fail-open error remains unknown. Separate owner-native approval rows remain the
 authority when a hook requests approval.
 
@@ -186,7 +190,7 @@ attribution only after the current durable recovery owner admits the exact
 attempt.
 
 Authenticated Gateway attach records immutable audit facts once. Session
-creation separately reads the live canonical durable profile id so a profile
+creation separately reads the current primary profile ID so a profile
 link performed after attach cannot orphan session ownership. Ordinary session
 provenance retains that id only; it does not retain a profile display label.
 When execution identity recording is explicitly enabled, its audit context may
@@ -198,6 +202,13 @@ Shared tokens, passwords, auth-none connections, and other profileless clients
 remain unattributed. If authenticated user evidence promises a durable profile
 but profile resolution fails, the invoker is `unknown` rather than guessed from
 headers, device ids, connection ids, or credentials.
+
+Control UI `chat.send`, including queued replies and ACP turns, carries the
+original prepared attach facts into execution admission. Later profile changes
+or reconnects do not rewrite an admitted context. Collected replies retain
+attribution only when every source supplies equivalent attach facts; conflicting
+or missing evidence remains unknown. These facts do not grant sender or tool
+authority and do not create a channel-admission enforcement receipt.
 
 Each present context projects one run-admission receipt. Its outcome
 is `not-applicable`, its policy and grant references are empty, and its reason
@@ -242,7 +253,7 @@ markers are never returned by the Gateway. Beta-only `local-operator` and
 they are not migrated or presented as principals.
 
 For an admitted run with message auditing enabled, run inspection also adapts
-the outbound message lifecycle. It deterministically merges the lazy progress
+the outbound message lifecycle. It uses fixed rules to merge the lazy progress
 owner with terminal ledger rows and reports `queued`, `platform-started`,
 `delivered`, `failed`, `unknown`, and intentionally `suppressed` as distinct
 receipts. Queue and transport results are `attribution-only`: they record what
@@ -255,11 +266,13 @@ message-policy, or turn-capability denial that changed the result is
 `enforced`. Portable actions and early suppressions without a durable owner
 record use the generic fact owner on the same audit-writer FIFO.
 
-Cron, task, and flow lifecycle receipts are `attribution-only` and have a
-`not-applicable` decision outcome. They report what the authoritative lifecycle
-owner retained; they do not claim an authorization decision. Their cursors are
-opaque and source-specific. Existing numeric cursors and `a:`, `m:`, and `g:`
-cursors remain accepted; newer owner stages use `c:`, `t:`, and `f:`.
+Cron lifecycle receipts are `attribution-only` and have a `not-applicable`
+decision outcome. They report what the authoritative lifecycle owner retained;
+they do not claim an authorization decision. Cursors are opaque and
+source-specific. Existing numeric cursors and `a:`, `m:`, and `g:` cursors
+remain accepted; cron uses `c:`. Well-formed historical `t:` and `f:` cursors
+return `decision cursor is no longer retained; restart inspection without --cursor`.
+They never alias another source or restart pagination silently.
 
 When the same `runId` has a retained terminal row in `operator_approvals`, the
 inspector also reads its owner-local `operator_approval_execution_identities`
@@ -280,14 +293,14 @@ Approval outcomes map to stable receipt reasons:
 | Run abort / Gateway restart    | `operator_approval_cancelled_run_aborted` / `operator_approval_cancelled_gateway_restart` |
 | No approval delivery route     | `operator_approval_denied_no_route`                                                       |
 | Malformed approval verdict     | `operator_approval_denied_malformed_verdict`                                              |
-| Fail-closed storage state      | `operator_approval_denied_storage_corrupt`                                                |
+| Storage state blocks approval  | `operator_approval_denied_storage_corrupt`                                                |
 | Unreadable or inconsistent row | `operator_approval_record_corrupt`                                                        |
 | Missing execution binding      | `operator_approval_execution_link_missing`                                                |
 | Malformed execution binding    | `operator_approval_execution_link_malformed`                                              |
 | Mismatched execution binding   | `operator_approval_execution_link_mismatch`                                               |
 
 Allowed, denied, expired, and cancelled rows are `enforced` because the
-recorded human decision or fail-closed owner policy changed whether the action
+recorded human decision or owner policy that denies on error changed whether the action
 could proceed. A no-route denial is `enforced` only because the approval owner
 records `no-route` as the winning terminal reason before returning the
 non-action. An unreadable row is `unknown`, never reconstructed. If a retained
@@ -404,11 +417,11 @@ only as installation-local keyed pseudonyms
   state database also has the key and can test candidate raw identifiers
   against the pseudonyms. RPC and CLI exports never include the key.
 - If the key material is missing or corrupt while message rows are retained,
-  the Gateway fails closed and drops new message records instead of silently
+  the Gateway drops new message records instead of silently
   rotating to a new key, which would split correlation.
 
 Run and tool records retain `sessionKey` and `sessionId` for correlation;
-canonical session keys can themselves contain platform account or peer ids.
+session keys can themselves contain platform account or peer ids.
 Message records intentionally omit both.
 
 Execution identity contexts use the same installation-local key owner with a
@@ -461,7 +474,7 @@ transaction deletes at most 1,024 expired rows and schedules more work until
 settled. Retention maintenance keeps running even when collection is disabled.
 
 Outbound `queued` and `platform-started` records live in the narrowly owned
-`outbound_message_progress` table. The table is created idempotently only on
+`outbound_message_progress` table. The table is created if needed on
 the first enabled progress write, remains absent after startup, read-only
 inspection, disabled collection, and terminal-only delivery, and does not
 advance the state schema version. Missing under read-only inspection means no
@@ -478,7 +491,7 @@ Upgrading from a Gateway with the earlier run/tool-only ledger migrates the
 schema automatically at startup (or via `openclaw doctor --fix`); existing
 rows and their ledger sequences are preserved.
 
-Execution identity contexts also live in the shared state database. Canonical
+Execution identity contexts also live in the shared state database. Stored
 rows are keyed by unique execution and context ids; `runId` is a non-unique,
 indexed correlation. Their
 additive table is created lazily on first use without a schema-version bump.
@@ -554,7 +567,7 @@ captures its selectors, cursors, limits, and retention clock before yielding.
 Changes to identity producers, storage, and inspection must preserve these
 boundaries alongside the operator behavior above:
 
-- Only byte-identical canonical replay is idempotent. Retries, fallbacks, and
+- Only byte-identical replay of the stored record is treated as a duplicate. Retries, fallbacks, and
   recovery reuse the original admission identity.
 - The parent approval row is the sole authorization owner. Its optional identity
   companion persists identity only for an exact host-validated source-run binding

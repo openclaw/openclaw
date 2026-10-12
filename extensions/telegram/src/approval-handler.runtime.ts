@@ -27,7 +27,8 @@ import {
   buildTelegramNativeExpiredApprovalText,
   buildTelegramNativeResolvedApprovalText,
 } from "./approval-terminal.js";
-import { resolveTelegramInlineButtons } from "./button-types.js";
+import { normalizeTelegramButtonStyle, resolveTelegramInlineButtons } from "./button-types.js";
+import { normalizeControlUiBasePath } from "./control-ui-base-path.js";
 import {
   isTelegramExecApprovalHandlerConfigured,
   shouldHandleTelegramExecApprovalRequest,
@@ -47,20 +48,11 @@ const log = createSubsystemLogger("telegram/approvals");
 const terminalizedSystemAgentApprovals = new Set<string>();
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
-type PendingMessage = {
-  chatId: string;
-  messageId: string;
-};
 type TelegramPendingDelivery = {
   text: string;
   buttons: ReturnType<typeof resolveTelegramInlineButtons>;
 };
-type TelegramFinalDelivery = {
-  text: string;
-};
-
 type TelegramExecApprovalHandlerDeps = {
-  nowMs?: () => number;
   sendTyping?: typeof sendTypingTelegram;
   sendMessage?: typeof sendMessageTelegram;
   editMessage?: typeof editMessageTelegram;
@@ -72,16 +64,17 @@ type TelegramApprovalHandlerContext = {
   deps?: TelegramExecApprovalHandlerDeps;
 };
 
-function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext): {
-  accountId: string;
-  context: TelegramApprovalHandlerContext;
-} | null {
+function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext) {
   const context = params.context as TelegramApprovalHandlerContext | undefined;
   const accountId = normalizeOptionalString(params.accountId) ?? "";
   if (!context?.token || !accountId) {
     return null;
   }
-  return { accountId, context };
+  return {
+    accountId,
+    context,
+    options: () => ({ cfg: params.cfg, token: context.token, accountId }),
+  };
 }
 
 function buildPendingPayload(params: {
@@ -99,8 +92,9 @@ function buildPendingPayload(params: {
     const origin = resolveGatewayPublicOrigin(params.cfg);
     const reviewUrl =
       origin && params.cfg.gateway?.controlUi?.enabled !== false
-        ? `${origin}${normalizeTelegramControlUiBasePath(
-            params.cfg.gateway?.controlUi?.basePath,
+        ? `${origin}${normalizeControlUiBasePath(
+            params.cfg.gateway?.controlUi?.basePath?.trim() ?? "",
+            "one",
           )}/approve/${encodeURIComponent(params.request.id)}`
         : undefined;
     const lines = [
@@ -115,26 +109,20 @@ function buildPendingPayload(params: {
         return [];
       }
       const callbackData = buildTelegramApprovalCallbackData(approvalAction);
-      const style =
-        action.style === "danger" || action.style === "success" || action.style === "primary"
-          ? action.style
-          : undefined;
+      const style = normalizeTelegramButtonStyle(action.style);
       return callbackData
         ? [{ text: action.label, callback_data: callbackData, ...(style ? { style } : {}) }]
         : [];
     });
+    const buttons = decisionButtons.length > 0 ? [decisionButtons] : [];
     return {
       text: lines.join("\n"),
       buttons: reviewUrl
-        ? [
-            [{ text: "Review in Control UI", url: reviewUrl }],
-            ...(decisionButtons.length > 0 ? [decisionButtons] : []),
-          ]
-        : decisionButtons.length > 0
-          ? [decisionButtons]
-          : [],
+        ? [[{ text: "Review in Control UI", url: reviewUrl }], ...buttons]
+        : buttons,
     };
   }
+  const execView = params.view.approvalKind === "exec" ? params.view : undefined;
   const payload =
     params.approvalKind === "plugin"
       ? buildPluginApprovalPendingReplyPayload({
@@ -145,17 +133,12 @@ function buildPendingPayload(params: {
           approvalId: params.request.id,
           approvalSlug: params.request.id.slice(0, 8),
           approvalCommandId: params.request.id,
-          warningText:
-            params.view.approvalKind === "exec"
-              ? (params.view.warningText ?? undefined)
-              : undefined,
-          command: params.view.approvalKind === "exec" ? params.view.commandText : "",
-          cwd: params.view.approvalKind === "exec" ? (params.view.cwd ?? undefined) : undefined,
-          host:
-            params.view.approvalKind === "exec" && params.view.host === "node" ? "node" : "gateway",
-          nodeId:
-            params.view.approvalKind === "exec" ? (params.view.nodeId ?? undefined) : undefined,
-          scope: params.view.approvalKind === "exec" ? (params.view.scope ?? undefined) : undefined,
+          warningText: execView?.warningText ?? undefined,
+          command: execView?.commandText ?? "",
+          cwd: execView?.cwd ?? undefined,
+          host: execView?.host === "node" ? "node" : "gateway",
+          nodeId: execView?.nodeId ?? undefined,
+          scope: execView?.scope ?? undefined,
           allowedDecisions: params.view.actions.map((action) => action.decision),
           expiresAtMs: params.request.expiresAtMs,
           nowMs: params.nowMs,
@@ -171,9 +154,9 @@ function buildPendingPayload(params: {
 export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
   TelegramPendingDelivery,
   { chatId: string; messageThreadId?: number; directMessagesTopicId?: number },
-  PendingMessage,
+  { chatId: string; messageId: string },
   never,
-  TelegramFinalDelivery
+  { text: string }
 >({
   eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
@@ -198,8 +181,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     },
   },
   presentation: {
-    buildPendingPayload: ({ cfg, request, approvalKind, nowMs, view }) =>
-      buildPendingPayload({ cfg, request, approvalKind, nowMs, view }),
+    buildPendingPayload,
     buildResolvedResult: ({ view }) => ({
       kind: "update",
       payload: { text: buildTelegramNativeResolvedApprovalText(view) },
@@ -231,22 +213,16 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       }
       const sendTyping = resolved.context.deps?.sendTyping ?? sendTypingTelegram;
       const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
-      await sendTyping(preparedTarget.chatId, {
-        cfg,
-        token: resolved.context.token,
-        accountId: resolved.accountId,
+      const options = {
+        ...resolved.options(),
         ...(preparedTarget.messageThreadId != null
           ? { messageThreadId: preparedTarget.messageThreadId }
           : {}),
-      }).catch(() => {});
+      };
+      await sendTyping(preparedTarget.chatId, options).catch(() => {});
       const result = await sendMessage(preparedTarget.chatId, pendingPayload.text, {
-        cfg,
-        token: resolved.context.token,
-        accountId: resolved.accountId,
+        ...options,
         buttons: pendingPayload.buttons,
-        ...(preparedTarget.messageThreadId != null
-          ? { messageThreadId: preparedTarget.messageThreadId }
-          : {}),
         ...(preparedTarget.directMessagesTopicId != null
           ? { directMessagesTopicId: preparedTarget.directMessagesTopicId }
           : {}),
@@ -265,9 +241,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       let editError: unknown;
       try {
         await editMessage(entry.chatId, entry.messageId, escapeTelegramHtml(payload.text), {
-          cfg,
-          token: resolved.context.token,
-          accountId: resolved.accountId,
+          ...resolved.options(),
           textMode: "html",
           buttons: [],
         });
@@ -288,25 +262,20 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
           parsedOrigin?.messageThreadId;
         const sourceAccountId = request.request.turnSourceAccountId?.trim();
         const isSourceAccount = !sourceAccountId || sourceAccountId === resolved.accountId;
-        if (
-          originChatId &&
-          isSourceAccount &&
-          (entry.chatId !== originChatId || editError !== undefined)
-        ) {
-          if (!terminalizedSystemAgentApprovals.has(request.id)) {
+        if (originChatId && isSourceAccount) {
+          if (
+            (entry.chatId !== originChatId || editError !== undefined) &&
+            !terminalizedSystemAgentApprovals.has(request.id)
+          ) {
             const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
             const originTo =
               parsedOrigin?.directMessagesTopicId != null ? originTarget! : originChatId;
             await sendMessage(originTo, escapeTelegramHtml(payload.text), {
-              cfg,
-              token: resolved.context.token,
-              accountId: resolved.accountId,
+              ...resolved.options(),
               textMode: "html",
               ...(originThreadId != null ? { messageThreadId: originThreadId } : {}),
             });
-            terminalizedSystemAgentApprovals.add(request.id);
           }
-        } else if (originChatId && isSourceAccount) {
           terminalizedSystemAgentApprovals.add(request.id);
         }
       }
@@ -323,11 +292,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       }
       const editReplyMarkup =
         resolved.context.deps?.editReplyMarkup ?? editMessageReplyMarkupTelegram;
-      await editReplyMarkup(entry.chatId, entry.messageId, [], {
-        cfg,
-        token: resolved.context.token,
-        accountId: resolved.accountId,
-      });
+      await editReplyMarkup(entry.chatId, entry.messageId, [], resolved.options());
     },
   },
   observe: {
@@ -341,12 +306,3 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     },
   },
 });
-
-function normalizeTelegramControlUiBasePath(value?: string | null): string {
-  const trimmed = value?.trim() ?? "";
-  if (!trimmed || trimmed === "/") {
-    return "";
-  }
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
-}

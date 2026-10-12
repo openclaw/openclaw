@@ -21,12 +21,6 @@ export function createMemorySearchDeadlineError(message: string): Error {
   return error;
 }
 
-function createMemorySearchTimeoutError(timeoutMs: number): Error {
-  return createMemorySearchDeadlineError(
-    `memory_search timed out after ${Math.round(timeoutMs / 1000)}s`,
-  );
-}
-
 export function isMemorySearchDeadlineError(error: unknown): boolean {
   return typeof error === "object" && error !== null && memorySearchDeadlineErrors.has(error);
 }
@@ -41,7 +35,9 @@ export async function runMemorySearchWithDeadline<T>(params: {
   }
 
   const controller = new AbortController();
-  const timeoutError = createMemorySearchTimeoutError(params.timeoutMs);
+  const timeoutError = createMemorySearchDeadlineError(
+    `memory_search timed out after ${Math.round(params.timeoutMs / 1000)}s`,
+  );
   const timeoutOutcome = { type: "timeout" } as const;
   const parentAbortOutcome = { type: "parent-abort" } as const;
   let timer: ReturnType<typeof setTimeout> | undefined;

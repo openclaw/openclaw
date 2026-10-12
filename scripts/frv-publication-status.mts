@@ -1,5 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
+import {
+  diagnosticError as errorSchema,
+  diagnosticPackage as packageSchema,
+  diagnosticSchema as producerDiagnosticSchema,
+} from "./lib/release-postpublish-diagnostic-schema.mts";
 
 // Observation limits are independent of the continuation controller's wait budget.
 export const PUBLICATION_LIMITS = Object.freeze({
@@ -83,14 +88,6 @@ const conclusion = z.enum([
   "neutral",
   "stale",
   "startup_failure",
-]);
-const diagnosticState = z.enum([
-  "unattempted",
-  "skipped",
-  "started",
-  "success",
-  "failure",
-  "unknown",
 ]);
 const diagnosticConclusion = z.enum([...conclusion.options, "unknown"]);
 const actor = z.object({
@@ -202,51 +199,6 @@ export function parsePublicationJobs(values: unknown[], runId: string, attempt: 
   });
 }
 
-const errorSchema = z.object({
-  class: z.enum([
-    "registry-not-visible",
-    "selector-mismatch",
-    "identity-mismatch",
-    "transport",
-    "malformed-response",
-    "command-failure",
-    "evidence-write-failure",
-  ]),
-  status: z.number().int().min(0).max(255).nullable(),
-});
-const packageSchema = z.object({
-  name: z
-    .string()
-    .max(128)
-    .regex(/^@openclaw\/[a-z0-9][a-z0-9._-]*$/u),
-  state: diagnosticState,
-  publication: z.enum(["unknown", "observed"]),
-  error: errorSchema.nullable(),
-});
-const stageSchema = z.object({
-  state: diagnosticState,
-  publication: z.enum(["unknown", "observed"]),
-  error: errorSchema.nullable(),
-  packages: z.array(packageSchema).max(256),
-  packagesTruncated: z.boolean(),
-});
-const stageNames = [
-  "checkout",
-  "githubRelease",
-  "coreNpm",
-  "postpublish",
-  "pluginNpm",
-  "clawHub",
-  "fullReleaseValidation",
-  "pluginNpmRun",
-  "pluginClawHubRun",
-  "pluginClawHubBootstrap",
-  "openclawNpm",
-  "npmTelegram",
-  "evidence",
-  "binding",
-  "assets",
-] as const;
 export const PUBLICATION_CHILDREN = {
   openclawNpm: { workflow: ".github/workflows/openclaw-npm-release.yml", surface: "coreNpm" },
   pluginNpm: { workflow: ".github/workflows/plugin-npm-release.yml", surface: "pluginNpm" },
@@ -257,60 +209,11 @@ export const PUBLICATION_CHILDREN = {
   },
   npmTelegram: { workflow: ".github/workflows/npm-telegram-beta-e2e.yml", surface: "npmTelegram" },
 } as const;
-const childNames = ["fullReleaseValidation", ...Object.keys(PUBLICATION_CHILDREN)] as [
-  string,
-  ...string[],
-];
-const diagnosticSchema = z.object({
-  schemaVersion: z.literal(1),
-  kind: z.literal("release-postpublish-diagnostics"),
-  invocationId: z.string().uuid(),
-  context: z.object({
-    repository: repository.nullable(),
-    releaseVersion: z
-      .string()
-      .max(80)
-      .regex(/^[0-9]+(?:\.[0-9]+){2}(?:-[a-z0-9.-]+)?$/u)
-      .nullable(),
-    releaseTag: z
-      .string()
-      .max(81)
-      .regex(/^v[0-9]+(?:\.[0-9]+){2}(?:-[a-z0-9.-]+)?$/u)
-      .nullable(),
-    npmDistTag: z.enum(["latest", "beta", "alpha", "extended-stable"]).nullable(),
-    requestedSourceSha: sha.nullable(),
-    toolingSha: sha.nullable(),
-    suppliedToolingSha: sha.nullable(),
-    suppliedToolingRef: ref.nullable(),
-    parentRunId: decimal.nullable(),
-    parentRunAttempt: decimal.nullable(),
-    validationEvidence: z.object({
-      mode: z.enum(["full-release-validation", "authorized-beta-focused-v1"]).nullable(),
-      runId: decimal.nullable(),
-      runAttempt: decimal.nullable(),
-    }),
-  }),
-  selection: z.object({
-    plugins: z.array(packageSchema.shape.name).max(256),
-    pluginsTruncated: z.boolean(),
-    workflowRef: ref.nullable(),
-    clawHubWorkflowRef: ref.nullable(),
-  }),
-  verification: diagnosticState,
-  currentStage: z.enum(stageNames).nullable(),
-  stages: z.record(z.enum(stageNames), stageSchema),
+// Observers also describe GitHub startup failures that the producer cannot record.
+const diagnosticSchema = producerDiagnosticSchema.extend({
   children: z.record(
-    z.enum(childNames),
-    z.object({
-      suppliedRunId: decimal.nullable(),
-      runAttempt: decimal.nullable(),
-      producerRunAttempt: decimal.nullable(),
-      status: z.enum([...runState.options, "unknown"]),
-      conclusion: diagnosticConclusion,
-      failedJobCount: z.number().int().min(0).max(10000).nullable(),
-      readbackArtifactId: decimal.nullable(),
-      packageArtifactId: decimal.nullable(),
-    }),
+    producerDiagnosticSchema.shape.children.keyType,
+    producerDiagnosticSchema.shape.children.valueType.extend({ conclusion: diagnosticConclusion }),
   ),
   jobOutcomeBeforeArtifactUploads: diagnosticConclusion,
   stepOutcomes: z.object({ coreStart: diagnosticConclusion, completion: diagnosticConclusion }),

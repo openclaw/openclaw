@@ -5,7 +5,8 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import * as diagnostics from "../../infra/diagnostics-timeline.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readUserProfileIdentity } from "../../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";

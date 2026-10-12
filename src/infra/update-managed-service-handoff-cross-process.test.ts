@@ -5,8 +5,22 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import {
+  createManagedHandoffTempDirTracker,
+  readManagedHandoffArtifacts,
+} from "./update-managed-service-handoff-artifacts.test-support.js";
+import {
+  scopeWrapperSource,
+  useHandoffFixtureReceipts,
+  waitForOrphanExit,
+} from "./update-managed-service-handoff-cross-process.test-support.js";
 import {
   signalMockManagedUpdateHandoffReady,
   writeConcurrentManagedHandoffParams,
@@ -14,9 +28,10 @@ import {
 import { pathExists } from "./update-managed-service-native.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
-const tempDirs = new Set<string>();
+const tempDirs = createManagedHandoffTempDirTracker();
 const handoffParents = new Map<string, import("node:child_process").ChildProcess>();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
+const receipts = useHandoffFixtureReceipts();
 
 function createReadyChild(_command: string, args: string[]) {
   const child = Object.assign(new EventEmitter(), {
@@ -29,7 +44,7 @@ function createReadyChild(_command: string, args: string[]) {
   });
   process.nextTick(signalMockManagedUpdateHandoffReady, {
     child,
-    paramsPath: args.at(-1) ?? "",
+    paramsPath: readManagedHandoffArtifacts(args).paramsPath,
     cleanups: mockedHandoffLeaseCleanups,
   });
   return child;
@@ -52,7 +67,7 @@ beforeEach(async () => {
   // Competing helpers share this fixture's coordinator, never the operator's database.
   const tmpDirOwner = await import("./tmp-openclaw-dir.js");
   vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
-    makeTempDir(tempDirs, "openclaw-handoff-coordinator-"),
+    tempDirs.make("openclaw-handoff-coordinator-"),
   );
   spawnMock.mockReset();
   spawnMock.mockImplementation(createReadyChild);
@@ -75,7 +90,7 @@ afterEach(async () => {
   for (const cleanup of mockedHandoffLeaseCleanups) {
     cleanup();
   }
-  cleanupTempDirs(tempDirs);
+  await tempDirs.cleanup();
   vi.restoreAllMocks();
   vi.resetModules();
 });
@@ -86,9 +101,9 @@ async function prepareConcurrentHandoffHelper(): Promise<{
   baseParams: Record<string, unknown>;
 }> {
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
-  const tmpDir = makeTempDir(tempDirs, "openclaw-handoff-concurrent-test-");
+  const tmpDir = tempDirs.make("openclaw-handoff-concurrent-test-");
 
-  await startManagedServiceUpdateHandoff({
+  const started = await startManagedServiceUpdateHandoff({
     root: tmpDir,
     timeoutMs: 1_800_000,
     restartDrainTimeoutMs: 300_000,
@@ -102,11 +117,9 @@ async function prepareConcurrentHandoffHelper(): Promise<{
   });
 
   const [, args] = spawnMock.mock.calls.at(-1) as unknown as [string, string[]];
-  const helperScriptPath = args[0] ?? "";
-  const baseParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as Record<
-    string,
-    unknown
-  >;
+  tempDirs.add(path.dirname(started.logPath));
+  const { scriptPath: helperScriptPath, paramsPath } = readManagedHandoffArtifacts(args);
+  const baseParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as Record<string, unknown>;
   const database = new DatabaseSync(String(baseParams.updateLeaseDatabasePath));
   try {
     database
@@ -115,7 +128,6 @@ async function prepareConcurrentHandoffHelper(): Promise<{
   } finally {
     database.close();
   }
-  tempDirs.add(path.dirname(helperScriptPath));
   return { tmpDir, helperScriptPath, baseParams };
 }
 
@@ -208,7 +220,7 @@ describe("managed service update handoff cross-process lease", () => {
     expect(result).not.toHaveProperty("pid");
   });
 
-  it.runIf(process.platform !== "win32").each([
+  it.runIf(process.platform !== "win32").for([
     { label: "its exact dead helper", replacement: "exact", reclaimed: true },
     { label: "a mismatched owner", replacement: "owner", reclaimed: false },
     { label: "a mismatched helper identity", replacement: "identity", reclaimed: false },
@@ -216,7 +228,7 @@ describe("managed service update handoff cross-process lease", () => {
     { label: "an unknown malformed process identity", replacement: "unknown", reclaimed: false },
   ] as const)(
     "claims a separate systemd scope helper and fences cancellation against $label",
-    async ({ replacement, reclaimed }) => {
+    async ({ replacement, reclaimed }, { signal }) => {
       const { getFileLockProcessStartTime } = await import("../shared/pid-alive.js");
       const { spawn } =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -225,34 +237,26 @@ describe("managed service update handoff cross-process lease", () => {
         claimManagedServiceUpdateHandoff,
         startManagedServiceUpdateHandoff,
       } = await import("./update-managed-service-handoff.js");
-      const tmpDir = makeTempDir(tempDirs, "openclaw-handoff-scope-wrapper-");
+      const tmpDir = tempDirs.make("openclaw-handoff-scope-wrapper-");
       const helperExitPath = path.join(tmpDir, "nested-helper-exited");
       const launcherPath = path.join(tmpDir, "systemd-run");
-      await fs.writeFile(
-        launcherPath,
-        `#!${process.execPath}
-const fs = require("node:fs");
-const { spawn } = require("node:child_process");
-const [command, scriptPath, paramsPath] = process.argv.slice(-3);
-const helper = spawn(command, [scriptPath, paramsPath], { stdio: ["pipe", "pipe", "ignore"] });
-let helperAlive = true;
-helper.stdin.on("error", () => {});
-helper.stdout.pipe(process.stdout, { end: false });
-helper.once("exit", () => {
-  helperAlive = false;
-  fs.writeFileSync(${JSON.stringify(helperExitPath)}, String(helper.pid));
-});
-process.stdin.on("data", (chunk) => {
-  if (helperAlive) {
-    helper.stdin.write(chunk);
-  } else if (chunk.toString().includes("cancel\\n")) {
-    process.stdout.write("cancelled\\n", () => process.exit(0));
-  }
-});
-`,
-        { mode: 0o700 },
-      );
-      spawnMock.mockImplementationOnce(spawn);
+      await fs.writeFile(launcherPath, scopeWrapperSource(helperExitPath), { mode: 0o700 });
+      const helperExited = createDeferred();
+      let launcherClosed = Promise.resolve();
+      spawnMock.mockImplementationOnce((...args: Parameters<typeof spawn>) => {
+        const child = spawn(...args);
+        launcherClosed = new Promise<void>((resolve) => {
+          child.once("close", () => resolve());
+        });
+        let output = "";
+        child.stdout?.on("data", (chunk: Buffer | string) => {
+          output += chunk.toString();
+          if (output.includes("helper-exited\n")) {
+            helperExited.resolve();
+          }
+        });
+        return child;
+      });
 
       const handoffId = `scope-wrapper-${replacement}-${path.basename(tmpDir)}`;
       let launcher: import("node:child_process").ChildProcess | undefined;
@@ -283,7 +287,9 @@ process.stdin.on("data", (chunk) => {
           | undefined;
         tempDirs.add(path.dirname(started.logPath));
         const [, args] = spawnMock.mock.calls.at(-1) as unknown as [string, string[]];
-        const helperParams = JSON.parse(await fs.readFile(args.at(-1) ?? "", "utf8")) as {
+        const helperParams = JSON.parse(
+          await fs.readFile(readManagedHandoffArtifacts(args).paramsPath, "utf8"),
+        ) as {
           updateLeaseDatabasePath: string;
           updateLeaseKey: string;
         };
@@ -318,14 +324,17 @@ process.stdin.on("data", (chunk) => {
           expect(claimManagedServiceUpdateHandoff(identity)).toBe(true);
 
           process.kill(helperPid, "SIGKILL");
-          await vi.waitFor(
-            async () => {
-              await expect(fs.readFile(helperExitPath, "utf8")).resolves.toBe(String(helperPid));
-              expect(isPidAlive(helperPid)).toBe(false);
-              expect(isPidAlive(started.pid!)).toBe(true);
-            },
-            { interval: 10, timeout: 5_000 },
+          await withinTest(
+            awaitGateBeforeSettlement(
+              helperExited.promise,
+              launcherClosed,
+              "launcher exited before its helper",
+            ),
+            signal,
           );
+          await expect(fs.readFile(helperExitPath, "utf8")).resolves.toBe(String(helperPid));
+          expect(isPidAlive(helperPid)).toBe(false);
+          expect(isPidAlive(started.pid)).toBe(true);
           expect(claimManagedServiceUpdateHandoff(identity)).toBe(false);
 
           let payload = current.payload_json;
@@ -387,6 +396,7 @@ process.stdin.on("data", (chunk) => {
         if (launcher?.pid && isPidAlive(launcher.pid)) {
           launcher.kill("SIGKILL");
         }
+        await launcherClosed;
         if (leaseDatabasePath) {
           const cleanup = new DatabaseSync(leaseDatabasePath);
           try {
@@ -792,7 +802,7 @@ childProcess.spawnSync = function(command, args, options) {
 
   it.runIf(process.platform !== "win32")(
     "keeps a surviving updater owned across helper loss and profiles",
-    async () => {
+    async ({ signal }) => {
       const { execFile, spawn } =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
       const { tmpDir, helperScriptPath, baseParams } = await prepareConcurrentHandoffHelper();
@@ -811,11 +821,15 @@ childProcess.spawnSync = function(command, args, options) {
           "-e",
           [
             'const fs = require("node:fs");',
+            "(async () => {",
+            `const { sendReceipt } = await import(${JSON.stringify(`data:text/javascript,${encodeURIComponent(receipts.clientSource() + "\nexport { sendReceipt };")}`)});`,
             `const pidPath = ${JSON.stringify(orphanPidPath)};`,
             // File existence signals readiness; never expose an empty PID as a dead updater.
             'fs.writeFileSync(pidPath + ".tmp", String(process.pid));',
             'fs.renameSync(pidPath + ".tmp", pidPath);',
+            'sendReceipt(pidPath, "started");',
             `const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(releaseOrphanPath)})){clearInterval(timer);process.exit(0)}},10);`,
+            "})();",
           ].join("\n"),
         ],
       });
@@ -855,20 +869,17 @@ childProcess.spawnSync = function(command, args, options) {
       first.stdout.on("data", (chunk) => (firstStdout += chunk));
       let orphanPid = 0;
       try {
-        await vi
-          .waitFor(
-            async () => {
-              expect(firstStdout).toContain("OPENCLAW_UPDATE_HANDOFF_READY");
-              await expect(pathExists(orphanPidPath)).resolves.toBe(true);
-            },
-            { interval: 10, timeout: 5_000 },
-          )
-          .catch(async (error: unknown) => {
-            const log = await fs
-              .readFile(path.join(tmpDir, "orphan-first.log"), "utf8")
-              .catch(String);
-            throw new Error(`Surviving updater did not become ready: ${log}`, { cause: error });
-          });
+        await withinTest(
+          receipts.startedBeforeSettlement(orphanPidPath, firstClosed),
+          signal,
+        ).catch(async (error: unknown) => {
+          const log = await fs
+            .readFile(path.join(tmpDir, "orphan-first.log"), "utf8")
+            .catch(String);
+          throw new Error(`Surviving updater did not become ready: ${log}`, { cause: error });
+        });
+        expect(firstStdout).toContain("OPENCLAW_UPDATE_HANDOFF_READY");
+        await expect(pathExists(orphanPidPath)).resolves.toBe(true);
         const orphanPidContents = await fs.readFile(orphanPidPath, "utf8");
         orphanPid = Number(orphanPidContents);
         expect(
@@ -891,10 +902,8 @@ childProcess.spawnSync = function(command, args, options) {
         await expect(pathExists(secondStartedPath)).resolves.toBe(false);
 
         await fs.writeFile(releaseOrphanPath, "release");
-        await vi.waitFor(() => expect(isPidAlive(orphanPid)).toBe(false), {
-          interval: 20,
-          timeout: 5_000,
-        });
+        await waitForOrphanExit(orphanPid, signal);
+        expect(isPidAlive(orphanPid)).toBe(false);
 
         const third = await runHelper({
           execFile,
@@ -934,111 +943,8 @@ childProcess.spawnSync = function(command, args, options) {
         await fs.writeFile(releaseOrphanPath, "release").catch(() => undefined);
         if (orphanPid > 0 && isPidAlive(orphanPid)) {
           process.kill(orphanPid, "SIGKILL");
-          await vi.waitFor(() => expect(isPidAlive(orphanPid)).toBe(false), {
-            interval: 20,
-            timeout: 5_000,
-          });
-        }
-      }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "serializes detached helpers across Gateway process generations",
-    async () => {
-      const { execFile, spawn } =
-        await vi.importActual<typeof import("node:child_process")>("node:child_process");
-      const { tmpDir, helperScriptPath, baseParams } = await prepareConcurrentHandoffHelper();
-      const firstStartedPath = path.join(tmpDir, "first-started");
-      const secondStartedPath = path.join(tmpDir, "second-started");
-      const thirdStartedPath = path.join(tmpDir, "third-started");
-      const releaseFirstPath = path.join(tmpDir, "release-first");
-      const firstParamsPath = await writeConcurrentHandoffParams({
-        tmpDir,
-        baseParams,
-        name: "first",
-        owner: "handoff-first",
-        commandArgv: [
-          process.execPath,
-          "-e",
-          `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(firstStartedPath)},"started");const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(releaseFirstPath)})){clearInterval(timer);process.stdout.write(JSON.stringify({status:"ok",root:${JSON.stringify(baseParams.updateLeaseKey)}}));process.exit(0)}},10);`,
-        ],
-      });
-      const secondParamsPath = await writeConcurrentHandoffParams({
-        tmpDir,
-        baseParams,
-        name: "second",
-        owner: "handoff-second",
-        commandArgv: [
-          process.execPath,
-          "-e",
-          `require("node:fs").writeFileSync(${JSON.stringify(secondStartedPath)},"started")`,
-        ],
-      });
-      const thirdParamsPath = await writeConcurrentHandoffParams({
-        tmpDir,
-        baseParams,
-        name: "third",
-        owner: "handoff-third",
-        commandArgv: [
-          process.execPath,
-          "-e",
-          `require("node:fs").writeFileSync(${JSON.stringify(thirdStartedPath)},"started");process.stdout.write(JSON.stringify({status:"ok",root:${JSON.stringify(baseParams.updateLeaseKey)}}))`,
-        ],
-      });
-
-      const first = spawn(process.execPath, [helperScriptPath, firstParamsPath], {
-        cwd: tmpDir,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      driveHandoffProtocol(first, firstParamsPath);
-      let firstStdout = "";
-      let firstStderr = "";
-      first.stdout.on("data", (chunk) => (firstStdout += chunk));
-      first.stderr.on("data", (chunk) => (firstStderr += chunk));
-      const firstExit = new Promise<number | null>((resolve) => {
-        first.once("close", resolve);
-      });
-
-      try {
-        await vi.waitFor(
-          async () => {
-            expect(firstStdout).toContain("OPENCLAW_UPDATE_HANDOFF_READY");
-            await expect(pathExists(firstStartedPath)).resolves.toBe(true);
-          },
-          { interval: 10, timeout: 5_000 },
-        );
-
-        const second = await runHelper({
-          execFile,
-          helperScriptPath,
-          paramsPath: secondParamsPath,
-          cwd: tmpDir,
-        });
-        expect(second, second.stderr).toMatchObject({
-          code: 0,
-          stdout: expect.stringContaining("HANDOFF_BUSY handoff-first"),
-        });
-        await expect(pathExists(secondStartedPath)).resolves.toBe(false);
-
-        await fs.writeFile(releaseFirstPath, "release");
-        await expect(firstExit).resolves.toBe(0);
-
-        const third = await runHelper({
-          execFile,
-          helperScriptPath,
-          paramsPath: thirdParamsPath,
-          cwd: tmpDir,
-        });
-        expect(third, third.stderr).toMatchObject({
-          code: 0,
-          stdout: expect.stringContaining("OPENCLAW_UPDATE_HANDOFF_READY"),
-        });
-        await expect(pathExists(thirdStartedPath)).resolves.toBe(true);
-      } finally {
-        await fs.writeFile(releaseFirstPath, "release").catch(() => undefined);
-        if (first.exitCode === null) {
-          first.kill("SIGKILL");
+          await waitForOrphanExit(orphanPid, signal);
+          expect(isPidAlive(orphanPid)).toBe(false);
         }
       }
     },

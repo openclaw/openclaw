@@ -8,12 +8,11 @@ import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lif
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import {
   drainMatrixReconnect,
   matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
-import { SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce, loadPendingDelivery } from "./delivery-queue-storage.js";
 import { createRecoveryLog } from "./delivery-queue.test-helpers.js";
@@ -104,7 +103,7 @@ describe("generation-bound result delivery", () => {
           expect(send).not.toHaveBeenCalled();
           expect(
             getDeliveryQueueEntryStatus(
-              SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME,
+              "outbound-session-generation-v1",
               "sessions-send:held-result",
             ),
           ).toBe("failed");
@@ -126,7 +125,7 @@ describe("generation-bound result delivery", () => {
       const { generation, update } = fixture();
       const entered = createDeferred();
       const released = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("reset", {
         scope: generation.storePath,
         identities: [generation.sessionKey, generation.sessionId],
         prepare: async () => {
@@ -241,10 +240,7 @@ describe("generation-bound result delivery", () => {
       await replay();
       expect(send).toHaveBeenCalledTimes(2);
       expect(
-        getDeliveryQueueEntryStatus(
-          SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME,
-          "sessions-send:revoked",
-        ),
+        getDeliveryQueueEntryStatus("outbound-session-generation-v1", "sessions-send:revoked"),
       ).toBe("failed");
     });
   });

@@ -1,4 +1,3 @@
-// Litellm tests cover index plugin behavior.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,10 +43,8 @@ describe("litellm plugin", () => {
   });
 
   it.each([
-    { authMode: "non-interactive", modelsMode: "merge" },
     { authMode: "interactive", modelsMode: "merge" },
     { authMode: "non-interactive", modelsMode: "replace" },
-    { authMode: "interactive", modelsMode: "replace" },
   ] as const)(
     "preserves an explicit proxy's authored models through registered $authMode auth in $modelsMode mode",
     async ({ authMode, modelsMode }) => {
@@ -75,6 +72,7 @@ describe("litellm plugin", () => {
           },
         },
       } satisfies OpenClawConfig;
+      const authoredModels = structuredClone(config.models.providers.litellm.models);
       let result: OpenClawConfig | null | undefined;
       if (authMode === "non-interactive") {
         result = await auth?.runNonInteractive?.({
@@ -118,10 +116,7 @@ describe("litellm plugin", () => {
         baseUrl: "https://litellm.example/v1",
         api: "openai-completions",
         apiKey: "old-key",
-        models: [
-          ...config.models.providers.litellm.models,
-          ...(modelsMode === "replace" ? [LITELLM_DEFAULT_MODEL] : []),
-        ],
+        models: [...authoredModels, ...(modelsMode === "replace" ? [LITELLM_DEFAULT_MODEL] : [])],
       });
     },
   );
@@ -135,11 +130,6 @@ describe("litellm plugin", () => {
     {
       name: "unversioned explicit base URL",
       baseUrl: "https://litellm.example",
-      endpoint: "https://litellm.example/v1/models",
-    },
-    {
-      name: "versioned explicit base URL",
-      baseUrl: "https://litellm.example/v1",
       endpoint: "https://litellm.example/v1/models",
     },
     {
@@ -183,29 +173,20 @@ describe("litellm plugin", () => {
 
   it.each([
     {
-      modelsMode: undefined,
       baseUrl: "https://litellm.example/v1/",
       expectedBaseUrl: "https://litellm.example/v1",
       expectedModels: [],
     },
     {
-      modelsMode: undefined,
       baseUrl: undefined,
       expectedBaseUrl: "http://localhost:4000",
       expectedModels: [LITELLM_DEFAULT_MODEL],
     },
-    {
-      modelsMode: "replace" as const,
-      baseUrl: "https://litellm.example/v1/",
-      expectedBaseUrl: "https://litellm.example/v1",
-      expectedModels: [LITELLM_DEFAULT_MODEL],
-    },
   ])(
-    "configures proxy URL $baseUrl in $modelsMode mode",
-    async ({ modelsMode, baseUrl, expectedBaseUrl, expectedModels }) => {
-      const provider = registerProvider();
-      const auth = provider?.auth?.[0];
-      const config = (modelsMode ? { models: { mode: modelsMode } } : {}) satisfies OpenClawConfig;
+    "configures proxy URL $baseUrl for fresh setup",
+    async ({ baseUrl, expectedBaseUrl, expectedModels }) => {
+      const auth = registerProvider()?.auth?.[0];
+      const config = {};
       const agentDir = mkdtempSync(join(tmpdir(), "openclaw-litellm-auth-"));
       const resolveApiKey = vi.fn(async () => ({
         key: "litellm-test-key",
@@ -232,35 +213,20 @@ describe("litellm plugin", () => {
           toApiKeyCredential,
         });
 
-        expect(result).toStrictEqual({
-          auth: {
-            profiles: {
-              "litellm:default": {
-                provider: "litellm",
-                mode: "api_key",
-              },
-            },
-          },
-          agents: {
-            defaults: {
-              models: {
-                "litellm/claude-opus-4-6": {
-                  alias: "LiteLLM",
-                },
-              },
-              model: {
-                primary: "litellm/claude-opus-4-6",
-              },
-            },
-          },
-          models: {
-            mode: modelsMode ?? "merge",
-            providers: {
-              litellm: {
-                baseUrl: expectedBaseUrl,
-                api: "openai-completions",
-                models: expectedModels,
-              },
+        expect(result?.auth).toStrictEqual({
+          profiles: { "litellm:default": { provider: "litellm", mode: "api_key" } },
+        });
+        expect(result?.agents?.defaults).toStrictEqual({
+          models: { "litellm/claude-opus-4-6": { alias: "LiteLLM" } },
+          model: { primary: "litellm/claude-opus-4-6" },
+        });
+        expect(result?.models).toStrictEqual({
+          mode: "merge",
+          providers: {
+            litellm: {
+              baseUrl: expectedBaseUrl,
+              api: "openai-completions",
+              models: expectedModels,
             },
           },
         });

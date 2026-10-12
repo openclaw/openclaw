@@ -2,37 +2,46 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import {
   deleteClawMcpServerRef,
   installClawMcpServers,
   planClawMcpServerRemoval,
   readClawMcpServerRefs,
+  upsertClawMcpServerRef,
 } from "./mcp.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseForTest());
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  });
+});
+
+function configuredServers() {
+  return {
+    docs: {
+      command: "uvx",
+      args: ["docs-mcp"],
+      env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
+    },
+    linear: {
+      url: "https://mcp.linear.app/mcp",
+      transport: "streamable-http",
+      auth: "oauth",
+    },
+  };
+}
 
 async function fixture(agentId = "worker", root?: string) {
   const packageRoot = root ?? tempDirs.make("openclaw-claw-mcp-");
   const parsed = parseClawManifest({
     schemaVersion: 1,
     agent: { id: agentId },
-    mcpServers: {
-      docs: {
-        command: "uvx",
-        args: ["docs-mcp"],
-        env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
-      },
-      linear: {
-        url: "https://mcp.linear.app/mcp",
-        transport: "streamable-http",
-        auth: "oauth",
-      },
-    },
+    mcpServers: configuredServers(),
   });
   if (!parsed.ok) {
     throw new Error(JSON.stringify(parsed.diagnostics));
@@ -56,7 +65,7 @@ async function fixture(agentId = "worker", root?: string) {
 }
 
 function listedMcpServers(mcpServers: Record<string, Record<string, unknown>> = {}) {
-  return { ok: true as const, path: "config", config: {}, mcpServers };
+  return { ok: true as const, path: "config", config: {}, mcpServers, runtimeConfig: {} };
 }
 
 describe("installClawMcpServers", () => {
@@ -130,26 +139,33 @@ describe("installClawMcpServers", () => {
     });
   });
 
+  it("clears a pending error from both the returned and persisted completed refs", async () => {
+    const current = await fixture();
+    const options = {
+      env: current.env,
+      listMcpServers: vi.fn().mockResolvedValue(listedMcpServers(configuredServers())),
+      nowMs: 42,
+    };
+    const refs = await installClawMcpServers(current.plan, options);
+    upsertClawMcpServerRef(
+      { ...refs[0]!, status: "pending", error: "Configuration response was lost." },
+      options,
+    );
+
+    const completed = await installClawMcpServers(current.plan, { ...options, nowMs: 43 });
+
+    expect(completed[0]).not.toHaveProperty("error");
+    expect(completed).toEqual(readClawMcpServerRefs(current.plan.agent.finalId, options));
+    expect(completed[0]?.status).toBe("complete");
+  });
+
   it("reuses an exact pre-existing server as a referenced resource", async () => {
     const current = await fixture();
     const setMcpServer = vi.fn();
     const refs = await installClawMcpServers(current.plan, {
       env: current.env,
       setMcpServer,
-      listMcpServers: vi.fn().mockResolvedValue(
-        listedMcpServers({
-          docs: {
-            command: "uvx",
-            args: ["docs-mcp"],
-            env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
-          },
-          linear: {
-            url: "https://mcp.linear.app/mcp",
-            transport: "streamable-http",
-            auth: "oauth",
-          },
-        }),
-      ),
+      listMcpServers: vi.fn().mockResolvedValue(listedMcpServers(configuredServers())),
     });
 
     expect(setMcpServer).not.toHaveBeenCalled();
@@ -184,20 +200,7 @@ describe("installClawMcpServers", () => {
     const refs = await installClawMcpServers(second.plan, {
       env: second.env,
       setMcpServer,
-      listMcpServers: vi.fn().mockResolvedValue(
-        listedMcpServers({
-          docs: {
-            command: "uvx",
-            args: ["docs-mcp"],
-            env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
-          },
-          linear: {
-            url: "https://mcp.linear.app/mcp",
-            transport: "streamable-http",
-            auth: "oauth",
-          },
-        }),
-      ),
+      listMcpServers: vi.fn().mockResolvedValue(listedMcpServers(configuredServers())),
     });
 
     expect(setMcpServer).not.toHaveBeenCalled();
@@ -297,20 +300,7 @@ describe("installClawMcpServers", () => {
     const [ref] = await installClawMcpServers(current.plan, {
       env: current.env,
       setMcpServer: vi.fn(),
-      listMcpServers: vi.fn().mockResolvedValue(
-        listedMcpServers({
-          docs: {
-            command: "uvx",
-            args: ["docs-mcp"],
-            env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
-          },
-          linear: {
-            url: "https://mcp.linear.app/mcp",
-            transport: "streamable-http",
-            auth: "oauth",
-          },
-        }),
-      ),
+      listMcpServers: vi.fn().mockResolvedValue(listedMcpServers(configuredServers())),
     });
     const selector = `mcp:${ref!.name}`;
 
@@ -332,20 +322,6 @@ describe("installClawMcpServers", () => {
     ).toMatchObject({ action: "remove", blocked: false });
   });
 
-  it("leaves ownership pending when a config write throws", async () => {
-    const current = await fixture();
-    await expect(
-      installClawMcpServers(current.plan, {
-        env: current.env,
-        setMcpServer: vi.fn().mockRejectedValue(new Error("write result unknown")),
-        listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
-      }),
-    ).rejects.toMatchObject({
-      code: "mcp_install_uncertain",
-      mcpServers: [{ name: "docs", status: "pending" }],
-    });
-  });
-
   it("retains a managed server after an ordinary MCP owner adopts it", async () => {
     const current = await fixture();
     await installClawMcpServers(current.plan, {
@@ -354,8 +330,12 @@ describe("installClawMcpServers", () => {
       listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
     });
 
-    expect(markClawMcpServerIndependentlyOwned("docs", { env: current.env, nowMs: 50 })).toBe(1);
-    expect(markClawMcpServerIndependentlyOwned("docs", { env: current.env, nowMs: 60 })).toBe(0);
+    expect(await markClawMcpServerIndependentlyOwned("docs", { env: current.env, nowMs: 50 })).toBe(
+      1,
+    );
+    expect(await markClawMcpServerIndependentlyOwned("docs", { env: current.env, nowMs: 60 })).toBe(
+      0,
+    );
     const refs = readClawMcpServerRefs("worker", { env: current.env });
     expect(refs).toMatchObject([
       { name: "docs", independentOwner: true, updatedAtMs: 50 },
@@ -377,7 +357,10 @@ describe("installClawMcpServers", () => {
         setMcpServer,
         listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
       }),
-    ).rejects.toMatchObject({ code: "mcp_install_uncertain" });
+    ).rejects.toMatchObject({
+      code: "mcp_install_uncertain",
+      mcpServers: [{ name: "docs", status: "pending" }],
+    });
 
     const refs = await installClawMcpServers(current.plan, {
       env: current.env,
@@ -452,18 +435,7 @@ describe("installClawMcpServers", () => {
 
   it("does not recreate a removed pre-existing server on retry", async () => {
     const current = await fixture();
-    const configured = {
-      docs: {
-        command: "uvx",
-        args: ["docs-mcp"],
-        env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
-      },
-      linear: {
-        url: "https://mcp.linear.app/mcp",
-        transport: "streamable-http",
-        auth: "oauth",
-      },
-    };
+    const configured = configuredServers();
     await installClawMcpServers(current.plan, {
       env: current.env,
       setMcpServer: vi.fn(),
@@ -489,18 +461,7 @@ describe("installClawMcpServers", () => {
       listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
     });
     const second = await fixture("analyst", first.root);
-    const configured = {
-      docs: {
-        command: "uvx",
-        args: ["docs-mcp"],
-        env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
-      },
-      linear: {
-        url: "https://mcp.linear.app/mcp",
-        transport: "streamable-http",
-        auth: "oauth",
-      },
-    };
+    const configured = configuredServers();
     await installClawMcpServers(second.plan, {
       env: second.env,
       setMcpServer: vi.fn(),

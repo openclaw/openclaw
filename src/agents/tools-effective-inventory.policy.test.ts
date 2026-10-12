@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -10,10 +10,31 @@ import { resolveConversationCapabilityProfile } from "./conversation-capability-
 import { resolveConfiguredToolAccess } from "./tool-access-diagnostics.js";
 import { resolveEffectiveToolInventory } from "./tools-effective-inventory.js";
 
+// mock-isolation: Policy fixtures use synthetic agents and mocked tools without auth database admission.
+vi.mock("./auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
+}));
+
 function messagingAgentConfig(tools: OpenClawConfig["tools"] = {}): OpenClawConfig {
   return {
     tools: { profile: "full", ...tools },
     agents: { entries: { assistant: { tools: { profile: "messaging" } } } },
+  };
+}
+
+function excludedByMessagingProfile(id: string, toolsPath = "agents.entries.assistant.tools") {
+  return {
+    id,
+    status: "excluded",
+    reasons: [
+      {
+        kind: "profile",
+        label: "messaging profile",
+        source: `${toolsPath}.profile`,
+        profile: "messaging",
+      },
+    ],
+    alsoAllowPath: `${toolsPath}.alsoAllow`,
   };
 }
 
@@ -22,72 +43,36 @@ describe("tool access diagnostics", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("explains a local profile override without claiming live tool availability", () => {
+  it("explains local exclusion and repair for a normalized explicit agent key", () => {
+    const agents: NonNullable<OpenClawConfig["agents"]> = {
+      ownership: "explicit",
+      entries: { other: {}, " Assistant ": { tools: { profile: "messaging" } } },
+    };
+    const toolsPath = 'agents.entries[" Assistant "].tools';
     const result = resolveConfiguredToolAccess({
-      config: messagingAgentConfig(),
+      config: { tools: { profile: "full" }, agents },
       agentId: "assistant",
       toolNames: ["exec", "process", "session_status"],
     });
-
     expect(result).toEqual({
       checked: "local-config",
       profiles: [
         { profile: "full", source: "tools.profile", active: false },
-        { profile: "messaging", source: "agents.entries.assistant.tools.profile", active: true },
+        { profile: "messaging", source: `${toolsPath}.profile`, active: true },
       ],
       tools: [
-        ...["exec", "process"].map((id) => ({
-          id,
-          status: "excluded",
-          reasons: [
-            {
-              kind: "profile",
-              label: "messaging profile",
-              source: "agents.entries.assistant.tools.profile",
-              profile: "messaging",
-            },
-          ],
-          alsoAllowPath: "agents.entries.assistant.tools.alsoAllow",
-        })),
+        ...["exec", "process"].map((id) => excludedByMessagingProfile(id, toolsPath)),
         { id: "session_status", status: "allowed", reasons: [] },
       ],
     });
   });
 
-  it.each<{ agents: NonNullable<OpenClawConfig["agents"]>; toolsPath: string }>([
-    {
-      agents: {
-        list: [{ id: "other" }, { id: " Assistant ", tools: { profile: "messaging" } }],
-      },
-      toolsPath: "agents.list[1].tools",
-    },
-    {
-      agents: { entries: { " Assistant ": { tools: { profile: "messaging" } } } },
-      toolsPath: 'agents.entries[" Assistant "].tools',
-    },
-  ])(
-    "preserves the authored $toolsPath location in profile repair guidance",
-    ({ agents, toolsPath }) => {
-      const result = resolveConfiguredToolAccess({
-        config: { tools: { profile: "full" }, agents },
-        agentId: "assistant",
-        toolNames: ["exec"],
-      });
-
-      expect(result.profiles).toContainEqual({
-        profile: "messaging",
-        source: `${toolsPath}.profile`,
-        active: true,
-      });
-      expect(result.tools[0]).toMatchObject({
-        status: "excluded",
-        reasons: [{ source: `${toolsPath}.profile` }],
-        alsoAllowPath: `${toolsPath}.alsoAllow`,
-      });
-    },
-  );
-
   it.each<{ tools: ToolsConfig; source: string; kind: "deny" | "allowlist" | "profile" }>([
+    {
+      tools: { alsoAllow: ["browser"] },
+      source: "agents.entries.assistant.tools.profile",
+      kind: "profile",
+    },
     { tools: { deny: ["ex*"] }, source: "tools.deny", kind: "deny" },
     { tools: { allow: ["process"] }, source: "tools.allow", kind: "allowlist" },
     {
@@ -100,35 +85,22 @@ describe("tool access diagnostics", () => {
       source: 'tools.byProvider["openai"].profile',
       kind: "profile",
     },
-  ])(
-    "reports a later $source blocker and omits an ineffective profile repair",
-    ({ tools, source, kind }) => {
-      const result = resolveConfiguredToolAccess({
-        config: messagingAgentConfig(tools),
-        agentId: "assistant",
-        modelProvider: "openai",
-        modelId: "test-model",
-      });
-      const exec = result.tools.find((tool) => tool.id === "exec");
-
-      expect(exec?.status).toBe("excluded");
-      expect(exec?.reasons).toHaveLength(2);
-      expect(exec?.reasons[1]).toMatchObject({ kind, source });
-      expect(exec).not.toHaveProperty("alsoAllowPath");
-    },
-  );
-
-  it("does not suggest replacing inherited alsoAllow grants with an agent list", () => {
+  ])("omits ineffective or destructive profile repair for $source", ({ tools, source, kind }) => {
     const result = resolveConfiguredToolAccess({
-      config: messagingAgentConfig({ alsoAllow: ["browser"] }),
+      config: messagingAgentConfig(tools),
       agentId: "assistant",
+      modelProvider: "openai",
+      modelId: "test-model",
     });
+    const exec = result.tools.find((tool) => tool.id === "exec");
 
-    expect(result.tools.find((tool) => tool.id === "exec")).toMatchObject({ status: "excluded" });
-    expect(result.tools.find((tool) => tool.id === "exec")).not.toHaveProperty("alsoAllowPath");
+    expect(exec?.status).toBe("excluded");
+    expect(exec?.reasons).toHaveLength(tools.alsoAllow ? 1 : 2);
+    expect(exec?.reasons.at(-1)).toMatchObject({ kind, source });
+    expect(exec).not.toHaveProperty("alsoAllowPath");
   });
 
-  it("observes actual inventory filtering and explicit profile repair", () => {
+  it("observes actual inventory filtering and explicit profile repair", async () => {
     const inventory = (cfg: OpenClawConfig) =>
       resolveEffectiveToolInventory({
         cfg,
@@ -139,7 +111,7 @@ describe("tool access diagnostics", () => {
         modelApi: null,
       });
 
-    const before = inventory(messagingAgentConfig());
+    const before = await inventory(messagingAgentConfig());
     expect(before.groups.flatMap((group) => group.tools.map((tool) => tool.id))).not.toContain(
       "exec",
     );
@@ -149,21 +121,11 @@ describe("tool access diagnostics", () => {
       source: "tools.profile",
       active: false,
     });
-    expect(before.toolAccess?.tools.find((tool) => tool.id === "exec")).toEqual({
-      id: "exec",
-      status: "excluded",
-      reasons: [
-        {
-          kind: "profile",
-          label: "messaging profile",
-          source: "agents.entries.assistant.tools.profile",
-          profile: "messaging",
-        },
-      ],
-      alsoAllowPath: "agents.entries.assistant.tools.alsoAllow",
-    });
+    expect(before.toolAccess?.tools.find((tool) => tool.id === "exec")).toEqual(
+      excludedByMessagingProfile("exec"),
+    );
 
-    const after = inventory({
+    const after = await inventory({
       tools: { profile: "full" },
       agents: {
         entries: {
@@ -181,40 +143,49 @@ describe("tool access diagnostics", () => {
     });
   });
 
-  it("preserves the prepared session ceiling when explaining a profile exclusion", () => {
-    const cfg = messagingAgentConfig();
-    const sessionKey = "agent:assistant:subagent:diagnostics";
-    const conversationCapabilityProfile = resolveConversationCapabilityProfile({
-      config: cfg,
-      agentId: "assistant",
-      sessionKey,
-      workspaceDir: "/tmp/tool-access-workspace",
-      preparedSessionEntry: {
+  it.each([false, true])(
+    "uses prepared inventory policy and session ceiling=%s",
+    async (ceiling) => {
+      const cfg = messagingAgentConfig();
+      const sessionKey = ceiling ? "agent:assistant:subagent:diagnostics" : "agent:assistant:main";
+      const conversationCapabilityProfile = resolveConversationCapabilityProfile({
+        config: cfg,
+        agentId: "assistant",
         sessionKey,
-        entry: {
-          sessionId: "diagnostics-session",
-          spawnedBy: "agent:assistant:main",
-          spawnDepth: 1,
-          inheritedToolPolicyVersion: 1,
-          inheritedToolDeny: ["exec"],
-        },
-      },
-    });
-    const result = resolveEffectiveToolInventory({
-      cfg,
-      agentId: "assistant",
-      sessionKey,
-      workspaceDir: "/tmp/tool-access-workspace",
-      agentDir: "/tmp/tool-access-agent",
-      modelApi: null,
-      conversationCapabilityProfile,
-    });
-    const exec = result.toolAccess?.tools.find((tool) => tool.id === "exec");
-
-    expect(exec?.reasons.map((reason) => reason.kind)).toEqual(["profile", "session"]);
-    expect(exec).not.toHaveProperty("alsoAllowPath");
-    expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).not.toContain(
-      "exec",
-    );
-  });
+        ...(ceiling
+          ? {
+              workspaceDir: "/tmp/tool-access-workspace",
+              preparedSessionEntry: {
+                sessionKey,
+                entry: {
+                  sessionId: "diagnostics-session",
+                  spawnedBy: "agent:assistant:main",
+                  spawnDepth: 1,
+                  inheritedToolPolicyVersion: 1,
+                  inheritedToolDeny: ["exec"],
+                },
+              },
+            }
+          : {}),
+      });
+      const result = await resolveEffectiveToolInventory({
+        cfg: ceiling ? cfg : { tools: { profile: "full" } },
+        agentId: "assistant",
+        sessionKey,
+        workspaceDir: "/tmp/tool-access-workspace",
+        agentDir: "/tmp/tool-access-agent",
+        modelApi: null,
+        conversationCapabilityProfile,
+      });
+      expect(result.profile).toBe("messaging");
+      expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).not.toContain(
+        "exec",
+      );
+      if (ceiling) {
+        const exec = result.toolAccess?.tools.find((tool) => tool.id === "exec");
+        expect(exec?.reasons.map((reason) => reason.kind)).toEqual(["profile", "session"]);
+        expect(exec).not.toHaveProperty("alsoAllowPath");
+      }
+    },
+  );
 });

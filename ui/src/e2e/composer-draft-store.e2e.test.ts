@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   installMockGateway,
   startControlUiE2eServer,
@@ -96,7 +98,7 @@ suite.define(() => {
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await page.getByRole("button", { name: "Open split view", exact: true }).click();
+        await selectChatLayoutAction(page, "Open split view");
         const cells = page.locator(".chat-split-view__cell");
         const left = cells.nth(0).getByRole("textbox", { name: "Chat composer" });
         const right = cells.nth(1).getByRole("textbox", { name: "Chat composer" });
@@ -640,16 +642,32 @@ suite.define(() => {
         const outboxHandle = await page.evaluateHandle<
           typeof import("../lib/chat/outbox-store.ts")
         >('import("/src/lib/chat/outbox-store.ts")');
+        await expect
+          .poll(() =>
+            activePane.evaluate((element) => {
+              const { state } = element as HTMLElement & { state: ChatPageHost };
+              return state.selectedChatSessionIncognito && state.client?.recoveryScopeReady;
+            }),
+          )
+          .toBe(true);
         // A submitted, held message has a separate reload contract from unsent input.
-        const admitted = await page.evaluate(
+        const admission = await page.evaluate(
           ({ persistence, outbox, sessionKey }) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: { gateway: { connection: { gatewayUrl: string } } } };
-            };
-            const state = {
-              settings: { gatewayUrl: app.runtime.context.gateway.connection.gatewayUrl },
-            };
-            return persistence.admitStoredChatComposerQueueItem(
+            const pane = document.querySelector<HTMLElement & { state: ChatPageHost }>(
+              'openclaw-chat-pane[aria-hidden="false"]',
+            );
+            const state = pane?.state;
+            if (
+              !state ||
+              state.sessionKey !== sessionKey ||
+              !state.selectedChatSessionIncognito ||
+              !state.client?.recoveryScopeReady ||
+              !state.client.recoveryScope
+            ) {
+              throw new Error("Expected the authenticated Incognito composer owner");
+            }
+            const target = outbox.storageTargetForComposer(state);
+            const admitted = persistence.admitStoredChatComposerQueueItem(
               state,
               outbox.captureChatOutboxAdmission(state, sessionKey),
               {
@@ -659,10 +677,15 @@ suite.define(() => {
                 sendState: "held",
               },
             );
+            return {
+              admitted,
+              storageKey: target.key,
+              storageScope: JSON.stringify([target.gatewayOwner, target.recoveryScope]),
+            };
           },
           { persistence: composerHandle, outbox: outboxHandle, sessionKey: incognito },
         );
-        expect(admitted).toBe(true);
+        expect(admission.admitted).toBe(true);
         await composer.fill("Private unsent draft — café 雪 🦞");
         await activePane.locator(".agent-chat__file-input").setInputFiles({
           name: "private-draft.txt",
@@ -712,16 +735,22 @@ suite.define(() => {
         } finally {
           await captureUiProof(suite, page, "incognito-draft-reload", "reloaded.png");
         }
-        const stored = await page.evaluate((sessionKey) => {
-          const key = Object.keys(sessionStorage).find((storageKey) =>
-            storageKey.startsWith("openclaw.control.chatComposer.v4:"),
-          );
-          return key
-            ? JSON.parse(sessionStorage.getItem(key)!).sessions[`${sessionKey}\u0000agent:main`]
-            : null;
-        }, incognito);
+        const stored = await page.evaluate(
+          ({ sessionKey, storageKey }) => {
+            const raw = sessionStorage.getItem(storageKey);
+            return raw ? JSON.parse(raw).sessions[`${sessionKey}\u0000agent:main`] : null;
+          },
+          { sessionKey: incognito, storageKey: admission.storageKey },
+        );
         expect(stored).toMatchObject({
-          queue: [{ id: "held-private", text: "Submitted private queue entry", sendState: "held" }],
+          queue: [
+            {
+              id: "held-private",
+              text: "Submitted private queue entry",
+              sendState: "held",
+              storageScope: admission.storageScope,
+            },
+          ],
         });
         expect(stored.draft).toBeUndefined();
         expect(stored.draftMentions).toBeUndefined();

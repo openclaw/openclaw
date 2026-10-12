@@ -388,66 +388,119 @@ describe("config write recovery", () => {
     }
   });
 
-  it.each([
-    { mode: "raw", edit: "revert", next: "raw" },
-    { mode: "form", edit: "revert", next: "form" },
-    { mode: "raw", edit: "newer", next: "raw" },
-    { mode: "form", edit: "newer", next: "form" },
-    { mode: "raw", edit: "revert", next: "form" },
-    { mode: "raw", edit: "newer", next: "form" },
-  ] as const)(
-    "retains a $mode $edit before a subsequent $next edit",
-    async ({ mode, edit, next }) => {
+  const recoveryCases: Array<{
+    outcome: "own" | "uncommitted" | "foreign";
+    mode: "raw" | "form";
+    edit: "revert" | "newer" | "none";
+    next?: "raw" | "form";
+    method?: "config.set" | "config.apply";
+    duringLoad?: boolean;
+  }> = [
+    { outcome: "own", mode: "raw", edit: "revert", next: "raw" },
+    { outcome: "own", mode: "form", edit: "revert", next: "form" },
+    { outcome: "own", mode: "form", edit: "newer", next: "form" },
+    { outcome: "own", mode: "raw", edit: "newer", next: "form" },
+    { outcome: "own", mode: "form", edit: "newer", next: "form", duringLoad: true },
+    { outcome: "foreign", mode: "raw", edit: "newer", method: "config.set" },
+    { outcome: "foreign", mode: "form", edit: "newer", method: "config.apply" },
+    { outcome: "own", mode: "form", edit: "none" },
+    { outcome: "uncommitted", mode: "raw", edit: "revert" },
+  ];
+
+  it.each(recoveryCases)(
+    "reconciles $outcome persistence with a $mode $edit (next: $next, pending read: $duringLoad)",
+    async ({ outcome, mode, edit, next, method, duringLoad }) => {
       vi.useFakeTimers();
-      const harness = createRecoveryHarness();
+      const harness = createRecoveryHarness(outcome, originalRaw, method);
       const { runtimeConfig, submissions } = harness;
       try {
         await harness.start();
-        const node = edit === "revert" ? "original" : "newer";
+        const node = edit === "revert" ? "original" : edit === "none" ? "submitted" : "newer";
         const pendingRaw = edit === "revert" ? originalRaw : `${rawForNode(node)}\n`;
-        if (mode === "raw") {
-          runtimeConfig.setRaw(pendingRaw);
-        } else {
-          runtimeConfig.patchForm(nodePath, node);
-        }
-        expect(runtimeConfig.state.configFormDirty).toBe(edit !== "revert");
-
-        await harness.reconnect();
-        expect(runtimeConfig.state.configFormMode).toBe(mode);
-        expect(JSON.parse(runtimeConfig.state.configRaw)).toEqual(nodeConfig(node));
-        if (mode === "raw") {
-          expect(runtimeConfig.state.configRaw).toBe(pendingRaw);
-          expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
-        } else {
-          expect(runtimeConfig.state.configAutoSaveStatus).toBe("paused");
-        }
-        expect(runtimeConfig.state.configFormDirty).toBe(true);
-        expect(runtimeConfig.state.configRawOriginal).toBe(rawForNode("submitted"));
-        expect(runtimeConfig.state.configFormOriginal).toEqual(nodeConfig("submitted"));
-        expect(runtimeConfig.state.configDraftBaseHash).toBe("own-commit");
-        expect(runtimeConfig.state.configNeedsApply).toBe(true);
-
-        // The pre-write document is now a real edit, not a clean revert to stale originals.
-        if (next === "raw") {
-          runtimeConfig.setRaw(originalRaw);
-        } else {
+        if (edit !== "none") {
           if (mode === "raw") {
-            runtimeConfig.setRaw(`${pendingRaw}\n`);
+            runtimeConfig.setRaw(pendingRaw);
+          } else {
+            runtimeConfig.patchForm(nodePath, node);
           }
-          runtimeConfig.patchForm(nodePath, "original");
+          expect(runtimeConfig.state.configFormDirty).toBe(edit !== "revert");
         }
-        expect(runtimeConfig.state.configFormDirty).toBe(true);
-        expect(runtimeConfig.state.configAutoSaveStatus).toBe(next === "form" ? "paused" : "idle");
-        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
-        expect(submissions).toHaveLength(1);
-        await expect(runtimeConfig.save()).resolves.toBe(true);
-        expect(submissions[1]).toEqual({
-          raw: next === "raw" ? originalRaw : rawForNode("original"),
-          baseHash: "own-commit",
-        });
-        expect(JSON.parse(harness.storedRaw)).toEqual(nodeConfig("original"));
-        expect(runtimeConfig.state.configFormDirty).toBe(false);
-        expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
+        await harness.reconnect(
+          duringLoad
+            ? () => {
+                expect(runtimeConfig.canSet).toBe(true);
+                expect(runtimeConfig.state.configSaving).toBe(false);
+                runtimeConfig.patchForm(nodePath, "original");
+                expect(runtimeConfig.state.configFormDirty).toBe(false);
+              }
+            : undefined,
+        );
+
+        if (outcome === "foreign") {
+          expect(runtimeConfig.state.configDraftBaseHash).toBe("before");
+          expect(runtimeConfig.state.configRawOriginal).toBe(originalRaw);
+          expect(JSON.parse(runtimeConfig.state.configRaw)).toEqual(nodeConfig("newer"));
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
+          expect(runtimeConfig.state.lastError).toContain("config changed since last load");
+          await expect(runtimeConfig.save()).resolves.toBe(false);
+          expect(harness.storedRaw).toBe(rawForNode("foreign"));
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
+        } else if (!next) {
+          expect(runtimeConfig.state.configFormDirty).toBe(false);
+          expect(runtimeConfig.state.configRaw).toBe(harness.storedRaw);
+          expect(runtimeConfig.state.configRawOriginal).toBe(harness.storedRaw);
+          expect(runtimeConfig.state.configDraftBaseHash).toBe(
+            outcome === "own" ? "own-commit" : "before",
+          );
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe(
+            outcome === "own" ? "idle" : "error",
+          );
+          if (outcome === "uncommitted") {
+            expect(runtimeConfig.state.lastError).toContain("could not be confirmed");
+          }
+        } else {
+          expect(runtimeConfig.state.configFormMode).toBe(mode);
+          expect(JSON.parse(runtimeConfig.state.configRaw)).toEqual(
+            nodeConfig(duringLoad ? "original" : node),
+          );
+          if (duringLoad) {
+            expect(runtimeConfig.state.configForm).toEqual(nodeConfig("original"));
+          }
+          if (mode === "raw") {
+            expect(runtimeConfig.state.configRaw).toBe(pendingRaw);
+          }
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe(mode === "raw" ? "idle" : "paused");
+          expect(runtimeConfig.state.configFormDirty).toBe(true);
+          expect(runtimeConfig.state.configRawOriginal).toBe(rawForNode("submitted"));
+          expect(runtimeConfig.state.configFormOriginal).toEqual(nodeConfig("submitted"));
+          expect(runtimeConfig.state.configDraftBaseHash).toBe("own-commit");
+          expect(runtimeConfig.state.configNeedsApply).toBe(true);
+
+          if (!duringLoad) {
+            if (next === "raw") {
+              runtimeConfig.setRaw(originalRaw);
+            } else {
+              if (mode === "raw") {
+                runtimeConfig.setRaw(`${pendingRaw}\n`);
+              }
+              runtimeConfig.patchForm(nodePath, "original");
+            }
+          }
+          expect(runtimeConfig.state.configFormDirty).toBe(true);
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe(
+            next === "form" ? "paused" : "idle",
+          );
+          await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+          expect(submissions).toHaveLength(1);
+          await expect(runtimeConfig.save()).resolves.toBe(true);
+          expect(submissions[1]).toEqual({
+            raw: next === "raw" ? originalRaw : rawForNode("original"),
+            baseHash: "own-commit",
+          });
+          expect(JSON.parse(harness.storedRaw)).toEqual(nodeConfig("original"));
+          expect(runtimeConfig.state.configFormDirty).toBe(false);
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
+        }
       } finally {
         harness.dispose();
       }
@@ -496,94 +549,6 @@ describe("config write recovery", () => {
       } finally {
         runtimeConfig.setWritesSuspended(true);
         runtimeConfig.dispose();
-      }
-    },
-  );
-
-  it("retains a Devices binding reverted while the recovery read is pending", async () => {
-    vi.useFakeTimers();
-    const harness = createRecoveryHarness();
-    const { runtimeConfig, submissions } = harness;
-    try {
-      await harness.start();
-      runtimeConfig.patchForm(nodePath, "newer");
-      await harness.reconnect(() => {
-        // Devices binding controls remain enabled while config.get is loading.
-        expect(runtimeConfig.canSet).toBe(true);
-        expect(runtimeConfig.state.configSaving).toBe(false);
-        runtimeConfig.patchForm(nodePath, "original");
-        expect(runtimeConfig.state.configFormDirty).toBe(false);
-      });
-      expect(runtimeConfig.state.configForm).toEqual(nodeConfig("original"));
-      expect(runtimeConfig.state.configFormDirty).toBe(true);
-      expect(runtimeConfig.state.configAutoSaveStatus).toBe("paused");
-      expect(runtimeConfig.state.configRawOriginal).toBe(rawForNode("submitted"));
-      expect(runtimeConfig.state.configDraftBaseHash).toBe("own-commit");
-      await expect(runtimeConfig.save()).resolves.toBe(true);
-      expect(submissions[1]).toEqual({ raw: rawForNode("original"), baseHash: "own-commit" });
-      expect(JSON.parse(harness.storedRaw)).toEqual(nodeConfig("original"));
-    } finally {
-      harness.dispose();
-    }
-  });
-
-  it.each([
-    { mode: "raw", method: "config.set" },
-    { mode: "form", method: "config.set" },
-    { mode: "raw", method: "config.apply" },
-    { mode: "form", method: "config.apply" },
-  ] as const)(
-    "reports a foreign write before retrying a $mode draft interrupted during $method",
-    async ({ mode, method }) => {
-      vi.useFakeTimers();
-      const harness = createRecoveryHarness("foreign", originalRaw, method);
-      const { runtimeConfig } = harness;
-      try {
-        await harness.start();
-        if (mode === "raw") {
-          runtimeConfig.setRaw(`${rawForNode("newer")}\n`);
-        } else {
-          runtimeConfig.patchForm(nodePath, "newer");
-        }
-        await harness.reconnect();
-        expect(runtimeConfig.state.configDraftBaseHash).toBe("before");
-        expect(runtimeConfig.state.configRawOriginal).toBe(originalRaw);
-        expect(JSON.parse(runtimeConfig.state.configRaw)).toEqual(nodeConfig("newer"));
-        expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
-        expect(runtimeConfig.state.lastError).toContain("config changed since last load");
-        await expect(runtimeConfig.save()).resolves.toBe(false);
-        expect(harness.storedRaw).toBe(rawForNode("foreign"));
-        expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
-      } finally {
-        harness.dispose();
-      }
-    },
-  );
-
-  it.each(["own", "uncommitted"] as const)(
-    "leaves a matching %s document clean",
-    async (outcome) => {
-      vi.useFakeTimers();
-      const harness = createRecoveryHarness(outcome);
-      const { runtimeConfig } = harness;
-      try {
-        await harness.start();
-        if (outcome === "uncommitted") {
-          runtimeConfig.setRaw(originalRaw);
-        }
-        await harness.reconnect();
-        expect(runtimeConfig.state.configFormDirty).toBe(false);
-        expect(runtimeConfig.state.configRaw).toBe(harness.storedRaw);
-        expect(runtimeConfig.state.configRawOriginal).toBe(harness.storedRaw);
-        expect(runtimeConfig.state.configDraftBaseHash).toBe(
-          outcome === "own" ? "own-commit" : "before",
-        );
-        expect(runtimeConfig.state.configAutoSaveStatus).toBe(outcome === "own" ? "idle" : "error");
-        if (outcome === "uncommitted") {
-          expect(runtimeConfig.state.lastError).toContain("could not be confirmed");
-        }
-      } finally {
-        harness.dispose();
       }
     },
   );

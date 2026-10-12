@@ -42,6 +42,16 @@ describe("Codex app-server attempt timeouts", () => {
     ).toBe(CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS);
   });
 
+  it("bounds startup by request timeouts when the turn budget is longer", () => {
+    const interactiveTurnMs = 48 * 60 * 60 * 1000;
+    expect(
+      resolveCodexStartupTimeoutMs({ timeoutMs: interactiveTurnMs, requestTimeoutMs: 60_000 }),
+    ).toBe(600_000);
+    expect(resolveCodexStartupTimeoutMs({ timeoutMs: 120_000, requestTimeoutMs: 60_000 })).toBe(
+      120_000,
+    );
+  });
+
   it("caps gateway timeout grace", () => {
     expect(resolveCodexGatewayTimeoutWithGraceMs(120_000)).toBe(130_000);
     expect(resolveCodexGatewayTimeoutWithGraceMs(120_000, 500)).toBe(120_500);

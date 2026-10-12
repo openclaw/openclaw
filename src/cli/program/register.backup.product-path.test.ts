@@ -150,7 +150,14 @@ describe("backup create CLI", () => {
       const result = await runBackupCli({ env: { ...process.env, ...state.env }, outputPath });
       expect(result.code).toBe(1);
       expect(result.stderr).not.toContain("Config invalid");
-      expect(result.stderr).toContain("Cannot read shared state for discovery");
+      expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+      expect(result.stderr).toContain("[openclaw] For help, run `openclaw doctor`.");
+      const failure = JSON.parse(result.stdout);
+      expect(failure).toMatchObject({ ok: false, error: { type: "cli_error" } });
+      expect(failure.error.message).toContain(
+        `Cannot read shared state for discovery: ${state.statePath("state/openclaw.sqlite")}.`,
+      );
+      expect(failure.error.message).toContain("file is not a database");
       await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
@@ -178,6 +185,20 @@ describe("backup create CLI", () => {
             const { syncBuiltinESMExports } = require("node:module");
             const sqlite = process.getBuiltinModule("node:sqlite");
             const originalBackup = sqlite.backup.bind(sqlite);
+            if (process.versions.bun) {
+              const workerThreads = require("node:worker_threads");
+              const OriginalWorker = workerThreads.Worker;
+              const preload = process.env.OPENCLAW_TEST_SQLITE_WORKER_PRELOAD;
+              // The CLI's nested Workers do not inherit the Vitest parent's preload spy.
+              workerThreads.Worker = class Worker extends OriginalWorker {
+                constructor(filename, options = {}) {
+                  super(filename, {
+                    ...options,
+                    execArgv: [...(options.execArgv ?? process.execArgv), "--preload", preload],
+                  });
+                }
+              };
+            }
             const markerPath = process.env.PROOF_SNAPSHOT_MARKER;
             const realNow = Date.now.bind(Date);
             // Acquisition runs in a worker; every isolate must observe the same elapsed time.

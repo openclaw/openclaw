@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { startMatrixQaFaultProxy } from "./fault-proxy.js";
 import { normalizeMatrixQaRoute } from "./recording-proxy-internals.js";
-import { startMatrixQaRecordingProxy } from "./recording-proxy.js";
+import { startMatrixQaRecordingProxy, type MatrixQaRecordingProxy } from "./recording-proxy.js";
 
 const closeCallbacks: Array<() => Promise<void>> = [];
 
@@ -145,12 +145,28 @@ async function startRecordingTarget(options?: { alwaysFailState?: boolean }) {
   return `http://127.0.0.1:${address.port}`;
 }
 
+async function startRecording(
+  scenarioId: string,
+  options?: Parameters<typeof startRecordingTarget>[0],
+) {
+  const targetBaseUrl = await startRecordingTarget(options);
+  const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
+  closeCallbacks.push(() => recording.stop());
+  recording.setScenarioId(scenarioId);
+  return recording;
+}
+
+function scenarioExpectation(recording: MatrixQaRecordingProxy, scenarioId: string) {
+  return recording.buildManifest({
+    requestedProfile: "test",
+    scenarioIds: [scenarioId],
+    substrate: { id: "tuwunel", version: "test" },
+  }).scenarios[scenarioId];
+}
+
 describe("Matrix QA recording proxy", () => {
   it("records only redacted shapes and derives scenario expectations", async () => {
-    const targetBaseUrl = await startRecordingTarget();
-    const proxy = await startMatrixQaRecordingProxy({ targetBaseUrl });
-    closeCallbacks.push(() => proxy.stop());
-    proxy.setScenarioId("matrix-recording-test");
+    const proxy = await startRecording("matrix-recording-test");
 
     const firstSync = await fetch(
       `${proxy.baseUrl}/_matrix/client/v3/sync?timeout=0&access_token=secret-query`,
@@ -403,10 +419,7 @@ describe("Matrix QA recording proxy", () => {
   });
 
   it("records in-place scenario faults without changing the canonical proxy URL", async () => {
-    const targetBaseUrl = await startRecordingTarget();
-    const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-in-place-fault-recording-test");
+    const recording = await startRecording("matrix-in-place-fault-recording-test");
     const baseUrl = recording.baseUrl;
     const handle = recording.installFaultRule({
       id: "in-place-backup-unavailable",
@@ -450,10 +463,7 @@ describe("Matrix QA recording proxy", () => {
   });
 
   it("redacts signature upload device and cross-signing key identifiers", async () => {
-    const targetBaseUrl = await startRecordingTarget();
-    const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-signatures-recording-test");
+    const recording = await startRecording("matrix-signatures-recording-test");
 
     await fetch(`${recording.baseUrl}/_matrix/client/v3/keys/signatures/upload`, {
       body: JSON.stringify({
@@ -474,30 +484,8 @@ describe("Matrix QA recording proxy", () => {
     expect(JSON.stringify(record)).not.toContain("SECRET_CROSS_SIGNING_KEY");
   });
 
-  it("reports sync continuity only when every incremental token is recognized", async () => {
-    const targetBaseUrl = await startRecordingTarget();
-    const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-sync-discontinuity-test");
-
-    await fetch(`${recording.baseUrl}/_matrix/client/v3/sync?timeout=0&since=unknown-token`);
-
-    const manifest = recording.buildManifest({
-      requestedProfile: "test",
-      scenarioIds: ["matrix-sync-discontinuity-test"],
-      substrate: { id: "tuwunel", version: "test" },
-    });
-    expect(manifest.scenarios["matrix-sync-discontinuity-test"]?.syncTokens).toMatchObject({
-      continuityObserved: false,
-      incrementalRequests: 1,
-    });
-  });
-
   it("does not learn an unknown request token from the same sync response", async () => {
-    const targetBaseUrl = await startRecordingTarget();
-    const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-echoed-sync-token-test");
+    const recording = await startRecording("matrix-echoed-sync-token-test");
 
     await fetch(`${recording.baseUrl}/_matrix/client/v3/sync?timeout=0&since=echoed-unknown`);
 
@@ -508,13 +496,16 @@ describe("Matrix QA recording proxy", () => {
     expect(recording.records().at(-1)?.request.query).toMatchObject({
       since: "sync-unknown",
     });
+    expect(
+      scenarioExpectation(recording, "matrix-echoed-sync-token-test")?.syncTokens,
+    ).toMatchObject({
+      continuityObserved: false,
+      incrementalRequests: 1,
+    });
   });
 
   it("does not conflate distinct same-shape operations as retries", async () => {
-    const targetBaseUrl = await startRecordingTarget();
-    const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-distinct-operation-test");
+    const recording = await startRecording("matrix-distinct-operation-test");
 
     await fetch(
       `${recording.baseUrl}/_matrix/client/v3/rooms/!first:matrix.test/state/m.room.name`,
@@ -533,19 +524,11 @@ describe("Matrix QA recording proxy", () => {
       },
     );
 
-    const manifest = recording.buildManifest({
-      requestedProfile: "test",
-      scenarioIds: ["matrix-distinct-operation-test"],
-      substrate: { id: "tuwunel", version: "test" },
-    });
-    expect(manifest.scenarios["matrix-distinct-operation-test"]?.retries).toEqual([]);
+    expect(scenarioExpectation(recording, "matrix-distinct-operation-test")?.retries).toEqual([]);
   });
 
   it("does not conflate identical operations from different principals", async () => {
-    const targetBaseUrl = await startRecordingTarget();
-    const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-principal-retry-test");
+    const recording = await startRecording("matrix-principal-retry-test");
     const endpoint = `${recording.baseUrl}/_matrix/client/v3/rooms/!same:matrix.test/state/m.room.name`;
 
     await fetch(endpoint, {
@@ -559,19 +542,11 @@ describe("Matrix QA recording proxy", () => {
       method: "POST",
     });
 
-    const manifest = recording.buildManifest({
-      requestedProfile: "test",
-      scenarioIds: ["matrix-principal-retry-test"],
-      substrate: { id: "tuwunel", version: "test" },
-    });
-    expect(manifest.scenarios["matrix-principal-retry-test"]?.retries).toEqual([]);
+    expect(scenarioExpectation(recording, "matrix-principal-retry-test")?.retries).toEqual([]);
   });
 
   it("attributes sync completion to the active scenario", async () => {
-    const targetBaseUrl = await startRecordingTarget();
-    const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("previous-scenario");
+    const recording = await startRecording("previous-scenario");
     const context = recording.createExchangeContext?.({
       body: Buffer.alloc(0),
       headers: {},
@@ -600,10 +575,7 @@ describe("Matrix QA recording proxy", () => {
   });
 
   it("does not share sync-token continuity across principals", async () => {
-    const targetBaseUrl = await startRecordingTarget();
-    const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-principal-sync-test");
+    const recording = await startRecording("matrix-principal-sync-test");
     const exchange = async (bearerToken: string, search: string, nextBatch: string) => {
       const request = {
         bearerToken,
@@ -633,77 +605,38 @@ describe("Matrix QA recording proxy", () => {
     });
   });
 
-  it("ends a retry chain at the first successful recovery", async () => {
-    const targetBaseUrl = await startRecordingTarget();
-    const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-retry-boundary-test");
-    const endpoint = `${recording.baseUrl}/_matrix/client/v3/rooms/!same:matrix.test/state/m.room.name`;
-    const request = () =>
-      fetch(endpoint, {
-        body: JSON.stringify({ name: "same" }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-      });
-
-    await request();
-    await request();
-    await request();
-
-    const manifest = recording.buildManifest({
-      requestedProfile: "test",
-      scenarioIds: ["matrix-retry-boundary-test"],
-      substrate: { id: "tuwunel", version: "test" },
-    });
-    expect(manifest.scenarios["matrix-retry-boundary-test"]?.retries).toEqual([
-      expect.objectContaining({ attempts: 2, statuses: [401, 200] }),
-    ]);
-  });
-
   it("records exhausted retry chains without recovery", async () => {
-    const targetBaseUrl = await startRecordingTarget({ alwaysFailState: true });
-    const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-exhausted-retry-test");
+    const recording = await startRecording("matrix-exhausted-retry-test", {
+      alwaysFailState: true,
+    });
     const endpoint = `${recording.baseUrl}/_matrix/client/v3/rooms/!exhausted:matrix.test/state/m.room.name`;
 
     await fetch(endpoint, { method: "POST" });
     await fetch(endpoint, { method: "POST" });
 
-    const manifest = recording.buildManifest({
-      requestedProfile: "test",
-      scenarioIds: ["matrix-exhausted-retry-test"],
-      substrate: { id: "tuwunel", version: "test" },
-    });
-    expect(manifest.scenarios["matrix-exhausted-retry-test"]?.retries).toEqual([
+    expect(scenarioExpectation(recording, "matrix-exhausted-retry-test")?.retries).toEqual([
       expect.objectContaining({ attempts: 2, statuses: [401, 401] }),
     ]);
   });
 
   it("does not infer retries across intervening operations", async () => {
-    const targetBaseUrl = await startRecordingTarget();
-    const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-independent-operation-test");
+    const recording = await startRecording("matrix-independent-operation-test");
     const stateEndpoint = `${recording.baseUrl}/_matrix/client/v3/rooms/!same:matrix.test/state/m.room.name`;
 
     await fetch(stateEndpoint, { method: "POST" });
     await fetch(`${recording.baseUrl}/_matrix/client/versions`);
     await fetch(stateEndpoint, { method: "POST" });
 
-    const manifest = recording.buildManifest({
-      requestedProfile: "test",
-      scenarioIds: ["matrix-independent-operation-test"],
-      substrate: { id: "tuwunel", version: "test" },
-    });
-    expect(manifest.scenarios["matrix-independent-operation-test"]?.retries).toEqual([]);
+    expect(scenarioExpectation(recording, "matrix-independent-operation-test")?.retries).toEqual(
+      [],
+    );
   });
 
-  it("records repeated retry chains for the same operation", async () => {
+  it("records repeated retry chains and ends each at the first recovery", async () => {
     let requestCount = 0;
     const server = createServer((_req, res) => {
       requestCount += 1;
-      const status = requestCount % 2 === 1 ? 503 : 200;
+      const status = requestCount <= 4 && requestCount % 2 === 1 ? 503 : 200;
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(status === 200 ? {} : { errcode: "M_UNAVAILABLE" }));
     });
@@ -732,16 +665,11 @@ describe("Matrix QA recording proxy", () => {
     closeCallbacks.push(() => recording.stop());
     recording.setScenarioId("matrix-repeated-retry-test");
     const endpoint = `${recording.baseUrl}/_matrix/client/v3/rooms/!same:matrix.test/state/m.room.name`;
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
       await fetch(endpoint, { method: "POST" });
     }
 
-    const manifest = recording.buildManifest({
-      requestedProfile: "test",
-      scenarioIds: ["matrix-repeated-retry-test"],
-      substrate: { id: "tuwunel", version: "test" },
-    });
-    expect(manifest.scenarios["matrix-repeated-retry-test"]?.retries).toEqual([
+    expect(scenarioExpectation(recording, "matrix-repeated-retry-test")?.retries).toEqual([
       expect.objectContaining({ attempts: 2, statuses: [503, 200] }),
       expect.objectContaining({ attempts: 2, statuses: [503, 200] }),
     ]);

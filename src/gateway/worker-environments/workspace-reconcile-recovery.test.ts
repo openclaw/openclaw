@@ -13,7 +13,6 @@ import {
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import {
-  applyStagedWorkerWorkspace,
   assertWorkspaceMatchesManifest,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
@@ -21,6 +20,7 @@ import {
   recoverWorkerWorkspaceReconciliation,
   type WorkerWorkspaceReconciliationJournal,
 } from "./workspace-reconcile.js";
+import { applyWorkspace, gitInit, manifestFor } from "./workspace-recovery.test-support.js";
 import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -33,86 +33,9 @@ async function temporaryDirectory(name: string): Promise<string> {
   return tempDirs.make(`openclaw-${name}-`);
 }
 
-async function gitInit(root: string): Promise<void> {
-  const result = await runCommandWithTimeout(["git", "-C", root, "init", "--quiet"], {
-    timeoutMs: 10_000,
-  });
-  expect(result.code).toBe(0);
-}
-
-async function manifestFor(root: string): Promise<WorkerWorkspaceManifest> {
-  const entries: WorkerWorkspaceManifestEntry[] = [];
-  const directories: string[] = [];
-  const walk = async (relativeDirectory: string) => {
-    for (const name of (await fs.readdir(path.join(root, relativeDirectory))).toSorted()) {
-      if (!relativeDirectory && name === ".git") {
-        continue;
-      }
-      const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
-      const absolute = path.join(root, relative);
-      const stats = await fs.lstat(absolute);
-      if (stats.isDirectory() && !stats.isSymbolicLink()) {
-        directories.push(relative);
-        await walk(relative);
-      } else if (stats.isSymbolicLink()) {
-        entries.push({
-          path: relative,
-          type: "symlink",
-          mode: 0o777,
-          target: await fs.readlink(absolute),
-        });
-      } else {
-        const content = await fs.readFile(absolute);
-        entries.push({
-          path: relative,
-          type: "file",
-          mode: (stats.mode & 0o111) === 0 ? 0o644 : 0o755,
-          size: content.length,
-          sha256: createHash("sha256").update(content).digest("hex"),
-        });
-      }
-    }
-  };
-  await walk("");
-  return { version: 1, baseCommit: null, entries, directories };
-}
-
 function encodeManifest(value: unknown) {
   const raw = JSON.stringify(value);
   return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
-}
-
-async function applyWorkspace(params: {
-  root: string;
-  stagingRoot: string;
-  base: WorkerWorkspaceManifest;
-  current: WorkerWorkspaceManifest;
-  begin?: (journal: WorkerWorkspaceReconciliationJournal) => void;
-  commit?: (manifestRef: string) => void;
-  abort?: () => void;
-}) {
-  let pending: WorkerWorkspaceReconciliationJournal | undefined;
-  return await applyStagedWorkerWorkspace({
-    ...params,
-    baseManifestRef: `sha256:${"a".repeat(64)}`,
-    currentManifestRef: `sha256:${"b".repeat(64)}`,
-    acceptance: { kind: "reconcile" },
-    journal: {
-      load: () => pending,
-      begin: (journal) => {
-        pending = journal;
-        params.begin?.(journal);
-      },
-      commit: (manifestRef) => {
-        params.commit?.(manifestRef);
-        pending = undefined;
-      },
-      abort: () => {
-        params.abort?.();
-        pending = undefined;
-      },
-    },
-  });
 }
 
 describe("worker workspace reconciliation recovery", () => {

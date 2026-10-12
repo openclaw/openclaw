@@ -5,9 +5,8 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import "./custodian-page.ts";
 import { createContext as createCustodianContext } from "./custodian-page.test-harness.ts";
-import { renderCustodianRoute } from "./route-view.ts";
+import { renderCustodianRoute } from "./custodian-page.ts";
 import { page, type CustodianRouteData } from "./route.ts";
 
 function location(search: string): RouteLocation {

@@ -1,7 +1,33 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
-import "./relative-time.ts";
+import "./relative-time.tsx";
+
+export function renderSidebarDismissButton(
+  itemLabel: string,
+  onDismiss?: () => void,
+  dismissing?: boolean,
+) {
+  if (!onDismiss) {
+    return nothing;
+  }
+  const label = t("attention.dismissItem", { item: itemLabel });
+  return html`<button
+    type="button"
+    class="sidebar-issues-panel__dismiss"
+    aria-label=${label}
+    aria-busy=${dismissing ? "true" : nothing}
+    title=${dismissing ? t("attention.mentions.dismissing") : label}
+    ?disabled=${dismissing}
+    @click=${(event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onDismiss();
+    }}
+  >
+    ${icons.x}
+  </button>`;
+}
 
 export function renderSidebarNotificationCard(props: {
   title: string;
@@ -12,12 +38,17 @@ export function renderSidebarNotificationCard(props: {
   critical?: boolean;
   dismissing?: boolean;
   onDismiss?: () => void;
+  onToggle?: (open: boolean) => void;
   body: TemplateResult | typeof nothing;
   bodyClass?: string;
 }) {
-  const dismissLabel = t("attention.dismissItem", { item: props.title });
   return html`<details
     class="sidebar-issues-panel__details ${props.severity ? `sidebar-issues-panel__details--${props.severity}` : ""}"
+    @toggle=${(event: Event) => {
+      if (event.currentTarget instanceof HTMLDetailsElement) {
+        props.onToggle?.(event.currentTarget.open);
+      }
+    }}
   >
     <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
       <span
@@ -42,25 +73,7 @@ export function renderSidebarNotificationCard(props: {
           }
         </span>
       </span>
-      ${
-        props.onDismiss
-          ? html`<button
-              type="button"
-              class="sidebar-issues-panel__dismiss"
-              aria-label=${dismissLabel}
-              aria-busy=${props.dismissing ? "true" : nothing}
-              title=${props.dismissing ? t("attention.mentions.dismissing") : dismissLabel}
-              ?disabled=${props.dismissing}
-              @click=${(event: Event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                props.onDismiss?.();
-              }}
-            >
-              ${icons.x}
-            </button>`
-          : nothing
-      }
+      ${renderSidebarDismissButton(props.title, props.onDismiss, props.dismissing)}
       <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
     </summary>
     <div class="sidebar-issues-panel__body ${props.bodyClass ?? ""}">${props.body}</div>

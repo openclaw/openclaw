@@ -1,4 +1,5 @@
 import {
+  applyMarkdownTextEdits,
   FormatCapabilityProfile,
   markdownToIR,
   renderMarkdownWithAttributedRanges,
@@ -57,35 +58,14 @@ function restoreCodeMarkers(
   if (codeRanges.length === 0) {
     return { text, ranges };
   }
-  let rendered = "";
-  let cursor = 0;
-  // The code-only renderer merges and sorts these non-overlapping ranges.
-  // Record each cumulative UTF-16 shift at the existing end-inclusive boundary.
   const edits = codeRanges.map((range) => {
     const end = range.start + range.length;
     const content = text.slice(range.start, end);
     const marker = codeDelimiter(content);
     const padding = content.startsWith("`") || content.endsWith("`") ? " " : "";
-    rendered +=
-      text.slice(cursor, range.start) + `${marker}${padding}${content}${padding}${marker}`;
-    cursor = end;
-    return { end, shift: rendered.length - end };
+    return { start: range.start, end, text: `${marker}${padding}${content}${padding}${marker}` };
   });
-  rendered += text.slice(cursor);
-  const mapOffset = (offset: number) => {
-    let low = 0;
-    let high = edits.length;
-    while (low < high) {
-      const middle = low + Math.floor((high - low) / 2);
-      const edit = edits[middle];
-      if (edit && edit.end <= offset) {
-        low = middle + 1;
-      } else {
-        high = middle;
-      }
-    }
-    return offset + (edits[low - 1]?.shift ?? 0);
-  };
+  const { text: rendered, mapOffset } = applyMarkdownTextEdits(text, edits);
   return {
     text: rendered,
     ranges: ranges.map((range) => {

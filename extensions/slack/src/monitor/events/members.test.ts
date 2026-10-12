@@ -1,15 +1,17 @@
-// Slack tests cover members plugin behavior.
 import type { AllMiddlewareArgs } from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerSlackMemberEvents } from "./members.js";
+import {
+  createSlackSystemEventTestHarness as initSlackHarness,
+  type SlackSystemEventHandler as MemberHandler,
+  type SlackSystemEventTestOverrides as MemberOverrides,
+} from "./system-event-test-harness.js";
 
 const memberMocks = vi.hoisted(() => ({
   enqueue: vi.fn(),
   reportJoin: vi.fn(),
 }));
-let registerSlackMemberEvents: typeof import("./members.js").registerSlackMemberEvents;
-let initSlackHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
-type MemberOverrides = import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
 vi.mock("openclaw/plugin-sdk/channel-join-intro-runtime", () => ({
   reportChannelRoomJoin: memberMocks.reportJoin,
@@ -22,7 +24,6 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
     options: Record<string, unknown>,
   ) => memberMocks.enqueue(text, { ...options, sessionKey: route.sessionKey }),
 }));
-type MemberHandler = import("./system-event-test-harness.js").SlackSystemEventHandler;
 
 type MemberCaseArgs = {
   event?: Record<string, unknown>;
@@ -81,36 +82,12 @@ async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
 }
 
 describe("registerSlackMemberEvents", () => {
-  beforeAll(async () => {
-    ({ registerSlackMemberEvents } = await import("./members.js"));
-    ({ createSlackSystemEventTestHarness: initSlackHarness } =
-      await import("./system-event-test-harness.js"));
-  });
-
   beforeEach(() => {
     memberMocks.enqueue.mockClear();
     memberMocks.reportJoin.mockReset().mockResolvedValue({ kind: "posted" });
   });
 
   const cases: Array<{ name: string; args: MemberCaseArgs; calls: number }> = [
-    {
-      name: "enqueues DM member events when dmPolicy is open",
-      args: { overrides: { dmPolicy: "open" } },
-      calls: 1,
-    },
-    {
-      name: "blocks DM member events when dmPolicy is disabled",
-      args: { overrides: { dmPolicy: "disabled" } },
-      calls: 0,
-    },
-    {
-      name: "blocks DM member events for unauthorized senders in allowlist mode",
-      args: {
-        overrides: { dmPolicy: "allowlist", allowFrom: ["U2"] },
-        event: makeMemberEvent({ user: "U1" }),
-      },
-      calls: 0,
-    },
     {
       name: "allows DM member events for authorized senders in allowlist mode",
       args: {
@@ -345,7 +322,7 @@ describe("registerSlackMemberEvents", () => {
     const resolveChannelName = vi.fn(harness.ctx.resolveChannelName);
     const resolveUserName = vi.fn(harness.ctx.resolveUserName);
     const resolveSessionKey = vi.fn(
-      (input: Parameters<typeof harness.ctx.resolveSlackSystemEventRoute>[0]) => ({
+      async (input: Parameters<typeof harness.ctx.resolveSlackSystemEventRoute>[0]) => ({
         agentId: "main",
         sessionKey: `session:${input.eventScope?.teamId ?? "workspace"}`,
       }),

@@ -81,6 +81,9 @@ export function createGatewayEventLog() {
     get revision() {
       return revision;
     },
+    clear() {
+      entries = [];
+    },
     resetConnection() {
       recoveryScope = null;
       return retire();
@@ -150,9 +153,7 @@ export function createGatewayMetadataObserver(
             ? resolveUiConversationIdentity({ hello }, target.sessionKey, target.agentId)
             : {}
           : undefined;
-      read = target
-        ? beginModelCatalogRead(client, scope, undefined, scope?.agentId === undefined)
-        : undefined;
+      read = target ? beginModelCatalogRead(client, scope) : undefined;
       return true;
     },
     receive(
@@ -183,7 +184,6 @@ export function createGatewayMetadataObserver(
           )
         : publication.scope;
       const accepted = publishModelCatalogResult(currentRead, scope, publication.catalog);
-      currentRead.cache.reads.delete(currentRead);
       return accepted ? { ...event, payload: { ...publication, scope } } : undefined;
     },
   };

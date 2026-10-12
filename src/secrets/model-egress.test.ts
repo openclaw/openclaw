@@ -72,44 +72,49 @@ function runOptions() {
 }
 
 describe("configured model egress", () => {
-  it("uses the provider-owned default route and seals a file-backed credential only for its host", async () => {
-    // Authored provider config can omit its default transport, even though materialized config has one.
-    Reflect.deleteProperty(config.models!.providers!.openai!, "baseUrl");
-    const result = await withConfiguredModelEgress(runOptions(), async (egress) => {
-      expect(egress).toMatchObject({
-        baseUrl: "https://api.openai.com/v1",
-        model: "gpt-5.5",
-        allowedHosts: ["api.openai.com"],
-        caBundle: publicCa,
+  it.each([
+    { configured: undefined, baseUrl: "https://api.openai.com/v1", host: "api.openai.com" },
+    {
+      configured: "https://inference.example.test/tenant/v1",
+      baseUrl: "https://inference.example.test/tenant/v1",
+      host: "inference.example.test",
+    },
+  ])(
+    "seals the credential only for the selected route $baseUrl",
+    async ({ configured, baseUrl, host }) => {
+      if (configured) {
+        config.models!.providers!.openai!.baseUrl = configured;
+      } else {
+        Reflect.deleteProperty(config.models!.providers!.openai!, "baseUrl");
+      }
+      const result = await withConfiguredModelEgress(runOptions(), async (egress) => {
+        expect(egress).toMatchObject({
+          baseUrl,
+          model: "gpt-5.5",
+          allowedHosts: [host],
+          caBundle: publicCa,
+        });
+        expect(looksLikeSecretSentinel(egress.sentinel)).toBe(true);
+        expect(resolveSecretSentinel(egress.sentinel)).toBe(credential);
+        expect(JSON.stringify(egress)).not.toContain(credential);
+        expect(proxy.registerProcess).toHaveBeenCalledWith([
+          {
+            name: "openai model API key",
+            sentinel: egress.sentinel,
+            allowedHosts: [host],
+          },
+        ]);
+        expect(revoke).not.toHaveBeenCalled();
+        return 17;
       });
-      expect(looksLikeSecretSentinel(egress.sentinel)).toBe(true);
-      expect(resolveSecretSentinel(egress.sentinel)).toBe(credential);
-      expect(JSON.stringify(egress)).not.toContain(credential);
-      expect(proxy.registerProcess).toHaveBeenCalledWith([
-        {
-          name: "openai model API key",
-          sentinel: egress.sentinel,
-          allowedHosts: ["api.openai.com"],
-        },
-      ]);
-      expect(revoke).not.toHaveBeenCalled();
-      return 17;
-    });
-    expect(result).toBe(17);
-    expect(revoke).toHaveBeenCalled();
-    expect(proxy.stop).toHaveBeenCalledOnce();
-    const options = startProxy.mock.calls[0]![0];
-    expect(options.allowedHosts).toEqual(["api.openai.com"]);
-    await expect(fs.stat(options.caDir)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("binds a configured compatible endpoint instead of the provider default", async () => {
-    config.models!.providers!.openai!.baseUrl = "https://inference.example.test/tenant/v1";
-    await withConfiguredModelEgress(runOptions(), async (egress) => {
-      expect(egress.baseUrl).toBe("https://inference.example.test/tenant/v1");
-      expect(egress.allowedHosts).toEqual(["inference.example.test"]);
-    });
-  });
+      expect(result).toBe(17);
+      expect(revoke).toHaveBeenCalled();
+      expect(proxy.stop).toHaveBeenCalledOnce();
+      const options = startProxy.mock.calls[0]![0];
+      expect(options.allowedHosts).toEqual([host]);
+      await expect(fs.stat(options.caDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it("streams progress before completion and redacts credentials split between chunks", async () => {
     const stdout: string[] = [];
@@ -149,45 +154,42 @@ describe("configured model egress", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("revokes synchronously on cancellation while the remote job is still settling", async () => {
-    const controller = new AbortController();
-    const entered = createDeferredCore();
-    const settle = createDeferredCore();
-    const running = withConfiguredModelEgress(
-      { ...runOptions(), signal: controller.signal },
-      async () => {
+  it.each(["preparing", "running"])(
+    "fences cancellation while %s, before settlement",
+    async (phase) => {
+      const controller = new AbortController();
+      const entered = createDeferredCore();
+      const settle = createDeferredCore();
+      if (phase === "preparing") {
+        startProxy.mockImplementationOnce(async () => {
+          entered.resolve();
+          await settle.promise;
+          return proxy;
+        });
+      }
+      const run = vi.fn(async () => {
         entered.resolve();
         await settle.promise;
-      },
-    );
-    await entered.promise;
-    controller.abort(new Error("job cancelled"));
-    expect(revoke).toHaveBeenCalled();
-    expect(proxy.stop).not.toHaveBeenCalled();
-    settle.resolve();
-    await expect(running).rejects.toThrow("job cancelled");
-    expect(proxy.stop).toHaveBeenCalledOnce();
-  });
-
-  it("refuses late admission after cancellation during proxy preparation", async () => {
-    const controller = new AbortController();
-    const entered = createDeferredCore();
-    const prepared = createDeferredCore();
-    startProxy.mockImplementationOnce(async () => {
-      entered.resolve();
-      await prepared.promise;
-      return proxy;
-    });
-    const run = vi.fn();
-    const running = withConfiguredModelEgress({ ...runOptions(), signal: controller.signal }, run);
-    await entered.promise;
-    controller.abort(new Error("preparation cancelled"));
-    prepared.resolve();
-    await expect(running).rejects.toThrow("preparation cancelled");
-    expect(proxy.registerProcess).not.toHaveBeenCalled();
-    expect(run).not.toHaveBeenCalled();
-    expect(proxy.stop).toHaveBeenCalledOnce();
-  });
+      });
+      const running = withConfiguredModelEgress(
+        { ...runOptions(), signal: controller.signal },
+        run,
+      );
+      await entered.promise;
+      controller.abort(new Error("job cancelled"));
+      if (phase === "running") {
+        expect(revoke).toHaveBeenCalled();
+      }
+      expect(proxy.stop).not.toHaveBeenCalled();
+      settle.resolve();
+      await expect(running).rejects.toThrow("job cancelled");
+      if (phase === "preparing") {
+        expect(proxy.registerProcess).not.toHaveBeenCalled();
+        expect(run).not.toHaveBeenCalled();
+      }
+      expect(proxy.stop).toHaveBeenCalledOnce();
+    },
+  );
 
   it("revokes and removes the private CA directory when the command fails", async () => {
     await expect(

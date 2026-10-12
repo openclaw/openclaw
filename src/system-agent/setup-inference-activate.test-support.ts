@@ -94,7 +94,7 @@ export async function fixture(
     gateway: { mode: "local" },
     plugins: { slots: { memory: "none" } },
     agents: {
-      entries: { main: { default: true } },
+      entries: { main: {} },
       defaults: {
         workspace,
         ...(options.primaryModel
@@ -300,7 +300,7 @@ export async function fixture(
     activationConfirmed?: true,
     overrides: Pick<
       ActivateSetupInferenceParams,
-      "apiKey" | "signal" | "onActivationCompletion" | "modelTarget" | "modelRef"
+      "agentId" | "apiKey" | "signal" | "onActivationCompletion" | "modelTarget" | "modelRef"
     > = {},
   ) =>
     metadata.run(() =>

@@ -3,11 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../src/infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { createDeferred } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
@@ -26,6 +22,53 @@ const cases = [
   { phase: "install", signal: "SIGTERM", boundary: "running installer" } as const,
 ];
 
+it.skipIf(process.platform === "win32").for([undefined, "node", "bun"])(
+  "selects the %s runtime for the serving Agent Plugin Gateway",
+  async (runtime, { signal }) => {
+    await fixtures.run(async () => {
+      const controls = fixtures.createTempDir("agent-plugin-runtime-");
+      const home = path.join(controls, "home");
+      const tmp = path.join(controls, "tmp");
+      mkdirSync(home);
+      mkdirSync(tmp);
+      const result = await fixtures.track(
+        runNodeScript(
+          (workerArgv) => {
+            const args = workerArgv(scriptUrl);
+            return [
+              ...args.slice(0, -1),
+              "--import",
+              new URL("./fixtures/agent-plugin-gateway-cancellation.mjs", import.meta.url).href,
+              ...args.slice(-1),
+            ];
+          },
+          {
+            PATH: process.env.PATH,
+            HOME: home,
+            TMPDIR: tmp,
+            TMP: tmp,
+            TEMP: tmp,
+            OPENCLAW_VITEST_RUNTIME: runtime,
+            AGENT_PLUGIN_E2E_FIXTURE_DIR: controls,
+            AGENT_PLUGIN_E2E_WRITE_PHASE: "runtime",
+          },
+          10_000,
+          { cwd: process.cwd(), signal, requireProcessTreeExit: true, maxBuffer: 128 * 1024 },
+        ),
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status).toBeGreaterThan(0);
+      expect(result.stderr).toContain("Synthetic service launch stopped at gateway");
+      const { command, hostExecPath } = JSON.parse(
+        readFileSync(path.join(controls, "gateway-command"), "utf8"),
+      );
+      expect(command).toBe(runtime === "bun" ? "bun" : hostExecPath);
+      const fixtureRoot = readFileSync(path.join(controls, "fixture-root"), "utf8");
+      expect(existsSync(fixtureRoot)).toBe(false);
+    });
+  },
+);
+
 it.skipIf(process.platform === "win32").for(cases)(
   "respects Agent Plugin E2E cancellation across the $boundary ($signal)",
   { timeout: 30_000 },
@@ -40,15 +83,17 @@ it.skipIf(process.platform === "win32").for(cases)(
       const ready = createDeferred();
       const receivedSignal = createDeferred();
       let child: ChildProcess | undefined;
-      const scriptArgs = resolveRuntimeWorkerArgv(scriptUrl, resolveTestNodeExecPath());
       const command = fixtures.track(
         runNodeScript(
-          [
-            ...scriptArgs.slice(0, -1),
-            "--import",
-            new URL("./fixtures/agent-plugin-gateway-cancellation.mjs", import.meta.url).href,
-            ...scriptArgs.slice(-1),
-          ],
+          (workerArgv) => {
+            const scriptArgs = workerArgv(scriptUrl);
+            return [
+              ...scriptArgs.slice(0, -1),
+              "--import",
+              new URL("./fixtures/agent-plugin-gateway-cancellation.mjs", import.meta.url).href,
+              ...scriptArgs.slice(-1),
+            ];
+          },
           {
             PATH: process.env.PATH,
             HOME: home,

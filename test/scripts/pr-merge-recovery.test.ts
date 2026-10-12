@@ -6,6 +6,54 @@ import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-suppor
 const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it("recovers a REST projection refusal through one pinned GraphQL squash", () => {
+    const f = fixture();
+    f.save({
+      ...f.state(),
+      restPolicy: "supported",
+      restDispatchChange: "projection",
+    });
+
+    const refused = f.run();
+    expect(refused.status, refused.output).toBe(1);
+    const previous = f.git(["rev-parse", outcomeRef]);
+    const previousRecord = f.record();
+    expect(previousRecord).toMatchObject({
+      phase: "intent",
+      accepted: false,
+      transport: "rest",
+      head: f.head,
+    });
+    expect(f.state().mutations).toBe(0);
+    expect(f.captures()).toHaveLength(1);
+    expect(f.captures()[0]![1]).toContain(
+      "immediate squash requires the prepared open, non-draft, clean PR head",
+    );
+    f.recover();
+
+    const recovered = f.run(false, f.repo, "squash", previous);
+
+    expect(recovered.status, recovered.output).toBe(0);
+    expect(f.record()).toMatchObject({
+      phase: "complete",
+      route: "immediate",
+      head: f.head,
+      recovery: { outcome: previous, attempt: previousRecord.attempt },
+    });
+    expect(f.state().mutations).toBe(1);
+    expect(f.state().restMergePayload).toBeNull();
+    expect(f.state().graphqlMergePayloads).toEqual([
+      {
+        pullRequestId: "fixture-pr",
+        expectedHeadOid: f.head,
+        mergeMethod: "SQUASH",
+        commitBody: f.state().mergeBody,
+      },
+    ]);
+    expect(JSON.parse(f.git(["show", `${previous}:outcome.json`]))).toEqual(previousRecord);
+    f.git(["merge-base", "--is-ancestor", previous, outcomeRef]);
+  });
+
   it("reconciles uncertain dispatch without the body and accepts a body only for explicit recovery", () => {
     const f = fixture();
     const body = join(f.repo, "body.md");
@@ -31,14 +79,12 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   });
 
   it.each([
-    { replacement: false, reviewHead: "current", forwardMain: false },
-    { replacement: true, reviewHead: "current", forwardMain: false },
-    { replacement: true, reviewHead: "previous", forwardMain: false },
-    { replacement: false, reviewHead: "current", forwardMain: true },
-    { replacement: true, reviewHead: "current", forwardMain: true },
+    { replacement: true, forwardMain: false },
+    { replacement: false, forwardMain: true },
+    { replacement: true, forwardMain: true },
   ])(
-    "operator recovery preserves evidence and consumes one exact attempt (replacement=$replacement, review=$reviewHead, forward main=$forwardMain)",
-    ({ replacement, reviewHead, forwardMain }) => {
+    "operator recovery preserves retained evidence and consumes one exact attempt (replacement=$replacement, forward main=$forwardMain)",
+    ({ replacement, forwardMain }) => {
       const f = fixture();
       f.save({ ...f.state(), mode: "unapplied" });
       expect(f.run().status).toBe(1);
@@ -70,9 +116,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         );
         next.observations = [{}, { main }, {}, { advanceMain: true, advanceAfterRead: true }];
       }
-      if (reviewHead === "previous") {
-        next.issueComments[0]!.body = next.issueComments[0]!.body.replace(approvedHead, f.head);
-      }
       f.save(next);
       const recovered = f.run(false, f.repo, "squash", previous, replacement ? approvedHead : "");
       expect(recovered.status, recovered.output).toBe(replacement ? 0 : 1);
@@ -81,7 +124,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(f.record()).toMatchObject({
         phase: replacement ? "complete" : "commenting",
         head: approvedHead,
-        clawsweeperReview: { reviewedSha: reviewHead === "previous" ? f.head : approvedHead },
         recovery: {
           outcome: previous,
           attempt: previousRecord.attempt,
@@ -147,8 +189,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     },
   );
 
-  // These refusals precede replacement validation, so keep the stronger prepared
-  // replacement input. Later admission cases retain both head paths.
   const retainedIntentFaults = new Set([
     "stale-outcome",
     "accepted",
@@ -179,7 +219,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       "current-auto",
       "current-queued",
     ].flatMap((fault) =>
-      (retainedIntentFaults.has(fault) ? [true] : [false, true]).map((replacement) => ({
+      (fault === "prepared-head" ? [false, true] : [true]).map((replacement) => ({
         fault,
         replacement,
       })),
@@ -271,7 +311,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(result.status, result.output).toBe(1);
       if (retainedIntentFaults.has(fault)) {
         expect(result.output).toContain(
-          "operator recovery requires the exact unaccepted immediate intent or confirmed auto cancellation; no attempt was authorized",
+          "operator recovery requires an exact unaccepted immediate intent, confirmed auto cancellation, or explicitly auto-routed stale admin head; no attempt was authorized",
         );
       }
       expect(f.state().mutations, result.output).toBe(1);
@@ -297,7 +337,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     "missing-context",
     "pending-gate",
     "ci-proof",
-    "expired-clawsweeper",
     "head-during-checks",
     "prep.env",
     "gates.env",
@@ -314,13 +353,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     next.mode = "success";
     if (fault === "ci-proof") {
       next.ciExit = 15;
-    }
-    if (fault === "expired-clawsweeper") {
-      const expired = new Date(Date.now() - 13 * 60 * 60_000).toISOString();
-      next.issueComments[0]!.body = next.issueComments[0]!.body.replace(
-        /reviewed_at=\S+/u,
-        `reviewed_at=${expired}`,
-      );
     }
     if (fault === "head-during-checks") {
       next.duringChecks = { head: f.head };

@@ -14,6 +14,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CronJob } from "../types.js";
 import { createCronServiceState } from "./state.js";
 import { executeJobCore } from "./timer-execution.js";
@@ -36,7 +37,9 @@ afterEach(async () => {
 
 function createHarness(handler: HeartbeatWakeHandler) {
   setHeartbeatWakeHandler(handler);
+  const wakeQueued = createDeferred();
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     cronEnabled: true,
     storePath: path.join(tempDirs.make("cron-wake-owner-"), "jobs.json"),
     log: { debug() {}, info() {}, warn() {}, error() {} },
@@ -50,7 +53,16 @@ function createHarness(handler: HeartbeatWakeHandler) {
     },
     requestHeartbeat: vi.fn(),
     requestHeartbeatAndWait: (wake, lifecycle) =>
-      requestHeartbeatAndWait({ ...wake, sessionKey, coalesceMs: 0 }, lifecycle),
+      requestHeartbeatAndWait(
+        { ...wake, sessionKey, coalesceMs: 0 },
+        {
+          ...lifecycle,
+          onQueued: () => {
+            lifecycle?.onQueued?.();
+            wakeQueued.resolve();
+          },
+        },
+      ),
     runIsolatedAgentJob: async () => ({ status: "ok" }),
   });
   const run = (id = "reminder", signal?: AbortSignal) => {
@@ -68,7 +80,7 @@ function createHarness(handler: HeartbeatWakeHandler) {
     };
     return executeJobCore(state, job, signal);
   };
-  return { state, run };
+  return { state, run, wakeQueued };
 }
 
 it("coalesces two main jobs and settles both only after their shared turn", async () => {
@@ -183,7 +195,7 @@ it("does not spend the busy budget while the model is executing", async () => {
 it.each([false, true])("removes only the cancelled job's event, retrying=%s", async (retrying) => {
   const observed: string[] = [];
   let calls = 0;
-  const { run } = createHarness(async () => {
+  const { run, wakeQueued } = createHarness(async () => {
     if (retrying && ++calls === 1) {
       return { status: "skipped", reason: "requests-in-flight" };
     }
@@ -193,6 +205,7 @@ it.each([false, true])("removes only the cancelled job's event, retrying=%s", as
   enqueueSystemEventWithReceipt("unrelated", { sessionKey, contextKey: "other" });
   const controller = new AbortController();
   const pending = run("cancelled", controller.signal);
+  await wakeQueued.promise;
   if (retrying) {
     await vi.advanceTimersByTimeAsync(0);
   }

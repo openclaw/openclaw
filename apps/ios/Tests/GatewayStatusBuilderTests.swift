@@ -76,11 +76,10 @@ struct GatewayStatusBuilderTests {
     }
 
     @Test func `chat agent badge rejects placeholder question mark`() {
-        #expect(ChatProTab.normalizedBadgeEmoji(" 🦞 ") == "🦞")
-        #expect(ChatProTab.normalizedBadgeEmoji("?") == nil)
-        #expect(ChatProTab.normalizedBadgeEmoji("   ") == nil)
-        #expect(ChatProTab.normalizedBadgeEmoji(nil) == nil)
-        #expect(ChatProTab.initialsBadge(for: "Agent Smith") == "AS")
+        #expect(AgentIdentityPresentation.badge(avatarText: " 🦞 ", displayName: "Agent Smith") == "🦞")
+        #expect(AgentIdentityPresentation.badge(avatarText: "?", displayName: "Agent Smith") == "AS")
+        #expect(AgentIdentityPresentation.badge(avatarText: "   ", displayName: "Agent Smith") == "AS")
+        #expect(AgentIdentityPresentation.badge(avatarText: nil, displayName: "Agent Smith") == "AS")
     }
 
     @Test func `pinned attachment displays its captured gateway owner`() {

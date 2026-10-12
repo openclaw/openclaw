@@ -1,10 +1,10 @@
 // Exercises a child turn after its launching parent has closed, through the real
 // run loop, harness selection, active-run registration, and transcript writer.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -20,6 +20,7 @@ import {
   installEmbeddedRunnerFastRunE2eMocks,
 } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "nested-finalization-");
 const runAttempt = vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>();
 let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
 let prepareSystemAgentRunAdmission: typeof import("./admitted-run-context.js").prepareSystemAgentRunAdmission;
@@ -64,21 +65,30 @@ beforeAll(async () => {
 afterEach(() => runAttempt.mockReset());
 
 describe("nested settled-turn finalization ownership", () => {
-  it.each(["answer", "unavailable", "closed"] as const)(
-    "preserves child ownership when finalization is %s after the parent closes",
-    async (finalization) => {
-      const root = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "nested-finalization-")),
-      );
+  it.each(
+    (["physical", "logical"] as const).flatMap((storeLocator) =>
+      (["answer", "unavailable", "closed", "empty"] as const).map((finalization) => ({
+        storeLocator,
+        finalization,
+      })),
+    ),
+  )(
+    "preserves $storeLocator child ownership when finalization is $finalization after the parent closes",
+    async ({ storeLocator, finalization }) => {
+      const root = sessionDirs.make();
       const agentDir = path.join(root, "agents", "test", "agent");
       const workspaceDir = path.join(root, "workspace");
+      const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
       await Promise.all([fs.mkdir(agentDir, { recursive: true }), fs.mkdir(workspaceDir)]);
       const config = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
       const target = {
         agentId: "test",
         sessionId: "child-session",
         sessionKey: "agent:test:child",
-        storePath: path.join(agentDir, "openclaw-agent.sqlite"),
+        storePath:
+          storeLocator === "logical"
+            ? path.join(root, "agents", "test", "sessions", "sessions.json")
+            : databasePath,
       };
       const parentTarget = {
         ...target,
@@ -125,7 +135,11 @@ describe("nested settled-turn finalization ownership", () => {
           if (!sessionKey) {
             throw new Error("The runner must prepare a transcript target before dispatch");
           }
-          const appendTarget = { ...params.sessionTarget, sessionId: target.sessionId, sessionKey };
+          const appendTarget = {
+            ...params.sessionTarget,
+            sessionId: target.sessionId,
+            sessionKey,
+          };
           expect(getGatewayToolCallerIdentity()?.operationalRunInstance).toBe(
             params.admittedRunContext.operationalRunInstance,
           );
@@ -134,6 +148,15 @@ describe("nested settled-turn finalization ownership", () => {
             expect(params.disableTools).toBe(true);
             if (finalization === "closed") {
               childAdmission.close();
+            }
+            if (finalization === "empty") {
+              const assistant = buildEmbeddedRunnerAssistant({ content: [] });
+              return makeEmbeddedRunnerAttempt({
+                sessionIdUsed: params.sessionId,
+                lastAssistant: assistant,
+                currentAttemptCompletedAssistant: assistant,
+                assistantTexts: [],
+              });
             }
             if (finalization !== "answer") {
               throw new Error("Synthetic summary provider unavailable");
@@ -239,7 +262,7 @@ describe("nested settled-turn finalization ownership", () => {
             : "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
         expect(result?.payloads).toEqual([expect.objectContaining({ text: expected })]);
         expect(toolRuns).toBe(1);
-        expect(finalizerRuns).toBe(1);
+        expect(finalizerRuns).toBe(finalization === "empty" ? 2 : 1);
         const transcript = await readMessages(target);
         expect(transcript).toHaveLength(messages.length + 1);
         expect(transcript.at(-1)?.message).toMatchObject({
@@ -253,14 +276,14 @@ describe("nested settled-turn finalization ownership", () => {
         childAdmission.close();
         const { waitForSessionTranscriptIndexReconcile } =
           await import("../config/sessions/session-transcript-reconcile.js");
-        const { closeOpenClawAgentDatabaseByPath } = await import("../state/openclaw-agent-db.js");
         const { closeAuthProfileReadPool } = await import("./auth-profiles/sqlite.js");
         try {
-          await waitForSessionTranscriptIndexReconcile({ agentId: "test", path: target.storePath });
+          await waitForSessionTranscriptIndexReconcile({
+            agentId: "test",
+            path: databasePath,
+          });
         } finally {
-          closeAuthProfileReadPool({ kind: "database", databasePath: target.storePath });
-          closeOpenClawAgentDatabaseByPath(target.storePath);
-          await fs.rm(root, { recursive: true, force: true });
+          closeAuthProfileReadPool({ kind: "database", databasePath });
         }
       }
     },

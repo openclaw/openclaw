@@ -131,7 +131,7 @@ export class WorkerTranscriptCommitClient {
     while (true) {
       await this.connection.waitForReady();
       try {
-        const response = await this.connection.requestTranscriptCommit(request);
+        const response = await this.connection.rpc.request("transcript", request);
         if (response.ok) {
           this.baseLeafIdValue = response.payload.newLeafId;
           this.nextSeqValue = request.seq + 1;
@@ -139,7 +139,7 @@ export class WorkerTranscriptCommitClient {
         }
         if (response.error.details.reason === "stale-base-leaf") {
           // A stale base consumes this ledger seq. Retrying against a new leaf
-          // would append output built from stale context; milestone 3 must relaunch.
+          // would append output built from stale context; the turn must relaunch.
           this.nextSeqValue = request.seq + 1;
           this.terminalFailure = new WorkerTranscriptCommitError(
             response.error,
@@ -148,7 +148,12 @@ export class WorkerTranscriptCommitClient {
           throw this.terminalFailure;
         }
         fenceForOwnershipError(this.connection, response.error);
-        throw new WorkerTranscriptCommitError(response.error);
+        const failure = new WorkerTranscriptCommitError(response.error);
+        if (response.error.code === "UNAVAILABLE" && response.error.retryable === false) {
+          // Turn cleanup must retain the rejection instead of submitting the failed batch again.
+          this.terminalFailure = failure;
+        }
+        throw failure;
       } catch (error) {
         if (
           error instanceof WorkerConnectionInterruptedError &&

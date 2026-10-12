@@ -5,7 +5,6 @@ import {
 } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
 import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
-import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshotCore,
@@ -81,7 +80,6 @@ describe("external auth owner", () => {
       expect(readMiniMax).toHaveBeenCalledOnce();
       const overlaid = createExternalAuthRuntime(() => []).overlayExternalAuthProfiles(store);
       expect(overlaid.profiles[profileId]).toEqual(synced.profiles[profileId]);
-      expect(getRuntimeExternalCliProfileIds(overlaid)).toEqual([]);
     },
   );
 
@@ -103,29 +101,41 @@ describe("external auth owner", () => {
     });
     expect(next.profiles["openai:default"]).toEqual(pluginCredential);
     expect(next.runtimeExternalProfileIds).toEqual(["openai:default"]);
-    expect(getRuntimeExternalCliProfileIds(next)).toEqual([]);
     expect(resolver).toHaveBeenCalledTimes(2);
     expect(resolver).toHaveBeenLastCalledWith(
       expect.objectContaining({ config, context: expect.objectContaining({ config }) }),
     );
   });
 
-  it("releases only the requested retired CLI overlay", () => {
+  it.each([false, true])("retains external account health during a scoped=%s refresh", (scoped) => {
+    const agentDir = "/tmp/openclaw-external-owner-health";
+    const profileId = "openai:external";
+    const external = credential();
     const store: RuntimeAuthProfileStore = {
       version: 1,
-      profiles: {
-        "openai:default": credential(),
-        "claude-cli:default": credential({ provider: "claude-cli" }),
-      },
-      runtimeExternalProfileIds: ["openai:default", "claude-cli:default"],
-      runtimeExternalCliProfileIds: ["openai:default", "claude-cli:default"],
+      profiles: { [profileId]: external },
+      order: { openai: [profileId] },
+      lastGood: { openai: profileId },
+      usageStats: { [profileId]: { lastUsed: 17, cooldownUntil: 123_456 } },
+      runtimeExternalProfileIds: [profileId],
     };
-    const next = createExternalAuthRuntime(() => []).overlayExternalAuthProfiles(store, {
-      externalCliProfileIds: ["openai:default"],
+    testing.setResolveExternalAuthProfilesForTest(() => [{ profileId, credential: external }]);
+    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
+    const loaded = ensureAuthProfileStore(agentDir, {
+      ...(scoped ? { externalCliProviderIds: ["openai"] } : {}),
+      allowKeychainPrompt: false,
+      readOnly: true,
+      syncExternalCli: false,
     });
-    expect(next.profiles["openai:default"]).toBeUndefined();
-    expect(next.profiles["claude-cli:default"]).toEqual(store.profiles["claude-cli:default"]);
-    expect(getRuntimeExternalCliProfileIds(next)).toEqual(["claude-cli:default"]);
+    // Scoped lookups publish retained health; ordinary lookups return it to the caller.
+    const retained = scoped ? getRuntimeAuthProfileStoreSnapshotCore(agentDir) : loaded;
+    expect(retained).toMatchObject({
+      profiles: store.profiles,
+      order: store.order,
+      lastGood: store.lastGood,
+      usageStats: store.usageStats,
+    });
+    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats).toEqual(store.usageStats);
   });
 
   it.each([undefined, "resolved-key"])(

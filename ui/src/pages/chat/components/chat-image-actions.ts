@@ -76,25 +76,40 @@ export function renderChatImageActions(title: string, readOriginalBlob: () => Pr
     }
   };
   return html`
-    <span class="chat-image-actions">
+    <wa-dropdown
+      class="chat-image-actions"
+      placement="bottom-end"
+      aria-label=${t("chat.imageLightbox.actions")}
+      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+        if (event.detail.item.value === "copy") {
+          void copy();
+        } else if (event.detail.item.value === "download") {
+          void download();
+        }
+      }}
+    >
       <button
+        slot="trigger"
         type="button"
         class="chat-image-action"
-        title=${t("chat.imageLightbox.download")}
-        aria-label=${t("chat.imageLightbox.download")}
-        @click=${() => void download()}
+        title=${t("chat.imageLightbox.actions")}
+        aria-label=${t("chat.imageLightbox.actions")}
       >
-        ${icons.download}
+        ${icons.moreHorizontal}
       </button>
-      <button
-        type="button"
-        class="chat-image-action"
-        title=${t("chat.imageLightbox.copy")}
-        aria-label=${t("chat.imageLightbox.copy")}
-        @click=${() => void copy()}
-      >
-        ${icons.copy}
-      </button>
-    </span>
+      ${(
+        [
+          ["copy", "chat.imageLightbox.copy", icons.copy],
+          ["download", "chat.imageLightbox.download", icons.download],
+        ] as const
+      ).map(
+        ([value, label, icon]) => html`
+          <wa-dropdown-item class="session-menu__item" value=${value}>
+            <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
+            <span class="session-menu__text">${t(label)}</span>
+          </wa-dropdown-item>
+        `,
+      )}
+    </wa-dropdown>
   `;
 }

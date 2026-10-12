@@ -65,7 +65,7 @@ To reduce that, OpenClaw treats the auth profile store as a **token sink**:
   `openai:default`-style profile before OpenClaw owns OAuth for that
   provider; after that, OpenClaw-owned refreshes stay canonical
 - status/startup paths scope external CLI discovery to the provider set
-  already configured, so an unrelated CLI login store is not probed for a
+  already configured, so an unrelated CLI login store is not checked for a
   single-provider setup
 
 ## Storage (where tokens live)
@@ -157,6 +157,17 @@ and [Z.AI / GLM Coding Plan](/providers/zai).
 ## OAuth exchange (how login works)
 
 OpenClaw's OAuth registry and adapters live in `src/llm/utils/oauth/`. Shared provider helpers live in `src/plugin-sdk/provider-oauth-runtime.ts` and `src/plugin-sdk/provider-auth-runtime.ts`. The auth commands in `src/commands/models/auth.ts` run the selected provider method and persist the returned profiles.
+
+### Restarting sign-in in Model Setup
+
+In **Model Setup**, starting the same sign-in again replaces your unfinished
+attempt for the same agent and workspace. This includes **Sign in with ChatGPT**
+and other provider sign-in flows. Use the newest browser link; callbacks from
+the previous attempt are no longer accepted.
+
+Another user's sign-in, a different setup flow, or an attempt already saving
+credentials or configuration stays protected. Let that operation finish before
+retrying.
 
 ### Anthropic setup-token
 

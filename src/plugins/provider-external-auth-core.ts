@@ -51,11 +51,7 @@ export function createProviderExternalAuthResolver(
       env,
       onlyPluginIds: externalAuthPluginIds,
     })) {
-      const profiles = plugin.resolveExternalAuthProfiles?.(params.context);
-      if (!profiles || profiles.length === 0) {
-        continue;
-      }
-      matches.push(...profiles);
+      matches.push(...(plugin.resolveExternalAuthProfiles?.(params.context) ?? []));
     }
     return matches;
   }

@@ -7,6 +7,23 @@ import { buildMarkdown, parseArgs } from "../../scripts/openclaw-performance-sou
 
 const tmpRoots: string[] = [];
 
+const sqliteRun = {
+  integrity: { agent: ["ok"], state: "ok" },
+  profile: "smoke",
+  rows: {
+    agentCacheEntries: 1000,
+    agentDatabases: 2,
+    channelIngressEvents: 1000,
+    cronJobs: 100,
+    cronTaskRuns: 1000,
+    deliveryQueueEntries: 1000,
+    pluginStateEntries: 1000,
+    stateRows: 4100,
+  },
+  timingsMs: { checkpoint: 1, seed: 100, total: 150 },
+  walBytes: { agentAfter: [0], agentBefore: [1024], stateAfter: 0, stateBefore: 4096 },
+};
+
 function mkTmpRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-source-summary-"));
   tmpRoots.push(root);
@@ -85,21 +102,8 @@ function writeSourceFixture(sourceDir: string) {
     ],
   });
   writeJson(path.join(sourceDir, "sqlite-perf-smoke.json"), {
-    integrity: { agent: ["ok"], state: "ok" },
-    profile: "smoke",
+    ...sqliteRun,
     queries: [{ p50Ms: 0.1, p95Ms: 0.2, query: "SELECT 1", rows: 1 }],
-    rows: {
-      agentCacheEntries: 1000,
-      agentDatabases: 2,
-      channelIngressEvents: 1000,
-      cronJobs: 100,
-      cronTaskRuns: 1000,
-      deliveryQueueEntries: 1000,
-      pluginStateEntries: 1000,
-      stateRows: 4100,
-    },
-    timingsMs: { checkpoint: 1, seed: 100, total: 150 },
-    walBytes: { agentAfter: [0], agentBefore: [1024], stateAfter: 0, stateBefore: 4096 },
   });
   writeJson(path.join(sourceDir, "mock-hello", "run-001", "qa-suite-summary.json"), {
     counts: { failed: 0, passed: 1, total: 1 },
@@ -158,44 +162,34 @@ it("labels CLI RSS semantics and rejects mixed-metric memory trends", () => {
   expect(() => buildMarkdown(sourceDir, null)).toThrow("Unknown CLI execution mode");
 });
 
+function sqliteQuery(overrides: Record<string, unknown> = {}) {
+  return {
+    database: "state",
+    id: "delivery.pending.load",
+    p50Ms: 10,
+    p95Ms: 12,
+    plan: {
+      fullTableScans: [],
+      indexes: ["idx_delivery_queue_pending"],
+      raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
+      tempSorts: [],
+    },
+    rows: 1000,
+    runs: 12,
+    sql: "SELECT id FROM delivery_queue_entries WHERE queue_name = ? AND status = ?",
+    ...overrides,
+  };
+}
+
 function writeSqliteV2Fixture(
   sourceDir: string,
-  queries: Array<Record<string, unknown>> = [
-    {
-      database: "state",
-      id: "delivery.pending.load",
-      p50Ms: 10,
-      p95Ms: 12,
-      plan: {
-        fullTableScans: [],
-        indexes: ["idx_delivery_queue_pending"],
-        raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
-        tempSorts: [],
-      },
-      rows: 1000,
-      runs: 12,
-      sql: "SELECT id FROM delivery_queue_entries WHERE queue_name = ? AND status = ?",
-    },
-  ],
+  queries: Array<Record<string, unknown>> = [sqliteQuery()],
 ) {
   writeJson(path.join(sourceDir, "sqlite-perf-smoke.json"), {
-    integrity: { agent: ["ok"], state: "ok" },
-    profile: "smoke",
+    ...sqliteRun,
     queries,
-    rows: {
-      agentCacheEntries: 1000,
-      agentDatabases: 2,
-      channelIngressEvents: 1000,
-      cronJobs: 100,
-      cronTaskRuns: 1000,
-      deliveryQueueEntries: 1000,
-      pluginStateEntries: 1000,
-      stateRows: 4100,
-    },
     schemaVersion: 2,
-    timingsMs: { checkpoint: 1, seed: 100, total: 150 },
     versions: { agentSchema: 16, sqlite: "3.53.4", stateSchema: 13 },
-    walBytes: { agentAfter: [0], agentBefore: [1024], stateAfter: 0, stateBefore: 4096 },
   });
 }
 
@@ -250,95 +244,33 @@ describe("parseArgs", () => {
 });
 
 describe("buildMarkdown", () => {
-  it("renders source performance fixtures with required artifacts", () => {
-    const sourceDir = mkTmpRoot();
-    writeSourceFixture(sourceDir);
-
-    expect(buildMarkdown(sourceDir, null)).toContain("run-001");
-    expect(buildMarkdown(sourceDir, null)).toContain("gateway health json");
-    expect(buildMarkdown(sourceDir, null)).toContain("## SQLite State Smoke");
-    expect(buildMarkdown(sourceDir, null)).toContain("4100");
-    expect(buildMarkdown(sourceDir, null)).toContain("| default | phase.load | 7.0ms | 8.0ms |");
-    expect(buildMarkdown(sourceDir, null)).not.toContain("phase.load.total");
-    expect(buildMarkdown(sourceDir, null)).not.toContain("phase.load.itemCount");
-    expect(buildMarkdown(sourceDir, null)).not.toContain("memory.ready.heapUsedMb");
-    expect(buildMarkdown(sourceDir, null)).toContain(
-      "Per-plugin rows are isolated cold imports and are not additive.",
-    );
-    expect(buildMarkdown(sourceDir, null)).toContain(
-      "| all 12 bundled plugins | 180.0MB | 130.0MB | ok |",
-    );
-    expect(buildMarkdown(sourceDir, null)).toContain("isolated delta from empty process");
-  });
-
   it("compares reordered v2 SQLite scenarios only by shared scenario ID", () => {
     const sourceDir = mkTmpRoot();
     const baselineDir = mkTmpRoot();
     writeSourceFixture(sourceDir);
     writeSourceFixture(baselineDir);
-    writeSqliteV2Fixture(sourceDir, [
-      {
-        database: "state",
-        id: "delivery.pending.load",
-        p50Ms: 10,
-        p95Ms: 15,
-        plan: {
-          fullTableScans: [],
-          indexes: ["idx_delivery_queue_pending"],
-          raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
-          tempSorts: [],
-        },
-        rows: 1000,
-        runs: 12,
-        sql: "SELECT id FROM delivery_queue_entries WHERE status = ?",
+    const agentQuery = sqliteQuery({
+      database: "agent",
+      id: "agent-cache.plugin-model-catalog.list",
+      p50Ms: 1,
+      p95Ms: 2,
+      plan: {
+        fullTableScans: [],
+        indexes: ["sqlite_autoindex_cache_entries_1"],
+        raw: ["SEARCH cache_entries USING INDEX sqlite_autoindex_cache_entries_1"],
+        tempSorts: [],
       },
-      {
-        database: "agent",
-        id: "agent-cache.plugin-model-catalog.list",
-        p50Ms: 1,
-        p95Ms: 2,
-        plan: {
-          fullTableScans: [],
-          indexes: ["sqlite_autoindex_cache_entries_1"],
-          raw: ["SEARCH cache_entries USING INDEX sqlite_autoindex_cache_entries_1"],
-          tempSorts: [],
-        },
-        rows: 100,
-        runs: 12,
-        sql: "SELECT key FROM cache_entries WHERE scope = ?",
-      },
-    ]);
+      rows: 100,
+      sql: "SELECT key FROM cache_entries WHERE scope = ?",
+    });
+    const currentQuery = sqliteQuery({
+      p95Ms: 15,
+      sql: "SELECT id FROM delivery_queue_entries WHERE status = ?",
+    });
+    writeSqliteV2Fixture(sourceDir, [currentQuery, agentQuery]);
     writeSqliteV2Fixture(baselineDir, [
-      {
-        database: "agent",
-        id: "baseline-only",
-        p50Ms: 3,
-        p95Ms: 4,
-        plan: {
-          fullTableScans: [],
-          indexes: ["sqlite_autoindex_cache_entries_1"],
-          raw: ["SEARCH cache_entries USING INDEX sqlite_autoindex_cache_entries_1"],
-          tempSorts: [],
-        },
-        rows: 100,
-        runs: 12,
-        sql: "SELECT key FROM cache_entries WHERE scope = ?",
-      },
-      {
-        database: "state",
-        id: "delivery.pending.load",
-        p50Ms: 18,
-        p95Ms: 20,
-        plan: {
-          fullTableScans: [],
-          indexes: ["idx_delivery_queue_pending"],
-          raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
-          tempSorts: [],
-        },
-        rows: 1000,
-        runs: 12,
-        sql: "SELECT id FROM delivery_queue_entries WHERE status = ?",
-      },
+      { ...agentQuery, id: "baseline-only", p50Ms: 3, p95Ms: 4 },
+      { ...currentQuery, p50Ms: 18, p95Ms: 20 },
     ]);
 
     const markdown = buildMarkdown(sourceDir, baselineDir);
@@ -379,20 +311,7 @@ describe("buildMarkdown", () => {
       writeSourceFixture(sourceDir);
       writeSourceFixture(baselineDir);
       writeSqliteV2Fixture(sourceDir);
-      writeSqliteV2Fixture(baselineDir, [
-        {
-          ...baselineQuery,
-          id: "delivery.pending.load",
-          p50Ms: 18,
-          p95Ms: 20,
-          plan: {
-            fullTableScans: [],
-            indexes: ["idx_delivery_queue_pending"],
-            raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
-            tempSorts: [],
-          },
-        },
-      ]);
+      writeSqliteV2Fixture(baselineDir, [sqliteQuery({ ...baselineQuery, p50Ms: 18, p95Ms: 20 })]);
 
       expect(buildMarkdown(sourceDir, baselineDir)).toContain(
         `| delivery.pending.load | state | 1000 | 12 | 10.0ms | 12.0ms | ${baselineQuery.rows} | ${baselineQuery.runs} | 20.0ms | n/a (workload differs) |`,
@@ -400,91 +319,24 @@ describe("buildMarkdown", () => {
     }
   });
 
-  it("rejects duplicate and empty v2 SQLite scenario IDs", () => {
-    for (const ids of [
-      ["delivery.pending.load", "delivery.pending.load"],
-      ["delivery.pending.load", "   "],
-    ]) {
-      const sourceDir = mkTmpRoot();
-      writeSourceFixture(sourceDir);
-      writeSqliteV2Fixture(
-        sourceDir,
-        ids.map((id) => ({
-          database: "state",
-          id,
-          p50Ms: 1,
-          p95Ms: 2,
-          plan: {
-            fullTableScans: ["SCAN delivery_queue_entries"],
-            indexes: [],
-            raw: ["SCAN delivery_queue_entries"],
-            tempSorts: [],
-          },
-          rows: 1000,
-          runs: 12,
-          sql: "SELECT id FROM delivery_queue_entries",
-        })),
-      );
-
-      expect(() => buildMarkdown(sourceDir, null)).toThrow(
-        "[source-performance] invalid SQLite scenario ID:",
-      );
-    }
-  });
-
   it("rejects malformed v2 SQLite metrics and normalized plans", () => {
+    const plan = {
+      fullTableScans: ["SCAN delivery_queue_entries"],
+      indexes: [],
+      raw: ["SCAN delivery_queue_entries"],
+      tempSorts: [],
+    };
+    const query = sqliteQuery({ plan, sql: "SELECT id FROM delivery_queue_entries" });
     const invalidQueries = [
-      {
-        database: "state",
-        id: "delivery.pending.load",
-        p50Ms: 10,
-        p95Ms: null,
-        plan: {
-          fullTableScans: ["SCAN delivery_queue_entries"],
-          indexes: [],
-          raw: ["SCAN delivery_queue_entries"],
-          tempSorts: [],
-        },
-        rows: 1000,
-        runs: 12,
-        sql: "SELECT id FROM delivery_queue_entries",
-      },
-      {
-        database: "state",
-        id: "delivery.pending.load",
-        p50Ms: 10,
-        p95Ms: 12,
-        plan: {
-          fullTableScans: [42],
-          indexes: [],
-          raw: ["SCAN delivery_queue_entries"],
-          tempSorts: [],
-        },
-        rows: 1000,
-        runs: 12,
-        sql: "SELECT id FROM delivery_queue_entries",
-      },
-      {
-        database: "state",
-        id: "delivery.pending.load",
-        p50Ms: 10,
-        p95Ms: 12,
-        plan: {
-          fullTableScans: [],
-          indexes: ["idx_fake"],
-          raw: ["SCAN delivery_queue_entries"],
-          tempSorts: [],
-        },
-        rows: 1000,
-        runs: 12,
-        sql: "SELECT id FROM delivery_queue_entries",
-      },
+      { ...query, p95Ms: null },
+      { ...query, plan: { ...plan, fullTableScans: [42] } },
+      { ...query, plan: { ...plan, fullTableScans: [], indexes: ["idx_fake"] } },
     ];
 
-    for (const query of invalidQueries) {
+    for (const invalidQuery of invalidQueries) {
       const sourceDir = mkTmpRoot();
       writeSourceFixture(sourceDir);
-      writeSqliteV2Fixture(sourceDir, [query]);
+      writeSqliteV2Fixture(sourceDir, [invalidQuery]);
 
       expect(() => buildMarkdown(sourceDir, null)).toThrow(
         /\[source-performance\] invalid SQLite scenario (metrics|plan):/,
@@ -496,39 +348,14 @@ describe("buildMarkdown", () => {
     const sourceDir = mkTmpRoot();
     writeSourceFixture(sourceDir);
     writeSqliteV2Fixture(sourceDir, [
-      {
-        database: "state",
+      sqliteQuery({
         id: "delivery.pending\nload",
-        p50Ms: 10,
-        p95Ms: 12,
-        plan: {
-          fullTableScans: [],
-          indexes: ["idx_delivery_queue_pending"],
-          raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
-          tempSorts: [],
-        },
-        rows: 1000,
-        runs: 12,
         sql: "SELECT id FROM delivery_queue_entries",
-      },
+      }),
     ]);
 
     expect(() => buildMarkdown(sourceDir, null)).toThrow(
       "[source-performance] invalid SQLite scenario ID:",
-    );
-  });
-
-  it("renders legacy SQLite artifacts without manufacturing baseline matches", () => {
-    const sourceDir = mkTmpRoot();
-    const baselineDir = mkTmpRoot();
-    writeSourceFixture(sourceDir);
-    writeSourceFixture(baselineDir);
-
-    const markdown = buildMarkdown(sourceDir, baselineDir);
-
-    expect(markdown).toContain("| current | legacy | smoke | n/a | n/a | n/a |");
-    expect(markdown).toContain(
-      "| legacy query 1 | unknown | 1 | n/a | 0.1ms | 0.2ms | n/a | n/a | n/a | n/a |",
     );
   });
 

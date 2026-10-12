@@ -1,4 +1,3 @@
-// Creates and applies JSON merge-patch updates to config-like objects.
 import { isDeepStrictEqual } from "node:util";
 import { isPlainObject } from "../infra/plain-object.js";
 import { isRecord } from "../utils.js";
@@ -204,8 +203,7 @@ export function applyMergePatch(
       }
     }
     if (isPlainObject(value)) {
-      const baseValue = result[key];
-      result[key] = applyMergePatch(isPlainObject(baseValue) ? baseValue : {}, value, {
+      result[key] = applyMergePatch(result[key], value, {
         ...options,
         path,
       });

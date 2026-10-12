@@ -10,7 +10,8 @@ import {
 import { resolveCrabboxSandboxConfig } from "./src/crabbox-sandbox-config.js";
 import { mintCrabboxSandboxLeaseId } from "./src/crabbox-sandbox-lease.js";
 import { createCrabboxTool } from "./src/crabbox-tool.js";
-import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./src/crabbox-worker-provider.js";
+import { resolveOpenClawRoot } from "./src/crabbox-worker-profile.js";
+import { createCrabboxWorkerProvider } from "./src/crabbox-worker-provider.js";
 import { resolveCrabboxWarmImagePolicy } from "./src/crabbox-worker-warm-image-policy.js";
 
 const workerWallpaperPath = fileURLToPath(

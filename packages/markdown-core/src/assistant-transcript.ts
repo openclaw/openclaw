@@ -148,42 +148,50 @@ function annotatedToken(
   return token;
 }
 
-function splitVisibleToken(params: {
-  TokenType: StateCore["Token"];
-  token: Token;
-  visibleStart: number;
-  spanStartIndex: number;
-  spans: readonly AssistantTranscriptRoleHeaderSpan[];
-}): Token[] {
-  const { token, visibleStart } = params;
-  const visibleEnd = visibleStart + token.content.length;
-  const firstSpan = params.spans[params.spanStartIndex];
-  if (!firstSpan || firstSpan.start >= visibleEnd) {
-    return [token];
-  }
-
-  const result: Token[] = [];
-  let localCursor = 0;
-  for (let spanIndex = params.spanStartIndex; spanIndex < params.spans.length; spanIndex += 1) {
-    const span = params.spans[spanIndex];
-    if (!span || span.start >= visibleEnd) {
+function sliceRoleHeaderSpans(
+  spans: readonly AssistantTranscriptRoleHeaderSpan[],
+  spanStartIndex: number,
+  start: number,
+  end: number,
+): AssistantTranscriptRoleHeaderSpan[] {
+  const sliced: AssistantTranscriptRoleHeaderSpan[] = [];
+  for (let index = spanStartIndex; index < spans.length; index += 1) {
+    const span = spans[index];
+    if (!span || span.start >= end) {
       break;
     }
-    if (span.end <= visibleStart) {
-      continue;
+    if (span.end > start) {
+      sliced.push({
+        ...span,
+        start: Math.max(span.start, start) - start,
+        end: Math.min(span.end, end) - start,
+      });
     }
-    const overlapStart = Math.max(span.start, visibleStart) - visibleStart;
-    const overlapEnd = Math.min(span.end, visibleEnd) - visibleStart;
-    if (overlapStart > localCursor) {
-      result.push(cloneToken(params.TokenType, token, localCursor, overlapStart));
+  }
+  return sliced;
+}
+
+function splitVisibleToken(
+  TokenType: StateCore["Token"],
+  token: Token,
+  spans: readonly AssistantTranscriptRoleHeaderSpan[],
+): Token[] {
+  if (spans.length === 0) {
+    return [token];
+  }
+  const result: Token[] = [];
+  let localCursor = 0;
+  for (const span of spans) {
+    if (span.start > localCursor) {
+      result.push(cloneToken(TokenType, token, localCursor, span.start));
     }
-    if (overlapEnd > overlapStart) {
-      result.push(annotatedToken(params.TokenType, token, overlapStart, overlapEnd, span));
+    if (span.end > span.start) {
+      result.push(annotatedToken(TokenType, token, span.start, span.end, span));
     }
-    localCursor = overlapEnd;
+    localCursor = span.end;
   }
   if (localCursor < token.content.length) {
-    result.push(cloneToken(params.TokenType, token, localCursor, token.content.length));
+    result.push(cloneToken(TokenType, token, localCursor, token.content.length));
   }
   return result;
 }
@@ -219,31 +227,19 @@ function annotateInlineChildren(
     }
     if (token.type === "text" || token.type === "html_inline") {
       result.push(
-        ...splitVisibleToken({
+        ...splitVisibleToken(
           TokenType,
           token,
-          visibleStart: visibleCursor,
-          spanStartIndex: spanCursor,
-          spans,
-        }),
+          sliceRoleHeaderSpans(spans, spanCursor, visibleCursor, visibleCursor + content.length),
+        ),
       );
     } else if (token.type === "image") {
-      const visibleEnd = visibleCursor + content.length;
-      const imageSpans: AssistantTranscriptRoleHeaderSpan[] = [];
-      for (let spanIndex = spanCursor; spanIndex < spans.length; spanIndex += 1) {
-        const span = spans[spanIndex];
-        if (!span || span.start >= visibleEnd) {
-          break;
-        }
-        if (span.end <= visibleCursor) {
-          continue;
-        }
-        imageSpans.push({
-          ...span,
-          start: Math.max(span.start, visibleCursor) - visibleCursor,
-          end: Math.min(span.end, visibleEnd) - visibleCursor,
-        });
-      }
+      const imageSpans = sliceRoleHeaderSpans(
+        spans,
+        spanCursor,
+        visibleCursor,
+        visibleCursor + content.length,
+      );
       if (imageSpans.length > 0) {
         token.meta = {
           ...(token.meta && typeof token.meta === "object" ? token.meta : {}),
@@ -310,10 +306,7 @@ function annotateHtmlBlock(TokenType: StateCore["Token"], token: Token): Token[]
     token.content,
     findRawCodeContainerRanges(token.content),
   );
-  if (spans.length === 0) {
-    return [token];
-  }
-  return splitVisibleToken({ TokenType, token, visibleStart: 0, spanStartIndex: 0, spans });
+  return splitVisibleToken(TokenType, token, spans);
 }
 
 /** Adds semantic transcript-role tokens to assistant-authored Markdown only. */

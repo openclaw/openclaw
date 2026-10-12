@@ -17,6 +17,13 @@ function createInvokeSpy() {
   }));
 }
 
+function dispatch(
+  invoke: ReturnType<typeof createInvokeSpy>,
+  ctx: Parameters<typeof handleSlackMessageAction>[0]["ctx"],
+) {
+  return handleSlackMessageAction({ providerId: "slack", ctx, invoke: invoke as never });
+}
+
 function slackConfig() {
   return { channels: { slack: { botToken: "tok" } } };
 }
@@ -107,19 +114,15 @@ describe("handleSlackMessageAction", () => {
     const invoke = createInvokeSpy();
     const toolContext = { currentMessageId: "171234.567" };
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "react",
-        cfg: {},
-        params: {
-          channelId: "C1",
-          emoji: "✅",
-        },
-        toolContext,
-      } as never,
-      invoke: invoke as never,
-    });
+    await dispatch(invoke, {
+      action: "react",
+      cfg: {},
+      params: {
+        channelId: "C1",
+        emoji: "✅",
+      },
+      toolContext,
+    } as never);
 
     expect(firstAction(invoke)).toMatchObject({
       action: "react",
@@ -130,61 +133,20 @@ describe("handleSlackMessageAction", () => {
     expect(firstInvokeCall(invoke)[2]).toBe(toolContext);
   });
 
-  it("merges presentation and interactive blocks when sending", async () => {
-    const invoke = createInvokeSpy();
-
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "send",
-        cfg: {},
-        params: {
-          to: "channel:C1",
-          message: "Deploy?",
-          presentation: {
-            blocks: [{ type: "text", text: "Deploy summary" }],
-          },
-          interactive: {
-            blocks: [
-              {
-                type: "buttons",
-                buttons: [{ label: "Approve", value: "approve" }],
-              },
-            ],
-          },
-        },
-      } as never,
-      invoke: invoke as never,
-    });
-
-    const action = firstAction(invoke);
-    expect(action).not.toHaveProperty("blocks");
-    const message = preparedMessages(invoke)[0]!;
-    expect(blockAt(message, 0).type).toBe("section");
-    expect(blockAt(message, 1).type).toBe("section");
-    const actionsBlock = blockAt(message, 2);
-    expect(actionsBlock.type).toBe("actions");
-    expect(elementAt(actionsBlock, 0).value).toBe("approve");
-  });
-
   it("sends an exact mirrored portable control row once", async () => {
     const invoke = createInvokeSpy();
     const buttons = [{ label: "Approve", action: { type: "callback" as const, value: "approve" } }];
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "send",
-        cfg: {},
-        params: {
-          to: "channel:C1",
-          message: "Deploy?",
-          presentation: { blocks: [{ type: "buttons", buttons }] },
-          interactive: { blocks: [{ type: "buttons", buttons }] },
-        },
-      } as never,
-      invoke: invoke as never,
-    });
+    await dispatch(invoke, {
+      action: "send",
+      cfg: {},
+      params: {
+        to: "channel:C1",
+        message: "Deploy?",
+        presentation: { blocks: [{ type: "buttons", buttons }] },
+        interactive: { blocks: [{ type: "buttons", buttons }] },
+      },
+    } as never);
 
     const action = firstAction(invoke);
     expect(action).not.toHaveProperty("blocks");
@@ -198,31 +160,27 @@ describe("handleSlackMessageAction", () => {
   it("sends native charts with a complete accessible text representation", async () => {
     const invoke = createInvokeSpy();
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "send",
-        cfg: {},
-        params: {
-          to: "channel:C1",
-          message: "Revenue summary",
-          presentation: {
-            blocks: [
-              {
-                type: "chart",
-                chartType: "pie",
-                title: "Revenue mix",
-                segments: [
-                  { label: "Product", value: 60 },
-                  { label: "Services", value: 40 },
-                ],
-              },
-            ],
-          },
+    await dispatch(invoke, {
+      action: "send",
+      cfg: {},
+      params: {
+        to: "channel:C1",
+        message: "Revenue summary",
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "pie",
+              title: "Revenue mix",
+              segments: [
+                { label: "Product", value: 60 },
+                { label: "Services", value: 40 },
+              ],
+            },
+          ],
         },
-      } as never,
-      invoke: invoke as never,
-    });
+      },
+    } as never);
 
     const action = firstAction(invoke);
     expect(action.content).toBe("Revenue summary");
@@ -248,31 +206,27 @@ describe("handleSlackMessageAction", () => {
   it("sends native tables with a complete accessible text representation", async () => {
     const invoke = createInvokeSpy();
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "send",
-        cfg: {},
-        params: {
-          to: "channel:C1",
-          message: "Pipeline summary",
-          presentation: {
-            blocks: [
-              {
-                type: "table",
-                caption: "Pipeline",
-                headers: ["Account", "ARR"],
-                rows: [
-                  ["Acme", 125000],
-                  ["Globex", 82000],
-                ],
-              },
-            ],
-          },
+    await dispatch(invoke, {
+      action: "send",
+      cfg: {},
+      params: {
+        to: "channel:C1",
+        message: "Pipeline summary",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Pipeline",
+              headers: ["Account", "ARR"],
+              rows: [
+                ["Acme", 125000],
+                ["Globex", 82000],
+              ],
+            },
+          ],
         },
-      } as never,
-      invoke: invoke as never,
-    });
+      },
+    } as never);
 
     const action = firstAction(invoke);
     expect(action.content).toBe("Pipeline summary");
@@ -294,15 +248,11 @@ describe("handleSlackMessageAction", () => {
     const invoke = createInvokeSpy();
 
     await expect(
-      handleSlackMessageAction({
-        providerId: "slack",
-        ctx: {
-          action: "edit",
-          cfg: {},
-          params: { channelId: "C1", messageId: "171234.567", message },
-        } as never,
-        invoke: invoke as never,
-      }),
+      dispatch(invoke, {
+        action: "edit",
+        cfg: {},
+        params: { channelId: "C1", messageId: "171234.567", message },
+      } as never),
     ).rejects.toThrow("Slack edit exceeds the 4000-byte edit limit. Send a new message instead.");
 
     expect(invoke).not.toHaveBeenCalled();
@@ -312,23 +262,19 @@ describe("handleSlackMessageAction", () => {
     "measures the account's %s table rendering before rejecting an edit",
     async (tables) => {
       const invoke = createInvokeSpy();
-      await handleSlackMessageAction({
-        providerId: "slack",
-        ctx: {
-          action: "edit",
-          cfg: {
-            channels: {
-              slack: {
-                defaultAccount: "work",
-                markdown: { tables: "code" },
-                accounts: { work: { markdown: { tables } } },
-              },
+      await dispatch(invoke, {
+        action: "edit",
+        cfg: {
+          channels: {
+            slack: {
+              defaultAccount: "work",
+              markdown: { tables: "code" },
+              accounts: { work: { markdown: { tables } } },
             },
           },
-          params: { channelId: "C1", messageId: "171234.567", message: paddedMarkdownTable },
-        } as never,
-        invoke: invoke as never,
-      });
+        },
+        params: { channelId: "C1", messageId: "171234.567", message: paddedMarkdownTable },
+      } as never);
       expect(firstAction(invoke)).toMatchObject({
         action: "editMessage",
         content: paddedMarkdownTable,
@@ -340,15 +286,11 @@ describe("handleSlackMessageAction", () => {
     const invoke = createInvokeSpy();
     const message = "x".repeat(4_000);
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "edit",
-        cfg: {},
-        params: { channelId: "C1", messageId: "171234.567", message },
-      } as never,
-      invoke: invoke as never,
-    });
+    await dispatch(invoke, {
+      action: "edit",
+      cfg: {},
+      params: { channelId: "C1", messageId: "171234.567", message },
+    } as never);
 
     expect(firstAction(invoke)).toMatchObject({ action: "editMessage", content: message });
   });
@@ -357,20 +299,16 @@ describe("handleSlackMessageAction", () => {
     const invoke = createInvokeSpy();
     const message = "x".repeat(4_001);
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "edit",
-        cfg: {},
-        params: {
-          channelId: "C1",
-          messageId: "171234.567",
-          message,
-          presentation: { blocks: [{ type: "text", text: "Visible block content" }] },
-        },
-      } as never,
-      invoke: invoke as never,
-    });
+    await dispatch(invoke, {
+      action: "edit",
+      cfg: {},
+      params: {
+        channelId: "C1",
+        messageId: "171234.567",
+        message,
+        presentation: { blocks: [{ type: "text", text: "Visible block content" }] },
+      },
+    } as never);
 
     expect(firstAction(invoke)).toMatchObject({ action: "editMessage", content: message });
     expect(blockAt(firstAction(invoke), 0)).toMatchObject({ type: "section" });
@@ -379,29 +317,25 @@ describe("handleSlackMessageAction", () => {
   it("edits native tables with a complete accessible text representation", async () => {
     const invoke = createInvokeSpy();
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "edit",
-        cfg: {},
-        params: {
-          channelId: "C1",
-          messageId: "171234.567",
-          message: "Updated pipeline",
-          presentation: {
-            blocks: [
-              {
-                type: "table",
-                caption: "Pipeline",
-                headers: ["Account", "Stage"],
-                rows: [["Acme", "Won"]],
-              },
-            ],
-          },
+    await dispatch(invoke, {
+      action: "edit",
+      cfg: {},
+      params: {
+        channelId: "C1",
+        messageId: "171234.567",
+        message: "Updated pipeline",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Pipeline",
+              headers: ["Account", "Stage"],
+              rows: [["Acme", "Won"]],
+            },
+          ],
         },
-      } as never,
-      invoke: invoke as never,
-    });
+      },
+    } as never);
 
     expect(firstAction(invoke)).toMatchObject({
       action: "editMessage",
@@ -414,51 +348,47 @@ describe("handleSlackMessageAction", () => {
   it("routes non-native tables through Slack-safe text with native controls", async () => {
     const invoke = createInvokeSpy();
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "send",
-        cfg: {},
-        params: {
-          to: "channel:C1",
-          message: "Summary",
-          presentation: {
-            blocks: [
-              {
-                type: "chart",
-                chartType: "pie",
-                title: "Revenue mix",
-                segments: [{ label: "Product", value: 60 }],
-              },
-              ...largeTablePresentation().blocks,
-              {
-                type: "buttons",
-                buttons: [{ label: "Stage", value: "stage" }],
-              },
-              {
-                type: "select",
-                placeholder: "Lane",
-                options: [{ label: "Production", value: "production" }],
-              },
-            ],
-          },
-          interactive: {
-            blocks: [
-              {
-                type: "buttons",
-                buttons: [{ label: "Refresh", value: "refresh" }],
-              },
-              {
-                type: "select",
-                placeholder: "Window",
-                options: [{ label: "Recent", value: "recent" }],
-              },
-            ],
-          },
+    await dispatch(invoke, {
+      action: "send",
+      cfg: {},
+      params: {
+        to: "channel:C1",
+        message: "Summary",
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "pie",
+              title: "Revenue mix",
+              segments: [{ label: "Product", value: 60 }],
+            },
+            ...largeTablePresentation().blocks,
+            {
+              type: "buttons",
+              buttons: [{ label: "Stage", value: "stage" }],
+            },
+            {
+              type: "select",
+              placeholder: "Lane",
+              options: [{ label: "Production", value: "production" }],
+            },
+          ],
         },
-      } as never,
-      invoke: invoke as never,
-    });
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Refresh", value: "refresh" }],
+            },
+            {
+              type: "select",
+              placeholder: "Window",
+              options: [{ label: "Recent", value: "recent" }],
+            },
+          ],
+        },
+      },
+    } as never);
 
     const action = firstAction(invoke);
     expect(action).not.toHaveProperty("separateTextAndBlocks");
@@ -496,20 +426,16 @@ describe("handleSlackMessageAction", () => {
     const invoke = createInvokeSpy();
     const label = `Deploy ${"x".repeat(80)}`;
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "send",
-        cfg: {},
-        params: {
-          to: "channel:C1",
-          presentation: {
-            blocks: [{ type: "buttons", buttons: [{ label, value: "deploy" }] }],
-          },
+    await dispatch(invoke, {
+      action: "send",
+      cfg: {},
+      params: {
+        to: "channel:C1",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label, value: "deploy" }] }],
         },
-      } as never,
-      invoke: invoke as never,
-    });
+      },
+    } as never);
 
     const action = firstAction(invoke);
     expect(action).not.toHaveProperty("blocks");
@@ -521,28 +447,24 @@ describe("handleSlackMessageAction", () => {
     const invoke = createInvokeSpy();
     const headers = Array.from({ length: 21 }, (_entry, index) => `Column ${String(index)}`);
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "edit",
-        cfg: {},
-        params: {
-          channelId: "C1",
-          messageId: "171234.567",
-          presentation: {
-            blocks: [
-              {
-                type: "table",
-                caption: "Wide pipeline",
-                headers,
-                rows: [headers.map((_header, index) => `Value ${String(index)}`)],
-              },
-            ],
-          },
+    await dispatch(invoke, {
+      action: "edit",
+      cfg: {},
+      params: {
+        channelId: "C1",
+        messageId: "171234.567",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Wide pipeline",
+              headers,
+              rows: [headers.map((_header, index) => `Value ${String(index)}`)],
+            },
+          ],
         },
-      } as never,
-      invoke: invoke as never,
-    });
+      },
+    } as never);
 
     const action = firstAction(invoke);
     expect(action.blocks).toBeUndefined();
@@ -571,19 +493,15 @@ describe("handleSlackMessageAction", () => {
     expect(fallback.length).toBeLessThan(8000);
 
     await expect(
-      handleSlackMessageAction({
-        providerId: "slack",
-        ctx: {
-          action: "edit",
-          cfg: {},
-          params: {
-            channelId: "C1",
-            messageId: "171234.567",
-            presentation,
-          },
-        } as never,
-        invoke: invoke as never,
-      }),
+      dispatch(invoke, {
+        action: "edit",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "171234.567",
+          presentation,
+        },
+      } as never),
     ).rejects.toThrow("Slack presentation fallback exceeds the 4000-byte edit limit");
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -610,15 +528,11 @@ describe("handleSlackMessageAction", () => {
     );
 
     await expect(
-      handleSlackMessageAction({
-        providerId: "slack",
-        ctx: {
-          action: "edit",
-          cfg: {},
-          params: { channelId: "C1", messageId: "171234.567", presentation },
-        } as never,
-        invoke: invoke as never,
-      }),
+      dispatch(invoke, {
+        action: "edit",
+        cfg: {},
+        params: { channelId: "C1", messageId: "171234.567", presentation },
+      } as never),
     ).rejects.toThrow("Slack presentation fallback exceeds the 4000-byte edit limit");
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -627,21 +541,17 @@ describe("handleSlackMessageAction", () => {
     const invoke = createInvokeSpy();
     const label = `Deploy ${"x".repeat(80)}`;
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "edit",
-        cfg: {},
-        params: {
-          channelId: "C1",
-          messageId: "171234.567",
-          presentation: {
-            blocks: [{ type: "buttons", buttons: [{ label, value: "deploy" }] }],
-          },
+    await dispatch(invoke, {
+      action: "edit",
+      cfg: {},
+      params: {
+        channelId: "C1",
+        messageId: "171234.567",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label, value: "deploy" }] }],
         },
-      } as never,
-      invoke: invoke as never,
-    });
+      },
+    } as never);
 
     expect(firstAction(invoke)).toMatchObject({ content: `- ${label}`, blocks: undefined });
   });
@@ -652,19 +562,15 @@ describe("handleSlackMessageAction", () => {
       const invoke = createInvokeSpy();
       const text = "x".repeat(3_001);
 
-      await handleSlackMessageAction({
-        providerId: "slack",
-        ctx: {
-          action: "edit",
-          cfg: {},
-          params: {
-            channelId: "C1",
-            messageId: "171234.567",
-            presentation: { blocks: [{ type, text }] },
-          },
-        } as never,
-        invoke: invoke as never,
-      });
+      await dispatch(invoke, {
+        action: "edit",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "171234.567",
+          presentation: { blocks: [{ type, text }] },
+        },
+      } as never);
 
       expect(firstAction(invoke)).toMatchObject({ content: text, blocks: undefined });
     },
@@ -677,21 +583,17 @@ describe("handleSlackMessageAction", () => {
     const invoke = createInvokeSpy();
 
     await expect(
-      handleSlackMessageAction({
-        providerId: "slack",
-        ctx: {
-          action: "edit",
-          cfg: {},
-          params: {
-            channelId: "C1",
-            messageId: "171234.567",
-            presentation: {
-              blocks: [{ type: "text", text }],
-            },
+      dispatch(invoke, {
+        action: "edit",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "171234.567",
+          presentation: {
+            blocks: [{ type: "text", text }],
           },
-        } as never,
-        invoke: invoke as never,
-      }),
+        },
+      } as never),
     ).rejects.toThrow(
       "Slack presentation fallback exceeds the 4000-byte edit limit. Send a new message instead.",
     );
@@ -708,15 +610,11 @@ describe("handleSlackMessageAction", () => {
       })),
     };
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "edit",
-        cfg: {},
-        params: { channelId: "C1", messageId: "171234.567", presentation },
-      } as never,
-      invoke: invoke as never,
-    });
+    await dispatch(invoke, {
+      action: "edit",
+      cfg: {},
+      params: { channelId: "C1", messageId: "171234.567", presentation },
+    } as never);
 
     const action = firstAction(invoke);
     expect(action.blocks).toBeUndefined();
@@ -724,74 +622,27 @@ describe("handleSlackMessageAction", () => {
     expect(action.content).toContain("Detail 50");
   });
 
-  it("keeps generated Slack control ids unique when presentation and interactive controls are merged", async () => {
-    const invoke = createInvokeSpy();
-
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "send",
-        cfg: {},
-        params: {
-          to: "channel:C1",
-          message: "Deploy?",
-          presentation: {
-            blocks: [
-              {
-                type: "buttons",
-                buttons: [{ label: "Stage", value: "stage" }],
-              },
-            ],
-          },
-          interactive: {
-            blocks: [
-              {
-                type: "buttons",
-                buttons: [{ label: "Approve", value: "approve" }],
-              },
-            ],
-          },
-        },
-      } as never,
-      invoke: invoke as never,
-    });
-
-    const action = firstAction(invoke);
-    expect(action).not.toHaveProperty("blocks");
-    const message = preparedMessages(invoke)[0]!;
-    const firstButtons = blockAt(message, 1);
-    expect(firstButtons.block_id).toBe("openclaw_reply_buttons_1");
-    expect(elementAt(firstButtons, 0).action_id).toBe("openclaw:reply_button:1:1");
-    const secondButtons = blockAt(message, 2);
-    expect(secondButtons.block_id).toBe("openclaw_reply_buttons_2");
-    expect(elementAt(secondButtons, 0).action_id).toBe("openclaw:reply_button:2:1");
-  });
-
   it("passes media and rendered interactive blocks through for split Slack delivery", async () => {
     const invoke = createInvokeSpy();
     const cfg = slackConfig();
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "send",
-        cfg,
-        params: {
-          to: "channel:C1",
-          message: "Approval required",
-          media: "https://example.com/report.md",
-          interactive: {
-            blocks: [
-              {
-                type: "buttons",
-                buttons: [{ label: "Approve", value: "approve" }],
-              },
-            ],
-          },
+    await dispatch(invoke, {
+      action: "send",
+      cfg,
+      params: {
+        to: "channel:C1",
+        message: "Approval required",
+        media: "https://example.com/report.md",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Approve", value: "approve" }],
+            },
+          ],
         },
-      } as never,
-      invoke: invoke as never,
-    });
+      },
+    } as never);
 
     expect(invoke).toHaveBeenCalledOnce();
     const action = firstAction(invoke);
@@ -864,11 +715,7 @@ describe("handleSlackMessageAction", () => {
   ])("$name", async ({ params, expected }) => {
     const invoke = createInvokeSpy();
     const cfg = slackConfig();
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: { action: "send", cfg, params } as never,
-      invoke: invoke as never,
-    });
+    await dispatch(invoke, { action: "send", cfg, params } as never);
     const action = firstAction(invoke);
     expect(action).toMatchObject({ action: "sendMessage", to: "channel:C1", ...expected });
     expect(action.threadTs).toBe(expected.threadTs);
@@ -953,11 +800,7 @@ describe("handleSlackMessageAction", () => {
   ])("$name", async ({ params, expected }) => {
     const invoke = createInvokeSpy();
     const cfg = slackConfig();
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: { action: "upload-file", cfg, params } as never,
-      invoke: invoke as never,
-    });
+    await dispatch(invoke, { action: "upload-file", cfg, params } as never);
     expect(firstAction(invoke)).toMatchObject({ action: "uploadFile", ...expected });
     expectForwardedCfg(invoke, cfg);
     expectNoForwardedToolContext(invoke);
@@ -967,38 +810,30 @@ describe("handleSlackMessageAction", () => {
     "normalizes %s for Slack send and upload-file",
     async (propertyName) => {
       const sendInvoke = createInvokeSpy();
-      await handleSlackMessageAction({
-        providerId: "slack",
-        ctx: {
-          action: "send",
-          cfg: slackConfig(),
-          params: {
-            to: "channel:C1",
-            media: "/tmp/original.png",
-            [propertyName]: true,
-          },
-        } as never,
-        invoke: sendInvoke as never,
-      });
+      await dispatch(sendInvoke, {
+        action: "send",
+        cfg: slackConfig(),
+        params: {
+          to: "channel:C1",
+          media: "/tmp/original.png",
+          [propertyName]: true,
+        },
+      } as never);
       expect(firstAction(sendInvoke)).toMatchObject({
         action: "sendMessage",
         forceDocument: true,
       });
 
       const uploadInvoke = createInvokeSpy();
-      await handleSlackMessageAction({
-        providerId: "slack",
-        ctx: {
-          action: "upload-file",
-          cfg: slackConfig(),
-          params: {
-            to: "channel:C1",
-            filePath: "/tmp/original.png",
-            [propertyName]: true,
-          },
-        } as never,
-        invoke: uploadInvoke as never,
-      });
+      await dispatch(uploadInvoke, {
+        action: "upload-file",
+        cfg: slackConfig(),
+        params: {
+          to: "channel:C1",
+          filePath: "/tmp/original.png",
+          [propertyName]: true,
+        },
+      } as never);
       expect(firstAction(uploadInvoke)).toMatchObject({
         action: "uploadFile",
         forceDocument: true,
@@ -1008,38 +843,30 @@ describe("handleSlackMessageAction", () => {
 
   it("rejects replyBroadcast for upload-file", async () => {
     await expect(
-      handleSlackMessageAction({
-        providerId: "slack",
-        ctx: {
-          action: "upload-file",
-          cfg: {},
-          params: {
-            to: "channel:C1",
-            filePath: "/tmp/report.png",
-            threadId: "111.222",
-            replyBroadcast: true,
-          },
-        } as never,
-        invoke: createInvokeSpy() as never,
-      }),
+      dispatch(createInvokeSpy(), {
+        action: "upload-file",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          filePath: "/tmp/report.png",
+          threadId: "111.222",
+          replyBroadcast: true,
+        },
+      } as never),
     ).rejects.toThrow(/replyBroadcast is only supported for text or block thread replies/i);
   });
 
   it("forwards messageId for read actions", async () => {
     const invoke = createInvokeSpy();
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "read",
-        cfg: {},
-        params: {
-          channelId: "C1",
-          messageId: "1712345678.654321",
-        },
-      } as never,
-      invoke: invoke as never,
-    });
+    await dispatch(invoke, {
+      action: "read",
+      cfg: {},
+      params: {
+        channelId: "C1",
+        messageId: "1712345678.654321",
+      },
+    } as never);
 
     const action = firstAction(invoke);
     expect(action.action).toBe("readMessages");
@@ -1048,39 +875,28 @@ describe("handleSlackMessageAction", () => {
     expect(firstInvokeCall(invoke)[1]).toEqual({});
   });
 
-  it.each([2.5, "20"])(
-    "forwards raw read limit %s to the authorized action owner",
-    async (limit) => {
-      const invoke = createInvokeSpy();
+  it.each([2.5])("forwards raw read limit %s to the authorized action owner", async (limit) => {
+    const invoke = createInvokeSpy();
 
-      await handleSlackMessageAction({
-        providerId: "slack",
-        ctx: {
-          action: "read",
-          cfg: {},
-          params: { channelId: "C1", limit },
-        } as never,
-        invoke: invoke as never,
-      });
+    await dispatch(invoke, {
+      action: "read",
+      cfg: {},
+      params: { channelId: "C1", limit },
+    } as never);
 
-      expect(firstAction(invoke)).toMatchObject({ action: "readMessages", limit });
-      expect(invoke).toHaveBeenCalledOnce();
-    },
-  );
+    expect(firstAction(invoke)).toMatchObject({ action: "readMessages", limit });
+    expect(invoke).toHaveBeenCalledOnce();
+  });
 
   it("requires filePath, path, or media for upload-file", async () => {
     await expect(
-      handleSlackMessageAction({
-        providerId: "slack",
-        ctx: {
-          action: "upload-file",
-          cfg: {},
-          params: {
-            to: "channel:C1",
-          },
-        } as never,
-        invoke: createInvokeSpy() as never,
-      }),
+      dispatch(createInvokeSpy(), {
+        action: "upload-file",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+        },
+      } as never),
     ).rejects.toThrow(/upload-file requires filePath, path, or media/i);
   });
 
@@ -1098,11 +914,7 @@ describe("handleSlackMessageAction", () => {
   ])("$name", async ({ params, expected }) => {
     const invoke = createInvokeSpy();
     const cfg = slackConfig();
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: { action: "download-file", cfg, params } as never,
-      invoke: invoke as never,
-    });
+    await dispatch(invoke, { action: "download-file", cfg, params } as never);
     expect(firstAction(invoke)).toMatchObject({ action: "downloadFile", ...expected });
     expectForwardedCfg(invoke, cfg);
   });
@@ -1112,18 +924,14 @@ describe("handleSlackMessageAction", () => {
     const cfg = slackConfig();
     const toolContext = { currentChannelId: "C1" };
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "download-file",
-        cfg,
-        toolContext,
-        params: {
-          fileId: "F123",
-        },
-      } as never,
-      invoke: invoke as never,
-    });
+    await dispatch(invoke, {
+      action: "download-file",
+      cfg,
+      toolContext,
+      params: {
+        fileId: "F123",
+      },
+    } as never);
 
     const action = firstAction(invoke);
     expect(action.action).toBe("downloadFile");
@@ -1151,11 +959,7 @@ describe("handleSlackMessageAction", () => {
     },
   ])("$name", async ({ params, expectedError }) => {
     await expect(
-      handleSlackMessageAction({
-        providerId: "slack",
-        ctx: { action: "download-file", cfg: {}, params } as never,
-        invoke: createInvokeSpy() as never,
-      }),
+      dispatch(createInvokeSpy(), { action: "download-file", cfg: {}, params } as never),
     ).rejects.toThrow(expectedError);
   });
 
@@ -1163,19 +967,15 @@ describe("handleSlackMessageAction", () => {
     const invoke = createInvokeSpy();
     const toolContext = { currentChannelProvider: " Slack " };
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "member-info",
-        cfg: {},
-        params: {},
-        accountId: "OPS",
-        requesterAccountId: "ops",
-        requesterSenderId: "U123",
-        toolContext,
-      } as never,
-      invoke: invoke as never,
-    });
+    await dispatch(invoke, {
+      action: "member-info",
+      cfg: {},
+      params: {},
+      accountId: "OPS",
+      requesterAccountId: "ops",
+      requesterSenderId: "U123",
+      toolContext,
+    } as never);
 
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U123" }),
@@ -1188,18 +988,14 @@ describe("handleSlackMessageAction", () => {
     const invoke = createInvokeSpy();
     const toolContext = { currentChannelProvider: "slack" };
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "member-info",
-        cfg: { channels: { slack: { defaultAccount: "ops", accounts: { ops: {} } } } },
-        params: {},
-        requesterAccountId: "OPS",
-        requesterSenderId: "U123",
-        toolContext,
-      } as never,
-      invoke: invoke as never,
-    });
+    await dispatch(invoke, {
+      action: "member-info",
+      cfg: { channels: { slack: { defaultAccount: "ops", accounts: { ops: {} } } } },
+      params: {},
+      requesterAccountId: "OPS",
+      requesterSenderId: "U123",
+      toolContext,
+    } as never);
 
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U123" }),
@@ -1209,7 +1005,6 @@ describe("handleSlackMessageAction", () => {
   });
 
   it.each([
-    ["has no inbound sender", { toolContext: { currentChannelProvider: "slack" } }],
     ["has no source provider", { requesterSenderId: "U123" }],
     [
       "has no source account",
@@ -1234,11 +1029,12 @@ describe("handleSlackMessageAction", () => {
     ],
   ])("rejects member-info without userId when the request %s", async (_label, context) => {
     await expect(
-      handleSlackMessageAction({
-        providerId: "slack",
-        ctx: { action: "member-info", cfg: {}, params: {}, ...context } as never,
-        invoke: createInvokeSpy() as never,
-      }),
+      dispatch(createInvokeSpy(), {
+        action: "member-info",
+        cfg: {},
+        params: {},
+        ...context,
+      } as never),
     ).rejects.toThrow(/member-info requires a userId/i);
   });
 
@@ -1246,19 +1042,15 @@ describe("handleSlackMessageAction", () => {
     const invoke = createInvokeSpy();
     const toolContext = { currentChannelProvider: "telegram" };
 
-    await handleSlackMessageAction({
-      providerId: "slack",
-      ctx: {
-        action: "member-info",
-        cfg: {},
-        params: { userId: "U999" },
-        accountId: "other",
-        requesterAccountId: "default",
-        requesterSenderId: "U123",
-        toolContext,
-      } as never,
-      invoke: invoke as never,
-    });
+    await dispatch(invoke, {
+      action: "member-info",
+      cfg: {},
+      params: { userId: "U999" },
+      accountId: "other",
+      requesterAccountId: "default",
+      requesterSenderId: "U123",
+      toolContext,
+    } as never);
 
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U999" }),

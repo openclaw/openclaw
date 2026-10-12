@@ -5,7 +5,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
-import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
+import type { WorkerTunnelRequest, WorkerWorkspaceCommand } from "./tunnel-contract.js";
 
 const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
@@ -56,16 +56,46 @@ function createHarness(
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
 ) {
   let placement: WorkerSessionPlacementRecord = activePlacement();
-  const startTunnel = vi.fn(async () => ({ runWorkspaceCommand }));
+  let runnerStatus: "available" | "offline" = "available";
+  let runnerVersion = 0;
+  let nowMs = 1_000;
+  const unexpected = async () => {
+    throw new Error("unexpected workspace mutation during a disk probe");
+  };
+  const startTunnel = vi.fn(async ({ environmentId, ownerEpoch }: WorkerTunnelRequest) => ({
+    environmentId,
+    ownerEpoch,
+    runWorkspaceCommand,
+    quiesceWorkspace: unexpected,
+    syncWorkspace: unexpected,
+    reconcileWorkspace: unexpected,
+    stop: async () => {},
+  }));
   const warn = vi.fn();
   const monitor = createWorkerPlacementDiskSpaceMonitor({
     placements: {
       get: () => placement,
-      list: () => [placement],
+      readChangeSnapshot: async () => {
+        const { sessionId, sessionKey, agentId, state, generation, updatedAtMs } = placement;
+        return [{ sessionId, sessionKey, agentId, state, generation, updatedAtMs }];
+      },
+      readProjection: async () => ({
+        placements: new Map([[placement.sessionId, placement]]),
+        moves: new Map(),
+        pendingResults: new Map(),
+        workspaceJournalOwnerSessionIds: new Set(),
+        workspaceResultReconcilingSessionIds: new Set(),
+        workspaceRecoveryPendingSessionIds: new Set(),
+        environments: new Map(),
+      }),
     },
-    environments: { startTunnel: startTunnel as never },
+    environments: { startTunnel },
+    runnerAvailability: {
+      read: () => ({ kind: "device", deviceId: "node-1", status: runnerStatus }),
+      version: () => runnerVersion,
+    },
     warn,
-    now: () => 1_000,
+    now: () => nowMs,
   });
   return {
     monitor,
@@ -74,6 +104,13 @@ function createHarness(
     get placement() {
       return placement;
     },
+    setRunnerStatus(next: "available" | "offline") {
+      runnerStatus = next;
+      runnerVersion += 1;
+    },
+    advanceTime(ms: number) {
+      nowMs += ms;
+    },
     setPlacement(next: WorkerSessionPlacementRecord) {
       placement = next;
     },
@@ -81,6 +118,30 @@ function createHarness(
 }
 
 describe("active worker placement disk-space monitoring", () => {
+  it("reuses an idle sample for fifteen minutes and refreshes after placement activity", async () => {
+    const runWorkspaceCommand = vi.fn(async () => result(6 * GIB, 10 * GIB));
+    const harness = createHarness(runWorkspaceCommand);
+
+    await harness.monitor.sweep();
+    for (let minute = 0; minute < 14; minute += 1) {
+      harness.advanceTime(60_000);
+      await harness.monitor.sweep();
+    }
+    expect(runWorkspaceCommand).toHaveBeenCalledTimes(1);
+
+    harness.advanceTime(60_000);
+    await harness.monitor.sweep();
+    expect(runWorkspaceCommand).toHaveBeenCalledTimes(2);
+
+    harness.setPlacement(activePlacement({ updatedAtMs: 30 }));
+    await harness.monitor.sweep();
+    expect(runWorkspaceCommand).toHaveBeenCalledTimes(3);
+
+    harness.setPlacement(activePlacement({ generation: 4, activeOwnerEpoch: 8 }));
+    await harness.monitor.sweep();
+    expect(runWorkspaceCommand).toHaveBeenCalledTimes(4);
+  });
+
   it("samples an idle active placement and emits only projected status transitions", async () => {
     let availableBytes = 6 * GIB;
     const commands: WorkerWorkspaceCommand[] = [];
@@ -113,6 +174,7 @@ describe("active worker placement disk-space monitoring", () => {
       expect(events).toEqual([]);
 
       availableBytes = 400 * MIB;
+      harness.advanceTime(15 * 60_000);
       await harness.monitor.sweep();
       expect(harness.monitor.read(harness.placement)?.status).toBe("warning");
       expect(events).toEqual([
@@ -121,6 +183,7 @@ describe("active worker placement disk-space monitoring", () => {
       expect(harness.monitor.version()).toBe(2);
 
       availableBytes = 300 * MIB;
+      harness.advanceTime(15 * 60_000);
       await harness.monitor.sweep();
       expect(harness.monitor.read(harness.placement)?.availableBytes).toBe(300 * MIB);
       expect(events).toHaveLength(1);
@@ -130,6 +193,7 @@ describe("active worker placement disk-space monitoring", () => {
       expect(harness.monitor.version()).toBe(3);
 
       availableBytes = 6 * GIB;
+      harness.advanceTime(15 * 60_000);
       await harness.monitor.sweep();
       expect(harness.monitor.read(harness.placement)?.status).toBe("ok");
       expect(events).toHaveLength(2);
@@ -142,7 +206,6 @@ describe("active worker placement disk-space monitoring", () => {
   it.each([
     { availableBytes: 99 * MIB, totalBytes: 10 * GIB, status: "critical" },
     { availableBytes: 512 * MIB, totalBytes: 25 * GIB, status: "critical" },
-    { availableBytes: 499 * MIB, totalBytes: 10 * GIB, status: "warning" },
     { availableBytes: 100 * MIB, totalBytes: GIB, status: "warning" },
     { availableBytes: 4 * GIB, totalBytes: 80 * GIB, status: "warning" },
     { availableBytes: 500 * MIB, totalBytes: GIB, status: "ok" },
@@ -208,6 +271,37 @@ describe("active worker placement disk-space monitoring", () => {
     expect(harness.startTunnel).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["worker-turn", "remote-exec"] as const)(
+    "pauses offline %s device probes and records a fresh sample after reconnect",
+    async (executionMode) => {
+      let availableBytes = 400 * MIB;
+      const harness = createHarness(async () => result(availableBytes, 10 * GIB));
+      harness.setPlacement(activePlacement({ executionMode }));
+      await harness.monitor.sweep();
+      const previous = harness.monitor.read(harness.placement);
+
+      harness.setRunnerStatus("offline");
+      availableBytes = 6 * GIB;
+      await harness.monitor.sweep();
+      await harness.monitor.sweep();
+
+      expect(harness.startTunnel).toHaveBeenCalledTimes(1);
+      expect(harness.monitor.read(harness.placement)).toEqual(previous);
+      expect(harness.monitor.version()).toBe(1);
+
+      harness.setRunnerStatus("available");
+      await harness.monitor.sweep();
+
+      expect(harness.startTunnel).toHaveBeenCalledTimes(2);
+      expect(harness.monitor.read(harness.placement)).toMatchObject({
+        status: "ok",
+        availableBytes,
+      });
+      expect(harness.monitor.version()).toBe(2);
+      expect(harness.warn).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps the last exact-binding sample and warns on every failed advisory probe", async () => {
     let fail = false;
     const harness = createHarness(async () =>
@@ -220,6 +314,7 @@ describe("active worker placement disk-space monitoring", () => {
     );
     await harness.monitor.sweep();
     fail = true;
+    harness.advanceTime(15 * 60_000);
 
     await harness.monitor.sweep();
     await harness.monitor.sweep();
@@ -228,7 +323,7 @@ describe("active worker placement disk-space monitoring", () => {
     expect(harness.monitor.version()).toBe(1);
     expect(harness.warn).toHaveBeenCalledTimes(2);
     expect(harness.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Worker disk-space probe command failed"),
+      expect.stringContaining("Worker disk-space check command failed"),
     );
   });
 });

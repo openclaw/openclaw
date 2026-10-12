@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { splitQaModelRef } from "./model-selection.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
-import { selectQaFlowSuiteScenarios, splitModelRef } from "./suite-planning.js";
+import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 
 const SCENARIO = "live-frontier-execution-identity";
 type Fault =
@@ -151,7 +152,7 @@ function runIdentityFlow(fault: Fault = "none") {
           primaryModel: "fixture-live/fixture-model",
           gateway: { call, restartAfterStateMutation: restart },
         },
-        splitModelRef,
+        splitModelRef: splitQaModelRef,
         waitForAgentRun: async (_env: unknown, runId: string) => {
           expect(contexts.has(runId)).toBe(true);
           return { status: "ok" };

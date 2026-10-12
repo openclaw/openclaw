@@ -1,12 +1,4 @@
-import type { APIChannel } from "discord-api-types/v10";
-import {
-  createGuildChannel,
-  deleteChannel,
-  deleteChannelPermission,
-  editChannel,
-  moveGuildChannels,
-  putChannelPermission,
-} from "./internal/discord.js";
+import { Routes, type APIChannel } from "discord-api-types/v10";
 import { stripUndefinedFields } from "./internal/undefined-fields.js";
 import { resolveDiscordRest } from "./send.shared.js";
 import type {
@@ -30,9 +22,8 @@ export async function createChannelDiscord(
     position: payload.position,
     nsfw: payload.nsfw,
   });
-  return await createGuildChannel(rest, payload.guildId, {
-    body,
-  });
+  // SAFETY: Discord's Create Guild Channel route returns an API channel.
+  return (await rest.post(Routes.guildChannels(payload.guildId), { body })) as APIChannel;
 }
 
 export async function editChannelDiscord(
@@ -63,14 +54,13 @@ export async function editChannelDiscord(
             }),
           ),
   });
-  return await editChannel(rest, payload.channelId, {
-    body,
-  });
+  // SAFETY: Discord's Modify Channel route returns the updated API channel.
+  return (await rest.patch(Routes.channel(payload.channelId), { body })) as APIChannel;
 }
 
 export async function deleteChannelDiscord(channelId: string, opts: DiscordReactOpts) {
   const rest = resolveDiscordRest(opts);
-  await deleteChannel(rest, channelId);
+  await rest.delete(Routes.channel(channelId));
   return { ok: true, channelId };
 }
 
@@ -83,7 +73,7 @@ export async function moveChannelDiscord(payload: DiscordChannelMove, opts: Disc
       ...(payload.position !== undefined && { position: payload.position }),
     },
   ];
-  await moveGuildChannels(rest, payload.guildId, { body });
+  await rest.patch(Routes.guildChannels(payload.guildId), { body });
   return { ok: true };
 }
 
@@ -97,7 +87,7 @@ export async function setChannelPermissionDiscord(
     allow: payload.allow,
     deny: payload.deny,
   });
-  await putChannelPermission(rest, payload.channelId, payload.targetId, { body });
+  await rest.put(Routes.channelPermission(payload.channelId, payload.targetId), { body });
   return { ok: true };
 }
 
@@ -107,6 +97,6 @@ export async function removeChannelPermissionDiscord(
   opts: DiscordReactOpts,
 ) {
   const rest = resolveDiscordRest(opts);
-  await deleteChannelPermission(rest, channelId, targetId);
+  await rest.delete(Routes.channelPermission(channelId, targetId));
   return { ok: true };
 }

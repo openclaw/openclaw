@@ -42,6 +42,9 @@ suite.define(() => {
         await row.waitFor({ state: "visible" });
         await row.hover();
         await row.click({ button: "right" });
+        if (action === "delete") {
+          await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
+        }
         await activateSelfRemovingControl(
           page.locator("openclaw-session-menu").getByRole("menuitem", {
             name: action === "delete" ? "Delete…" : "Archive session",
@@ -150,8 +153,10 @@ suite.define(() => {
           if (!client?.recoveryScope) {
             throw new Error("Gateway recovery scope unavailable");
           }
+          const recoveryScope = client.recoveryScope;
           const { gatewayOwner, key: storageKey } = outbox.storageTargetForGateway(
             client.gatewayUrl,
+            recoveryScope,
           );
           const sessions = Object.fromEntries(
             sessionKeys.map((key, index) => [
@@ -159,16 +164,22 @@ suite.define(() => {
               {
                 draft: `local ${key}`,
                 draftRevision: index + 1,
-                queue: [{ id: `queued-${index}`, text: "queued", createdAt: index }],
+                queue: [
+                  {
+                    id: `queued-${index}`,
+                    text: "queued",
+                    createdAt: index,
+                    storageScope: JSON.stringify([gatewayOwner, recoveryScope]),
+                  },
+                ],
                 updatedAt: index + 1,
               },
             ]),
           );
           sessionStorage.setItem(
-            `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayOwner)}`,
+            storageKey,
             JSON.stringify({ version: 4, gatewayOwner, sessions, recovery: {} }),
           );
-          const recoveryScope = client.recoveryScope;
           await Promise.all(
             sessionKeys.map((key, index) =>
               store.writeDurableComposerDraft(
@@ -218,7 +229,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.delete", { after: requestsBeforeReplacement });
       const inFlightRevision = await page.evaluate(
         async ({ store, key, scopeOwner }) => {
-          const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+          const storageKey = scopeOwner.storageKey;
           const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
             sessions: Record<string, unknown>;
           };
@@ -248,7 +259,7 @@ suite.define(() => {
         .poll(() =>
           page.evaluate(
             async ({ store, key, scopeOwner }) => {
-              const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+              const storageKey = scopeOwner.storageKey;
               const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
                 sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
               };
@@ -270,7 +281,7 @@ suite.define(() => {
 
       await page.evaluate(
         async ({ store, key, scopeOwner }) => {
-          const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+          const storageKey = scopeOwner.storageKey;
           const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
             sessions: Record<string, { draft?: string; draftRevision?: number }>;
           };
@@ -309,11 +320,9 @@ suite.define(() => {
         .poll(() =>
           page.evaluate(
             async ({ store, sessionKeys, scopeOwner }) => {
-              const local = JSON.parse(
-                sessionStorage.getItem(
-                  `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`,
-                ) ?? "{}",
-              ) as { sessions?: Record<string, { draft?: string; queue?: unknown[] }> };
+              const local = JSON.parse(sessionStorage.getItem(scopeOwner.storageKey) ?? "{}") as {
+                sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
+              };
               return Object.fromEntries(
                 await Promise.all(
                   sessionKeys.map(async (key) => {
@@ -466,6 +475,7 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
       await row.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
       await page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Delete…" })
@@ -556,6 +566,7 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
       await row.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
       await page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Delete…" })

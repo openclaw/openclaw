@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import {
+  hasMainSessionRecoveryClaim,
+  hasRestartRecoveryTerminalRun,
+  isMainRestartRecoveryCandidate,
+} from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
@@ -7,7 +12,6 @@ import {
   scheduleMainSessionRecoveryMutation,
 } from "./main-session-recovery-lifecycle.js";
 import {
-  isMainRestartRecoveryCandidate,
   isMainSessionRecoveryPending,
   transitionMainSessionRecovery,
   type MainSessionRecoveryCommand,
@@ -15,6 +19,7 @@ import {
   type MainSessionRecoveryReservation,
   type MainSessionRecoveryTransitionResult,
 } from "./main-session-recovery-state.js";
+import { captureYieldedMainSessionContinuation } from "./main-session-restart-recovery-target.js";
 
 export type MainSessionRecoveryStoreTarget = {
   agentId?: string;
@@ -59,7 +64,6 @@ export async function commitMainSessionRecovery(params: {
   command: MainSessionRecoveryCommand;
   expectedSessionId?: string;
   requireWriteSuccess?: boolean;
-  scanAliases?: boolean;
   shouldContinue?: () => boolean;
   target: MainSessionRecoveryStoreTarget;
 }): Promise<MainSessionRecoveryStoreResult> {
@@ -76,14 +80,31 @@ export async function commitMainSessionRecovery(params: {
     params.command.kind === "validate_foreground" || params.command.kind === "release_foreground"
       ? params.command.claim
       : undefined;
-  const result = await applySessionEntryReplacements<MainSessionRecoveryStoreResult | undefined>({
+  let yieldedContinuation: (() => boolean) | undefined;
+  return await applySessionEntryReplacements<MainSessionRecoveryStoreResult>({
     agentId: params.target.agentId,
     requireWriteSuccess: params.requireWriteSuccess,
-    ...(params.scanAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
+    sessionKeys: [params.target.sessionKey],
+    // Retained windows follow key moves and session rotation; the claim still authorizes cleanup.
+    includeSessionWindowOwner:
+      reservationCleanup?.sessionId ??
+      recoveryAdmission?.sessionId ??
+      exactOwnerClaim?.sessionId ??
+      ownerClaim?.sessionId ??
+      params.expectedSessionId,
     storePath: params.target.storePath,
+    assertCommitAllowed: () => {
+      if (
+        yieldedContinuation &&
+        (!yieldedContinuation() ||
+          ownerClaim?.lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
+          params.shouldContinue?.() === false)
+      ) {
+        throw new Error("Yielded requester continuation changed before recovery handoff");
+      }
+    },
     update: (entries) => {
-      // Recheck after entering write admission: shutdown can begin while this
-      // recovery owner is waiting, including between exact and moved-key lookups.
+      // Shutdown can begin while recovery waits for writer admission.
       const expectedGeneration = currentGenerationRequiredBy(params.command);
       if (
         params.shouldContinue?.() === false ||
@@ -107,7 +128,7 @@ export async function commitMainSessionRecovery(params: {
         // Canonical session-key migration may happen between reservation and
         // Gateway admission; the reservation identity remains authoritative.
         candidate = entries.find(({ entry }) => {
-          const reservation = (entry as SessionEntry).mainRestartRecovery?.reservation;
+          const reservation = entry.mainRestartRecovery?.reservation;
           return (
             entry.sessionId === recoveryAdmission.sessionId &&
             reservation?.runId === recoveryAdmission.runId &&
@@ -116,7 +137,7 @@ export async function commitMainSessionRecovery(params: {
         });
       } else if (exactOwnerClaim) {
         candidate = entries.find(({ entry }) => {
-          const state = (entry as SessionEntry).mainRestartRecovery;
+          const state = entry.mainRestartRecovery;
           return (
             state?.cycleId === exactOwnerClaim.cycleId &&
             state.foregroundClaims?.lifecycleGeneration === exactOwnerClaim.lifecycleGeneration &&
@@ -125,20 +146,8 @@ export async function commitMainSessionRecovery(params: {
         });
       } else if (ownerClaim && (!selected || selected.entry.sessionId !== ownerClaim.sessionId)) {
         candidate = entries.find(({ entry }) => entry.sessionId === ownerClaim.sessionId);
-      } else if (params.scanAliases && params.expectedSessionId) {
+      } else if (params.expectedSessionId) {
         candidate = entries.find(({ entry }) => entry.sessionId === params.expectedSessionId);
-      }
-      if (
-        !candidate &&
-        !params.scanAliases &&
-        (reservationCleanup ||
-          recoveryAdmission ||
-          exactOwnerClaim ||
-          ownerClaim ||
-          params.command.kind === "inspect")
-      ) {
-        // Discover moved identities only after the exact key misses.
-        return { result: undefined };
       }
       if (reservationCleanup || recoveryAdmission || exactOwnerClaim) {
         candidate ??= selected;
@@ -152,8 +161,10 @@ export async function commitMainSessionRecovery(params: {
           },
         };
       }
-      const entry = candidate.entry as SessionEntry;
+      const entry = candidate.entry;
       const previousRecoveryState = entry.mainRestartRecovery;
+      const previousRecoveryRuns = entry.restartRecoveryRuns;
+      const previousDeliveryRunId = entry.restartRecoveryDeliveryRunId;
       const command =
         (params.command.kind === "claim_foreground" ||
           params.command.kind === "observe" ||
@@ -161,9 +172,36 @@ export async function commitMainSessionRecovery(params: {
         params.command.sessionKey !== candidate.sessionKey
           ? { ...params.command, sessionKey: candidate.sessionKey }
           : params.command;
+      if (
+        ownerClaim &&
+        entry.sessionId === ownerClaim.sessionId &&
+        isMainRestartRecoveryCandidate(entry, candidate.sessionKey) &&
+        entry.abortedLastRun !== true &&
+        !entry.mainRestartRecovery &&
+        !entry.pendingFinalDelivery &&
+        !entry.restartRecoveryDeliveryRunId &&
+        entry.restartRecoveryRuns?.length &&
+        entry.restartRecoveryRuns.every(
+          (run) =>
+            run.runId === entry.lifecycleRunId || hasRestartRecoveryTerminalRun(entry, run.runId),
+        )
+      ) {
+        yieldedContinuation = captureYieldedMainSessionContinuation({
+          storeAgentId: params.target.agentId,
+          entry,
+          sessionKey: candidate.sessionKey,
+          storePath: params.target.storePath,
+        });
+        if (yieldedContinuation?.()) {
+          // The durable child batch takes custody before the successor gets its own fence.
+          transitionMainSessionRecovery(entry, { kind: "clear" });
+        }
+      }
       const transition = transitionMainSessionRecovery(entry, command);
       const changed =
         previousRecoveryState !== entry.mainRestartRecovery ||
+        previousRecoveryRuns !== entry.restartRecoveryRuns ||
+        previousDeliveryRunId !== entry.restartRecoveryDeliveryRunId ||
         (transition.kind !== "foreground_validated" &&
           transition.kind !== "no_change" &&
           transition.kind !== "observed" &&
@@ -174,7 +212,6 @@ export async function commitMainSessionRecovery(params: {
       };
     },
   });
-  return result ?? commitMainSessionRecovery({ ...params, scanAliases: true });
 }
 
 export async function refreshMainSessionRecoveryOwner(
@@ -240,26 +277,24 @@ export async function claimMainSessionRecoveryOwner(params: {
   if (!claim.entry && (params.allowMissingSession || params.replacementSessionId)) {
     // A fresh explicit session has no predecessor. An automatic rollover can
     // also lose its predecessor before admission. Either way, no row remains to fence.
-    return { kind: "not_required" } as const;
+    return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
+  // Stop retains its outcome flag after recovery custody settles. Admit that
+  // same-session row without mistaking its cancelled outcome for unfinished work.
   const healthyExpectedSession =
     claim.entry &&
-    claim.entry.abortedLastRun !== true &&
+    (claim.entry.abortedLastRun !== true || !hasMainSessionRecoveryClaim(claim.entry)) &&
     claim.entry.restartRecoveryRuns === undefined &&
     claim.entry.mainRestartRecovery === undefined &&
     (claim.entry.sessionId === params.sessionId ||
       claim.entry.sessionId === params.replacementSessionId);
   if (
-    claim.entry?.sessionId === params.sessionId &&
-    claim.sessionKey &&
-    !isMainRestartRecoveryCandidate(claim.entry, claim.sessionKey)
+    healthyExpectedSession ||
+    (claim.entry?.sessionId === params.sessionId &&
+      claim.sessionKey &&
+      !isMainRestartRecoveryCandidate(claim.entry, claim.sessionKey))
   ) {
-    return { kind: "not_required" } as const;
-  }
-  if (healthyExpectedSession) {
-    // A healthy completion may clear recovery between the caller's read and this
-    // transaction. Only that fully clean same-session state can proceed unclaimed.
-    return { kind: "not_required" } as const;
+    return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
   const reason = claim.transition.kind === "rejected" ? claim.transition.reason : "state_changed";
   return { kind: "invalidated", reason } as const;

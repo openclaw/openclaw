@@ -1,6 +1,7 @@
-import chokidar from "chokidar";
-import { expect, vi, type TestContext } from "vitest";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { assert, expect, onTestFinished, vi, type TestContext } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type {
   ConfigFileSnapshot,
   ConfigWriteNotification,
@@ -8,12 +9,18 @@ import type {
 } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import * as backoff from "../infra/backoff.js";
+import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import {
   startGatewayConfigReloader as startGatewayConfigReloaderImpl,
   type GatewayConfigReloadTransactionOwnership,
   type GatewayReloadPlan,
 } from "./config-reload.js";
-import { createWatcherMock } from "./config-reload.watcher.test-support.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 
 const activeReloaders = new Set<ReturnType<typeof startGatewayConfigReloaderImpl>>();
 let currentTest: { timeout: number; signal: AbortSignal } | undefined;
@@ -22,10 +29,114 @@ export function prepareConfigReloadTest({ task, signal }: TestContext) {
   currentTest = { timeout: task.timeout, signal };
 }
 
-export function startGatewayConfigReloader(
-  ...args: Parameters<typeof startGatewayConfigReloaderImpl>
-) {
-  const reloader = startGatewayConfigReloaderImpl(...args);
+export function createConfigReloadTestClock() {
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  onTestFinished(() => scheduler.stop());
+  return { clock, scheduler };
+}
+
+export function createPluginLifecycleLeaseTestClock() {
+  const leaseScope = new AsyncLocalStorage<boolean>();
+  const pendingBackoffs = new Set<{ dueAt: number }>();
+  let backoffScheduled = createDeferred();
+  const sleep = backoff.sleepWithAbort;
+  const sleepSpy = vi.spyOn(backoff, "sleepWithAbort").mockImplementation((ms, ...args) => {
+    const completion = sleep(ms, ...args);
+    if (leaseScope.getStore() && Number.isFinite(ms) && ms > 0) {
+      const pending = { dueAt: Date.now() + Math.max(1, Math.floor(ms)) };
+      pendingBackoffs.add(pending);
+      const scheduled = backoffScheduled;
+      backoffScheduled = createDeferred();
+      scheduled.resolve();
+      void completion.then(
+        () => pendingBackoffs.delete(pending),
+        () => pendingBackoffs.delete(pending),
+      );
+    }
+    return completion;
+  });
+  const withLease = pluginLifecycleLease.withPluginLifecycleLease;
+  const withCleanupLease = pluginLifecycleLease.withPluginArtifactCleanupLease;
+  let firstCompletion: Promise<unknown> | undefined;
+  const trackLease = <T>(start: () => Promise<T>): Promise<T> => {
+    const completion = leaseScope.run(true, start);
+    firstCompletion ??= completion;
+    return completion;
+  };
+  const leaseSpy = vi
+    .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
+    .mockImplementation((options, run) => trackLease(() => withLease(options, run)));
+  const cleanupLeaseSpy = vi
+    .spyOn(pluginLifecycleLease, "withPluginArtifactCleanupLease")
+    .mockImplementation((options, run) => trackLease(() => withCleanupLease(options, run)));
+  onTestFinished(() => {
+    leaseSpy.mockRestore();
+    cleanupLeaseSpy.mockRestore();
+    sleepSpy.mockRestore();
+  });
+  const waitFor = async <T>(completion: Promise<T>): Promise<T> => {
+    const settlement = completion.then(
+      () => "settled",
+      () => "settled",
+    );
+    for (;;) {
+      const backoffReady =
+        pendingBackoffs.size > 0
+          ? Promise.resolve("backoff")
+          : backoffScheduled.promise.then(() => "backoff");
+      if ((await Promise.race([settlement, backoffReady])) === "settled") {
+        return await completion;
+      }
+      // Worker replies can schedule lease backoff after a fake timer advance ends.
+      // Advance only for an observed lease delay; never poll a real clock for completion.
+      const next = Math.min(...[...pendingBackoffs].map(({ dueAt }) => dueAt));
+      if (Number.isFinite(next)) {
+        await vi.advanceTimersByTimeAsync(Math.max(0, next - Date.now()));
+      }
+    }
+  };
+  return {
+    waitFor,
+    async waitForFirstLease() {
+      assert.isDefined(firstCompletion);
+      await waitFor(firstCompletion);
+    },
+  };
+}
+
+export function createReloadWarningObserver() {
+  let record: ((message: string) => void) | undefined;
+  return {
+    observe: (message: string) => record?.(message),
+    next: (text: string) =>
+      new Promise<void>((resolve) => {
+        record = (message) => {
+          if (message.includes(text)) {
+            record = undefined;
+            resolve();
+          }
+        };
+      }),
+  };
+}
+
+export function createRecoveryRestartMock() {
+  const emitted = createDeferred();
+  const requestRecoveryRestart = vi.fn(() => {
+    emitted.resolve();
+    return { status: "emitted" as const };
+  });
+  return { requestRecoveryRestart, restartEmitted: emitted.promise };
+}
+
+export function startGatewayConfigReloader({
+  scheduler = createTestGatewayScheduler("fake-timers"),
+  ...opts
+}: Omit<Parameters<typeof startGatewayConfigReloaderImpl>[0], "scheduler"> & {
+  scheduler?: Parameters<typeof startGatewayConfigReloaderImpl>[0]["scheduler"];
+}) {
+  const reloader = startGatewayConfigReloaderImpl({ ...opts, scheduler });
   activeReloaders.add(reloader);
   return reloader;
 }
@@ -130,9 +241,24 @@ export function makeZeroDebounceHookWrite(persistedHash: string): ConfigWriteNot
   };
 }
 
+export function makeWrite(
+  config: OpenClawConfig,
+  hash: string,
+  overrides: Partial<ConfigWriteNotification> = {},
+): ConfigWriteNotification {
+  return {
+    ...makeZeroDebounceHookWrite(hash),
+    sourceConfig: config,
+    runtimeConfig: config,
+    snapshot: makeSnapshot({ config, hash }),
+    ...overrides,
+  };
+}
+
 export function createReloaderHarness(
   readSnapshot: () => Promise<ConfigFileSnapshot>,
   options: {
+    scheduler?: Parameters<typeof startGatewayConfigReloaderImpl>[0]["scheduler"];
     initialConfig?: OpenClawConfig;
     initialCompareConfig?: OpenClawConfig;
     initialSnapshotRawHash?: string | null;
@@ -160,8 +286,7 @@ export function createReloaderHarness(
     onRestart?: Parameters<typeof startGatewayConfigReloader>[0]["onRestart"];
   } = {},
 ) {
-  const watcher = createWatcherMock();
-  vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
+  const watcher = installWatcherMock();
   const onConfigChange = vi.fn(
     options.onConfigChange ?? (async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {}),
   );
@@ -209,6 +334,7 @@ export function createReloaderHarness(
   const log = createInfoWarnErrorLogger();
   const initialConfig = options.initialConfig ?? { gateway: { reload: {} } };
   const reloader = startGatewayConfigReloader({
+    scheduler: options.scheduler,
     testDebounceMs: 0,
     initialConfig,
     initialCompareConfig: options.initialCompareConfig,

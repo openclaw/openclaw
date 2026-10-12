@@ -57,8 +57,7 @@ across many turns:
 - A maintenance task: inspect current state, make bounded changes, run the
   right checks, and report what changed.
 
-A goal is not a task queue. Use [Task Flow](/automation/taskflow),
-[tasks](/automation/tasks), [cron jobs](/automation/cron-jobs), or
+A goal is not a task queue. Use [subagents](/tools/subagents), [cron jobs](/automation/cron-jobs), or
 [standing orders](/automation/standing-orders) when work should run detached,
 repeat on a schedule, fan out into managed sub-work, or persist as a policy.
 
@@ -194,7 +193,8 @@ the objective as a normal chat draft. Complete pasted commands such as
 
 Starting a Goal saves the Goal, its user turn, and the run admission together
 before acknowledging Send. A failed admission leaves the draft intact and
-does not create a Goal. Start and Resume require the built-in OpenClaw runtime
+does not create a Goal. A failed older chat send stays separate from a newly opened
+Goal draft instead of filling its empty objective. Start and Resume require the built-in OpenClaw runtime
 and an idle local session with recoverable history. They are unavailable for
 native Codex and other external runtimes, and are not queued or steered into
 another run. The UI reports unsupported or busy sessions rather than creating
@@ -223,17 +223,20 @@ The pill carries inline controls:
 - **Chevron** expands the pill to show the full objective, the latest status
   note, token usage, and elapsed time.
 
-On narrow mobile screens, expand the pill to reveal compact labeled controls
-above the full objective. Collapsing it hides these controls again; token usage
-and elapsed time remain below the objective and status note.
+Resume stays visible in the collapsed pill, including on narrow mobile screens.
+Expand the pill to reveal the other compact labeled controls above the full
+objective. Token usage and elapsed time remain below the objective and status note.
 
 Edit, Pause, and Clear do not send slash commands or add chat turns. Controls
 target the displayed Goal ID, so a stale button cannot change a replacement
 Goal. If a request is interrupted or its acknowledgment does not arrive within
-30 seconds, the UI reports an unconfirmed outcome. Use **Check outcome** in the
-recovery notice, even if the goal changed or was cleared. This retries the saved action
+30 seconds, the UI reports an unconfirmed outcome. Resume keeps **Resuming goal…**
+in the pill while waiting and retries once after a timeout or unavailable response,
+using the same saved request. If it remains unconfirmed, use **Retry resume** in
+the pill. Other actions, or requests whose goal changed or was cleared, use
+**Check outcome** in the recovery notice. These controls retry the saved action
 unchanged to reconcile it with the Gateway receipt. The original request stays
-in this browser tab across reconnects and reloads; it is never retried
+in this browser tab across reconnects and reloads; restoring it never sends it
 automatically. The UI does not send goal controls if the connection has no
 account-scoped recovery identity or the recovery request cannot be saved; it
 immediately shows an error explaining why the action was not sent.
@@ -245,8 +248,9 @@ request expires and its literal payload is removed; **Review current goal** refr
 state before another decision. Forgetting this browser or switching authenticated
 accounts removes that Gateway's previous account recovery payloads.
 
-The action buttons are unavailable without a connection. The expand chevron
-keeps working. Concurrent Goal actions are rejected while an operation is
+The action buttons are unavailable without a connection or while the initial
+chat history loads and confirms the session identity. The expand chevron keeps
+working. Concurrent Goal actions are rejected while an operation is
 pending. These controls require
 a Gateway advertising the structured Goal capability. Text `/goal` commands
 remain available for CLI and other command-capable surfaces.
@@ -325,5 +329,4 @@ and transcript-derived totals.
 - [TUI](/web/tui)
 - [Session tool](/concepts/session-tool)
 - [Compaction](/concepts/compaction)
-- [Task Flow](/automation/taskflow)
 - [Standing orders](/automation/standing-orders)

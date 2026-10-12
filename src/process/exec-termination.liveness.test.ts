@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { transformSync } from "esbuild";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { requireNodeTool, stripNodeTypeScriptTypes } from "../../test/helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -15,15 +16,37 @@ beforeAll(async () => {
     /from "(\.\.?\/[^"\n]+)"/g,
     'from "./dependencies.mjs"',
   );
+  const retry = transformSync(
+    await fs.readFile(path.resolve("packages/retry/src/index.ts"), "utf8"),
+    {
+      loader: "ts",
+      target: "esnext",
+      format: "esm",
+    },
+  ).code;
+  await fs.writeFile(path.join(directory, "retry.mjs"), retry);
+  const sleepSource = await fs.readFile(path.resolve("src/utils/sleep.ts"), "utf8");
+  // Keep the real timer owner so an unref regression still lets the child exit early.
+  const sleep = stripNodeTypeScriptTypes(sleepSource).replace(
+    /from "([^"\n]+)"/g,
+    (_match, specifier: string) =>
+      `from ${JSON.stringify(
+        specifier === "../infra/abort-signal.js" || specifier === "@openclaw/retry"
+          ? "./retry.mjs"
+          : import.meta.resolve(specifier),
+      )}`,
+  );
   await fs.writeFile(path.join(directory, "owner.mjs"), owner);
   await fs.writeFile(
     path.join(directory, "dependencies.mjs"),
     `
+${sleep}
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
 export const getWindowsSystem32ExePath = () => 'taskkill.exe';
 export const getFileLockProcessStartTime = () => { throw new Error('unexpected POSIX identity'); };
 export const isChildProcessTreeAlive = () => { throw new Error('unexpected POSIX group'); };
 export const killProcessTree = () => { throw new Error('unexpected POSIX termination'); };
+export const scheduleAdoptedChildZombieReapAfterExit = () => { throw new Error('unexpected POSIX reaping'); };
 export const runOutsideCommandProcessScope = operation => operation();
 let child, failure;
 export let completedHelpers = 0;

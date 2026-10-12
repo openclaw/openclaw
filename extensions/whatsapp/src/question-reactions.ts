@@ -7,64 +7,18 @@ import {
   questionGatewayRuntime,
 } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
-
-type WhatsAppQuestionReactionIdentity = {
-  accountId: string;
-  remoteJid: string;
-  messageId: string;
-};
-
-function buildKey(identity: WhatsAppQuestionReactionIdentity): string | undefined {
-  const parts = [identity.accountId, identity.remoteJid, identity.messageId].map((part) =>
-    part.trim(),
-  );
-  return parts.every(Boolean) ? parts.join(":") : undefined;
-}
+import { listWhatsAppDeliveredMessageIdentities } from "./inbound/send-result.js";
+import { buildWhatsAppReactionTargetKey } from "./reaction-target.js";
 
 const questionReactionTargets = createQuestionReactionTargetStore({
   channel: "whatsapp",
   channelDisplayName: "WhatsApp",
-  buildKey,
+  buildKey: buildWhatsAppReactionTargetKey,
   registerChannelDelivery: questionGatewayRuntime.registerChannelDelivery,
   resolveReaction: questionGatewayRuntime.resolveReaction,
 });
-
-function addCandidate(values: string[], value: string | null | undefined): void {
-  const normalized = value?.trim();
-  if (normalized && !values.includes(normalized)) {
-    values.push(normalized);
-  }
-}
-
-function listDeliveredIdentities(
-  results: readonly OutboundDeliveryResult[],
-): Array<{ messageId: string; remoteJid: string }> {
-  const identities: Array<{ messageId: string; remoteJid: string }> = [];
-  const seen = new Set<string>();
-  const add = (messageId?: string, remoteJid?: string) => {
-    const id = messageId?.trim() ?? "";
-    const jid = remoteJid?.trim() ?? "";
-    const key = `${jid}:${id}`;
-    if (id && id !== "unknown" && jid && !seen.has(key)) {
-      seen.add(key);
-      identities.push({ messageId: id, remoteJid: jid });
-    }
-  };
-  for (const result of results) {
-    if (result.channel !== "whatsapp") {
-      continue;
-    }
-    add(result.messageId, result.toJid);
-    for (const raw of result.receipt?.raw ?? []) {
-      add(raw.messageId, raw.toJid);
-    }
-    for (const part of result.receipt?.parts ?? []) {
-      add(part.raw?.messageId ?? part.platformMessageId, part.raw?.toJid);
-    }
-  }
-  return identities;
-}
 
 export function registerWhatsAppQuestionReactionTargetForDeliveredPayload(params: {
   cfg: OpenClawConfig;
@@ -81,7 +35,7 @@ export function registerWhatsAppQuestionReactionTargetForDeliveredPayload(params
     accountId: params.target.accountId,
   }).accountId;
   let registered = false;
-  for (const identity of listDeliveredIdentities(params.results)) {
+  for (const identity of listWhatsAppDeliveredMessageIdentities(params.results, () => true)) {
     registered =
       questionReactionTargets.register(binding, { accountId, ...identity }) || registered;
   }
@@ -104,18 +58,16 @@ export async function maybeResolveWhatsAppQuestionReaction(params: {
   if (optionIndex === undefined || !messageId) {
     return false;
   }
-  const remoteJids: string[] = [];
-  addCandidate(remoteJids, reaction?.key?.remoteJid);
-  addCandidate(remoteJids, params.msg.key?.remoteJid);
+  const remoteJids = normalizeUniqueTrimmedStringList([
+    reaction?.key?.remoteJid,
+    params.msg.key?.remoteJid,
+  ]);
   const candidates: string[] = [];
   for (const remoteJid of remoteJids) {
-    addCandidate(candidates, remoteJid);
-    for (const mapped of (await params.resolveReactionTargetJids?.(remoteJid)) ?? []) {
-      addCandidate(candidates, mapped);
-    }
+    candidates.push(remoteJid, ...((await params.resolveReactionTargetJids?.(remoteJid)) ?? []));
   }
   return await questionReactionTargets.resolve({
-    identities: candidates.map((remoteJid) => ({
+    identities: normalizeUniqueTrimmedStringList(candidates).map((remoteJid) => ({
       accountId: params.accountId,
       remoteJid,
       messageId,

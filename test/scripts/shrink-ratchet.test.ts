@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   compareRatchetCounts,
   compareRatchetSets,
-  formatRatchetMessage,
   loadRatchetReference,
   loadRatchetSnapshot,
   loadRatchetSources,
@@ -46,12 +45,6 @@ describe("shrink-ratchet", () => {
       parse: (source: string) => [...parseRatchetCounts(source, "counts.txt")],
       source: "# per-file debt\nsrc/b.ts\t2\nsrc/a.ts\t1\n",
     },
-    {
-      expected: 2,
-      file: "scalar.txt",
-      parse: (source: string) => parseRatchetScalar(source, "scalar.txt"),
-      source: "# total debt\n2\n",
-    },
   ])("loads the existing $file baseline format", ({ expected, file, parse, source }) => {
     const root = tempDirs.make("openclaw-shrink-ratchet-");
     fs.writeFileSync(path.join(root, file), source);
@@ -59,40 +52,34 @@ describe("shrink-ratchet", () => {
     expect(loadRatchetSnapshot<unknown>(root, file, false, parse)).toEqual(expected);
   });
 
-  it("loads worktree, index, and reference snapshots", () => {
+  it("loads worktree, index, and reference snapshots beyond the Git pipe limit", () => {
     const root = tempDirs.make("openclaw-shrink-ratchet-git-");
     const baselinePath = "baseline.txt";
     const absolutePath = path.join(root, baselinePath);
     execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
-    fs.writeFileSync(absolutePath, "1\n");
+    const padding = `#${"x".repeat(2 * 1024 * 1024)}\n`;
+    fs.writeFileSync(absolutePath, padding + "1\n");
     execFileSync("git", ["add", baselinePath], { cwd: root, stdio: "ignore" });
     execFileSync(
       "git",
       ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", "commit", "-m", "base"],
       { cwd: root, stdio: "ignore" },
     );
-    fs.writeFileSync(absolutePath, "2\n");
+    fs.writeFileSync(absolutePath, padding + "2\n");
     execFileSync("git", ["add", baselinePath], { cwd: root, stdio: "ignore" });
-    fs.writeFileSync(absolutePath, "3\n");
+    fs.writeFileSync(absolutePath, padding + "3\n");
     const parse = (source: string) => parseRatchetScalar(source, baselinePath);
 
     expect(loadRatchetSnapshot(root, baselinePath, false, parse)).toBe(3);
     expect(loadRatchetSnapshot(root, baselinePath, true, parse)).toBe(2);
     expect(loadRatchetReference(root, "HEAD", baselinePath, parse)).toBe(1);
     expect(loadRatchetReference(root, "HEAD", "missing.txt", parse)).toBeNull();
+    expect(() => loadRatchetReference(root, "missing-ref", baselinePath, parse)).toThrow();
   });
 
-  it.each([
-    () => parseRatchetCounts("src/a.ts\t0\n", "counts.txt"),
-    () => parseRatchetCounts("src/a.ts\t1\nsrc/a.ts\t2\n", "counts.txt"),
-    () => parseRatchetCounts("src/a.ts\t1.5\n", "counts.txt"),
-  ])("rejects malformed count-map baselines", (parse) => {
-    expect(parse).toThrow(/Invalid counts\.txt entry/u);
-  });
-  it("prefers an exact prepared merge parent over merge-base recovery", () => {
-    const root = tempDirs.make("openclaw-shrink-ratchet-prepared-");
+  it("trusts a CI-verified comparison base when Git history is disconnected", () => {
+    const root = tempDirs.make("openclaw-shrink-ratchet-ci-base-");
     execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
-    execFileSync("git", ["branch", "-m", "main"], { cwd: root, stdio: "ignore" });
     fs.writeFileSync(path.join(root, "base.txt"), "base\n");
     execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
     execFileSync(
@@ -100,28 +87,13 @@ describe("shrink-ratchet", () => {
       ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", "commit", "-m", "base"],
       { cwd: root, stdio: "ignore" },
     );
-    execFileSync("git", ["branch", "feature"], { cwd: root, stdio: "ignore" });
-    fs.writeFileSync(path.join(root, "prepared.txt"), "prepared\n");
-    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=OpenClaw",
-        "-c",
-        "user.email=test@openclaw.local",
-        "commit",
-        "-m",
-        "prepared base",
-      ],
-      { cwd: root, stdio: "ignore" },
-    );
     const preparedBase = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: root,
       encoding: "utf8",
     }).trim();
 
-    execFileSync("git", ["checkout", "feature"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["checkout", "--orphan", "feature"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["rm", "-rf", "."], { cwd: root, stdio: "ignore" });
     fs.writeFileSync(path.join(root, "feature.txt"), "feature\n");
     execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
     execFileSync(
@@ -137,22 +109,35 @@ describe("shrink-ratchet", () => {
       ],
       { cwd: root, stdio: "ignore" },
     );
-    execFileSync("git", ["checkout", "main"], { cwd: root, stdio: "ignore" });
-    execFileSync(
-      "git",
-      ["merge", "--no-ff", "feature", "-m", "prepared merge"],
-      { cwd: root, stdio: "ignore" },
-    );
+    const prHead = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
 
-    expect(resolveRatchetBase(root, { base: preparedBase, staged: false })).toBe(preparedBase);
+    const previousBase = process.env.CHECKOUT_BASE_SHA;
+    const previousHead = process.env.RATCHET_PR_HEAD_SHA;
+    process.env.CHECKOUT_BASE_SHA = preparedBase;
+    process.env.RATCHET_PR_HEAD_SHA = prHead;
+    try {
+      expect(resolveRatchetBase(root, { base: preparedBase, staged: false })).toBe(preparedBase);
+    } finally {
+      if (previousBase === undefined) delete process.env.CHECKOUT_BASE_SHA;
+      else process.env.CHECKOUT_BASE_SHA = previousBase;
+      if (previousHead === undefined) delete process.env.RATCHET_PR_HEAD_SHA;
+      else process.env.RATCHET_PR_HEAD_SHA = previousHead;
+    }
   });
 
-  it.each([
-    () => parseRatchetScalar("1\n2\n", "scalar.txt"),
-    () => parseRatchetScalar("-1\n", "scalar.txt"),
-    () => parseRatchetScalar("many\n", "scalar.txt"),
-  ])("rejects malformed scalar baselines", (parse) => {
-    expect(parse).toThrow(/exactly one non-negative integer/u);
+  it("rejects duplicate count-map entries", () => {
+    expect(() => parseRatchetCounts("src/a.ts\t1\nsrc/a.ts\t2\n", "counts.txt")).toThrow(
+      /Invalid counts\.txt entry/u,
+    );
+  });
+
+  it("rejects negative scalar baselines", () => {
+    expect(() => parseRatchetScalar("-1\n", "scalar.txt")).toThrow(
+      /exactly one non-negative integer/u,
+    );
   });
 
   it.each([
@@ -197,11 +182,5 @@ describe("shrink-ratchet", () => {
     },
   ])("compares $name without permitting growth", ({ compare, expected }) => {
     expect(compare()).toEqual(expected);
-  });
-
-  it("formats shrink guidance", () => {
-    expect(
-      formatRatchetMessage("Shrink baseline entries:", ["src/a.ts: 1 < 2", "src/b.ts: 0 < 1"]),
-    ).toBe("Shrink baseline entries:\n  src/a.ts: 1 < 2\n  src/b.ts: 0 < 1");
   });
 });

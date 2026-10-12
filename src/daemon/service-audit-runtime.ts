@@ -32,53 +32,41 @@ export async function auditGatewayRuntime(
     return undefined;
   }
 
-  if (isBunRuntime(execPath)) {
-    const runtime = await resolveBunRuntimeInfo(execPath);
-    if (runtime.status !== "supported") {
-      issues.push({
-        code:
-          runtime.status === "probe-failed"
-            ? SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeProbeFailed
-            : SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeBun,
-        message:
-          runtime.status === "probe-failed"
-            ? "Gateway service Bun runtime probe failed."
-            : "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with WAL-reset-safe node:sqlite is required.",
-        detail:
-          runtime.status === "probe-failed"
-            ? runtime.error.message
-            : runtime.sqliteSelectionError
-              ? `${execPath}: ${runtime.sqliteSelectionError}`
-              : execPath,
-        level: "recommended",
-      });
-    }
+  const bun = isBunRuntime(execPath);
+  if (!bun && !isNodeRuntime(execPath)) {
     return undefined;
   }
-
-  if (!isNodeRuntime(execPath)) {
-    return undefined;
-  }
-
-  const runtime = await resolveNodeRuntimeInfo(execPath, env, timeoutMs);
+  const runtime = bun
+    ? await resolveBunRuntimeInfo(execPath)
+    : await resolveNodeRuntimeInfo(execPath, env, timeoutMs);
   if (runtime.status !== "supported") {
     issues.push({
       code:
         runtime.status === "probe-failed"
           ? SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeProbeFailed
-          : SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeNode,
+          : bun
+            ? SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeBun
+            : SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeNode,
       message:
         runtime.status === "probe-failed"
-          ? "Gateway service Node runtime probe failed."
-          : (runtime.capabilityError ?? "Gateway service Node failed its capability probe."),
-      detail: runtime.status === "probe-failed" ? runtime.error.message : execPath,
+          ? `Gateway service ${bun ? "Bun" : "Node"} runtime check failed.`
+          : bun
+            ? "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with WAL-reset-safe node:sqlite is required."
+            : (runtime.capabilityError ?? "Gateway service Node failed its capability check."),
+      detail:
+        runtime.status === "probe-failed"
+          ? runtime.error.message
+          : bun && runtime.sqliteSelectionError
+            ? `${execPath}: ${runtime.sqliteSelectionError}`
+            : execPath,
       level: "recommended",
     });
   }
+  if (bun) {
+    return undefined;
+  }
 
-  const pinnedPath = command
-    ? readDaemonRuntimePin({ kind: "gateway", env }, command).pin?.path
-    : undefined;
+  const pinnedPath = readDaemonRuntimePin({ kind: "gateway", env }, command).pin?.path;
   const explicitlyPinned =
     pinnedPath &&
     normalizeServicePathEntry(pinnedPath, platform) ===

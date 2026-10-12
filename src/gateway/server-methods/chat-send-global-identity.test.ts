@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
@@ -14,18 +15,19 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { readSessionPendingInputByKey } from "../../config/sessions/session-accessor.sqlite-pending-inputs.js";
+import { SessionPendingInputCustodyError } from "../../config/sessions/session-pending-input-custody-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
 } from "../../state/openclaw-agent-db.js";
 import * as profileReader from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import * as sessionUtils from "../session-utils.js";
+import * as sessionStores from "../session-utils-store.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import type { GatewayClient } from "./types.js";
@@ -47,6 +49,13 @@ it.each<{
   replaceDuringPersistence?: boolean;
   pendingReplacement?: boolean;
   switchStoreAfterAck?: boolean;
+  configDuringAdmission?:
+    | "unrelated"
+    | "unrelated provider"
+    | "unrelated channel"
+    | "model"
+    | "security"
+    | "routing";
 }>([
   {
     name: "raw global only",
@@ -87,6 +96,15 @@ it.each<{
     shared: true,
     key: "agent:research:global",
     allowed: true,
+  },
+  {
+    name: "empty counterpart store preserves raw source",
+    raw: true,
+    literal: false,
+    shared: false,
+    key: "global",
+    allowed: true,
+    separateStore: true,
   },
   {
     name: "collision across discovered stores",
@@ -151,6 +169,24 @@ it.each<{
     allowed: true,
     writeDuringAdmission: "unrelated",
   },
+  ...(
+    [
+      "unrelated",
+      "unrelated provider",
+      "unrelated channel",
+      "model",
+      "security",
+      "routing",
+    ] as const
+  ).map((configDuringAdmission) => ({
+    name: `${configDuringAdmission} config changes during admission read`,
+    raw: true,
+    literal: false,
+    shared: false,
+    key: "global",
+    allowed: configDuringAdmission.startsWith("unrelated"),
+    configDuringAdmission,
+  })),
   {
     name: "database replacement after recorder target resolution",
     raw: true,
@@ -224,7 +260,8 @@ it.each<{
       await replaceSessionEntry(row, {
         sessionId: row.sessionId,
         lifecycleRevision: "original",
-        updatedAt: 1,
+        // Identity assertions require live rows, not fixtures eligible for age-retention archiving.
+        updatedAt: Date.now(),
         status: "done",
       });
       await appendTranscriptMessage(row, {
@@ -234,10 +271,16 @@ it.each<{
     for (const row of rows) {
       await seedRow(row);
     }
+    if (scenario.separateStore && !scenario.literal) {
+      await replaceSessionEntry(
+        { ...literalScope, sessionKey: "agent:research:other" },
+        { sessionId: "other-session", updatedAt: 1 },
+      );
+    }
     const originalPath = state.path("original.sqlite");
     const replacementPath = state.path("replacement.sqlite");
     if (scenario.replaceDatabase === "symlink") {
-      closeOpenClawAgentDatabaseByPath(storePath);
+      await closeOpenClawAgentDatabaseByPathAsync(storePath);
       fs.renameSync(storePath, originalPath);
       fs.copyFileSync(originalPath, replacementPath);
       fs.symlinkSync(originalPath, storePath);
@@ -252,6 +295,10 @@ it.each<{
       transcripts: await Promise.all(rows.map((row) => loadTranscriptEvents(row))),
     });
     let before = await snapshot();
+    if (scenario.replaceDatabase) {
+      // The synchronous selection hook replaces files after fixture readers have drained.
+      await closeOpenClawAgentDatabasesAsync(state.root);
+    }
     const runId = `global-identity-${scenario.name}`;
     const message =
       scenario.replaceDuringPersistence && !scenario.pendingReplacement
@@ -333,17 +380,67 @@ it.each<{
             return prepared;
           })
       : undefined;
+    let configReloaded = false;
+    const readQualifiedEntry = sessionStores.withQualifiedGatewaySessionEntry;
+    const reloadDuringRead = scenario.configDuringAdmission
+      ? vi.spyOn(sessionStores, "withQualifiedGatewaySessionEntry").mockImplementation((params) =>
+          readQualifiedEntry({
+            ...params,
+            consume: (...args) => {
+              if (!configReloaded) {
+                const changedConfig: OpenClawConfig =
+                  scenario.configDuringAdmission === "unrelated"
+                    ? { ...cfg, logging: { level: "debug" }, ui: { seamColor: "#123456" } }
+                    : scenario.configDuringAdmission === "unrelated provider"
+                      ? {
+                          ...cfg,
+                          models: {
+                            ...cfg.models,
+                            providers: {
+                              ...cfg.models?.providers,
+                              other: {
+                                baseUrl: "https://provider.example.test/v1",
+                                api: "openai-responses",
+                                models: [],
+                              },
+                            },
+                          },
+                        }
+                      : scenario.configDuringAdmission === "unrelated channel"
+                        ? { ...cfg, channels: { ...cfg.channels, telegram: { enabled: false } } }
+                        : scenario.configDuringAdmission === "model"
+                          ? {
+                              ...cfg,
+                              agents: {
+                                ...cfg.agents,
+                                defaults: {
+                                  ...cfg.agents?.defaults,
+                                  model: "anthropic/claude-sonnet-4-6",
+                                },
+                              },
+                            }
+                          : scenario.configDuringAdmission === "security"
+                            ? { ...cfg, tools: { ...cfg.tools, fs: { workspaceOnly: true } } }
+                            : { ...cfg, session: { ...cfg.session, mainKey: "changed-main" } };
+                setRuntimeConfigSnapshot(changedConfig, changedConfig);
+                configReloaded = true;
+              }
+              return params.consume(...args);
+            },
+          }),
+        )
+      : undefined;
     let databaseReplaced = false;
-    const loadSessionEntry = sessionUtils.loadSessionEntry;
+    const readSessionEntry = sessionStores.withGatewaySessionEntry;
     const replaceAfterSelection = scenario.replaceDatabase
-      ? vi.spyOn(sessionUtils, "loadSessionEntry").mockImplementation((...args) => {
-          const loaded = loadSessionEntry(...args);
+      ? vi.spyOn(sessionStores, "withGatewaySessionEntry").mockImplementation(async (...args) => {
+          const loaded = await readSessionEntry(...args);
           if (!databaseReplaced) {
-            const source = loaded.readSource;
-            if (!source) {
+            const source = isRecord(loaded) ? loaded.capturedReadSource : undefined;
+            if (!isRecord(source) || typeof source.path !== "string") {
               throw new Error("Expected the selected physical database before replacement");
             }
-            closeOpenClawAgentDatabaseByPath(source.path);
+            await closeOpenClawAgentDatabaseByPathAsync(source.path);
             if (scenario.replaceDatabase === "copy") {
               fs.renameSync(source.path, originalPath);
               fs.copyFileSync(originalPath, source.path);
@@ -443,6 +540,9 @@ it.each<{
           }),
         );
       }
+      if (scenario.configDuringAdmission) {
+        expect(configReloaded).toBe(true);
+      }
       if (!scenario.allowed) {
         expect(respond).toHaveBeenCalledWith(
           false,
@@ -536,7 +636,11 @@ it.each<{
             owned.userTurn.persist(
               scenario.pendingReplacement ? undefined : { contextFreeCommand: true },
             ),
-          ).rejects.toThrow(/database|identity|changed/i);
+          ).rejects.toThrow(
+            scenario.pendingReplacement
+              ? SessionPendingInputCustodyError
+              : /database|identity|changed/i,
+          );
           expect(replaceAtPersistence).toHaveBeenCalledOnce();
           if (scenario.pendingReplacement) {
             expect(readPending(source.path)).toEqual(pendingBefore);
@@ -659,6 +763,7 @@ it.each<{
         vi.mocked(preparedProfile.release).mockRestore();
       }
       holdProfile?.mockRestore();
+      reloadDuringRead?.mockRestore();
       replaceAfterSelection?.mockRestore();
       holdDispatch.mockRestore();
       observeDispatch.mockRestore();

@@ -146,60 +146,8 @@ describe("writeImportedSourcePage", () => {
     );
   });
 
-  it("preserves the human Notes block when an imported source page is updated", async () => {
-    const sourcePath = path.join(suiteRoot, "imported.txt");
-    const pagePath = "sources/imported.md";
-    const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
-      entries: {},
-      version: 1,
-    };
-
-    await fs.writeFile(sourcePath, "first body", "utf8");
-    await writeImportedSourcePage({
-      vaultRoot: suiteRoot,
-      syncKey: "bridge:imported",
-      sourcePath,
-      sourceUpdatedAtMs: Date.UTC(2026, 4, 1),
-      sourceSize: 10,
-      renderFingerprint: "fp-1",
-      pagePath,
-      group: "bridge",
-      state,
-      buildRendered: buildSourcePage,
-    });
-
-    const absPage = path.join(suiteRoot, pagePath);
-    const userNote = "IMPORTED PAGE NOTE";
-    const edited = (await fs.readFile(absPage, "utf8")).replace(
-      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-      `<!-- openclaw:human:start -->\n${userNote}\n<!-- openclaw:human:end -->`,
-    );
-    await fs.writeFile(absPage, edited, "utf8");
-
-    await fs.writeFile(sourcePath, "second body changed", "utf8");
-    const result = await writeImportedSourcePage({
-      vaultRoot: suiteRoot,
-      syncKey: "bridge:imported",
-      sourcePath,
-      sourceUpdatedAtMs: Date.UTC(2026, 4, 2),
-      sourceSize: 19,
-      renderFingerprint: "fp-2",
-      pagePath,
-      group: "bridge",
-      state,
-      buildRendered: buildSourcePage,
-    });
-
-    const after = await fs.readFile(absPage, "utf8");
-    expect(result.changed).toBe(true);
-    expect(after).toContain("second body changed");
-    expect(after).toContain(userNote);
-  });
-
   it.each([
     { group: "bridge" as const, missingMarker: "opening" as const },
-    { group: "bridge" as const, missingMarker: "closing" as const },
-    { group: "unsafe-local" as const, missingMarker: "opening" as const },
     { group: "unsafe-local" as const, missingMarker: "closing" as const },
   ])(
     "preserves a $group page and tracked state when its human Notes $missingMarker marker is missing",

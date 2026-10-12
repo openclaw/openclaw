@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
 
@@ -19,6 +19,8 @@ describe("Control UI browser link preferences row", () => {
   it("renders an accessible default-off toggle and publishes changes", () => {
     const onChange = vi.fn();
     const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
 
     render(
       renderBrowserLinkPreferencesRow({
@@ -31,15 +33,16 @@ describe("Control UI browser link preferences row", () => {
     expect(container.querySelector(".settings-row__title")?.textContent?.trim()).toBe(
       "Open links in Control UI browser",
     );
-    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    const toggle = container.querySelector<HTMLInputElement>(".settings-toggle__input");
     expect(toggle?.checked).toBe(false);
-    expect(toggle?.textContent?.trim()).toBe("Open links in Control UI browser");
+    expect(
+      container.querySelector(`#${toggle?.getAttribute("aria-labelledby")}`)?.textContent,
+    ).toBe("Open links in Control UI browser");
 
     if (!toggle) {
       throw new Error("missing Control UI browser link preference toggle");
     }
-    toggle.checked = true;
-    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    toggle.click();
     expect(onChange).toHaveBeenCalledWith(true);
   });
 });

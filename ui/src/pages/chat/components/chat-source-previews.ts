@@ -9,8 +9,7 @@ import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-cha
 import type { ChatSourcePreview } from "../../../lib/chat/source-previews.ts";
 import { generateUUID } from "../../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import { readLinkFavicon } from "../link-favicon-cache.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
+import { readLinkFavicon, type LinkFaviconFetcher } from "../link-favicon-cache.ts";
 
 registerChatMessageMetadataEnglish();
 

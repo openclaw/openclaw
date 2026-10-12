@@ -11,7 +11,7 @@ const SECRET_TARGET_CALLSITES = [
   "src/commands/channels/resolve.ts",
   "src/commands/channels/shared.ts",
   "src/commands/message.ts",
-  "src/cli/capability-cli/audio.ts",
+  "src/cli/capability-cli/media-understanding-command.ts",
   "src/cli/capability-cli/embedding.ts",
   "src/cli/capability-cli/image.ts",
   "src/cli/capability-cli/model.ts",
@@ -28,7 +28,6 @@ function hasSupportedTargetIdsWiring(source: string): boolean {
     source.includes("resolveAgentRuntimeConfig(") ||
     /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
     /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
-    /targetIds:\s*getCapabilityWeb(Fetch|Search)CommandSecretTargetIds\(/m.test(source) ||
     /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
     (/\bconst\s+scopedTargets\s*=\s*getCapabilityWeb(?:Fetch|Search)CommandSecretTargets\(/m.test(
       source,
@@ -42,6 +41,7 @@ function hasSupportedSecretResolutionWiring(source: string): boolean {
   return (
     source.includes("resolveAgentRuntimeConfig(") ||
     source.includes("resolveLocalCapabilityRuntimeConfig(") ||
+    source.includes("resolveLocalCapabilityAgent(") ||
     source.includes("resolveCommandConfigWithSecrets(") ||
     source.includes("resolveCommandSecretRefsViaGateway(") ||
     source.includes("collectStatusScanOverview(")

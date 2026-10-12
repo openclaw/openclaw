@@ -1,23 +1,40 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { withGatewayPersonalToolUser } from "../../agents/tools/gateway-caller-context.js";
+import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import * as preferences from "../../state/user-preferences.js";
-import { ensureProfileForEmail, linkEmail, setAvatar } from "../../state/user-profiles.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { linkEmail, setAvatar } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
+import {
+  createCoreGatewayMethodDescriptors,
+  createGatewayMethodRegistry,
+} from "../methods/registry.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import {
+  dispatchGatewayMethodInProcess,
+  withOperatorToolGatewayAuthority,
+} from "../server-plugin-in-process-dispatch.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "../server-plugin-in-process-dispatch.test-support.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import { createGatewayWsTestSocket } from "../server/ws-connection.test-helpers.js";
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayClient, GatewayRequestHandler } from "./types.js";
 import { usersHandlers } from "./users.js";
 
 async function invokePreferenceMethod(
@@ -47,6 +64,161 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
+async function withPreferenceToolTurn(
+  run: (params: {
+    ownerId: string;
+    steer: () => Promise<void>;
+    revoke: () => void;
+    request: (
+      method: "users.prefs.get" | "users.prefs.set",
+      params?: Record<string, unknown>,
+    ) => Promise<unknown>;
+  }) => Promise<void>,
+) {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "prefs-tool-turn-" });
+  try {
+    const owner = ensureProfileForEmail("prefs-owner@example.test");
+    const guest = ensureProfileForEmail("prefs-guest@example.test");
+    const scopes = ["operator.read", "operator.write"];
+    const client = createOperatorClient({ profileId: owner.id, scopes });
+    const context = createContext();
+    const expectSyntheticOwnerCall = (
+      method: "users.prefs.get" | "users.prefs.set",
+    ): GatewayRequestHandler => {
+      const handler = usersHandlers[method];
+      if (!handler) {
+        throw new Error(`missing ${method} handler`);
+      }
+      return (options) => {
+        expect(options.client?.internal?.syntheticClient).toBe(true);
+        expect(options.client?.authenticatedUserProfile?.profileId).toBe(owner.id);
+        return handler(options);
+      };
+    };
+    const descriptors = createCoreGatewayMethodDescriptors({
+      "users.prefs.get": expectSyntheticOwnerCall("users.prefs.get"),
+      "users.prefs.set": expectSyntheticOwnerCall("users.prefs.set"),
+    });
+    context.getGatewayMethodRegistry = () => createGatewayMethodRegistry(descriptors);
+    await withOperatorToolGatewayAuthority(
+      { authenticatedUserProfile: client.authenticatedUserProfile!, scopes },
+      () =>
+        withPersonalToolTurn(
+          { owner: { profileId: owner.id, senderId: "owner", name: "Owner" } },
+          (turn) =>
+            run({
+              ownerId: owner.id,
+              steer: async () => {
+                expect(
+                  await turn.steer({ profileId: guest.id, senderId: "guest", name: "Guest" }),
+                ).toMatchObject({ status: "accepted" });
+              },
+              revoke: () => turn.revoke(owner.id),
+              request: (method, params = {}) =>
+                dispatchGatewayMethodInProcess(method, params, {
+                  forceSyntheticClient: true,
+                  resolveGatewayContext: () => context,
+                }),
+            }),
+        ),
+    );
+  } finally {
+    await state.cleanup();
+  }
+}
+
+test("users.prefs rejects mixed-person synthetic turn calls before reading or writing preferences", async () => {
+  await withPreferenceToolTurn(async ({ ownerId, steer, request }) => {
+    await expect(request("users.prefs.set", { entries: { "ui.theme": "claw" } })).resolves.toEqual({
+      status: "ok",
+    });
+    await expect(request("users.prefs.get")).resolves.toEqual({
+      status: "ok",
+      entries: { "ui.theme": "claw" },
+    });
+    await steer();
+    using read = vi.spyOn(preferences, "getCanonicalUserPreferences");
+    using write = vi.spyOn(preferences, "setCanonicalUserPreferences");
+    await withGatewayPersonalToolUser(ownerId, async () => {
+      await expect(request("users.prefs.get")).rejects.toThrow(/own Control UI turn/i);
+      await expect(request("users.prefs.set", { entries: { "ui.theme": "dark" } })).rejects.toThrow(
+        /own Control UI turn/i,
+      );
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+});
+
+test.each(["read", "write"] as const)(
+  "users.prefs rejects a steer accepted while the personal %s is pending",
+  async (operation) => {
+    await withPreferenceToolTurn(async ({ ownerId, steer, request }) => {
+      await request("users.prefs.set", { entries: { "ui.theme": "claw" } });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const readPreferences = preferences.getCanonicalUserPreferences;
+      const writePreferences = preferences.setCanonicalUserPreferences;
+      using read = vi.spyOn(preferences, "getCanonicalUserPreferences");
+      using write = vi.spyOn(preferences, "setCanonicalUserPreferences");
+      if (operation === "read") {
+        read.mockImplementationOnce(async (...args) => {
+          const result = await readPreferences(...args);
+          entered.resolve();
+          await release.promise;
+          return result;
+        });
+      } else {
+        write.mockImplementationOnce(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return writePreferences(...args);
+        });
+      }
+      const pending = request(
+        operation === "read" ? "users.prefs.get" : "users.prefs.set",
+        operation === "read" ? {} : { entries: { "ui.theme": "dark" } },
+      );
+      const outcome = Promise.allSettled([pending]);
+      try {
+        await Promise.race([entered.promise, pending]);
+        expect(operation === "read" ? read : write).toHaveBeenCalledOnce();
+        await steer();
+      } finally {
+        release.resolve();
+        await outcome;
+      }
+      expect(await outcome).toMatchObject([
+        { status: "rejected", reason: { message: expect.stringMatching(/own Control UI turn/i) } },
+      ]);
+      expect(await readPreferences(ownerId)).toMatchObject({ entries: { "ui.theme": "claw" } });
+    });
+  },
+);
+
+test("users.prefs refuses a pending write when the participant is revoked before worker commit", async () => {
+  await withPreferenceToolTurn(async ({ ownerId, revoke, request }) => {
+    await request("users.prefs.set", { entries: { "ui.theme": "claw" } });
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    let reachedCommit = false;
+    using admission = vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission");
+    admission.mockImplementation((admit, attachment) =>
+      createAdmission((workerRequest, grant) => {
+        if (workerRequest.stage === "commit") {
+          reachedCommit = true;
+          revoke();
+        }
+        admit(workerRequest, grant);
+      }, attachment),
+    );
+    await expect(request("users.prefs.set", { entries: { "ui.theme": "dark" } })).rejects.toThrow();
+    expect(reachedCommit).toBe(true);
+    expect(await preferences.getCanonicalUserPreferences(ownerId)).toMatchObject({
+      entries: { "ui.theme": "claw" },
+    });
+  });
+});
+
 test.each(["current", "scope", "source", "identity", "error-response", "staff"] as const)(
   "users.self keeps its original %s authority through the handler's identity sync",
   async (change) => {
@@ -54,9 +226,11 @@ test.each(["current", "scope", "source", "identity", "error-response", "staff"] 
       layout: "state-only",
       prefix: "users-self-read-",
     });
+    let releaseProfiles: (() => void) | undefined;
     try {
       const owner = ensureProfileForEmail("self-reader@example.test");
       const replacement = ensureProfileForEmail("other-reader@example.test");
+      releaseProfiles = (await prepareUserProfileCatalog()).release;
       const client = createOperatorWsClient({
         connId: "self-reader",
         scopes: [change === "staff" ? "operator.read" : "operator.sessions.read"],
@@ -141,6 +315,7 @@ test.each(["current", "scope", "source", "identity", "error-response", "staff"] 
         }
       }
     } finally {
+      releaseProfiles?.();
       await state.cleanup();
     }
   },
@@ -151,8 +326,10 @@ test("users.prefs.get retains its original scope across the preference read", as
     layout: "state-only",
     prefix: "users-prefs-read-",
   });
+  let releaseProfiles: (() => void) | undefined;
   try {
     const owner = ensureProfileForEmail("retained-preferences@example.test");
+    releaseProfiles = (await prepareUserProfileCatalog()).release;
     await invokePreferenceMethod("users.prefs.set", { entries: { "ui.theme": "dark" } }, owner.id);
     const client = createOperatorWsClient({
       connId: "preference-reader",
@@ -206,6 +383,7 @@ test("users.prefs.get retains its original scope across the preference read", as
     );
     expect(await original(owner.id)).toMatchObject({ entries: { "ui.theme": "dark" } });
   } finally {
+    releaseProfiles?.();
     await state.cleanup();
   }
 });
@@ -270,11 +448,12 @@ test("users.prefs returns a typed result without a durable identity", async () =
   expect(context.broadcastToConnIds).not.toHaveBeenCalled();
 });
 
-test("users.prefs.set notifies only connections belonging to the same merged profile", async () => {
+test("users.prefs.set notifies only the current merged profile without main-thread profile reads", async () => {
   const state = await createOpenClawTestState({
     layout: "state-only",
     prefix: "users-prefs-events-",
   });
+  let releaseProfiles: (() => void) | undefined;
   try {
     const retired = ensureProfileForEmail("retired@example.test");
     const owner = ensureProfileForEmail("owner@example.test");
@@ -283,6 +462,7 @@ test("users.prefs.set notifies only connections belonging to the same merged pro
     for (const profile of [retired, owner, other]) {
       expect(setAvatar(profile.id, avatar, "image/png").ok).toBe(true);
     }
+    releaseProfiles = (await prepareUserProfileCatalog()).release;
     linkEmail("retired@example.test", owner.id);
 
     const peers = [
@@ -350,12 +530,13 @@ test("users.prefs.set notifies only connections belonging to the same merged pro
           expect(peer.frames).toEqual([]);
         }
       }
-      expect(reads.rowCounts.profiles).toBeGreaterThan(0);
+      expect(reads.counts.profiles).toBe(0);
       expect.soft(reads.blobBytes.profiles).toBe(0);
     } finally {
       reads.restore();
     }
   } finally {
+    releaseProfiles?.();
     await state.cleanup();
   }
 });
@@ -402,9 +583,11 @@ test("users.prefs.set compares canonical preferences atomically and publishes on
     layout: "state-only",
     prefix: "users-prefs-conditional-",
   });
+  let releaseProfiles: (() => void) | undefined;
   try {
     const retired = ensureProfileForEmail("conditional-retired@example.test");
     const owner = ensureProfileForEmail("conditional-owner@example.test");
+    releaseProfiles = (await prepareUserProfileCatalog()).release;
     const original = {
       selection: { folder: "/new", model: "new", nested: [1, { a: 2, b: 3 }] },
       removed: true,
@@ -461,6 +644,7 @@ test("users.prefs.set compares canonical preferences atomically and publishes on
       payload: { status: "ok", entries: { selection: original.selection, inserted: true } },
     });
   } finally {
+    releaseProfiles?.();
     await state.cleanup();
   }
 });

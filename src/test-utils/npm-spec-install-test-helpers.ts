@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect } from "vitest";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import { expectSingleNpmInstallIgnoreScriptsCall } from "./exec-assertions.js";
+import { npmCommandArgs } from "./npm-command.js";
 
 const emptyNpmFailure: SpawnResult = {
   stdout: "",
@@ -115,7 +116,7 @@ export function mockNpmViewMetadataResult(
   metadata: NpmViewMetadata,
 ) {
   run.mockImplementation(async (argv) => {
-    if (argv[0] !== "npm" || argv[1] !== "view") {
+    if (npmCommandArgs(argv)?.[0] !== "view") {
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     }
 
@@ -132,18 +133,6 @@ export function mockNpmViewMetadataResult(
   });
 }
 
-export async function expectUnsupportedNpmSpec(
-  install: (spec: string) => Promise<InstallResultLike>,
-  spec = "github:evil/evil",
-) {
-  const result = await install(spec);
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    return;
-  }
-  expect(result.error).toContain("unsupported npm spec");
-}
-
 export function mockNpmPackMetadataResult(
   run: {
     mockImplementation: (
@@ -156,7 +145,7 @@ export function mockNpmPackMetadataResult(
   metadata: NpmPackMetadata,
 ) {
   run.mockImplementation(async (argv, optionsOrTimeout) => {
-    if (argv[0] !== "npm" || argv[1] !== "pack") {
+    if (npmCommandArgs(argv)?.[0] !== "pack") {
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     }
 

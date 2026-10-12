@@ -1,9 +1,14 @@
+import {
+  readPreparedSessionEntryChange,
+  type SessionEntryPublicationSource,
+} from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { captureCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
 import type {
   SessionMembershipFact,
   SessionParticipantProjection,
 } from "../config/sessions/session-membership-facts.types.js";
 import { withPreparedSessionParticipants } from "../config/sessions/session-participant-prepared-read.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-agent-db.js";
@@ -25,6 +30,7 @@ type Store = {
   all: boolean;
   dirty: Set<string>;
   facts: Map<string, SessionMembershipFact>;
+  publishedSource?: SessionEntryPublicationSource;
 };
 const noMembership: readonly string[] = Object.freeze([]);
 const noParticipants: SessionParticipantProjection = Object.freeze({});
@@ -118,10 +124,16 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
     return stores.values();
   }
   function invalidate(change: SessionRowChange) {
-    if (disposed || (!("all" in change) && change.scope === "automation")) {
+    if (
+      disposed ||
+      (!("all" in change) && (change.scope === "automation" || change.scope === "acp"))
+    ) {
       return;
     }
     if ("all" in change) {
+      if (typeof change.scope === "object" && change.scope.topology && !change.factsInvalidated) {
+        return;
+      }
       if (typeof change.scope === "string") {
         // Config/catalog/profile/model publications do not change compact facts.
         // updateTargets admits config changes to physical store identity or birthtime.
@@ -138,17 +150,48 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
       }
     } else {
       const facts = change.facts;
-      if (!change.factsInvalidated && (!facts || facts.kind === "unchanged")) {
+      const prepared = readPreparedSessionEntryChange(change, change.sessionKey);
+      if (
+        !change.factsInvalidated &&
+        (!facts || facts.kind === "unchanged" || facts.kind === "owner" || facts.kind === "acp")
+      ) {
         return;
       }
       for (const store of matching(change)) {
+        const source = prepared?.source;
+        if (
+          source &&
+          (source.identity !== store.target.identity ||
+            source.birthtime !== store.target.birthtime ||
+            (store.target.filename !== undefined && source.filename !== store.target.filename) ||
+            (store.publishedSource?.incarnation === source.incarnation &&
+              store.publishedSource.revision !== undefined &&
+              source.revision !== undefined &&
+              store.publishedSource.revision > source.revision))
+        ) {
+          continue;
+        }
         store.revision++;
+        if (!change.factsInvalidated && facts?.kind === "replacement" && prepared?.projection) {
+          store.facts.set(
+            change.sessionKey,
+            freezeFact(structuredClone(prepared.projection.membership)),
+          );
+          store.publishedSource = source;
+          store.dirty.delete(change.sessionKey);
+          continue;
+        }
         if (change.factsInvalidated) {
           store.facts.delete(change.sessionKey);
           store.dirty.add(change.sessionKey);
           continue;
         }
-        if (!facts || facts.kind === "unchanged") {
+        if (
+          !facts ||
+          facts.kind === "unchanged" ||
+          facts.kind === "owner" ||
+          facts.kind === "acp"
+        ) {
           continue;
         }
         if (facts.kind === "removed") {
@@ -163,6 +206,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
           store.initial ||
           store.all ||
           store.dirty.has(change.sessionKey) ||
+          facts.kind === "replacement" ||
           (facts.kind === "entry" && previous[4] !== facts.previousSessionId) ||
           ((facts.kind === "member" || facts.kind === "category") &&
             previous[4] !== facts.sessionId) ||
@@ -284,6 +328,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
               groups = undefined;
             }
           },
+          projectionLane,
         );
       } finally {
         for (const continuation of continuations.toReversed()) {

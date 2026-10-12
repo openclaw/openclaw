@@ -4,9 +4,3 @@ export type GatewayWsBrowserOrigin = {
   origin?: string;
   isLocalClient?: boolean;
 };
-
-export type PreparedSessionProfile = {
-  profileId: string;
-  aliases: ReadonlySet<string>;
-  role: string | null;
-};

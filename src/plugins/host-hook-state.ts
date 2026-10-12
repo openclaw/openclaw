@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
+import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry.js";
 import {
   resolveSessionEntryAccessTarget,
   updateResolvedSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolvePromptInjectionAllowed } from "./hook-policy-decisions.js";
 import {
   buildPluginAgentTurnPrepareContext,
   isPluginJsonValue,
@@ -59,31 +61,7 @@ function isExpired(entry: unknown, now: number) {
   if (!isPluginNextTurnInjectionRecord(entry)) {
     return true;
   }
-  return typeof entry.ttlMs === "number" && entry.ttlMs >= 0 && now - entry.createdAt > entry.ttlMs;
-}
-
-function isPluginPromptInjectionEnabled(cfg: OpenClawConfig, pluginId: string): boolean {
-  const entry = cfg.plugins?.entries?.[pluginId];
-  return entry?.hooks?.allowPromptInjection !== false;
-}
-
-function toPluginNextTurnInjectionRecord(params: {
-  pluginId: string;
-  pluginName?: string;
-  injection: PluginNextTurnInjection;
-  now: number;
-}): PluginNextTurnInjectionRecord {
-  return {
-    id: params.injection.idempotencyKey?.trim() || randomUUID(),
-    pluginId: params.pluginId,
-    pluginName: params.pluginName,
-    text: params.injection.text,
-    idempotencyKey: params.injection.idempotencyKey?.trim() || undefined,
-    placement: params.injection.placement ?? "prepend_context",
-    ttlMs: params.injection.ttlMs,
-    createdAt: params.now,
-    metadata: params.injection.metadata,
-  };
+  return entry.ttlMs !== undefined && now - entry.createdAt > entry.ttlMs;
 }
 
 export async function enqueuePluginNextTurnInjection(params: {
@@ -93,61 +71,47 @@ export async function enqueuePluginNextTurnInjection(params: {
   injection: PluginNextTurnInjection;
   now?: number;
 }): Promise<PluginNextTurnInjectionEnqueueResult> {
-  if (typeof params.injection.sessionKey !== "string") {
-    return { enqueued: false, id: "", sessionKey: "" };
-  }
-  const sessionKey = params.injection.sessionKey.trim();
+  const sessionKey = normalizeOptionalString(params.injection.sessionKey) ?? "";
   if (!sessionKey) {
     return { enqueued: false, id: "", sessionKey };
   }
-  if (typeof params.injection.text !== "string") {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  const text = params.injection.text.trim();
-  if (!text) {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  if (text.length > MAX_PLUGIN_NEXT_TURN_INJECTION_TEXT_LENGTH) {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  if (params.injection.metadata !== undefined && !isPluginJsonValue(params.injection.metadata)) {
-    return { enqueued: false, id: "", sessionKey };
-  }
+  const text = normalizeOptionalString(params.injection.text);
   if (
-    params.injection.idempotencyKey !== undefined &&
-    (typeof params.injection.idempotencyKey !== "string" ||
-      params.injection.idempotencyKey.trim().length === 0 ||
-      params.injection.idempotencyKey.length >
-        MAX_PLUGIN_NEXT_TURN_INJECTION_IDEMPOTENCY_KEY_LENGTH)
-  ) {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  if (
-    params.injection.placement !== undefined &&
-    !isPluginNextTurnInjectionPlacement(params.injection.placement)
-  ) {
-    return { enqueued: false, id: "", sessionKey };
-  }
-  if (
-    params.injection.ttlMs !== undefined &&
-    (!Number.isFinite(params.injection.ttlMs) || params.injection.ttlMs < 0)
+    !text ||
+    text.length > MAX_PLUGIN_NEXT_TURN_INJECTION_TEXT_LENGTH ||
+    (params.injection.metadata !== undefined && !isPluginJsonValue(params.injection.metadata)) ||
+    (params.injection.idempotencyKey !== undefined &&
+      (typeof params.injection.idempotencyKey !== "string" ||
+        params.injection.idempotencyKey.trim().length === 0 ||
+        params.injection.idempotencyKey.length >
+          MAX_PLUGIN_NEXT_TURN_INJECTION_IDEMPOTENCY_KEY_LENGTH)) ||
+    (params.injection.placement !== undefined &&
+      !isPluginNextTurnInjectionPlacement(params.injection.placement)) ||
+    (params.injection.ttlMs !== undefined &&
+      (!Number.isFinite(params.injection.ttlMs) || params.injection.ttlMs < 0))
   ) {
     return { enqueued: false, id: "", sessionKey };
   }
   const now = params.now ?? Date.now();
-  const record = toPluginNextTurnInjectionRecord({
+  const injection = { ...params.injection };
+  const record: PluginNextTurnInjectionRecord = {
+    id: injection.idempotencyKey?.trim() || randomUUID(),
     pluginId: params.pluginId,
     pluginName: params.pluginName,
-    injection: { ...params.injection, sessionKey, text },
-    now,
-  });
+    text,
+    idempotencyKey: injection.idempotencyKey?.trim() || undefined,
+    placement: injection.placement ?? "prepend_context",
+    ttlMs: injection.ttlMs,
+    createdAt: now,
+    metadata: injection.metadata,
+  };
   const scope = { cfg: params.cfg, sessionKey, agentId: params.injection.agentId };
   const updated = await updateResolvedSessionEntry(scope, (entry) => {
     const injections = { ...entry.pluginNextTurnInjections };
     // Guard against malformed/hand-edited persisted state — a non-array value
     // here would crash the spread/filter and break the whole session's enqueue.
     const rawExisting = injections[params.pluginId];
-    const existing = (Array.isArray(rawExisting) ? [...rawExisting] : []).filter(
+    const existing = (Array.isArray(rawExisting) ? rawExisting : []).filter(
       (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
     );
     const duplicate = record.idempotencyKey
@@ -175,7 +139,7 @@ async function drainPluginNextTurnInjections(
     return [];
   }
   const scope = { cfg: params.cfg, sessionKey, agentId: params.agentId };
-  const { entry: selectedEntry } = resolveSessionEntryAccessTarget(scope);
+  const selectedEntry = await readResolvedSessionEntryInWorker(scope);
   // Empty queues need no qualified mutation target. Concurrent enqueues wait for the next turn.
   if (
     !selectedEntry?.pluginNextTurnInjections ||
@@ -200,7 +164,7 @@ async function drainPluginNextTurnInjections(
       for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
         if (
           !activePluginIds.has(pluginId) ||
-          !isPluginPromptInjectionEnabled(params.cfg, pluginId)
+          !resolvePromptInjectionAllowed(params.cfg.plugins?.entries?.[pluginId]?.hooks)
         ) {
           continue;
         }
@@ -299,14 +263,7 @@ export async function patchPluginSessionExtension(params: {
   // extension opted in via `sessionEntrySlotKey`. The slot is a read-only
   // mirror: writes still go through patchSessionExtension; the host overwrites
   // the slot value on every patch and clears it on unset.
-  const rawSlotKey = normalizeOptionalString(registration.extension.sessionEntrySlotKey);
-  const normalizedSlotKey = rawSlotKey ? normalizeSessionEntrySlotKey(rawSlotKey) : undefined;
-  if (normalizedSlotKey?.ok === false) {
-    log.warn(
-      `plugin session extension slot promotion skipped for ${pluginId}/${namespace}: ${normalizedSlotKey.error}`,
-    );
-  }
-  const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
+  const slotKey = registration.extension.sessionEntrySlotKey;
   const updated = await updateResolvedSessionEntry(
     {
       cfg: params.cfg,

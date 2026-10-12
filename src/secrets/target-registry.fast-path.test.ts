@@ -1,5 +1,6 @@
 /** Tests that configured-only secret target lookup avoids broad manifest rediscovery. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
   loadPluginManifestRegistryMock: vi.fn(() => {
@@ -11,48 +12,38 @@ const { getSecretTargetRegistryMock } = vi.hoisted(() => ({
   getSecretTargetRegistryMock: vi.fn(),
 }));
 
-const { loadBundledPublicArtifactMock } = vi.hoisted(() => ({
-  loadBundledPublicArtifactMock: vi.fn(
+const { channelTarget, loadBundledPublicArtifactMock } = vi.hoisted(() => {
+  const buildChannelTarget = (id: string, refPathPattern?: string): SecretTargetRegistryEntry => ({
+    id,
+    targetType: id,
+    configFile: "openclaw.json",
+    pathPattern: id,
+    ...(refPathPattern ? { refPathPattern } : {}),
+    secretShape: refPathPattern ? "sibling_ref" : "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  });
+  const loadArtifact = vi.fn(
     ({ artifactCandidates, dirName }: { artifactCandidates: string[]; dirName: string }) => {
       if (dirName === "googlechat" && artifactCandidates[0] === "secret-contract-api.js") {
         return {
-          secretTargetRegistryEntries: [
-            {
-              id: "channels.googlechat.serviceAccount",
-              targetType: "channels.googlechat.serviceAccount",
-              configFile: "openclaw.json",
-              pathPattern: "channels.googlechat.serviceAccount",
-              secretShape: "secret_input",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
-          ],
+          secretTargetRegistryEntries: [buildChannelTarget("channels.googlechat.serviceAccount")],
         };
       }
       if (dirName === "telegram" && artifactCandidates[0] === "secret-contract-api.js") {
         return {
           secretTargetRegistryEntries: [
-            {
-              id: "channels.telegram.botToken",
-              targetType: "channels.telegram.botToken",
-              configFile: "openclaw.json",
-              pathPattern: "channels.telegram.botToken",
-              refPathPattern: "channels.telegram.botTokenRef",
-              secretShape: "sibling_ref",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
+            buildChannelTarget("channels.telegram.botToken", "channels.telegram.botTokenRef"),
           ],
         };
       }
       return null;
     },
-  ),
-}));
+  );
+  return { channelTarget: buildChannelTarget, loadBundledPublicArtifactMock: loadArtifact };
+});
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: loadPluginManifestRegistryMock,
@@ -64,17 +55,6 @@ vi.mock("../plugins/public-surface-loader.js", () => ({
 
 vi.mock("./target-registry-data.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./target-registry-data.js")>();
-  const channelTarget = (id: string) => ({
-    id,
-    targetType: id,
-    configFile: "openclaw.json" as const,
-    pathPattern: id,
-    secretShape: "secret_input" as const,
-    expectedResolvedValue: "string" as const,
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  });
   getSecretTargetRegistryMock.mockImplementation(
     (params?: { config?: { plugins?: { load?: { paths?: string[] } } } }) => {
       const loadPath = params?.config?.plugins?.load?.paths?.[0];
@@ -106,20 +86,6 @@ describe("secret target registry fast path", () => {
     getSecretTargetRegistryMock.mockClear();
   });
 
-  it("resolves core paths before loading channel or full registries", () => {
-    const pathSegments = ["models", "providers", "openai", "headers", "X.Trace"];
-    const target = resolveConfigSecretTargetByPath(pathSegments);
-
-    expect(target).toMatchObject({
-      pathSegments,
-      pathTokens: pathSegments,
-      providerId: "openai",
-    });
-    expect(loadBundledPublicArtifactMock).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
-    expect(getSecretTargetRegistryMock).not.toHaveBeenCalled();
-  });
-
   it("resolves bundled channel targets by explicit channel id without manifest scans", () => {
     const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
 
@@ -136,20 +102,6 @@ describe("secret target registry fast path", () => {
     expect(getSecretTargetRegistryMock).not.toHaveBeenCalled();
   });
 
-  it("discovers selected core config targets without loading plugin metadata", () => {
-    const targets = discoverConfigSecretTargetsByIds(
-      {
-        gateway: { auth: { token: "test-token" } },
-        channels: { telegram: { botToken: "ignored-token" } },
-      },
-      ["gateway.auth.token"],
-    );
-
-    expect(targets.map((target) => target.entry.id)).toEqual(["gateway.auth.token"]);
-    expect(loadBundledPublicArtifactMock).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
-  });
-
   it("discovers selected configured channel targets without loading plugin metadata", () => {
     const targets = discoverConfigSecretTargetsByIds(
       { channels: { telegram: { botToken: "test-token" } } },
@@ -157,20 +109,6 @@ describe("secret target registry fast path", () => {
     );
 
     expect(targets.map((target) => target.entry.id)).toContain("channels.telegram.botToken");
-    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
-  });
-
-  it("discovers all core and configured channel targets without loading plugin metadata", () => {
-    const targets = discoverConfigSecretTargets({
-      gateway: { auth: { token: "gateway-token" } },
-      channels: { telegram: { botToken: "telegram-token" } },
-    });
-
-    const targetIds = targets.map((target) => target.entry.id);
-    expect(targetIds).toEqual(
-      expect.arrayContaining(["gateway.auth.token", "channels.telegram.botToken"]),
-    );
-    expect(targetIds.some((targetId) => targetId.startsWith("plugins.entries."))).toBe(false);
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
 

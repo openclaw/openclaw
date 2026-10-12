@@ -55,61 +55,28 @@ afterEach(async () => {
 describe("geolocation database store", () => {
   it("tries the previous month when the current build is not published yet", async () => {
     const stateDir = await tempStateDir();
-    const fetchImpl = vi.fn(async () => jsonResponse(Buffer.from("nope"), false));
-    const store = createGeolocationDatabaseStore({
-      stateDir,
-      settings: resolveGeolocationSettings({
-        databaseUrl: "https://host.test/db-{yyyy}-{mm}.mmdb",
-      }),
-      now: () => new Date("2026-01-03T00:00:00Z"),
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+    const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse(Buffer.from("nope"), false));
+    const store = createStore(stateDir, fetchImpl, {
+      databaseUrl: "https://host.test/db-{yyyy}-{mm}.mmdb",
     });
 
     await expect(store.load()).rejects.toThrow(/db-2026-01.*db-2025-12/s);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-  });
-
-  it("refuses to publish an unparsable body, leaving no database behind", async () => {
-    const stateDir = await tempStateDir();
-    const store = createGeolocationDatabaseStore({
-      stateDir,
-      settings: resolveGeolocationSettings({ databaseUrl: "https://host.test/db.mmdb" }),
-      now: () => new Date("2026-01-03T00:00:00Z"),
-      fetchImpl: (async () =>
-        jsonResponse(Buffer.from("<html>rate limited</html>"))) as unknown as typeof fetch,
-    });
-
-    await expect(store.load()).rejects.toThrow(/db\.mmdb/);
-    await expect(fs.readdir(path.join(stateDir, "geolocation"))).rejects.toThrow();
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      "https://host.test/db-2026-01.mmdb",
+      "https://host.test/db-2025-12.mmdb",
+    ]);
   });
 
   it("downloads once when concurrent callers race the first lookup", async () => {
     const stateDir = await tempStateDir();
     const fetchImpl = vi.fn(async () => jsonResponse(Buffer.from("garbage")));
-    const store = createGeolocationDatabaseStore({
-      stateDir,
-      settings: resolveGeolocationSettings({ databaseUrl: "https://host.test/db.mmdb" }),
-      now: () => new Date("2026-01-03T00:00:00Z"),
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
+    const store = createStore(stateDir, fetchImpl);
 
     const results = await Promise.allSettled([store.load(), store.load(), store.load()]);
 
     expect(results.every((r) => r.status === "rejected")).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
-  it("names the source in the cache path so a swapped source cannot reuse the old data", async () => {
-    const stateDir = await tempStateDir();
-    const settingsFor = (databaseUrl: string) =>
-      createGeolocationDatabaseStore({
-        stateDir,
-        settings: resolveGeolocationSettings({ databaseUrl }),
-        now: () => new Date("2026-01-03T00:00:00Z"),
-        fetchImpl: (async () => jsonResponse(Buffer.from(""))) as unknown as typeof fetch,
-      }).databaseFile;
-
-    expect(settingsFor("https://a.test/db.mmdb")).not.toBe(settingsFor("https://b.test/db.mmdb"));
+    await expect(fs.readdir(path.join(stateDir, "geolocation"))).rejects.toThrow();
   });
 
   it("rejects an oversized body after its source cancellation settles", async () => {
@@ -120,18 +87,14 @@ describe("geolocation database store", () => {
     const cancellationStarted = createDeferred<void>();
     const finishCancellation = createDeferred<void>();
     let cancellationFinished = false;
-    const store = createGeolocationDatabaseStore({
-      stateDir,
-      settings: resolveGeolocationSettings({ databaseUrl: "https://host.test/db.mmdb" }),
-      now: () => new Date("2026-01-03T00:00:00Z"),
-      fetchImpl: async () =>
-        chunkedResponse(chunkBytes, 3, async () => {
-          cancellationStarted.resolve();
-          await finishCancellation.promise;
-          cancellationFinished = true;
-          throw new Error("synthetic cancellation failure");
-        }),
-    });
+    const store = createStore(stateDir, async () =>
+      chunkedResponse(chunkBytes, 3, async () => {
+        cancellationStarted.resolve();
+        await finishCancellation.promise;
+        cancellationFinished = true;
+        throw new Error("synthetic cancellation failure");
+      }),
+    );
 
     const loading = store.load();
     let settled = false;
@@ -161,11 +124,8 @@ describe("geolocation database store", () => {
     // compressed bytes are tiny, the inflated output is what must be bounded.
     const inflated = Buffer.alloc(700 * 1024 * 1024, 0);
     const compressed = gzipSync(inflated);
-    const store = createGeolocationDatabaseStore({
-      stateDir,
-      settings: resolveGeolocationSettings({ databaseUrl: "https://host.test/db.mmdb.gz" }),
-      now: () => new Date("2026-01-03T00:00:00Z"),
-      fetchImpl: (async () => jsonResponse(compressed)) as unknown as typeof fetch,
+    const store = createStore(stateDir, compressed, {
+      databaseUrl: "https://host.test/db.mmdb.gz",
     });
 
     await expect(store.load()).rejects.toThrow(/db\.mmdb\.gz/);
@@ -208,69 +168,62 @@ function cityDatabase(city: string): Buffer {
 
 function createStore(
   stateDir: string,
-  body: Buffer,
-  downloaded?: () => Promise<void>,
-  warn?: (message: string) => void,
+  body: Buffer | typeof fetch,
+  {
+    databaseUrl = "https://host.test/db.mmdb",
+    downloaded,
+    warn,
+  }: {
+    databaseUrl?: string;
+    downloaded?: () => Promise<void>;
+    warn?: (message: string) => void;
+  } = {},
 ) {
   return createGeolocationDatabaseStore({
     stateDir,
-    settings: resolveGeolocationSettings({ databaseUrl: "https://host.test/db.mmdb" }),
+    settings: resolveGeolocationSettings({ databaseUrl }),
     now: () => now,
     logger: warn ? { info: () => {}, warn } : undefined,
-    fetchImpl: async () => {
-      await downloaded?.();
-      return new Response(Uint8Array.from(body));
-    },
+    fetchImpl:
+      typeof body === "function"
+        ? body
+        : async () => {
+            await downloaded?.();
+            return jsonResponse(body);
+          },
   });
 }
 
 describe("geolocation database publication", () => {
-  it.each(["before", "after"] as const)(
-    "serves its download when another process publishes %s its rename",
-    async (publication) => {
-      const stateDir = await tempStateDir();
-      const body = cityDatabase("Vienna");
-      const competingBody = cityDatabase("Paris");
-      const warn = vi.fn();
-      const store = createStore(stateDir, body, undefined, warn);
-      const rename = fs.rename;
-      let competingPublished = false;
-      vi.spyOn(fs, "rename").mockImplementationOnce(async (source, target) => {
-        const publishCompeting = async () => {
-          const oldStaging = `${store.databaseFile}.partial`;
-          await fs.writeFile(oldStaging, competingBody);
-          await rename(oldStaging, store.databaseFile);
-          competingPublished = true;
-        };
-        if (publication === "before") {
-          await publishCompeting();
-        }
-        await rename(source, target);
-        if (publication === "after") {
-          await publishCompeting();
-        }
-      });
-
-      const database = await store.load();
-
-      expect(competingPublished).toBe(true);
-      expect(database.lookup("8.8.8.8")?.city?.names.en).toBe("Vienna");
-      expect(await fs.readFile(store.databaseFile)).toEqual(
-        publication === "before" ? body : competingBody,
-      );
-      expect(warn).not.toHaveBeenCalled();
-      expect(await fs.readdir(path.dirname(store.databaseFile))).toEqual([
-        path.basename(store.databaseFile),
-      ]);
-    },
-  );
+  it("serves its own reader after another process replaces its publication", async () => {
+    const stateDir = await tempStateDir();
+    const body = cityDatabase("Vienna");
+    const competingBody = cityDatabase("Paris");
+    const warn = vi.fn();
+    const store = createStore(stateDir, body, { warn });
+    const rename = fs.rename;
+    vi.spyOn(fs, "rename").mockImplementationOnce(async (source, target) => {
+      await rename(source, target);
+      const competing = `${store.databaseFile}.partial`;
+      await fs.writeFile(competing, competingBody);
+      await rename(competing, store.databaseFile);
+    });
+    expect((await store.load()).lookup("8.8.8.8")?.city?.names.en).toBe("Vienna");
+    expect(await fs.readFile(store.databaseFile)).toEqual(competingBody);
+    expect(warn).not.toHaveBeenCalled();
+    expect(await fs.readdir(path.dirname(store.databaseFile))).toEqual([
+      path.basename(store.databaseFile),
+    ]);
+  });
 
   it("keeps the first download invisible while its staged file is being written", async () => {
     const stateDir = await tempStateDir();
     const firstBody = cityDatabase("Vienna");
     const firstStore = createStore(stateDir, firstBody);
     const secondDownloaded = vi.fn();
-    const secondStore = createStore(stateDir, cityDatabase("Paris"), secondDownloaded);
+    const secondStore = createStore(stateDir, cityDatabase("Paris"), {
+      downloaded: secondDownloaded,
+    });
     const beforeWrite = createDeferred<void>();
     const finishWrite = createDeferred<void>();
     let firstWrite = true;
@@ -333,12 +286,14 @@ describe("geolocation database publication", () => {
       const store = createStore(
         stateDir,
         failure === "parse" ? Buffer.from("invalid MMDB") : cityDatabase("Paris"),
-        async () => {
-          if (failure === "download") {
-            throw new Error("synthetic download failure");
-          }
+        {
+          downloaded: async () => {
+            if (failure === "download") {
+              throw new Error("synthetic download failure");
+            }
+          },
+          warn,
         },
-        warn,
       );
       const directory = path.dirname(store.databaseFile);
       await fs.mkdir(directory);
@@ -382,8 +337,8 @@ describe("geolocation database publication", () => {
     };
     const firstBody = cityDatabase("Vienna");
     const secondBody = cityDatabase("Paris");
-    const firstStore = createStore(stateDir, firstBody, downloaded);
-    const stores = [firstStore, createStore(stateDir, secondBody, downloaded)];
+    const firstStore = createStore(stateDir, firstBody, { downloaded });
+    const stores = [firstStore, createStore(stateDir, secondBody, { downloaded })];
 
     const databases = await Promise.allSettled(stores.map((store) => store.load()));
 

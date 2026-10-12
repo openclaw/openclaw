@@ -1,8 +1,7 @@
 import { gcm } from "@noble/ciphers/aes.js";
-import { sha256 } from "@noble/hashes/sha2.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
-import { canonicalBytes } from "./canonical.js";
-import { base64, decodeUtf8, fromBase64, hex, utf8 } from "./encoding.js";
+import { canonicalBytes, sha256Hex } from "./canonical.js";
+import { base64, decodeUtf8, fromBase64, utf8 } from "./encoding.js";
 
 export interface AuditEvent {
   seq: number;
@@ -145,7 +144,7 @@ function decryptSensitive(value: unknown, key: Uint8Array, field?: string): unkn
 function hashEntry(previous: string, event: AuditEvent): string {
   const previousBytes = previous === "" ? new Uint8Array() : fromHex(previous);
   const eventBytes = canonicalBytes(event);
-  return hex(sha256(concatBytes(previousBytes, eventBytes)));
+  return sha256Hex(concatBytes(previousBytes, eventBytes));
 }
 
 function validateAuditKey(key: Uint8Array): Uint8Array {

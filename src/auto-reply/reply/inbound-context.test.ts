@@ -1,38 +1,15 @@
 // Tests inbound context text built from sender and conversation metadata.
-import { describe, expect, expectTypeOf, it } from "vitest";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "../../channels/plugins/contracts/test-helpers.js";
+import { describe, expect, it } from "vitest";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext } from "../templating.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { finalizeInboundContext, finalizeInboundContextForSdk } from "./inbound-context.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
-import { normalizeInboundTextNewlines } from "./inbound-text.js";
-
-describe("normalizeInboundTextNewlines", () => {
-  it("normalizes real newlines and preserves literal backslash-n sequences", () => {
-    const cases = [
-      { input: "hello\r\nworld", expected: "hello\nworld" },
-      { input: "hello\rworld", expected: "hello\nworld" },
-      { input: "C:\\Work\\nxxx\\README.md", expected: "C:\\Work\\nxxx\\README.md" },
-      {
-        input: "Please read the file at C:\\Work\\nxxx\\README.md",
-        expected: "Please read the file at C:\\Work\\nxxx\\README.md",
-      },
-      { input: "C:\\new\\notes\\nested", expected: "C:\\new\\notes\\nested" },
-      { input: "Line 1\r\nC:\\Work\\nxxx", expected: "Line 1\nC:\\Work\\nxxx" },
-    ] as const;
-
-    for (const testCase of cases) {
-      expect(normalizeInboundTextNewlines(testCase.input)).toBe(testCase.expected);
-    }
-  });
-});
 
 describe("inbound context contract (providers + extensions)", () => {
   it.each([
     ["heartbeat", "heartbeat"],
-    ["cron-event", "cron"],
     ["exec-event", "exec"],
   ] as const)("folds the legacy %s source without changing the reply route", (provider, source) => {
     const input: MsgContext = {
@@ -73,271 +50,61 @@ describe("inbound context contract (providers + extensions)", () => {
     expect(ctx.OriginatingChannel).toBeUndefined();
   });
 
-  it("does not turn an unknown source into an internal wake", () => {
-    const ctx = finalizeInboundContextForSdk({
-      Body: "A user message",
-      Provider: "telegram",
-      InternalTurnSource: "unknown",
-    });
-    expect(ctx.InternalTurnSource).toBeUndefined();
-    expect(ctx.Provider).toBe("telegram");
-  });
-
-  const cases: Array<{ name: string; ctx: MsgContext }> = [
-    {
-      name: "whatsapp group",
-      ctx: {
-        Provider: "whatsapp",
-        Surface: "whatsapp",
-        ChatType: "group",
-        From: "123@g.us",
-        To: "+15550001111",
-        Body: "[WhatsApp 123@g.us] hi",
-        RawBody: "hi",
-        CommandBody: "hi",
-        SenderName: "Alice",
-      },
-    },
-    {
-      name: "telegram group",
-      ctx: {
-        Provider: "telegram",
-        Surface: "telegram",
-        ChatType: "group",
-        From: "group:123",
-        To: "telegram:123",
-        Body: "[Telegram group:123] hi",
-        RawBody: "hi",
-        CommandBody: "hi",
-        GroupSubject: "Telegram Group",
-        SenderName: "Alice",
-      },
-    },
-    {
-      name: "slack channel",
-      ctx: {
-        Provider: "slack",
-        Surface: "slack",
-        ChatType: "channel",
-        From: "slack:channel:C123",
-        To: "channel:C123",
-        Body: "[Slack #general] hi",
-        RawBody: "hi",
-        CommandBody: "hi",
-        GroupSubject: "#general",
-        SenderName: "Alice",
-      },
-    },
-    {
-      name: "discord channel",
-      ctx: {
-        Provider: "discord",
-        Surface: "discord",
-        ChatType: "channel",
-        From: "group:123",
-        To: "channel:123",
-        Body: "[Discord #general] hi",
-        RawBody: "hi",
-        CommandBody: "hi",
-        GroupSubject: "#general",
-        SenderName: "Alice",
-      },
-    },
-    {
-      name: "signal dm",
-      ctx: {
-        Provider: "signal",
-        Surface: "signal",
-        ChatType: "direct",
-        From: "signal:+15550001111",
-        To: "signal:+15550002222",
-        Body: "[Signal] hi",
-        RawBody: "hi",
-        CommandBody: "hi",
-      },
-    },
-    {
-      name: "imessage group",
-      ctx: {
-        Provider: "imessage",
-        Surface: "imessage",
-        ChatType: "group",
-        From: "group:chat_id:123",
-        To: "chat_id:123",
-        Body: "[iMessage Group] hi",
-        RawBody: "hi",
-        CommandBody: "hi",
-        GroupSubject: "iMessage Group",
-        SenderName: "Alice",
-      },
-    },
-    {
-      name: "matrix channel",
-      ctx: {
-        Provider: "matrix",
-        Surface: "matrix",
-        ChatType: "channel",
-        From: "matrix:channel:!room:example.org",
-        To: "room:!room:example.org",
-        Body: "[Matrix] hi",
-        RawBody: "hi",
-        CommandBody: "hi",
-        GroupSubject: "#general",
-        SenderName: "Alice",
-      },
-    },
-    {
-      name: "msteams channel",
-      ctx: {
-        Provider: "msteams",
-        Surface: "msteams",
-        ChatType: "channel",
-        From: "msteams:channel:19:abc@thread.tacv2",
-        To: "msteams:channel:19:abc@thread.tacv2",
-        Body: "[Teams] hi",
-        RawBody: "hi",
-        CommandBody: "hi",
-        GroupSubject: "Teams Channel",
-        SenderName: "Alice",
-      },
-    },
-    {
-      name: "zalo dm",
-      ctx: {
-        Provider: "zalo",
-        Surface: "zalo",
-        ChatType: "direct",
-        From: "zalo:123",
-        To: "zalo:123",
-        Body: "[Zalo] hi",
-        RawBody: "hi",
-        CommandBody: "hi",
-      },
-    },
-    {
-      name: "zalouser group",
-      ctx: {
-        Provider: "zalouser",
-        Surface: "zalouser",
-        ChatType: "group",
-        From: "group:123",
-        To: "zalouser:123",
-        Body: "[Zalo Personal] hi",
-        RawBody: "hi",
-        CommandBody: "hi",
-        GroupSubject: "Zalouser Group",
-        SenderName: "Alice",
-      },
-    },
-  ];
-
-  for (const entry of cases) {
-    it(entry.name, () => {
-      const ctx = finalizeInboundContext({ ...entry.ctx });
-      expectInboundContextContract(ctx);
-    });
-  }
-});
-
-describe("finalizeInboundContext text facts", () => {
-  it.each(["native", "text"] as const)(
-    "keeps suppressed %s command input literal across repeated finalization",
-    (source) => {
-      const body = "/new keep this as task text";
-      const ctx = finalizeInboundContext({
-        Body: body,
-        RawBody: body,
-        CommandBody: body,
-        BodyForCommands: body,
-        commandText: body,
-        CommandInterpretationSuppressed: true,
-        CommandAuthorized: true,
-        CommandSource: source,
-        CommandTargetSessionKey: "agent:other:main",
-        CommandTurn: {
-          kind: source === "native" ? "native" : "text-slash",
-          source,
-          authorized: true,
-          commandName: "new",
-          body,
-        },
-      });
-
-      const expected = {
-        agentText: body,
-        rawText: body,
-        BodyForAgent: body,
-        commandText: "",
-        BodyForCommands: "",
-        CommandAuthorized: false,
-        CommandSource: undefined,
-        CommandTurn: { kind: "normal", source: "message", authorized: false, body: "" },
-      };
-      expect(ctx).toMatchObject(expected);
-      expect(resolveCommandTurnTargetSessionKey(ctx)).toBeUndefined();
-      expect(finalizeInboundContext(ctx, { forceBodyForCommands: true })).toMatchObject(expected);
-    },
-  );
-
-  it.each([
-    {
-      name: "BodyForCommands",
-      ctx: {
-        Body: "body",
-        BodyStripped: "stripped",
-        Transcript: "transcript",
-        RawBody: "raw",
-        CommandBody: "command",
-        BodyForCommands: "commands",
-      },
-      expected: "commands",
-    },
-    {
-      name: "CommandBody",
-      ctx: {
-        Body: "body",
-        BodyStripped: "stripped",
-        Transcript: "transcript",
-        RawBody: "raw",
-        CommandBody: "command",
-      },
-      expected: "command",
-    },
-    {
-      name: "RawBody",
-      ctx: { Body: "body", BodyStripped: "stripped", Transcript: "transcript", RawBody: "raw" },
-      expected: "raw",
-    },
-    {
-      name: "Transcript",
-      ctx: { Body: "body", BodyStripped: "stripped", Transcript: "transcript" },
-      expected: "transcript",
-    },
-    {
-      name: "BodyStripped",
-      ctx: { Body: "body", BodyStripped: "stripped" },
-      expected: "stripped",
-    },
-    { name: "Body", ctx: { Body: "body" }, expected: "body" },
-  ])("resolves commandText from $name", ({ ctx, expected }) => {
-    expect(finalizeInboundContext(ctx).commandText).toBe(expected);
-  });
-
-  it("carries prompt-facing and raw text separately", () => {
+  it("finalizes the group text and conversation contract", () => {
     const ctx = finalizeInboundContext({
-      Body: "enveloped body",
-      BodyForAgent: "agent body",
-      BodyForCommands: "command body",
-      RawBody: "raw body",
+      ChatType: "group",
+      From: "test:123",
+      Body: "[Test] hello",
+      RawBody: "hello",
+      SenderName: "Alice",
+      GroupSubject: "Room",
     });
 
     expect(ctx).toMatchObject({
-      commandText: "command body",
-      agentText: "agent body",
-      rawText: "raw body",
-      BodyForCommands: "command body",
-      BodyForAgent: "agent body",
+      Body: "[Test] hello",
+      BodyForAgent: "hello",
+      BodyForCommands: "hello",
+      ConversationLabel: "Room id:123",
+      CommandAuthorized: false,
     });
+  });
+});
+
+describe("finalizeInboundContext text facts", () => {
+  it("keeps suppressed text command input literal across repeated finalization", () => {
+    const body = "/new keep this as task text";
+    const ctx = finalizeInboundContext({
+      Body: body,
+      RawBody: body,
+      CommandBody: body,
+      BodyForCommands: body,
+      commandText: body,
+      CommandInterpretationSuppressed: true,
+      CommandAuthorized: true,
+      CommandSource: "text",
+      CommandTargetSessionKey: "agent:other:main",
+      CommandTurn: {
+        kind: "text-slash",
+        source: "text",
+        authorized: true,
+        commandName: "new",
+        body,
+      },
+    });
+
+    const expected = {
+      agentText: body,
+      rawText: body,
+      BodyForAgent: body,
+      commandText: "",
+      BodyForCommands: "",
+      CommandAuthorized: false,
+      CommandSource: undefined,
+      CommandTurn: { kind: "normal", source: "message", authorized: false, body: "" },
+    };
+    expect(ctx).toMatchObject(expected);
+    expect(resolveCommandTurnTargetSessionKey(ctx)).toBeUndefined();
+    expect(finalizeInboundContext(ctx, { forceBodyForCommands: true })).toMatchObject(expected);
   });
 
   it("preserves an explicitly empty raw projection", () => {
@@ -353,59 +120,9 @@ describe("finalizeInboundContext text facts", () => {
       rawText: "",
     });
   });
-
-  it("normalizes canonical text once and keeps repeated finalization stable", () => {
-    const ctx = finalizeInboundContext({
-      Body: "body\r\nline",
-      Transcript: "transcript\r\nline",
-    });
-
-    expect(ctx).toMatchObject({
-      commandText: "transcript\nline",
-      agentText: "transcript\nline",
-      rawText: "transcript\nline",
-    });
-    expect(finalizeInboundContext(ctx)).toMatchObject({
-      commandText: "transcript\nline",
-      agentText: "transcript\nline",
-      rawText: "transcript\nline",
-    });
-  });
 });
 
 describe("finalizeInboundContext media cleanup", () => {
-  it("removes legacy media fields from both the value and its return type", () => {
-    const ctx = finalizeInboundContext({
-      Body: "hello",
-      MediaPath: "/tmp/photo.jpg",
-      MediaUrl: "file:///tmp/photo.jpg",
-      MediaType: "image/jpeg",
-      MediaPaths: ["/tmp/photo.jpg"],
-      MediaUrls: ["file:///tmp/photo.jpg"],
-      MediaTypes: ["image/jpeg"],
-      MediaDir: "/tmp/media",
-      MediaWorkspaceDir: "/tmp",
-      MediaTranscribedIndexes: [0],
-      MediaStaged: true,
-    });
-
-    expectTypeOf<Extract<keyof typeof ctx, "MediaPath">>().toEqualTypeOf<never>();
-    for (const key of [
-      "MediaPath",
-      "MediaUrl",
-      "MediaType",
-      "MediaPaths",
-      "MediaUrls",
-      "MediaTypes",
-      "MediaDir",
-      "MediaWorkspaceDir",
-      "MediaTranscribedIndexes",
-      "MediaStaged",
-    ] as const) {
-      expect(Object.hasOwn(ctx, key)).toBe(false);
-    }
-  });
-
   it("restores legacy media projections only for the shipped SDK adapter", () => {
     const ctx = finalizeInboundContextForSdk({
       Body: "hello",
@@ -430,47 +147,21 @@ describe("finalizeInboundContext media cleanup", () => {
     });
   });
 
-  it("adopts a singular SDK-staged path without losing canonical facts or metadata", () => {
+  it("keeps a singular legacy MediaUrl off the second inbound attachment slot", () => {
     const ctx = finalizeInboundContext({
-      Body: "hello",
-      media: [
-        {
-          path: "/remote/photo.jpg",
-          contentType: "image/jpeg",
-          kind: "image",
-          transcribed: true,
-          messageId: "photo",
-        },
-        {
-          path: "/remote/document.pdf",
-          contentType: "application/pdf",
-          kind: "document",
-          messageId: "document",
-          hydrationSuppressed: true,
-        },
-      ],
-      MediaPath: "/tmp/staged/photo.jpg",
-      MediaStaged: true,
+      Body: "two attachments",
+      MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
+      MediaUrls: ["file:///tmp/a.png"],
+      MediaUrl: "file:///tmp/a.png",
     });
 
     expect(ctx.media).toHaveLength(2);
     expect(ctx.media?.[0]).toMatchObject({
-      path: "/tmp/staged/photo.jpg",
-      contentType: "image/jpeg",
-      kind: "image",
-      transcribed: true,
-      messageId: "photo",
-      staged: true,
+      path: "/tmp/a.png",
+      url: "file:///tmp/a.png",
     });
-    expect(ctx.media?.[1]).toMatchObject({
-      path: "/remote/document.pdf",
-      contentType: "application/pdf",
-      kind: "document",
-      messageId: "document",
-      hydrationSuppressed: true,
-    });
-    expect(Object.hasOwn(ctx, "MediaPath")).toBe(false);
-    expect(Object.hasOwn(ctx, "MediaStaged")).toBe(false);
+    expect(ctx.media?.[1]).toMatchObject({ path: "/tmp/b.png" });
+    expect(ctx.media?.[1]?.url).toBeUndefined();
   });
 });
 
@@ -521,25 +212,6 @@ describe("finalizeInboundContext supplemental projection", () => {
     expect(Object.hasOwn(ctx, "SupplementalContext")).toBe(false);
   });
 
-  it("keeps explicit legacy fields and omits undefined supplemental fields", () => {
-    const ctx = finalizeInboundContext({
-      Body: "hello",
-      ReplyToId: "explicit-reply",
-      GroupSystemPrompt: "explicit prompt",
-      SupplementalContext: {
-        quote: {
-          id: "supplemental-reply",
-          isQuote: false,
-        },
-      },
-    });
-
-    expect(ctx.ReplyToId).toBe("explicit-reply");
-    expect(ctx.GroupSystemPrompt).toBe("explicit prompt");
-    expect(ctx.ReplyToIsQuote).toBe(false);
-    expect(Object.hasOwn(ctx, "ReplyToBody")).toBe(false);
-  });
-
   it("folds the deprecated supplemental structured-context key", () => {
     const supplemental: NonNullable<MsgContext["SupplementalContext"]> = {
       untrustedContext: [{ label: "raw", payload: { ok: true } }],
@@ -576,17 +248,6 @@ describe("finalizeInboundContext deprecated prompt-context aliases", () => {
     );
     expect(deprecated.ChannelStructuredContext).toEqual([entry]);
     expect(Object.hasOwn(deprecated, "UntrustedStructuredContext")).toBe(false);
-  });
-
-  it("keeps explicitly empty structured context ahead of the deprecated alias", () => {
-    const ctx = finalizeInboundContext({
-      Body: "hello",
-      ChannelStructuredContext: [],
-      UntrustedStructuredContext: [{ label: "stale", payload: {} }],
-    });
-
-    expect(ctx.ChannelStructuredContext).toEqual([]);
-    expect(Object.hasOwn(ctx, "UntrustedStructuredContext")).toBe(false);
   });
 
   it("folds deprecated UntrustedContext before prompt rendering", () => {

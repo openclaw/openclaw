@@ -1,4 +1,3 @@
-// Migrate Claude plugin module implements skills behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
@@ -10,11 +9,11 @@ import {
   MIGRATION_REASON_TARGET_EXISTS,
 } from "openclaw/plugin-sdk/migration";
 import { backupMigrationItemTarget } from "openclaw/plugin-sdk/migration-runtime";
+import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { exists, sanitizeName } from "./helpers.js";
 import type { ClaudeSource } from "./source.js";
-import type { PlannedTargets } from "./targets.js";
 
 type PlannedSkill = {
   name: string;
@@ -27,7 +26,7 @@ type PlannedSkill = {
 async function collectSkillDirs(
   planned: PlannedSkill[],
   dir: string | undefined,
-  targets: PlannedTargets,
+  targets: PlannedMigrationTargets,
   scope: string,
 ): Promise<void> {
   if (!dir) {
@@ -59,7 +58,7 @@ async function collectSkillDirs(
 async function collectCommandFiles(
   planned: PlannedSkill[],
   dir: string | undefined,
-  targets: PlannedTargets,
+  targets: PlannedMigrationTargets,
   scope: string,
 ): Promise<void> {
   if (!dir) {
@@ -90,7 +89,7 @@ async function collectCommandFiles(
 
 export async function buildSkillItems(params: {
   source: ClaudeSource;
-  targets: PlannedTargets;
+  targets: PlannedMigrationTargets;
   overwrite?: boolean;
 }): Promise<MigrationItem[]> {
   const planned: PlannedSkill[] = [];

@@ -215,88 +215,32 @@ describe("runGitHubCopilotDeviceFlow — live authority", () => {
 });
 
 describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
-  it("throws with failureLabel on non-OK device code response", async () => {
-    mocks.fetchWithSsrFGuard.mockImplementation(async () => guardResponse({}, 401));
-
-    await expect(runGitHubCopilotDeviceFlow({ showCode: vi.fn() })).rejects.toThrow(
-      "GitHub device code failed: HTTP 401",
-    );
-  });
-
-  it("cancels the unread device code body before throwing on non-OK", async () => {
+  it.each([
+    { stage: "device code", url: DEVICE_CODE_URL, status: 502 },
+    { stage: "device token", url: ACCESS_TOKEN_URL, status: 401 },
+  ])("cancels the unread $stage body before throwing on non-OK", async ({ stage, url, status }) => {
     let canceled = false;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(
-          new TextEncoder().encode(
-            JSON.stringify({ error: "server_error", error_description: "boom" }),
-          ),
-        );
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: "server_error" })));
       },
       cancel() {
         canceled = true;
       },
     });
-    mocks.fetchWithSsrFGuard.mockImplementation(async () => ({
-      response: new Response(body, {
-        status: 502,
-        headers: { "Content-Type": "application/json" },
-      }),
-      finalUrl: DEVICE_CODE_URL,
-      release: vi.fn(async () => {}),
-    }));
-
-    await expect(runGitHubCopilotDeviceFlow({ showCode: vi.fn() })).rejects.toThrow(
-      "GitHub device code failed: HTTP 502",
-    );
-    expect(canceled).toBe(true);
-  });
-
-  it("throws with failureLabel on non-OK access token response", async () => {
-    let callIdx = 0;
-    mocks.fetchWithSsrFGuard.mockImplementation(async () => {
-      callIdx += 1;
-      if (callIdx === 1) {
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+      if (url === ACCESS_TOKEN_URL && params.url === DEVICE_CODE_URL) {
         return guardResponse(VALID_DEVICE_CODE_BODY);
       }
-      return guardResponse({}, 500, ACCESS_TOKEN_URL);
-    });
-
-    await expect(runDeviceFlowAfterFirstPoll({ showCode: vi.fn(async () => {}) })).rejects.toThrow(
-      "GitHub device token failed: HTTP 500",
-    );
-  });
-
-  it("cancels the unread access token body before throwing on non-OK", async () => {
-    let canceled = false;
-    let callIdx = 0;
-    mocks.fetchWithSsrFGuard.mockImplementation(async () => {
-      callIdx += 1;
-      if (callIdx === 1) {
-        return guardResponse(VALID_DEVICE_CODE_BODY);
-      }
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(
-            new TextEncoder().encode(JSON.stringify({ error: "bad_verification_code" })),
-          );
-        },
-        cancel() {
-          canceled = true;
-        },
-      });
       return {
-        response: new Response(body, {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        }),
-        finalUrl: ACCESS_TOKEN_URL,
+        response: new Response(body, { status, headers: { "Content-Type": "application/json" } }),
+        finalUrl: url,
         release: vi.fn(async () => {}),
       };
     });
 
     await expect(runDeviceFlowAfterFirstPoll({ showCode: vi.fn(async () => {}) })).rejects.toThrow(
-      "GitHub device token failed: HTTP 401",
+      `GitHub ${stage} failed: HTTP ${status}`,
     );
     expect(canceled).toBe(true);
   });
@@ -318,11 +262,14 @@ describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
 });
 
 describe("postGitHubDeviceFlowForm — response size bound", () => {
-  it("bounds oversized device code body and cancels the stream", async () => {
-    const chunk = new Uint8Array(1024 * 1024); // 1 MiB
+  it.each([
+    { stage: "device code", url: DEVICE_CODE_URL },
+    { stage: "access token", url: ACCESS_TOKEN_URL },
+  ])("bounds oversized $stage bodies and cancels the stream", async ({ url }) => {
+    const chunk = new Uint8Array(1024 * 1024);
     let readCount = 0;
     let canceled = false;
-    // 64 chunks × 1 MiB = 64 MiB — far exceeds the 16 MiB cap
+    // Stop well before consuming the 64 MiB source body.
     const oversizedBody = new ReadableStream<Uint8Array>({
       pull(controller) {
         if (readCount >= 64) {
@@ -336,57 +283,16 @@ describe("postGitHubDeviceFlowForm — response size bound", () => {
         canceled = true;
       },
     });
-
-    mocks.fetchWithSsrFGuard.mockImplementation(async () => ({
-      response: new Response(oversizedBody, {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-      finalUrl: DEVICE_CODE_URL,
-      release: async () => {},
-    }));
-
-    await expect(runGitHubCopilotDeviceFlow({ showCode: vi.fn() })).rejects.toThrow(
-      "github-copilot.device-flow",
-    );
-
-    // Stream must be cancelled before all 64 MiB are consumed
-    expect(readCount).toBeLessThan(64);
-    expect(canceled).toBe(true);
-  });
-
-  it("bounds oversized access token body and cancels the stream", async () => {
-    const chunk = new Uint8Array(1024 * 1024); // 1 MiB
-    let readCount = 0;
-    let canceled = false;
-    let callIdx = 0;
-
-    mocks.fetchWithSsrFGuard.mockImplementation(async () => {
-      callIdx += 1;
-      if (callIdx === 1) {
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+      if (url === ACCESS_TOKEN_URL && params.url === DEVICE_CODE_URL) {
         return guardResponse(VALID_DEVICE_CODE_BODY);
       }
-
-      const oversizedBody = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (readCount >= 64) {
-            controller.close();
-            return;
-          }
-          readCount += 1;
-          controller.enqueue(chunk);
-        },
-        cancel() {
-          canceled = true;
-        },
-      });
-
       return {
         response: new Response(oversizedBody, {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),
-        finalUrl: ACCESS_TOKEN_URL,
+        finalUrl: url,
         release: async () => {},
       };
     });
@@ -394,8 +300,6 @@ describe("postGitHubDeviceFlowForm — response size bound", () => {
     await expect(runDeviceFlowAfterFirstPoll({ showCode: vi.fn(async () => {}) })).rejects.toThrow(
       "github-copilot.device-flow",
     );
-
-    // Stream must be cancelled before all 64 MiB are consumed
     expect(readCount).toBeLessThan(64);
     expect(canceled).toBe(true);
   });

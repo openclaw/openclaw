@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
@@ -24,12 +24,19 @@ afterEach(() => {
 
 describe("clearSessionResetRuntimeState", () => {
   it("disposes prompt projections with the archived session", () => {
-    const state = getEmbeddedSessionPromptState("old-session");
-    state.sentUserTurnIds.add("sent-user-turn");
+    using original = retainEmbeddedSessionPromptState("old-session");
+    const state = original.state;
+    state.toolResults.frozen.add("sent-tool-result");
 
-    clearSessionResetRuntimeState(["old-session"], { agentId: "main" });
+    clearSessionResetRuntimeState(["old-session"], {
+      agentId: "main",
+      sessionKey: "agent:main:slack:room:1",
+      activeReplySessionId: "old-session",
+      assertCurrent: () => {},
+    });
 
-    expect(getEmbeddedSessionPromptState("old-session")).not.toBe(state);
+    using replacement = retainEmbeddedSessionPromptState("old-session");
+    expect(replacement.state).not.toBe(state);
   });
 
   it("clears reset queues and drains system events for normalized keys", () => {
@@ -37,12 +44,12 @@ describe("clearSessionResetRuntimeState", () => {
     enqueueSystemEvent("stale beta", withSystemEventOwner({ sessionKey: "beta" }, "main"));
     enqueueSystemEvent("fresh gamma", withSystemEventOwner({ sessionKey: "gamma" }, "main"));
 
-    const result = clearSessionResetRuntimeState([" alpha ", undefined, " ", "alpha", "beta"], {
+    clearSessionResetRuntimeState([" alpha ", undefined, " ", "alpha", "beta"], {
       agentId: "main",
+      sessionKey: "alpha",
+      assertCurrent: () => {},
     });
 
-    expect(result.keys).toEqual(["alpha", "beta"]);
-    expect(result.systemEventsCleared).toBe(2);
     expect(peekSystemEvents("agent:main:alpha")).toStrictEqual([]);
     expect(peekSystemEvents("agent:main:beta")).toStrictEqual([]);
     expect(peekSystemEvents("agent:main:gamma")).toEqual(["fresh gamma"]);
@@ -53,11 +60,12 @@ describe("clearSessionResetRuntimeState", () => {
     enqueueSystemEvent("alpha", withSystemEventOwner({ sessionKey: "global" }, "alpha"));
     enqueueSystemEvent("beta", withSystemEventOwner({ sessionKey: "global" }, "beta"));
 
-    const result = clearSessionResetRuntimeState(["global", "agent:beta:global"], {
+    clearSessionResetRuntimeState(["global", "agent:beta:global"], {
       agentId: " Alpha ",
+      sessionKey: "global",
+      assertCurrent: () => {},
     });
 
-    expect(result.systemEventsCleared).toBe(1);
     expect(peekSystemEvents("agent:alpha:global")).toEqual([]);
     expect(peekSystemEvents("agent:main:global")).toEqual(["main"]);
     expect(peekSystemEvents("agent:beta:global")).toEqual(["beta"]);
@@ -80,6 +88,8 @@ describe("clearSessionResetRuntimeState", () => {
     clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
       agentId: "main",
       activeReplySessionId: "old-session",
+      sessionKey: "agent:main:slack:room:1",
+      assertCurrent: () => {},
     });
 
     expect(cancel).toHaveBeenCalledWith("restart");
@@ -103,6 +113,8 @@ describe("clearSessionResetRuntimeState", () => {
     clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
       agentId: "main",
       activeReplySessionId: "old-session",
+      sessionKey: "agent:main:slack:room:1",
+      assertCurrent: () => {},
     });
 
     expect(replyRunRegistry.get("agent:main:slack:room:1")).toBe(operation);
@@ -133,6 +145,8 @@ describe("clearSessionResetRuntimeState", () => {
     clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
       agentId: "main",
       activeReplySessionId: "old-session",
+      sessionKey: "agent:main:slack:room:1",
+      assertCurrent: () => {},
     });
 
     expect(replacement).toBeDefined();
@@ -149,6 +163,8 @@ describe("clearSessionResetRuntimeState", () => {
     clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
       agentId: "main",
       activeReplySessionId: "old-session",
+      sessionKey: "agent:main:slack:room:1",
+      assertCurrent: () => {},
     });
 
     expect(operation.phase).toBe("queued");

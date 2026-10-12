@@ -1,9 +1,7 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Moonshot provider module implements model/runtime integration.
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
-  type WebSearchProviderSetupContext,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 
 const KIMI_CREDENTIAL_PATH = "plugins.entries.moonshot.config.webSearch.apiKey";
@@ -30,13 +28,6 @@ const KimiSearchSchema = {
   },
 } satisfies Record<string, unknown>;
 
-async function runKimiSearchProviderSetup(
-  ctx: WebSearchProviderSetupContext,
-): Promise<WebSearchProviderSetupContext["config"]> {
-  const runtime = await loadKimiWebSearchProviderRuntime();
-  return await runtime.runKimiSearchProviderSetup(ctx);
-}
-
 export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "kimi",
@@ -55,7 +46,10 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
       searchCredential: { type: "scoped", scopeId: "kimi" },
       configuredCredential: { pluginId: "moonshot" },
     }),
-    runSetup: runKimiSearchProviderSetup,
+    runSetup: createLazyRuntimeMethod(
+      loadKimiWebSearchProviderRuntime,
+      (runtime) => runtime.runKimiSearchProviderSetup,
+    ),
     createTool: (ctx) => ({
       description:
         "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search.",

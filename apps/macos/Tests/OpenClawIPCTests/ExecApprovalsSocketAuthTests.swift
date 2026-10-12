@@ -199,7 +199,17 @@ struct ExecApprovalsSocketAuthTests {
         ])
         switch ExecHostRequestEvaluator.validateRequest(decoded) {
         case let .success(validated):
-            #expect(validated.delayedPolicySnapshot?.portable == decoded.policySnapshot)
+            #expect(validated.delayedPolicySnapshot == ExecApprovalPolicySnapshot(
+                security: .allowlist,
+                ask: .onMiss,
+                askFallback: .deny,
+                autoAllowSkills: true,
+                allowlist: [
+                    ExecAllowlistEntry(pattern: "/"),
+                    ExecAllowlistEntry(pattern: "/A"),
+                    ExecAllowlistEntry(pattern: "/A", source: "allow-always"),
+                    ExecAllowlistEntry(pattern: "/ä"),
+                ]))
         case let .failure(error):
             Issue.record("unexpected invalid request: \(error.message)")
         }

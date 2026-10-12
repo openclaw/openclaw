@@ -4,7 +4,7 @@ import { mergeVitestPretestBuildModes } from "./vitest-build-prerequisites.mts";
 import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 
 const FIXED_JOB_SECONDS = 60;
-const MAX_PACKED_JOB_SECONDS = 720;
+const MAX_PACKED_JOB_SECONDS = { native: 360, "hosted-hourly": 720 } as const;
 
 // Complete serial BS8/two-worker child observations from 35702479645,
 // 35702772380, 35707408465 and native Testbox run 35722202780.
@@ -173,16 +173,27 @@ function isNumberedToolingGroup(group: NodeTestShardGroup): boolean {
 }
 
 /** Reuse measured serial placement without replacing the general capacity-pricing owner. */
-export function rebalanceMeasuredHybridJobs(
+export function rebalanceMeasuredSerialJobs(
   jobs: CompactNodeTestShard[],
   options: {
     runner: string;
+    profile?: "native" | "hosted-hourly";
     estimateGroup: (group: NodeTestShardGroup) => { seconds: number; complete: boolean };
     canShare: (groups: NodeTestShardGroup[]) => boolean;
+    testSecondsLimit?: (groups: NodeTestShardGroup[]) => number;
   },
 ): CompactNodeTestShard[] {
+  const profile = options.profile ?? "native";
+  const maxPackedJobSeconds = MAX_PACKED_JOB_SECONDS[profile];
+  const packedJobLimit = (groups: NodeTestShardGroup[]) =>
+    Math.min(
+      maxPackedJobSeconds,
+      (options.testSecondsLimit?.(groups) ?? maxPackedJobSeconds - FIXED_JOB_SECONDS) +
+        FIXED_JOB_SECONDS,
+    );
   const split = jobs.flatMap((job) => {
     if (
+      profile === "hosted-hourly" ||
       job.groups.length < 2 ||
       !serialTwoWorkerJob(job, options.runner, true) ||
       job.pretestBuildMode !==
@@ -234,7 +245,7 @@ export function rebalanceMeasuredHybridJobs(
       ) + FIXED_JOB_SECONDS;
     // Complete child walls identify existing tails more directly than summed
     // file estimates. Packing still retains the higher canonical price below.
-    const limit = 600;
+    const limit = packedJobLimit(job.groups);
     if (!pair && (!tooling || completeWall <= limit)) {
       return [job];
     }
@@ -246,10 +257,7 @@ export function rebalanceMeasuredHybridJobs(
         index === 0 ? job.shardName : `${job.shardName}-tail${index === 1 ? "" : `-${index + 1}`}`,
       groups: [group],
       pretestBuildMode: group.pretestBuildMode,
-      predictedSeconds: Math.max(
-        job.predictedSeconds ?? 0,
-        seconds[index]! + buildSeconds[index]! + FIXED_JOB_SECONDS,
-      ),
+      predictedSeconds: Math.ceil(seconds[index]! + buildSeconds[index]!),
     }));
   });
 
@@ -264,7 +272,7 @@ export function rebalanceMeasuredHybridJobs(
     }
     const prices = job.groups.map((group) => {
       const estimate = options.estimateGroup(group);
-      const observed = toolingWall(group);
+      const observed = profile === "hosted-hourly" ? undefined : toolingWall(group);
       return {
         seconds: Math.max(estimate.seconds, observed ?? 0),
         complete: estimate.complete || observed !== undefined,
@@ -286,13 +294,14 @@ export function rebalanceMeasuredHybridJobs(
       job,
       {
         ...job,
-        predictedSeconds: Math.ceil(seconds + FIXED_JOB_SECONDS),
+        predictedSeconds: Math.ceil(seconds),
       },
     ]),
   );
   const candidates = measured
     .filter(
-      ({ seconds, complete }) => complete && seconds + FIXED_JOB_SECONDS <= MAX_PACKED_JOB_SECONDS,
+      ({ job, seconds, complete }) =>
+        complete && seconds + FIXED_JOB_SECONDS <= packedJobLimit(job.groups),
     )
     .toSorted((a, b) => b.seconds - a.seconds || a.job.checkName.localeCompare(b.job.checkName));
   if (candidates.length < 2) {
@@ -303,7 +312,7 @@ export function rebalanceMeasuredHybridJobs(
     return split.map((job) => priced.get(job) ?? job);
   }
 
-  const workBudget = MAX_PACKED_JOB_SECONDS - FIXED_JOB_SECONDS;
+  const workBudget = maxPackedJobSeconds - FIXED_JOB_SECONDS;
   const minimumJobs = Math.ceil(
     candidates.reduce((sum, entry) => sum + entry.seconds, 0) / workBudget,
   );
@@ -316,7 +325,8 @@ export function rebalanceMeasuredHybridJobs(
       const bin = bins
         .filter(
           (candidate) =>
-            candidate.seconds + seconds <= workBudget &&
+            candidate.seconds + seconds + FIXED_JOB_SECONDS <=
+              packedJobLimit([...candidate.jobs.flatMap((entry) => entry.groups), ...job.groups]) &&
             (candidate.jobs.length === 0 ||
               candidate.jobs[0]!.timeoutMinutes === job.timeoutMinutes) &&
             options.canShare([...candidate.jobs.flatMap((entry) => entry.groups), ...job.groups]),
@@ -339,7 +349,7 @@ export function rebalanceMeasuredHybridJobs(
         Object.assign({}, originals[0]!, {
           groups: originals.flatMap((job) => job.groups),
           env: { ...originals[0]!.env, OPENCLAW_VITEST_MAX_WORKERS: "2" },
-          predictedSeconds: Math.ceil(seconds + FIXED_JOB_SECONDS),
+          predictedSeconds: Math.ceil(seconds),
         }),
       );
     return [

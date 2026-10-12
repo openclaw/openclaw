@@ -9,13 +9,16 @@ import {
   type CommandPaletteInputHandoff,
   type CommandPaletteOpenInput,
 } from "../components/command-palette-contract.ts";
-import { renderCommandPaletteInput } from "../components/command-palette-input.ts";
+import { CommandPaletteInput } from "../components/command-palette-input.tsx";
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import { t } from "../i18n/index.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
+import { showToast } from "../lib/toast.ts";
+import { uploadsEnabled, uploadsDisabledMessage } from "../lib/uploads.ts";
+import { solidContent } from "../lit/solid-content.tsx";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import type {
@@ -25,7 +28,8 @@ import type {
 import { lazyShellEvent, type LazyShellEvent } from "./lazy-shell-action.ts";
 
 type CommandPaletteShellHost = {
-  readonly context?: Pick<ApplicationContext, "gateway">;
+  readonly context?: Pick<ApplicationContext, "gateway"> &
+    Partial<Pick<ApplicationContext, "config">>;
   readonly commandPalette?: CommandPaletteElement;
   readonly commandPaletteElement: OptionalCustomElement;
   readonly commandPaletteTarget?: CommandPaletteTargetDetail;
@@ -155,9 +159,9 @@ export class CommandPaletteLoadingState {
   #handoffPending = false;
   #generation = 0;
 
-  readonly #host: Pick<CommandPaletteShellHost, "requestUpdate">;
+  readonly #host: Pick<CommandPaletteShellHost, "requestUpdate" | "context">;
 
-  constructor(host: Pick<CommandPaletteShellHost, "requestUpdate">) {
+  constructor(host: Pick<CommandPaletteShellHost, "requestUpdate" | "context">) {
     this.#host = host;
   }
 
@@ -221,11 +225,14 @@ export class CommandPaletteLoadingState {
     this.#host.requestUpdate();
   };
 
-  readonly inputRef = (element: Element | undefined): void => {
+  readonly inputRef = (element: Element | undefined, previous?: HTMLTextAreaElement): void => {
+    if (previous && previous !== this.#input) {
+      return;
+    }
+    if (this.active && this.#input && this.#input !== element) {
+      this.#draft = this.#snapshot();
+    }
     if (!(element instanceof HTMLTextAreaElement)) {
-      if (this.active && this.#input) {
-        this.#draft = this.#snapshot();
-      }
       this.#input = undefined;
       return;
     }
@@ -283,6 +290,10 @@ export class CommandPaletteLoadingState {
     );
     if (files.length) {
       event.preventDefault();
+      if (!uploadsEnabled(this.#host.context?.config)) {
+        showToast({ message: uploadsDisabledMessage() });
+        return;
+      }
       this.#imageFiles.push(...files);
     }
   };
@@ -384,7 +395,7 @@ export function renderCommandPaletteLoading(
       @compositionend=${state.handleCompositionEnd}
       @keydown=${state.handleKeydown}
     >
-      ${renderCommandPaletteInput({
+      ${solidContent(CommandPaletteInput, {
         value: state.value,
         placeholder: label,
         onInputRef: state.inputRef,

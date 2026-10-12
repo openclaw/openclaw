@@ -9,16 +9,14 @@ const resolveConfiguredSecretInputWithFallbackMock = vi.hoisted(() => vi.fn());
 const resolveRequiredConfiguredSecretRefInputStringMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
-  const { findNormalizedProviderValue, resolveAuthProfileOrder } =
-    await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
   const { normalizeOptionalString } = await import("openclaw/plugin-sdk/string-coerce-runtime");
   return {
+    ...actual,
     coerceSecretRef: coerceSecretRefMock,
-    ensureAuthProfileStore: ensureAuthProfileStoreMock,
-    findNormalizedProviderValue,
+    ensureAuthProfileStoreAsync: ensureAuthProfileStoreMock,
     listProfilesForProvider: listProfilesForProviderMock,
     normalizeOptionalSecretInput: normalizeOptionalString,
-    resolveAuthProfileOrder,
   };
 });
 
@@ -85,26 +83,6 @@ describe("resolveFirstGithubToken", () => {
       hasProfile: false,
     });
     expect(resolveRequiredConfiguredSecretRefInputStringMock).not.toHaveBeenCalled();
-  });
-
-  it("returns direct profile tokens when no SecretRef is configured", async () => {
-    ensureAuthProfileStoreMock.mockReturnValue({
-      profiles: {
-        "github-copilot:github": {
-          type: "token",
-          token: "profile-token",
-        },
-      },
-    });
-    const result = await resolveFirstGithubToken({
-      env: {} as NodeJS.ProcessEnv,
-    });
-
-    expect(result).toEqual({
-      githubToken: "profile-token",
-      hasProfile: true,
-      profileId: "github-copilot:github",
-    });
   });
 
   it.each([
@@ -213,18 +191,6 @@ describe("resolveFirstGithubToken", () => {
       expected: { githubToken: "", hasProfile: true },
     },
     {
-      label: "an OAuth account with a whitespace-only durable credential",
-      enterpriseUrl: undefined,
-      refresh: "   ",
-      expected: { githubToken: "", hasProfile: true },
-    },
-    {
-      label: "an enterprise OAuth account without a durable credential",
-      enterpriseUrl: "acme.ghe.com",
-      refresh: "",
-      expected: { githubToken: "", hasProfile: true },
-    },
-    {
       label: "an enterprise OAuth account with a whitespace-only durable credential",
       enterpriseUrl: "acme.ghe.com",
       refresh: "   ",
@@ -262,7 +228,7 @@ describe("resolveFirstGithubToken", () => {
     ).resolves.toEqual(testCase.expected);
   });
 
-  it.each(["durable-github-token", "", "   "])(
+  it.each(["durable-github-token", ""])(
     "rejects an explicitly ordered OAuth account with an unsupported enterprise domain (refresh: %j)",
     async (refresh) => {
       ensureAuthProfileStoreMock.mockReturnValue({

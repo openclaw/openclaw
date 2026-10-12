@@ -12,7 +12,8 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { getPendingChatPickerPatch, switchChatModel } from "./chat-session.ts";
+import { switchChatModel } from "./chat-session.ts";
+import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -70,6 +71,7 @@ it("dispatches a fresh-pane send without waiting for background roster loading",
       expect.objectContaining({
         message: "send without changing a picker",
       }),
+      { timeoutMs: 30_000 },
     );
   } finally {
     roster.resolve(createSessionsListResult());

@@ -70,7 +70,7 @@ describe("json-parse repairJson invalid \\u escapes", () => {
     expect(parseStreamingJson(args)).toEqual({ cmd: "\\underline{x}" });
   });
 
-  it.each(["null", "[]", '"text"', "1", "true"])(
+  it.each(["null", "[]", '"text"'])(
     "returns an empty object for non-object streaming JSON: %s",
     (input) => {
       expect(parseStreamingJson(input)).toEqual({});

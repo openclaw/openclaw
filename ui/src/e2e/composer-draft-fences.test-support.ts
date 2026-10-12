@@ -173,17 +173,13 @@ export async function verifyDurableComposerFences(page: Page) {
           missingPayloadConflicts += 1;
         },
       );
-      missingPayloadPersistence.persist({
+      await missingPayloadPersistence.persist({
         scope: missingPayloadScope,
         expectedRevision: 0,
         revision: 59,
         text: "stale attachment draft",
         storedAttachments: null,
         writeId: "stale-missing-payload",
-      });
-      await waitFor(async () => {
-        const read = await draftStore.readDurableComposerDraft(missingPayloadScope);
-        return read.status === "not-found" || missingPayloadConflicts > 0;
       });
       const missingPayloadRead = await draftStore.readDurableComposerDraft(missingPayloadScope);
 

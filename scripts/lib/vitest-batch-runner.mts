@@ -79,7 +79,7 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
       ...testCommand,
       options: {
         cwd: repoRoot,
-        env,
+        env: testCommand.envOverrides ? { ...env, ...testCommand.envOverrides } : env,
         stdio: workers ? ["inherit", "inherit", "inherit", "ipc"] : "inherit",
       },
     });

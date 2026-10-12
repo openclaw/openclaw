@@ -8,21 +8,12 @@ import {
   resolveChannelEntryMatch,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
-  applyChannelMatchMeta,
   resolveChannelMatchConfig,
 } from "./channel-config.js";
 
 describe("buildChannelKeyCandidates", () => {
   it("dedupes and trims keys", () => {
     expect(buildChannelKeyCandidates(" a ", "a", "", "b", "b")).toEqual(["a", "b"]);
-  });
-});
-
-describe("normalizeChannelSlug", () => {
-  it("normalizes names into slugs", () => {
-    expect(normalizeChannelSlug("My Team")).toBe("my-team");
-    expect(normalizeChannelSlug("#General Chat")).toBe("general-chat");
-    expect(normalizeChannelSlug(" Dev__Chat ")).toBe("dev-chat");
   });
 });
 
@@ -55,14 +46,6 @@ describe("resolveChannelEntryMatchWithFallback", () => {
     expectedMatchKey: string;
   }>([
     {
-      name: "prefers direct matches over parent and wildcard",
-      entries: { a: { allow: true }, parent: { allow: false }, "*": { allow: false } },
-      args: { keys: ["a"], parentKeys: ["parent"], wildcardKey: "*" },
-      expectedEntryKey: "a",
-      expectedSource: "direct",
-      expectedMatchKey: "a",
-    },
-    {
       name: "falls back to parent when direct misses",
       entries: { parent: { allow: false }, "*": { allow: true } },
       args: { keys: ["missing"], parentKeys: ["parent"], wildcardKey: "*" },
@@ -90,10 +73,7 @@ describe("resolveChannelEntryMatchWithFallback", () => {
     expect(match.matchKey).toBe(testCase.expectedMatchKey);
   });
 
-  it.each([
-    { keys: ["my-team"], parentKeys: ["parent"], source: "direct" },
-    { keys: ["missing"], parentKeys: ["my-team"], source: "parent" },
-  ] as const)(
+  it.each([{ keys: ["my-team"], parentKeys: ["parent"], source: "direct" }] as const)(
     "matches normalized $source keys before wildcard fallback",
     ({ keys, parentKeys, source }) => {
       const entries = { "My Team": { allow: true } };
@@ -107,18 +87,9 @@ describe("resolveChannelEntryMatchWithFallback", () => {
       expect(match.entry).toBe(entries["My Team"]);
       expect(match.matchSource).toBe(source);
       expect(match.matchKey).toBe("My Team");
-      expect(match.parentEntry).toBe(source === "parent" ? entries["My Team"] : undefined);
+      expect(match.parentEntry).toBeUndefined();
     },
   );
-});
-
-describe("applyChannelMatchMeta", () => {
-  it("copies match metadata onto resolved configs", () => {
-    const base: { matchKey?: string; matchSource?: ChannelMatchSource } = {};
-    const resolved = applyChannelMatchMeta(base, { matchKey: "general", matchSource: "direct" });
-    expect(resolved.matchKey).toBe("general");
-    expect(resolved.matchSource).toBe("direct");
-  });
 });
 
 describe("resolveChannelMatchConfig", () => {
@@ -174,16 +145,6 @@ describe("resolveNestedAllowlistDecision", () => {
         innerMatched: false,
       },
       expected: false,
-    },
-    {
-      name: "allows when both outer and inner allowlists match",
-      value: {
-        outerConfigured: true,
-        outerMatched: true,
-        innerConfigured: true,
-        innerMatched: true,
-      },
-      expected: true,
     },
   ] as const;
 

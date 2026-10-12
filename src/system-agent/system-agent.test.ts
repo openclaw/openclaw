@@ -139,16 +139,16 @@ describe("runSystemAgent", () => {
 
     await expect(
       runSystemAgent(withoutBinding({ ...common, json: true }), runtime),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    ).rejects.toMatchObject({ message: expect.stringContaining("openclaw onboard") });
     await expect(
       runSystemAgent(withoutBinding({ ...common, message: "please make things nicer" }), runtime),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    ).rejects.toMatchObject({ message: expect.stringContaining("openclaw onboard") });
     await expect(
       runSystemAgent(withoutBinding({ ...common, message: "restart gateway", yes: true }), runtime),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
-    await expect(runSystemAgent(withoutBinding(common), runtime)).rejects.toBeInstanceOf(
-      SystemAgentInferenceUnavailableError,
-    );
+    ).rejects.toMatchObject({ message: expect.stringContaining("openclaw onboard") });
+    await expect(runSystemAgent(withoutBinding(common), runtime)).rejects.toMatchObject({
+      message: expect.stringContaining("openclaw onboard"),
+    });
 
     expect(loadOverview).not.toHaveBeenCalled();
     expect(planWithAssistant).not.toHaveBeenCalled();
@@ -254,7 +254,9 @@ describe("runSystemAgent", () => {
         },
         runtime,
       ),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("verified inference route changed"),
+    });
     expect(runGatewayRestart).not.toHaveBeenCalled();
   });
 
@@ -289,7 +291,9 @@ describe("runSystemAgent", () => {
         },
         runtime,
       ),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("verified inference route changed"),
+    });
 
     expect(readConfigFileSnapshot).toHaveBeenCalledTimes(4);
     expect(runGatewayRestart).not.toHaveBeenCalled();

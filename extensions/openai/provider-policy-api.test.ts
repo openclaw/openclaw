@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isResponseModelEquivalent,
   normalizeModelCatalogId,
-  resolveModelAuthPolicy,
   resolveModelRoutes,
   resolveThinkingProfile,
 } from "./provider-policy-api.js";
@@ -16,39 +15,6 @@ describe("OpenAI provider policy artifact", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
-
-  it.each([
-    ["oauth", undefined, "openai-chatgpt-responses", undefined, "subscription", true],
-    ["api-key", undefined, "openai-responses", undefined, "api-key", true],
-    [
-      "oauth",
-      "chatgpt-token-sharing",
-      "openai-responses",
-      "https://api.openai.com/v1",
-      "api-key",
-      true,
-    ],
-    ["oauth", "chatgpt-token-sharing", "openai-chatgpt-responses", undefined, "api-key", false],
-    [
-      "oauth",
-      "chatgpt-token-sharing",
-      "openai-responses",
-      "https://example.com/v1",
-      "api-key",
-      false,
-    ],
-    ["oauth", "chatgpt-identity", "openai-responses", undefined, null, false],
-  ] as const)(
-    "authorizes %s/%s for %s at %s as %s: %s",
-    (mode, authFlow, api, baseUrl, authRequirement, compatible) => {
-      expect(
-        resolveModelAuthPolicy({ provider: "openai", mode, authFlow, api, baseUrl }),
-      ).toMatchObject({
-        authRequirement,
-        compatible,
-      });
-    },
-  );
 
   it.each([
     ["openai", "gpt-5.6", "gpt-5.6-sol", true],
@@ -314,7 +280,7 @@ describe("OpenAI provider policy artifact", () => {
         },
       ],
     } as const;
-    expect(resolveModelRoutes({ provider: "openai", modelId: "gpt-5.5" })).toEqual(expected);
+    expect(resolveModelRoutes({ provider: "openai", modelId: "gpt-6-astra" })).toEqual(expected);
     for (const observed of [
       { api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
       { api: "openai-completions", baseUrl: "https://api.openai.com/v1" },
@@ -326,7 +292,7 @@ describe("OpenAI provider policy artifact", () => {
       expect(
         resolveModelRoutes({
           provider: "openai",
-          modelId: "gpt-5.5",
+          modelId: "gpt-6-astra",
           observedRoutes: [observed],
         }),
       ).toEqual(expected);

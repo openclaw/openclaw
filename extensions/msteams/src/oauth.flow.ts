@@ -1,13 +1,8 @@
-import { isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
   MSTEAMS_OAUTH_REDIRECT_URI,
   buildMSTeamsAuthEndpoint,
 } from "./oauth.shared.js";
-
-export function shouldUseManualOAuthFlow(isRemote: boolean): boolean {
-  return isRemote || isWSL2Sync();
-}
 
 export function buildMSTeamsAuthUrl(params: {
   tenantId: string;

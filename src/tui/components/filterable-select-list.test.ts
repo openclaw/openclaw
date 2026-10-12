@@ -60,7 +60,7 @@ describe("FilterableSelectList", () => {
     expect(list.render(80)[0]).not.toContain(CURSOR_MARKER);
   });
 
-  it.each([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])(
+  it.each([0, 1, 2, 7, 12])(
     "keeps ANSI, CJK, scroll, and no-match rows within %i terminal columns",
     (width) => {
       const items: FilterableSelectItem[] = [

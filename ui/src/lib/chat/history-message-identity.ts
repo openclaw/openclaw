@@ -17,7 +17,8 @@ export function readChatInputReceipt(
   ) {
     return undefined;
   }
-  return history.inputReceipts?.find((input) => input.runId === item.sendRunId)?.state;
+  const receipt = history.inputReceipts?.find((input) => input.runId === item.sendRunId);
+  return receipt?.state === "pending" && receipt.cancelled ? "cancelled" : receipt?.state;
 }
 
 /** Submission proof uses the recorded key, never execution correlation. */

@@ -2,22 +2,19 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import type { SessionRowTranscriptReadParams } from "./session-row-transcript-backfill.types.js";
 
-/** Optional transcript facts keep the row generation and foreground admission on the host. */
+/** Optional transcript facts are published by the resident row owner. */
 export async function backfillSessionRowTranscriptFields(
   params: Omit<SessionRowTranscriptReadParams, "includeTerminalModel"> & {
-    shouldCommit?: () => boolean;
     model?: { selectedProvider: string; selectedModel: string; config?: OpenClawConfig };
   },
 ): Promise<{ lastMessagePreview?: string; fallbackModel?: { provider: string; model: string } }> {
-  if (params.shouldCommit?.() === false) {
-    return {};
-  }
-  const { shouldCommit, sessionEntry, model, ...scope } = params;
+  const { sessionEntry, model, ...scope } = params;
   const input: SessionRowTranscriptReadParams = {
     ...scope,
     includeTerminalModel: model !== undefined,
@@ -39,9 +36,6 @@ export async function backfillSessionRowTranscriptFields(
     async (owner) => {
       const { terminalModel, ...fields } = await owner.readRowBackfill(input);
       owner.assertCurrent();
-      if (shouldCommit?.() === false) {
-        return {};
-      }
       const fallback =
         model &&
         readSessionFallbackModel({
@@ -57,5 +51,6 @@ export async function backfillSessionRowTranscriptFields(
           : {}),
       };
     },
+    projectionLane,
   );
 }

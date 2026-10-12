@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const lanceMocks = vi.hoisted(() => ({
   countRows: vi.fn(async () => 1),
+  queryRows: vi.fn(async () => [{ id: "known" }]),
   deleteRows: vi.fn(),
   checkoutLatest: vi.fn(async () => undefined),
   schema: vi.fn(async () => ({ fields: [{ name: "agentId" }] })),
@@ -16,6 +17,9 @@ vi.mock("./lancedb-runtime.js", () => ({
         checkoutLatest: lanceMocks.checkoutLatest,
         schema: lanceMocks.schema,
         countRows: lanceMocks.countRows,
+        query: () => ({
+          where: () => ({ select: () => ({ toArray: lanceMocks.queryRows }) }),
+        }),
         delete: lanceMocks.deleteRows,
         close: vi.fn(),
       })),
@@ -47,17 +51,16 @@ describe("MemoryDB delete receipts", () => {
     db.close();
   });
 
-  test.each(["search", "count", "list", "query", "delete", "store"] as const)(
+  test.each(["search", "list", "query", "delete", "store"] as const)(
     "%s propagates a refresh failure before reading or changing stale data",
     async (operation) => {
       const db = new MemoryDB("/unused", 3);
       try {
-        await db.count("main");
-        lanceMocks.countRows.mockClear();
+        await db.query("main", { columns: ["id"] });
+        lanceMocks.queryRows.mockClear();
         lanceMocks.checkoutLatest.mockRejectedValueOnce(new Error("refresh unavailable"));
         const operations = {
           search: () => db.search("main", [1, 0, 0]),
-          count: () => db.count("main"),
           list: () => db.list("main"),
           query: () => db.query("main", { columns: ["id"] }),
           delete: () => db.delete("main", "890e1fae-1234-4678-abcd-ef0123456789"),
@@ -71,9 +74,9 @@ describe("MemoryDB delete receipts", () => {
         };
         const result = operations[operation]();
         await expect(result).rejects.toThrow("refresh unavailable");
-        expect(lanceMocks.countRows).not.toHaveBeenCalled();
+        expect(lanceMocks.queryRows).not.toHaveBeenCalled();
         expect(lanceMocks.deleteRows).not.toHaveBeenCalled();
-        await expect(db.count("main")).resolves.toBe(1);
+        await expect(db.query("main", { columns: ["id"] })).resolves.toEqual([{ id: "known" }]);
       } finally {
         db.close();
       }
@@ -85,13 +88,16 @@ describe("MemoryDB delete receipts", () => {
     lanceMocks.schema.mockReturnValueOnce(schema.promise);
     const db = new MemoryDB("/unused", 3);
     try {
-      const first = db.count("main");
-      const second = db.count("main");
+      const first = db.query("main", { columns: ["id"] });
+      const second = db.query("main", { columns: ["id"] });
       schema.resolve({ fields: [{ name: "agentId" }] });
-      await expect(Promise.all([first, second])).resolves.toEqual([1, 1]);
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        [{ id: "known" }],
+        [{ id: "known" }],
+      ]);
       expect(lanceMocks.schema).toHaveBeenCalledTimes(2);
       expect(lanceMocks.checkoutLatest).not.toHaveBeenCalled();
-      await expect(db.count("main")).resolves.toBe(1);
+      await expect(db.query("main", { columns: ["id"] })).resolves.toEqual([{ id: "known" }]);
       expect(lanceMocks.checkoutLatest).toHaveBeenCalledTimes(1);
     } finally {
       db.close();

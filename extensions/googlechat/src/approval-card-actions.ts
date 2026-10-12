@@ -4,6 +4,7 @@ import {
   type ExecApprovalDecision,
 } from "openclaw/plugin-sdk/approval-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleChatActionParameter, GoogleChatEvent } from "./types.js";
 
@@ -35,18 +36,6 @@ export const googleChatApprovalControls =
   });
 const GOOGLECHAT_MANUAL_APPROVAL_SUPPRESSION_MAX_ENTRIES = 1024;
 
-type GoogleChatManualApprovalSuppressionPayload = {
-  text?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  presentation?: unknown;
-  interactive?: unknown;
-  channelData?: unknown;
-  btw?: unknown;
-  spokenText?: unknown;
-  ttsSupplement?: unknown;
-};
-
 type GoogleChatManualApprovalFollowupSuppression = {
   approvalId: string;
   approvalKind: ChannelApprovalKind;
@@ -70,14 +59,11 @@ export function buildGoogleChatApprovalActionParameters(
 
 function collectEventParameters(event: GoogleChatEvent): Record<string, string> {
   const params: Record<string, string> = {};
-  for (const [key, value] of Object.entries(event.common?.parameters ?? {})) {
-    if (typeof value === "string") {
-      params[key] = value;
-    }
-  }
-  for (const [key, value] of Object.entries(event.commonEventObject?.parameters ?? {})) {
-    if (typeof value === "string") {
-      params[key] = value;
+  for (const source of [event.common?.parameters, event.commonEventObject?.parameters]) {
+    for (const [key, value] of Object.entries(source ?? {})) {
+      if (typeof value === "string") {
+        params[key] = value;
+      }
     }
   }
   for (const item of event.action?.parameters ?? []) {
@@ -123,8 +109,7 @@ export function registerGoogleChatApprovalCardBinding(
 }
 
 function normalizeApprovalRef(value: string): string | null {
-  const normalized = value.trim().toLowerCase();
-  return normalized ? normalized : null;
+  return value.trim().toLowerCase() || null;
 }
 
 export function registerGoogleChatManualApprovalFollowupSuppression(
@@ -137,9 +122,7 @@ export function registerGoogleChatManualApprovalFollowupSuppression(
   if (!key) {
     return false;
   }
-  if (manualApprovalFollowupSuppressions.has(key)) {
-    manualApprovalFollowupSuppressions.delete(key);
-  }
+  manualApprovalFollowupSuppressions.delete(key);
   manualApprovalFollowupSuppressions.set(key, suppression);
   pruneMapToMaxSize(
     manualApprovalFollowupSuppressions,
@@ -217,7 +200,7 @@ export function shouldSuppressGoogleChatManualExecApprovalFollowupText(
   return false;
 }
 
-function hasStructuredPayloadPart(payload: GoogleChatManualApprovalSuppressionPayload): boolean {
+function hasStructuredPayloadPart(payload: ReplyPayload): boolean {
   return Boolean(
     payload.mediaUrl?.trim() ||
     payload.mediaUrls?.some((url) => url.trim()) ||
@@ -230,7 +213,7 @@ function hasStructuredPayloadPart(payload: GoogleChatManualApprovalSuppressionPa
 }
 
 export function shouldSuppressGoogleChatManualExecApprovalFollowupPayload(
-  payload: GoogleChatManualApprovalSuppressionPayload,
+  payload: ReplyPayload,
   nowMs = Date.now(),
 ): boolean {
   const text = payload.text?.trim();

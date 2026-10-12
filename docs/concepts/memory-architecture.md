@@ -8,11 +8,16 @@ read_when:
   - You are deciding which memory surface a new feature or plugin should write to
 ---
 
-OpenClaw memory is a set of plain files and one SQLite index, organized into
-tiers with different trust levels, write rules, and injection behavior. This
+Memory Core, OpenClaw's default memory plugin, uses plain files and one SQLite
+index, organized into tiers with different trust levels, write rules, and injection behavior. This
 page explains the whole system: what gets written where, how content earns its
 way into long-term memory, how recall works on every turn, and how the system
 defends itself against junk and poisoning.
+
+Other selected memory plugins can own their storage and save pre-compaction
+context through their tools. Their flush receives the source turn's memory
+audience and sandbox state; the file and dreaming pipeline below describes
+Memory Core. See [Automatic memory flush](/concepts/memory#automatic-memory-flush).
 
 If you want task-oriented guides instead, start with
 [Memory overview](/concepts/memory), [Dreaming](/concepts/dreaming),
@@ -51,17 +56,21 @@ Five rules shape everything below:
 | ------------ | ------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
 | Instructions | `AGENTS.md` and workspace instruction files             | Human only                                          | Always, at session start                               |
 | Curated core | `MEMORY.md`, `USER.md`                                  | Dreaming consolidation; direct user request         | At session start when provenance is eligible; budgeted |
-| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | Never; searchable on demand                            |
+| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | On recall; not at session start                        |
 | Prospective  | Standing intents (SQLite) and cron jobs                 | `intent` tool; scheduled tasks                      | Only when a trigger fires                              |
 | Review       | `DREAMS.md`, dreaming reports                           | Dreaming phases                                     | Never; for human reading                               |
 
 The boundary that matters most is between the **curated core** and the
 **episodic** tier. Curated files are small, normally in context when their
 provenance is eligible, and written only through gated consolidation. Episodic
-files are large, append-friendly,
-and reachable only through explicit search tools or the escalation lane.
-Nothing crosses from episodic to curated without passing the promotion gates
-described below.
+files are large, append-friendly, and retrieved through search tools or
+Active Memory rather than loaded at session start. With
+`memory.search.rememberAcrossConversations` enabled and Active Memory on,
+relevant excerpts from the same agent's other recognized private conversations
+can inform reply context before generation. See
+[Remember across conversations](/concepts/active-memory/enabling#remember-across-conversations)
+for eligibility and privacy boundaries. Nothing crosses from episodic to curated
+without passing the promotion gates described below.
 
 ## Provenance: every memory knows where it came from
 
@@ -229,7 +238,7 @@ Three mechanisms run on eligible turns with no model involvement:
 - **Trigger injection.** Writers can attach short trigger phrases to
   entries describing when they are relevant. Each inbound message runs a
   fast lexical and vector prefilter against those triggers; entries that
-  match strongly (score at or above 0.72) are injected as a compact hidden
+  match strongly (score at or above 0.65) are injected as a compact hidden
   context block, at most three per turn.
 
 Writers store both signals as trailing comments on the same `MEMORY.md` or

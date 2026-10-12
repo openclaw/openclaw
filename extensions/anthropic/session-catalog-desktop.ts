@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionCatalogPullRequestSummary } from "openclaw/plugin-sdk/session-catalog";
 import {
   asPositiveSafeInteger as pullRequestNumber,
@@ -20,6 +21,7 @@ import {
 } from "./session-catalog-tree-watch.js";
 
 export const MAX_STRING_LENGTH = 4096;
+const log = createSubsystemLogger("anthropic-session-catalog");
 const MAX_SESSION_PULL_REQUESTS = 20;
 const CLAUDE_DESKTOP_SCAN_TTL_MS = 60_000;
 
@@ -35,10 +37,9 @@ type DesktopSessionMetadata = {
   pullRequest?: SessionCatalogPullRequestSummary;
 };
 
-type DesktopPullRequestMetadata = {
-  prNumber?: unknown;
-  state?: unknown;
-  dismissed?: unknown;
+export type DesktopOverlay = {
+  active: Map<string, DesktopSessionMetadata>;
+  archived: Set<string>;
 };
 
 function pullRequestState(value: unknown): SessionCatalogPullRequestSummary["state"] | undefined {
@@ -59,11 +60,10 @@ function desktopPullRequestSummary(
   const visibleByNumber = new Map<number, SessionCatalogPullRequestSummary["state"] | undefined>();
   const dismissed = new Set<number>();
   if (Array.isArray(metadata.prs)) {
-    for (const value of metadata.prs) {
-      if (!isRecord(value)) {
+    for (const entry of metadata.prs) {
+      if (!isRecord(entry)) {
         continue;
       }
-      const entry: DesktopPullRequestMetadata = value;
       const number = pullRequestNumber(entry.prNumber);
       if (!number) {
         continue;
@@ -162,23 +162,13 @@ export function parsePullRequestSummary(
 async function readDesktopMetadata(
   homeDir: string,
   forceRefresh?: boolean,
-): Promise<{
-  available: boolean;
-  customGroups: Map<string, string>;
-  active: Map<string, DesktopSessionMetadata>;
-  archived: Set<string>;
-}> {
+): Promise<DesktopOverlay> {
   const active = new Map<string, DesktopSessionMetadata>();
   const archived = new Set<string>();
   const customGroups = await readClaudeDesktopCustomGroups(homeDir, forceRefresh);
   for (const accountDir of await childDirectories(desktopSessionsDir(homeDir))) {
     for (const workspaceDir of await childDirectories(accountDir)) {
-      let entries: string[];
-      try {
-        entries = await fs.readdir(workspaceDir);
-      } catch {
-        continue;
-      }
+      const entries = await fs.readdir(workspaceDir).catch(() => []);
       for (const name of entries) {
         if (!name.startsWith("local_") || !name.endsWith(".json")) {
           continue;
@@ -206,10 +196,9 @@ async function readDesktopMetadata(
       }
     }
   }
-  return { available: true, active, archived, customGroups };
+  return { active, archived };
 }
 
-export type DesktopOverlay = Awaited<ReturnType<typeof readDesktopMetadata>>;
 type DesktopOverlayCacheEntry = {
   watch?: DirtyDirectoryWatch;
   refreshedAt: number;
@@ -218,10 +207,8 @@ type DesktopOverlayCacheEntry = {
 };
 const desktopOverlays = new Map<string, DesktopOverlayCacheEntry>();
 export const emptyDesktopOverlay: DesktopOverlay = {
-  available: false,
   active: new Map(),
   archived: new Set(),
-  customGroups: new Map(),
 };
 
 export async function readDesktopOverlay(
@@ -246,10 +233,10 @@ export async function readDesktopOverlay(
     dirty !== "all" &&
     !(dirty instanceof Set && dirty.size > 0)
   ) {
-    setBoundedCache(desktopOverlays, homeDir, entry, 8, (evicted) => evicted.watch?.close());
+    setBoundedCache(desktopOverlays, homeDir, entry, 8);
     return entry.overlay;
   }
-  const watch = entry?.watch ?? createDirtyDirectoryWatch(desktopSessionsDir(homeDir));
+  const watch = entry?.watch ?? createDirtyDirectoryWatch(desktopSessionsDir(homeDir), 3);
   const current: DesktopOverlayCacheEntry = {
     watch,
     refreshedAt: Date.now(),
@@ -260,7 +247,7 @@ export async function readDesktopOverlay(
     const stat = await fs.stat(desktopSessionsDir(homeDir)).catch(() => undefined);
     if (!stat?.isDirectory()) {
       // An absent Desktop store is rechecked on the 60s overlay TTL, never on each CLI poll.
-      watch.close();
+      await watch.close();
       current.watch = undefined;
       return emptyDesktopOverlay;
     }
@@ -268,6 +255,10 @@ export async function readDesktopOverlay(
   })().finally(() => {
     current.refreshing = false;
   });
-  setBoundedCache(desktopOverlays, homeDir, current, 8, (evicted) => evicted.watch?.close());
+  setBoundedCache(desktopOverlays, homeDir, current, 8, (evicted) => {
+    void evicted.watch?.close().catch((error: unknown) => {
+      log.warn(`Claude Desktop catalog watcher cleanup failed: ${String(error)}`);
+    });
+  });
   return current.overlay;
 }

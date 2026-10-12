@@ -7,6 +7,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  renameSync,
   symlinkSync,
   writeFileSync,
   writeSync,
@@ -38,6 +39,123 @@ function recoverFixtureLock(f: ReturnType<typeof fixture>, oid: string) {
 }
 
 describePosix("native PR main refresh boundaries", () => {
+  it.each(["pr-42", "pr-42-verify"])(
+    "reuses the exact local %s commit without fetching or changing checkpoints",
+    (branch) => {
+      const f = fixture();
+      const destination = `refs/heads/${branch}`;
+      f.git(f.canonical, "update-ref", destination, f.head);
+      f.git(f.canonical, "config", `branch.${branch}.remote`, "origin");
+      f.git(f.canonical, "config", `branch.${branch}.merge`, "refs/heads/topic");
+      const config = readFileSync(join(f.canonical, ".git", "config"), "utf8");
+      const reflog = f.git(f.canonical, "reflog", "show", "--format=%H", destination);
+      const checkpoint = f.git(f.worktree, "rev-parse", "--git-path", "FETCH_HEAD");
+      writeFileSync(checkpoint, "unrelated private main checkpoint\n");
+      const shallow = join(f.canonical, ".git", "shallow");
+      if (branch === "pr-42") {
+        writeFileSync(shallow, `${f.head}\n`);
+      }
+      f.configure({ failPrFetch: true });
+      const result = f.shell(`cd .worktrees/pr-42\nfetch_pr_head 42 ${f.head} ${destination}`);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(f.git(f.canonical, "rev-parse", destination)).toBe(f.head);
+      expect(readFileSync(checkpoint, "utf8")).toBe("unrelated private main checkpoint\n");
+      expect(readFileSync(join(f.canonical, ".git", "config"), "utf8")).toBe(config);
+      expect(f.git(f.canonical, "reflog", "show", "--format=%H", destination)).toBe(reflog);
+      if (branch === "pr-42") {
+        expect(readFileSync(shallow, "utf8")).toBe(`${f.head}\n`);
+        expect(f.git(f.canonical, "rev-parse", "--is-shallow-repository")).toBe("true");
+      }
+      expect(f.events().filter((event) => event.args?.includes("fetch"))).toEqual([]);
+      expect(
+        f.events().filter((event) => event.args?.includes("repos/fixture/repo/pulls/42")),
+      ).toHaveLength(2);
+    },
+  );
+
+  it.each([
+    { dangling: false, fail: false },
+    { dangling: false, fail: true },
+    { dangling: true, fail: false },
+  ])("fetches a missing immutable head (dangling=$dangling, fail=$fail)", ({ dangling, fail }) => {
+    const f = fixture();
+    const remoteHead = f.git(
+      dangling ? f.canonical : f.origin,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit-tree",
+      `${f.head}^{tree}`,
+      "-p",
+      f.head,
+      "-m",
+      "test: remote-only PR head",
+    );
+    if (dangling) {
+      f.git(f.canonical, "push", "origin", `${remoteHead}:refs/heads/topic`);
+      f.git(f.canonical, "update-ref", "refs/heads/pr-42", remoteHead);
+      renameSync(
+        join(f.canonical, ".git", "objects", remoteHead.slice(0, 2), remoteHead.slice(2)),
+        join(f.root, "withheld-head-object"),
+      );
+    } else {
+      f.git(f.origin, "update-ref", "refs/heads/topic", remoteHead);
+      f.git(f.canonical, "update-ref", "refs/heads/pr-42", f.head);
+    }
+    expect(() => f.git(f.canonical, "cat-file", "-e", `${remoteHead}^{commit}`)).toThrow();
+    f.configure({ metadata: { ...f.metadata, headRefOid: remoteHead }, failPrFetch: fail });
+    const result = f.shell(`cd .worktrees/pr-42\nfetch_pr_head 42 ${remoteHead} refs/heads/pr-42`);
+    if (fail) {
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stderr).toContain("injected prepare handoff failure");
+    } else {
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(f.git(f.canonical, "cat-file", "-t", remoteHead)).toBe("commit");
+    }
+    expect(f.git(f.canonical, "rev-parse", "refs/heads/pr-42")).toBe(fail ? f.head : remoteHead);
+    expect(f.events().filter((event) => event.args?.includes("fetch"))).toHaveLength(1);
+  });
+
+  it.each([
+    "moved",
+    "symbolic",
+    "fetch.hideRefs",
+    "transfer.hideRefs",
+    "no destination",
+    "unsupported local-only probe",
+  ])("retains canonical fetching for %s refs", (state) => {
+    const f = fixture();
+    f.git(f.canonical, "update-ref", "refs/heads/pr-42", state === "moved" ? f.main : f.head);
+    if (state === "symbolic") {
+      f.git(f.canonical, "symbolic-ref", "refs/heads/pr-42", "refs/heads/topic");
+    }
+    if (state.endsWith(".hideRefs")) {
+      f.git(f.canonical, "config", state, "refs/heads/pr-42");
+    }
+    f.configure({ failPrFetch: true, unsupportedNoLazy: state === "unsupported local-only probe" });
+    const destination = state === "no destination" ? "" : "refs/heads/pr-42";
+    const result = f.shell(`cd .worktrees/pr-42\nfetch_pr_head 42 ${f.head} ${destination}`);
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("injected prepare handoff failure");
+    expect(f.events().filter((event) => event.args?.includes("fetch"))).toHaveLength(1);
+  });
+
+  it.each([false, true])("preserves Git's active-branch refusal (rebase=%s)", (rebasing) => {
+    const f = fixture();
+    f.git(f.worktree, "checkout", "-B", "pr-42", f.head);
+    if (rebasing) {
+      expect(() => f.git(f.worktree, "rebase", f.movedMain)).toThrow();
+    }
+    const before = f.git(f.worktree, "status", "--porcelain");
+    const result = f.shell(`cd .worktrees/pr-42\nfetch_pr_head 42 ${f.head} refs/heads/pr-42`);
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("cannot force update the branch");
+    expect(f.git(f.canonical, "rev-parse", "refs/heads/pr-42")).toBe(f.head);
+    expect(f.git(f.worktree, "status", "--porcelain")).toBe(before);
+    expect(f.events().filter((event) => event.args?.includes("fetch"))).toEqual([]);
+  });
+
   it.each([
     "review-init",
     "review-checkout-pr",
@@ -75,10 +193,16 @@ describePosix("native PR main refresh boundaries", () => {
       const beforePrepContext = existsSync(prepContext)
         ? readFileSync(prepContext, "utf8")
         : undefined;
-      f.configure({ prIdentityDriftAfterFetch: boundary });
+      f.configure({ prIdentityDriftAfterAcquisition: boundary });
       const result = f.run(command);
       expect(result.status, result.stdout + result.stderr).not.toBe(0);
       expect(result.stdout + result.stderr).toContain("PR head changed");
+      if (command === "merge-verify") {
+        expect(result.stderr).toContain("PR head changed during acquisition");
+        expect(
+          f.events().filter((event) => event.args?.includes(`+${f.head}:refs/heads/pr-42`)),
+        ).toEqual([]);
+      }
       expect(existsSync(prepContext) ? readFileSync(prepContext, "utf8") : undefined).toBe(
         beforePrepContext,
       );
@@ -173,6 +297,10 @@ describePosix("native PR main refresh boundaries", () => {
   it.each(["detach", "fetch"])("recovers preparation after failed %s handoff", (failure) => {
     const f = fixture();
     f.git(f.worktree, "checkout", "-B", "pr-42", f.head);
+    // A symbolic destination still needs the canonical fetch path.
+    if (failure === "fetch") {
+      f.git(f.canonical, "symbolic-ref", "refs/heads/pr-42", "refs/heads/topic");
+    }
     f.configure({ failDetach: failure === "detach", failPrFetch: failure === "fetch" });
     const failed = f.run("prepare-init");
     expect(failed.status, failed.stdout + failed.stderr).not.toBe(0);
@@ -272,8 +400,11 @@ describePosix("native PR main refresh boundaries", () => {
     const runtimeCalls = f.events().filter((event) => event.kind === "git-runtime");
     expect(runtimeCalls.length).toBeGreaterThan(0);
     expect(
-      runtimeCalls.every((event) =>
-        event.args?.some((arg) => ["fetch", "checkout", "push"].includes(arg)),
+      runtimeCalls.every(
+        ({ args }) =>
+          args?.some((arg) => ["fetch", "checkout", "push"].includes(arg)) ||
+          (args?.[0] === "--no-lazy-fetch" && args[1] === "for-each-ref") ||
+          (args?.[0] === "branch" && args[1] === "--force" && args[2] === "--no-track"),
       ),
     ).toBe(true);
   });
@@ -473,18 +604,33 @@ ${readFileSync(gitShim, "utf8")}
     f.configure({ moveAfterFirstFetch: true, moveAtGate: true });
     const result = f.run("prepare-run", "bash", f.worktree);
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(
-      f
-        .events()
-        .filter((e) => e.kind === "fetched")
-        .map((e) => e.sha),
-    ).toEqual([f.main, f.movedMain, f.gateMain]);
-    const decisions = f
-      .events()
+    const events = f.events();
+    expect(events.filter((e) => e.kind === "fetched").map((e) => e.sha)).toEqual([
+      f.main,
+      f.movedMain,
+      f.gateMain,
+    ]);
+    const gateCheckpoint = events.findIndex((e) => e.kind === "fetched" && e.sha === f.movedMain);
+    const hostedGate = events.findIndex((e) => e.kind === "hosted-gate");
+    expect(hostedGate).toBeGreaterThan(gateCheckpoint);
+    const gateDecisions = events
+      .slice(gateCheckpoint + 1, hostedGate)
       .filter((e) => e.kind === "git-decision")
-      .map((e) => e.args?.join(" "));
-    expect(decisions).toContain(`diff --name-only ${f.movedMain}...HEAD`);
-    expect(decisions).toContain(`merge-base ${f.head} ${f.gateMain}`);
+      .map((e) => e.args);
+    const gateBase = f.git(f.worktree, "merge-base", f.movedMain, f.head);
+    expect(gateBase).toBe(f.main);
+    expect(gateDecisions).toContainEqual(["merge-base", f.movedMain, f.head]);
+    expect(gateDecisions).toContainEqual(["diff", "--name-only", gateBase, f.head]);
+    const publicationCheckpoint = events.findIndex(
+      (e) => e.kind === "fetched" && e.sha === f.gateMain,
+    );
+    expect(publicationCheckpoint).toBeGreaterThan(hostedGate);
+    expect(
+      events
+        .slice(publicationCheckpoint + 1)
+        .filter((e) => e.kind === "git-decision")
+        .map((e) => e.args),
+    ).toContainEqual(["merge-base", f.head, f.gateMain]);
     expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.head);
   });
 
@@ -645,6 +791,12 @@ ${readFileSync(gitShim, "utf8")}
               : `cd .worktrees/pr-42\nfetch_pr_head 42 ${head} refs/heads/pr-42`;
         const result = f.shell(command);
         expect(result.status, result.stdout + result.stderr).toBe(0);
+        if (phase === "pr") {
+          f.configure({ failPrFetch: true });
+          const reused = f.shell(command);
+          expect(reused.status, reused.stdout + reused.stderr).toBe(0);
+          f.configure({ failPrFetch: false });
+        }
         const afterObjects = localObjects();
         expect(afterObjects.includes(smallBlob), `${phase} small blob`).toBe(smallIncluded);
         expect(afterObjects.includes(largeBlob), `${phase} large blob`).toBe(largeIncluded);
@@ -953,7 +1105,7 @@ read -r release < "$OPENCLAW_TEST_FETCH_HOLD"
         f.configure({ metadata: { ...f.metadata, headRefName: "renamed" } });
       }
       if (boundary === "fetched") {
-        f.configure({ wrongPrFetch: true });
+        f.configure({ wrongPrAcquisition: true });
       }
       const result = f.run("prepare-run");
       expect(result.status, result.stdout + result.stderr).not.toBe(0);
@@ -1135,10 +1287,13 @@ printf 'caller-locale=%s\\n' "$LC_ALL"
       "diagnostic read",
       'sed() { if [ "${DRIFT_FAULT_ACTIVE:-}" = 1 ] && [ "$1" = -n ]; then return 1; fi; command sed "$@"; }',
     ],
-  ])("rejects drift %s failure before merge intent or dispatch", (_name, fault) => {
+  ])("rejects drift %s failure before merge intent or dispatch", (faultName, fault) => {
     const f = fixture();
     f.seedPreparedMerge();
     f.configure({ moveAtChecks: true });
+    if (faultName === "commit read") {
+      f.env.OPENCLAW_PR_STRICT_DRIFT = "1";
+    }
     const result = f.shell(`
 eval "$(declare -f mainline_drift_requires_sync | sed '1s/mainline_drift_requires_sync/evaluate_actual_drift/')"
 mainline_drift_requires_sync() {
@@ -1152,7 +1307,7 @@ merge_run 42 || exit 1
 `);
     const output = result.stdout + result.stderr;
     expect(result.status, output).toBe(1);
-    expect(output, output).toContain("unable to evaluate mainline drift");
+    expect(result.stderr, output).toContain("unable to evaluate mainline drift");
     expect(output).not.toContain("UNEXPECTED_AFTER_VERIFY");
     expect(output).not.toContain("because behind-main drift is unrelated");
     expect(existsSync(join(f.local, "merge-output.log"))).toBe(false);
@@ -1184,19 +1339,6 @@ fi`,
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain(hasFiles ? "no overlap" : "no mainline changes");
     expect(readdirSync(f.root).filter((name) => name.startsWith("openclaw-pr-drift."))).toEqual([]);
-  });
-
-  it("rejects drift evaluation errors in strict mode", () => {
-    const f = fixture();
-    f.seedPreparedMerge();
-    f.configure({ moveAtChecks: true });
-    f.env.OPENCLAW_PR_STRICT_DRIFT = "1";
-    const result = f.shell(
-      `mainline_drift_requires_sync() { return 2; }\nmerge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stderr).toContain("unable to evaluate mainline drift");
-    expect(result.stdout).not.toContain("because behind-main drift is unrelated");
   });
 
   it("rejects a moved prepared branch without consuming CI proof", () => {
@@ -1259,23 +1401,17 @@ fi`,
     expect(f.git(f.canonical, "for-each-ref", "--format=%(refname)", "refs/openclaw")).toBe("");
   });
 
-  for (const command of [
-    "enter_worktree 42 false",
-    "review_guard 42",
-    "review_validate_artifacts 42",
-  ]) {
-    it.each([false, true])(
-      `propagates failed refresh through ${command} (OR-list=%s)`,
-      (orList) => {
-        const f = fixture();
-        f.configure({ failFetch: true });
-        const result = f.shell(`${command}${orList ? " || exit 1" : ""}\necho UNEXPECTED_SUCCESS`);
-        expect(result.stderr).toContain("injected main fetch failure");
-        expect(result.status, result.stdout + result.stderr).not.toBe(0);
-        expect(result.stdout).not.toContain("UNEXPECTED_SUCCESS");
-        expect(result.stdout).not.toContain("review artifacts validated");
-        expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-      },
-    );
-  }
+  it.each(["enter_worktree 42 false", "review_guard 42", "review_validate_artifacts 42"])(
+    "propagates failed refresh through %s in an OR-list",
+    (command) => {
+      const f = fixture();
+      f.configure({ failFetch: true });
+      const result = f.shell(`${command} || exit 1\necho UNEXPECTED_SUCCESS`);
+      expect(result.stderr).toContain("injected main fetch failure");
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stdout).not.toContain("UNEXPECTED_SUCCESS");
+      expect(result.stdout).not.toContain("review artifacts validated");
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+    },
+  );
 });

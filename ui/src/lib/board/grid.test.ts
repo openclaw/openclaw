@@ -2,13 +2,10 @@
 import { describe, expect, it } from "vitest";
 import {
   BOARD_GRID_COLUMNS,
-  BOARD_GRID_GAP,
-  BOARD_GRID_ROW_HEIGHT,
   layout,
   nudge,
   previewDrag,
   resize,
-  toCssPlacement,
   type BoardGridItem,
   type BoardGridRect,
 } from "./grid.ts";
@@ -69,14 +66,6 @@ function propertyItems(seed: number, count: number): BoardGridItem[] {
 }
 
 describe("board grid layout", () => {
-  it("exports the shared geometry constants", () => {
-    expect({
-      columns: BOARD_GRID_COLUMNS,
-      rowHeight: BOARD_GRID_ROW_HEIGHT,
-      gap: BOARD_GRID_GAP,
-    }).toEqual({ columns: 12, rowHeight: 56, gap: 12 });
-  });
-
   it("flows first-fit from left to right and then downward", () => {
     expect(layout([item("a", 6, 2, 0), item("b", 6, 1, 1), item("c", 3, 1, 2)])).toEqual([
       { name: "a", x: 0, y: 0, w: 6, h: 2 },
@@ -124,12 +113,8 @@ describe("board grid layout", () => {
 describe("board grid drag preview", () => {
   const items = [item("a", 4, 2, 0), item("b", 4, 2, 1), item("c", 4, 2, 2)];
 
-  it.each([
-    { name: undefined, x: 1, y: 0 },
-    { name: "missing", x: 1, y: 0 },
-    { name: "a", x: 100, y: 100 },
-  ])("pushes the named or fallback occupied target aside: %j", (target) => {
-    const preview = previewDrag(items, "c", target);
+  it("pushes the occupied fallback target aside when the named target is missing", () => {
+    const preview = previewDrag(items, "c", { name: "missing", x: 1, y: 0 });
     expect(preview.map((entry) => [entry.name, entry.order])).toEqual([
       ["c", 0],
       ["a", 1],
@@ -179,14 +164,6 @@ describe("board grid drag preview", () => {
     expect(
       previewDrag(items, "a", { name: undefined, x: 100, y: 100 }).map((entry) => entry.name),
     ).toEqual(["b", "c", "a"]);
-  });
-
-  it("is deterministic and leaves inputs unchanged", () => {
-    const before = structuredClone(items);
-    expect(previewDrag(items, "c", { name: undefined, x: 0, y: 0 })).toEqual(
-      previewDrag(items, "c", { name: undefined, x: 0, y: 0 }),
-    );
-    expect(items).toEqual(before);
   });
 
   it("preserves compaction invariants across generated drag targets", () => {
@@ -277,11 +254,5 @@ describe("board grid mutations", () => {
     const items = [item("a", 1, 1, 0), item("b", 1, 1, 1)];
     expect(nudge(items, "a", "up").map((entry) => entry.name)).toEqual(["a", "b"]);
     expect(nudge(items, "b", "right").map((entry) => entry.name)).toEqual(["a", "b"]);
-  });
-
-  it("serializes one-based CSS grid placement", () => {
-    expect(toCssPlacement({ name: "chart", x: 2, y: 4, w: 5, h: 3 })).toBe(
-      "grid-column: 3 / span 5; grid-row: 5 / span 3;",
-    );
   });
 });

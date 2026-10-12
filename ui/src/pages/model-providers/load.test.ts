@@ -3,8 +3,9 @@ import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
+import { requestProviderUsage } from "../../lib/provider-usage-request.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { loadModelProviderCost, loadModelProvidersData, loadModelProviderUsage } from "./load.ts";
+import { loadModelProviderCost, loadModelProvidersData } from "./load.ts";
 
 describe("loadModelProvidersData", () => {
   it.each([false, true])(
@@ -311,66 +312,6 @@ describe("loadModelProvidersData", () => {
     },
   );
 
-  it("records a usage.status failure instead of reducing it to no data", async () => {
-    const request = vi.fn(async (method: string) => {
-      switch (method) {
-        case "models.authStatus":
-          return { ts: 1, providers: [] };
-        case "models.list":
-          return { models: [] };
-        case "usage.status":
-          throw new Error("usage.status failed");
-        case "sessions.usage":
-          return { aggregates: { byProvider: [] } };
-        default:
-          return {};
-      }
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    const result = await loadModelProviderUsage(client, new AbortController().signal);
-
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: "request-failed" },
-    });
-  });
-
-  it("keeps provider-scoped usage errors as data instead of a global request failure", async () => {
-    const request = vi.fn(async (method: string) => {
-      switch (method) {
-        case "models.authStatus":
-          return { ts: 1, providers: [] };
-        case "models.list":
-          return { models: [] };
-        case "usage.status":
-          return {
-            updatedAt: 1,
-            providers: [
-              {
-                provider: "openai",
-                displayName: "OpenAI",
-                windows: [],
-                error: "provider API unavailable",
-              },
-            ],
-          };
-        case "sessions.usage":
-          return { aggregates: { byProvider: [] } };
-        default:
-          return {};
-      }
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    const result = await loadModelProviderUsage(client, new AbortController().signal);
-
-    expect(result).toMatchObject({
-      ok: true,
-      value: { providers: [{ error: "provider API unavailable" }] },
-    });
-  });
-
   it.each(["before dispatch", "while pending"] as const)(
     "retires both supplemental requests when aborted %s",
     async (when) => {
@@ -393,14 +334,19 @@ describe("loadModelProvidersData", () => {
         controller.abort();
       }
       const loading = Promise.allSettled([
-        loadModelProviderUsage(client, controller.signal),
+        requestProviderUsage(client, { signal: controller.signal }),
         loadModelProviderCost(client, controller.signal),
       ]);
       try {
         if (when === "while pending") {
           expect(sent.map(({ method }) => method)).toEqual(["usage.status", "sessions.usage"]);
           expect(sent[0]?.params).toBeUndefined();
-          expect(sent[1]?.params).toMatchObject({ agentScope: "all", groupBy: "family" });
+          expect(sent[1]?.params).toMatchObject({
+            agentScope: "all",
+            groupBy: "family",
+            projection: "overview",
+            limit: 50,
+          });
           expect(sent[1]?.params).not.toHaveProperty("agentId");
           expect(pending.hasPending).toBe(true);
           controller.abort();

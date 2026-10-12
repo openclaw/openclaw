@@ -1,11 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionsListResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
-import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
   createContext,
   createGateway,
@@ -14,35 +13,12 @@ import {
   expectPalettePromptMode,
   findPaletteOption,
   mountPalette,
+  registerCommandPaletteTestHooks,
 } from "./command-palette.test-support.ts";
 import "./command-palette.ts";
 
 describe("CommandPalette lifecycle", () => {
-  let restoreDialogPolyfill: () => void;
-  let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    restoreDialogPolyfill = installDialogPolyfill();
-    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
-    Object.defineProperty(Element.prototype, "scrollIntoView", {
-      configurable: true,
-      value: vi.fn(),
-    });
-  });
-
-  afterEach(() => {
-    document.body.replaceChildren();
-    restoreDialogPolyfill();
-    if (scrollIntoViewDescriptor) {
-      Object.defineProperty(Element.prototype, "scrollIntoView", scrollIntoViewDescriptor);
-    } else {
-      delete (Element.prototype as Partial<Element>).scrollIntoView;
-    }
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  registerCommandPaletteTestHooks();
 
   it("hides native browser overlays while the palette is open and releases on close or disconnect", async () => {
     vi.stubGlobal("webkit", {
@@ -121,32 +97,58 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.onNavigate).toHaveBeenCalledWith("plugins");
   });
 
-  it("retries the pending query after the gateway reconnects", async () => {
-    const harness = createGateway(true);
-    const stale = createDeferred<SessionsListResult | null>();
-    const list = vi
-      .fn<ApplicationContext["sessions"]["list"]>()
-      .mockImplementationOnce(() => stale.promise)
-      .mockResolvedValueOnce(createSessionResult("agent:main:retry", "Retry chat"));
-    const { palette } = await mountPalette(createContext(harness.gateway, list));
-    await enterQuery(palette, "retry");
-    await vi.advanceTimersByTimeAsync(200);
-    expect(list).toHaveBeenCalledOnce();
+  it.each(["reconnect", "replacement"])(
+    "retires stale search results across a Gateway %s",
+    async (change) => {
+      const harness = createGateway(true);
+      const stale = createDeferred<SessionsListResult | null>();
+      const list = vi
+        .fn<ApplicationContext["sessions"]["list"]>()
+        .mockImplementationOnce(() => stale.promise)
+        .mockResolvedValueOnce(createSessionResult("agent:main:retry", "Retry chat"));
+      const { palette, provider } = await mountPalette(createContext(harness.gateway, list));
+      await enterQuery(palette, "retry");
+      await vi.advanceTimersByTimeAsync(200);
+      expect(list).toHaveBeenCalledOnce();
 
-    harness.setConnected(false);
-    stale.resolve(createSessionResult("agent:main:stale", "Stale chat"));
-    await Promise.resolve();
-    expect(palette.textContent).not.toContain("Stale chat");
+      if (change === "reconnect") {
+        harness.setConnected(false);
+      }
+      stale.resolve(createSessionResult("agent:main:stale", "Stale chat"));
+      const replacementList = vi.fn(async () =>
+        createSessionResult("agent:main:fresh", "Fresh chat"),
+      );
+      if (change === "replacement") {
+        provider.setContext(createContext(createGateway(true).gateway, replacementList));
+      } else {
+        await Promise.resolve();
+        expect(palette.textContent).not.toContain("Stale chat");
+        harness.setConnected(true);
+      }
+      await palette.updateComplete;
+      await vi.advanceTimersByTimeAsync(200);
+      await palette.updateComplete;
 
-    harness.setConnected(true);
-    await palette.updateComplete;
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
-
-    expect(list).toHaveBeenCalledTimes(2);
-    expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ search: "retry" }));
-    expect(palette.textContent).toContain("Retry chat");
-  });
+      if (change === "reconnect") {
+        expect(list).toHaveBeenCalledTimes(2);
+        expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ search: "retry" }));
+        expect(palette.textContent).toContain("Retry chat");
+      } else {
+        expect(palette.isOpen).toBe(false);
+        expect(palette.querySelector(".cmd-palette__input")).toBeNull();
+        palette.openPalette();
+        await palette.updateComplete;
+        expect(palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")?.value).toBe("");
+        expect(replacementList).not.toHaveBeenCalled();
+        expect(palette.textContent).not.toContain("Stale chat");
+        await enterQuery(palette, "retry");
+        await vi.advanceTimersByTimeAsync(200);
+        await palette.updateComplete;
+        expect(replacementList).toHaveBeenCalledOnce();
+        expect(palette.textContent).toContain("Fresh chat");
+      }
+    },
+  );
 
   it.each(["reconnect", "config.changed", "chat.metadata.changed", "agent"])(
     "keeps prompt searches stopped through %s and resumes when shortened",
@@ -199,38 +201,4 @@ describe("CommandPalette lifecycle", () => {
       expect(palette.querySelectorAll(".cmd-palette__filter")).toHaveLength(3);
     },
   );
-
-  it("clears the old Gateway prompt before searching the replacement context", async () => {
-    const initial = createGateway(true);
-    const replacement = createGateway(true);
-    const stale = createDeferred<SessionsListResult | null>();
-    const initialList = vi.fn(() => stale.promise);
-    const replacementList = vi.fn(async () =>
-      createSessionResult("agent:main:fresh", "Fresh chat"),
-    );
-    const { palette, provider } = await mountPalette(createContext(initial.gateway, initialList));
-    await enterQuery(palette, "chat");
-    await vi.advanceTimersByTimeAsync(200);
-    expect(initialList).toHaveBeenCalledOnce();
-
-    stale.resolve(createSessionResult("agent:main:stale", "Stale chat"));
-    provider.setContext(createContext(replacement.gateway, replacementList));
-    await palette.updateComplete;
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
-
-    expect(palette.isOpen).toBe(false);
-    expect(palette.querySelector(".cmd-palette__input")).toBeNull();
-    palette.openPalette();
-    await palette.updateComplete;
-    expect(palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")?.value).toBe("");
-    expect(replacementList).not.toHaveBeenCalled();
-    expect(palette.textContent).not.toContain("Stale chat");
-
-    await enterQuery(palette, "chat");
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
-    expect(replacementList).toHaveBeenCalledOnce();
-    expect(palette.textContent).toContain("Fresh chat");
-  });
 });

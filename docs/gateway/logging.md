@@ -219,21 +219,17 @@ Tune console verbosity independently:
 
 ## Redaction
 
-OpenClaw masks sensitive tokens before log or transcript output leaves the process. This redaction policy applies at console, file-log, OTLP log-record, and session transcript text sinks. Matching secret values are masked before JSONL lines or messages are written to disk.
+OpenClaw masks sensitive tokens in console output, file logs, diagnostic exports,
+and OTLP log records. Matching secret values are masked before those records are
+written or exported.
 
-The OpenClaw harness masks finalized tool-result text after middleware, before
-it enters live model context, including exec output and tool errors. Media bytes
-and the original execution arguments stay intact; later replay reuses the masked
-result. Model-visible tool-result text preserves ambiguous source assignments such as
-`token = timeObserverToken`. Registered secrets and explicit credential forms,
-including structured fields, authorization headers, URL credentials, and known
-token formats, remain masked. Direct reads of `.env`
-files apply broader assignment masking before their content becomes a tool
-result. Other config and source reads preserve opaque values. Register actual
-secrets instead of relying on key-name matching. Other transcript fields and
-diagnostic sinks retain broad assignment matching.
+Tool arguments, tool results, and session transcripts are not secret-masked.
+This includes source-code output and direct reads of `.env` files. Tool payloads
+still receive size limits, image/base64 handling, and structural normalization.
+Configuration snapshots, audit output, command-line diagnostics, and
+credential-bearing URLs retain their masking.
 
-- Sensitive-value redaction is always enabled.
+- Log and diagnostic redaction is always enabled.
 - `logging.redactPatterns`: array of regex strings (replaces the default string list). Built-in structural protections for form bodies, structured authorization headers, and bare AWS secret access keys always apply.
   - Use raw regex strings (auto `gi`), or `/pattern/flags` for custom flags.
   - Matches are masked keeping the first 6 + last 4 chars (values >= 18 chars). Shorter values become `***`.
@@ -241,7 +237,7 @@ diagnostic sinks retain broad assignment matching.
 
 File and JSON console records finish masking before final JSON encoding. Rules run in order over decoded values, then serialized record context, with later rules seeing earlier masks. String matches retain their existing token hints so later rules can match those hints. Structured credential fields use full masks; matched numbers, booleans, and null become the JSON string `"***"`. File records retain built-in credential patterns when custom patterns are configured.
 
-Safety boundaries such as Control UI tool-call events, `sessions_history` output, diagnostics exports, provider errors, exec approval display, and Gateway WebSocket logs always redact. `logging.redactPatterns` adds deployment-specific patterns.
+Diagnostics exports, provider error logs, and Gateway WebSocket logs retain redaction. `logging.redactPatterns` adds deployment-specific patterns at these log and diagnostic boundaries.
 
 ## Gateway WebSocket logs
 
@@ -260,18 +256,36 @@ The latter two distinguish selected rows refreshed during this request from
 selected rows already resident when it began. Dirty counts describe pending
 owner work at the start of the request.
 
+`sessions.messages.subscribe` requests taking at least one second emit
+`slow session messages subscribe` with `operation`, `elapsedMs`, and
+`phaseDurationsMs`. Timing starts in the router, before the handler, and separates
+`projectionReadiness`, `accessFacts`, `handlerPreparation`,
+`retainedReadAdmission`, `replayPreparation`, and `observerCommit` from response
+and cleanup work. Ordinary subscriptions prepare committed access facts without
+waiting for display-row refreshes; incognito reads retain their exact-row
+preparation. Approval subscriptions still prepare and validate the authoritative
+replay before acknowledging. Records contain no session keys or message content.
+
 The `materialize` phase measures the wait for session-row projection readiness. In-flight
 catalog renewals no longer block lists or descriptions once a catalog is loaded:
 reads use the current catalog while its replacement loads in the background, then
 rows refresh with the new catalog. Startup still waits for the first catalog.
 Renewals that retain identical catalog content do not dirty resident rows.
 
+Concurrent lists share metadata preparation and selected-row materialization.
+Selected pages yield to the event loop between bounded materialization batches,
+including when stored facts are already cached. A long `materialize` wait does
+not by itself indicate an event-loop stall or repeated work for each caller.
+
 Profile and run-registry publications refresh their derived display facts without
 rereading session entries. Worker environment and placement publications refresh
 only the selected rows' worker facts on their next presentation. Stored session
 writes publish exact keys; broad list notifications do not schedule an all-row
-drain. Config, store topology, and adopted model catalogs still refresh affected
-live rows before lists respond. Archived rows stay cold until selected.
+drain. Sidebar preferences, `talk.realtime.model`, and other projection-neutral
+config commits retain session rows. Agent identity edits refresh display facts on
+presentation; store admission reconciles physical generations and retains unchanged
+rows. Session policy, roster, sharing, and adopted model catalog changes still
+refresh affected live rows before lists respond. Archived rows stay cold until selected.
 
 Transcript-only row refreshes use a one-second window per resident session: the
 first notification refreshes promptly, and further notifications collapse into a
@@ -309,6 +323,30 @@ If a CPU counter read fails, all CPU fields are omitted for that request;
 its result and elapsed diagnostics are preserved. Existing activation and the
 one-second warning threshold are unchanged, so missing slow records do not account
 for CPU consumed by faster requests.
+
+`chat.send` records `slow chat send <N>ms stage=request` when authorization,
+input admission, and acknowledgement take at least one second. Phase durations
+appear in the message text, including authority, run admission, attachments,
+persistence, and response. A separate `stage=startup ack=<N>ms` record attributes
+post-acknowledgement preparation to workspace setup, reply initialization,
+skill preparation, and authoring. `worktree` covers pending workspace creation;
+ordinary sandbox readiness remains inside inclusive `preparation`.
+`replyInitialization` includes routing, admission-ticket waits, workspace bootstrap,
+media processing, and session initialization until the prepared-session callback.
+Initial session row-reader waits are included in that interval, rather than timed
+separately. `snapshot` measures the agent-run transcript-start reader preparation,
+nested inside `preparation`.
+Startup measurement ends when the agent run starts, or when dispatch exits before starting one.
+Accepted steering instead reports `stage=steer`; a deferred follow-up reports
+`stage=queued`. These records include waits for the active run to commit the input
+at its next boundary, including the steering receipt timeout. They use the same
+one-second threshold and emit at most one post-acknowledgement record per send;
+they are not startup latency. Rejected steering that starts a new run retains
+`stage=startup`.
+These records do not contain message text or session identifiers. Nested phases
+can overlap; their sum is not the request duration. The
+[Prometheus exporter](/gateway/prometheus) records the same fixed phases for fast
+and slow sends when diagnostics are enabled.
 
 Catalog lists additionally expose fixed request-stage observations through the
 existing diagnostic event stream and [Prometheus exporter](/gateway/prometheus#catalog-list-stages).

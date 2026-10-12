@@ -50,27 +50,14 @@ type IngressFailureDisposition =
       message: string;
     };
 
-function resolveConfig(config?: IngressRetryPolicyConfig) {
-  return {
-    maxAttempts: config?.maxAttempts ?? DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-    deadLetterMinAgeMs: config?.deadLetterMinAgeMs ?? DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-    baseMs: config?.baseMs ?? DEFAULT_INGRESS_RETRY_BASE_MS,
-    maxMs: config?.maxMs ?? DEFAULT_INGRESS_RETRY_MAX_MS,
-  };
-}
-
-/** Next attempt number after a failed dispatch (1-based for the attempt just finished). */
-function resolveIngressAttemptNumber(event: IngressRetryEventFacts): number {
-  return (event.attempts ?? 0) + 1;
-}
-
 /** Remaining backoff delay before a released event may be claimed again. */
 export function resolveIngressRetryDelayMs(
   event: IngressRetryEventFacts,
   config?: IngressRetryPolicyConfig,
   now = Date.now(),
 ): number {
-  const { baseMs, maxMs } = resolveConfig(config);
+  const baseMs = config?.baseMs ?? DEFAULT_INGRESS_RETRY_BASE_MS;
+  const maxMs = config?.maxMs ?? DEFAULT_INGRESS_RETRY_MAX_MS;
   const attempts = event.attempts ?? 0;
   if (!event.lastError || event.lastAttemptAt === undefined || attempts <= 0) {
     return 0;
@@ -92,7 +79,9 @@ export function shouldDeadLetterRetryableIngressEvent(
   config?: IngressRetryPolicyConfig,
   now = Date.now(),
 ): boolean {
-  const { maxAttempts, deadLetterMinAgeMs } = resolveConfig(config);
+  const maxAttempts = config?.maxAttempts ?? DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS;
+  const deadLetterMinAgeMs =
+    config?.deadLetterMinAgeMs ?? DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS;
   return attempt >= maxAttempts && now - event.receivedAt >= deadLetterMinAgeMs;
 }
 
@@ -106,8 +95,8 @@ export function resolveIngressFailureDisposition(params: {
   now?: number;
 }): IngressFailureDisposition {
   const now = params.now ?? Date.now();
-  const { maxAttempts } = resolveConfig(params.config);
-  const attempt = resolveIngressAttemptNumber(params.event);
+  const maxAttempts = params.config?.maxAttempts ?? DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS;
+  const attempt = (params.event.attempts ?? 0) + 1;
   const message = params.formatError(params.err);
   const nonRetryable = params.resolveNonRetryableFailure?.(params.err) ?? null;
   if (nonRetryable) {
@@ -120,29 +109,14 @@ export function resolveIngressFailureDisposition(params: {
   }
   const errorCodes = new Set(collectNestedErrorCandidates(params.err).map(extractErrorCode));
   // Retrying this terminal generation blocks the authorized reset behind it.
-  if (errorCodes.has(SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE)) {
-    return {
-      kind: "fail",
-      reason: "restart-recovery-tombstone",
-      message,
-      attempt,
-    };
-  }
-  if (attempt >= maxAttempts && errorCodes.has(SESSION_WORK_START_CHANGED_ERROR_CODE)) {
-    return {
-      kind: "fail",
-      reason: "session-start-conflict-retry-limit",
-      message,
-      attempt,
-    };
-  }
-  if (shouldDeadLetterRetryableIngressEvent(params.event, attempt, params.config, now)) {
-    return {
-      kind: "fail",
-      reason: "retry-limit-exceeded",
-      message,
-      attempt,
-    };
-  }
-  return { kind: "release", attempt, message };
+  const reason = errorCodes.has(SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE)
+    ? "restart-recovery-tombstone"
+    : attempt >= maxAttempts && errorCodes.has(SESSION_WORK_START_CHANGED_ERROR_CODE)
+      ? "session-start-conflict-retry-limit"
+      : shouldDeadLetterRetryableIngressEvent(params.event, attempt, params.config, now)
+        ? "retry-limit-exceeded"
+        : undefined;
+  return reason
+    ? { kind: "fail", reason, message, attempt }
+    : { kind: "release", attempt, message };
 }

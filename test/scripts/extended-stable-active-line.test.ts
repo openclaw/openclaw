@@ -11,21 +11,19 @@ const nodeExecutable = resolveTestNodeExecPath();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("extended-stable live publication eligibility", () => {
-  it("keeps both trailing months eligible across the year boundary", () => {
+  it("keeps only the trailing completed month eligible across the year boundary", () => {
     expect(() => validateActiveExtendedStableLine("2026.12.34", "2027.1.1")).not.toThrow();
-    expect(() => validateActiveExtendedStableLine("2026.12.34", "2027.2.1")).not.toThrow();
-    expect(() => validateActiveExtendedStableLine("2026.12.34", "2027.3.1")).toThrow(
-      "only the two trailing completed months",
+    expect(() => validateActiveExtendedStableLine("2026.12.34", "2027.2.1")).toThrow(
+      "only the trailing completed month",
     );
   });
 
   it.skipIf(process.platform === "win32").each([
     { mainVersion: "2026.8.1", expectedStatus: 42, expectedError: "" },
-    { mainVersion: "2026.9.1", expectedStatus: 42, expectedError: "" },
     {
-      mainVersion: "2026.10.1",
+      mainVersion: "2026.9.1",
       expectedStatus: 1,
-      expectedError: "only the two trailing completed months",
+      expectedError: "only the trailing completed month",
     },
     {
       mainVersion: "unavailable",

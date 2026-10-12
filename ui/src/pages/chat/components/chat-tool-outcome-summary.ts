@@ -1,48 +1,38 @@
 import { html, nothing } from "lit";
-import { summarizeAgentActivity } from "../../../../../src/agents/agent-activity-presentation.js";
-import { t } from "../../../i18n/index.ts";
+import type { summarizeAgentActivity } from "../../../../../src/agents/agent-activity-presentation.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
-import { isToolCardError, isToolCardSkipped } from "../../../lib/chat/tool-cards.ts";
+import type { resolveToolApprovalReviewOutcome } from "../../../lib/chat/tool-approval-reviews.ts";
+import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";
+import "./chat-tool-outcome-summary.solid.tsx";
 
-/** Status belongs in the disclosure; diagnostics stay in the expanded tool output. */
+// Temporary adapters for unported activity/transcript renderers.
 export function renderToolOutcomeSummary(
   cards: readonly ToolCard[],
   includeCount = true,
   activity?: Parameters<typeof summarizeAgentActivity>[0],
 ) {
-  const failures = cards.filter(isToolCardError);
-  // Prepared outcomes remain authoritative even when their raw card is absent.
-  const failureCount = activity
-    ? summarizeAgentActivity(activity).outcomes.failed
-    : failures.length;
-  const skipped = cards.filter(isToolCardSkipped).length;
-  const first = failures[0];
-  if (failureCount === 0 && skipped === 0) {
+  const outcomes = summarizeToolCardOutcomes(cards, activity);
+  if (outcomes.failed === 0 && outcomes.skipped === 0) {
     return nothing;
   }
-  const outcome =
-    first?.exitCode === undefined
-      ? t("chat.toolCards.failed")
-      : t("chat.toolCards.exitCode", { code: String(first.exitCode) });
-  return html`${
-    failureCount > 0
-      ? html`<span class="chat-tool-failure"
-          >${
-            includeCount
-              ? t("chat.toolCards.failureCount", { count: String(failureCount) })
-              : outcome
-          }</span
-        >`
-      : nothing
-  }${
-    skipped > 0
-      ? html`<span class="chat-tool-skipped"
-          >${
-            includeCount
-              ? t("chat.toolCards.skippedCount", { count: String(skipped) })
-              : t("chat.toolCards.skipped")
-          }</span
-        >`
-      : nothing
-  }`;
+  return html`<openclaw-chat-tool-outcome-summary
+    style="display: contents"
+    .cards=${cards}
+    .includeCount=${includeCount}
+    .activity=${activity}
+  ></openclaw-chat-tool-outcome-summary>`;
+}
+
+export function renderToolReviewOutcome(
+  outcome: ReturnType<typeof resolveToolApprovalReviewOutcome>,
+  reviewer = "Review",
+) {
+  if (!outcome) {
+    return nothing;
+  }
+  return html`<openclaw-chat-tool-review-outcome
+    style="display: contents"
+    .outcome=${outcome}
+    .reviewer=${reviewer}
+  ></openclaw-chat-tool-review-outcome>`;
 }

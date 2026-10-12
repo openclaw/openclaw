@@ -1,7 +1,4 @@
-import type {
-  BranchSummaryResult as CoreBranchSummaryResult,
-  AgentMessage,
-} from "../runtime/index.js";
+import type { AgentMessage } from "../runtime/index.js";
 import { estimateTokens } from "../runtime/index.js";
 
 export function unwrapCoreResult<T>(
@@ -11,26 +8,6 @@ export function unwrapCoreResult<T>(
     return result.value;
   }
   throw result.error;
-}
-
-export function normalizeBranchSummaryResult(
-  result:
-    | { ok: true; value: CoreBranchSummaryResult }
-    | { ok: false; error: { code: string; message: string } },
-): {
-  summary?: string;
-  readFiles?: string[];
-  modifiedFiles?: string[];
-  aborted?: boolean;
-  error?: string;
-} {
-  if (result.ok) {
-    return result.value;
-  }
-  if (result.error.code === "aborted") {
-    return { aborted: true, error: result.error.message };
-  }
-  return { error: result.error.message };
 }
 
 export function hasPersistedAssistantContent(content: unknown): boolean {

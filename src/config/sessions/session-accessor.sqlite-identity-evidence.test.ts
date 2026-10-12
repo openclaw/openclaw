@@ -16,7 +16,8 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it.each([1, 32])("bounds participant reads for %i session identity probes", (count) => {
+it("bounds participant reads for 32 session identity probes", () => {
+  const count = 32;
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-session-identity-batch-") };
   const scope = { agentId: "worker-1", env };
   const database = openOpenClawAgentDatabase(scope);

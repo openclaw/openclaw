@@ -2,6 +2,7 @@ import type {
   SqliteWorkerBackend,
   SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import type { WorkboardDatabaseInput } from "./database-config.js";
 import type {
   WorkboardSqliteOperations,
   WorkboardSqliteWorkerOperations,
@@ -15,10 +16,10 @@ type ConnectionCommand = Exclude<
 >;
 
 export function createSqliteWorkerBackend(
-  _input: undefined,
+  input: WorkboardDatabaseInput,
   context: { databasePath: string },
 ): SqliteWorkerBackend<WorkboardSqliteWorkerOperations> {
-  const initial = createWorkboardSqliteKernel(context.databasePath);
+  const initial = createWorkboardSqliteKernel(context.databasePath, undefined, input);
   const connections = new Map<number, Connection>();
   // Broker admission opens the native database; the first logical lease adopts it.
   connections.set(0, { kernel: initial, close: initial.close });
@@ -40,8 +41,6 @@ export function createSqliteWorkerBackend(
       throw new Error("Workboard SQLite connection initialization failed.");
     }
     switch (command.type) {
-      case "dataVersion":
-        return kernel.dataVersion();
       case "cards.register":
         return kernel.cards.register(...command.input.args);
       case "cards.registerIfAbsent":
@@ -74,6 +73,16 @@ export function createSqliteWorkerBackend(
         return kernel.boards.delete(...command.input.args);
       case "boards.entries":
         return kernel.boards.entries(...command.input.args);
+      case "sessionsBoard.get":
+        return kernel.sessionsBoard.get(...command.input.args);
+      case "sessionsBoard.update":
+        return kernel.sessionsBoard.update(...command.input.args);
+      case "sessionsBoard.listPlacements":
+        return kernel.sessionsBoard.listPlacements(...command.input.args);
+      case "sessionsBoard.repairPlacements":
+        return kernel.sessionsBoard.repairPlacements(...command.input.args);
+      case "sessionsBoard.writePlacement":
+        return kernel.sessionsBoard.writePlacement(...command.input.args);
       case "subscriptions.register":
         return kernel.subscriptions.register(...command.input.args);
       case "subscriptions.lookup":
@@ -101,11 +110,15 @@ export function createSqliteWorkerBackend(
           connections.delete(0);
           const kernel =
             unclaimed?.kernel ??
-            createWorkboardSqliteKernel(context.databasePath, (close) => {
-              connections.set(connection, { close });
-            });
+            createWorkboardSqliteKernel(
+              context.databasePath,
+              (close) => {
+                connections.set(connection, { close });
+              },
+              input,
+            );
           connections.set(connection, { kernel, close: kernel.close });
-          return { ok: true, value: { connection, dataVersion: kernel.dataVersion() } };
+          return { ok: true, value: { connection } };
         } catch (error) {
           const owned = connections.get(connection);
           if (owned) {
@@ -123,7 +136,29 @@ export function createSqliteWorkerBackend(
         }
       }
       try {
-        return { ok: true, value: execute(command) };
+        const readOnly = [
+          "cards.lookup",
+          "cards.entries",
+          "cards.listCardStatuses",
+          "cards.listBoardAggregates",
+          "cards.listStatsAggregates",
+          "cards.hasCards",
+          "boards.lookup",
+          "boards.entries",
+          "sessionsBoard.get",
+          "sessionsBoard.listPlacements",
+          "subscriptions.lookup",
+          "subscriptions.entries",
+          "attachments.lookup",
+          "attachments.entries",
+          "connection.close",
+        ].includes(command.type);
+        const kernel = connections.get(command.input.connection)?.kernel;
+        const value =
+          input && !readOnly && kernel
+            ? kernel.withWriteTransaction(() => execute(command))
+            : execute(command);
+        return { ok: true, value };
       } catch (error) {
         return { ok: false, failure: encodeWorkboardSqliteFailure(error) };
       }

@@ -1,22 +1,9 @@
 import type { ApplicationThemeServerSelection } from "../../app/context.ts";
 import type { ImportedCustomTheme } from "../../app/custom-theme.ts";
+import type { UiSettings } from "../../app/settings.ts";
 import type { ThemeName } from "../../app/theme.ts";
+import type { RuntimeConfigState } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-
-type ThemeSettingsSnapshot = {
-  theme: ThemeName;
-  customTheme?: { importedAt: string };
-};
-
-type ConfigWriteSnapshot = {
-  connected: boolean;
-  configLoading: boolean;
-  configSnapshot: unknown;
-  configFormDirty: boolean;
-  configSaving: boolean;
-  configApplying: boolean;
-  configAutoSaveStatus: string;
-};
 
 type CustomThemeImportViewState = {
   url: string;
@@ -34,11 +21,6 @@ export const INITIAL_CUSTOM_THEME_IMPORT_STATE: CustomThemeImportViewState = {
   focusToken: 0,
 };
 
-type ImportTicket = {
-  requestRevision: number;
-  activationRevision: number;
-};
-
 type ImportMessages = {
   blocked: (reason: "loading" | "unsaved") => string;
   imported: (label: string) => string;
@@ -46,11 +28,8 @@ type ImportMessages = {
 
 /** Owns every state transition that can supersede a delayed custom-theme import. */
 export class CustomThemeImportOwner {
-  private requestRevision = 0;
-  private activationIntent: { revision: number; theme: ThemeName | null } = {
-    revision: 0,
-    theme: null,
-  };
+  private currentImport: object | null = null;
+  private activationIntent: { theme: ThemeName | null } = { theme: null };
   private gatewayScope = "";
   private serverSelectionRevision = 0;
   private state = INITIAL_CUSTOM_THEME_IMPORT_STATE;
@@ -73,11 +52,11 @@ export class CustomThemeImportOwner {
     this.connect(scope, serverSelection);
   }
 
-  adoptSettings<T extends ThemeSettingsSnapshot>(
-    previous: T,
-    next: T,
+  adoptSettings(
+    previous: UiSettings,
+    next: UiSettings,
     serverSelection: ApplicationThemeServerSelection | null,
-  ): T {
+  ): UiSettings {
     const scopedSelection = this.selectionForScope(this.gatewayScope, serverSelection);
     const serverSelectionChanged =
       this.serverSelectionRevision !== (scopedSelection?.revision ?? 0);
@@ -98,10 +77,7 @@ export class CustomThemeImportOwner {
   }
 
   recordActivation(theme: ThemeName | null): void {
-    this.activationIntent = {
-      revision: this.activationIntent.revision + 1,
-      theme,
-    };
+    this.activationIntent = { theme };
   }
 
   open(): void {
@@ -127,7 +103,7 @@ export class CustomThemeImportOwner {
   }
 
   async import(params: {
-    config: ConfigWriteSnapshot;
+    config: RuntimeConfigState;
     hasCustomTheme: boolean;
     load: (url: string) => Promise<ImportedCustomTheme>;
     apply: (theme: ImportedCustomTheme, activate: boolean) => void;
@@ -141,21 +117,27 @@ export class CustomThemeImportOwner {
       });
       return;
     }
-    const ticket = this.beginImport();
+    const ticket = {};
+    const activationIntent = this.activationIntent;
+    this.currentImport = ticket;
     const importUrl = this.state.url;
     this.update({ expanded: true, busy: true, message: null });
     try {
       const theme = await params.load(importUrl);
-      if (!this.ownsImport(ticket)) {
+      if (this.currentImport !== ticket) {
         return;
       }
-      params.apply(theme, !params.hasCustomTheme && this.mayActivate(ticket));
+      params.apply(
+        theme,
+        !params.hasCustomTheme &&
+          (this.activationIntent === activationIntent || this.activationIntent.theme === "custom"),
+      );
       this.update({
         url: "",
         message: { kind: "success", text: params.messages.imported(theme.label) },
       });
     } catch (error) {
-      if (!this.ownsImport(ticket)) {
+      if (this.currentImport !== ticket) {
         return;
       }
       this.update({
@@ -165,7 +147,7 @@ export class CustomThemeImportOwner {
         },
       });
     } finally {
-      if (this.ownsImport(ticket)) {
+      if (this.currentImport === ticket) {
         this.update({ busy: false });
       }
     }
@@ -178,32 +160,13 @@ export class CustomThemeImportOwner {
   }
 
   retireImport(): void {
-    this.requestRevision += 1;
+    this.currentImport = null;
     if (this.state.busy) {
       this.update({ busy: false });
     }
   }
 
-  private beginImport(): ImportTicket {
-    this.requestRevision += 1;
-    return {
-      requestRevision: this.requestRevision,
-      activationRevision: this.activationIntent.revision,
-    };
-  }
-
-  private ownsImport(ticket: ImportTicket): boolean {
-    return ticket.requestRevision === this.requestRevision;
-  }
-
-  private mayActivate(ticket: ImportTicket): boolean {
-    return (
-      ticket.activationRevision === this.activationIntent.revision ||
-      this.activationIntent.theme === "custom"
-    );
-  }
-
-  private blockedReason(config: ConfigWriteSnapshot): "loading" | "unsaved" | null {
+  private blockedReason(config: RuntimeConfigState): "loading" | "unsaved" | null {
     if (config.connected && (config.configLoading || !config.configSnapshot)) {
       return "loading";
     }

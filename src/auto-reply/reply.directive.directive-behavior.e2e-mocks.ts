@@ -115,6 +115,7 @@ vi.mock("../agents/thinking-runtime.js", async (importOriginal) => {
     ...actual,
     // These tests cover directive acknowledgements and persistence, not harness selection.
     // Keep each directive from loading unrelated provider-route metadata through auto selection.
+    resolveCandidateAgentRuntime: () => "openclaw",
     resolveEffectiveAgentRuntime: () => "openclaw",
   };
 });
@@ -140,7 +141,8 @@ vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./reply/agent-runner.runtime.js", () => ({
+vi.mock("./reply/agent-runner-run.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply/agent-runner-run.js")>()),
   runReplyAgent: (...args: unknown[]) => runReplyAgentMock(...args),
 }));
 

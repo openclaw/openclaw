@@ -1,5 +1,4 @@
-// Feishu helper module supports perm schema behavior.
-import { Type, type Static } from "typebox";
+import { Type } from "typebox";
 
 const TokenType = Type.Union([
   Type.Literal("doc"),
@@ -49,5 +48,3 @@ export const FeishuPermSchema = Type.Union([
     member_id: Type.String({ description: "Member ID to remove" }),
   }),
 ]);
-
-export type FeishuPermParams = Static<typeof FeishuPermSchema>;

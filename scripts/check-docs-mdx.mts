@@ -1,7 +1,5 @@
 #!/usr/bin/env node
 
-// Validates docs MDX files for syntax and repository-specific conventions.
-
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -116,9 +114,6 @@ function parsePositiveIntegerArg(raw: string | undefined, label: string): number
   return value;
 }
 
-/**
- * Parses docs MDX check arguments.
- */
 export function parseArgs(argv: string[]) {
   const roots: string[] = [];
   let jsonOut = "";

@@ -52,6 +52,7 @@ class ChatWorkedSummaryTest {
         emptyList<ChatAgentActivity>() to emptyMap(),
         listOf(activity) to mapOf(WorkedToolOutcome.Failed to 1),
         listOf(activity.copy(status = "blocked")) to mapOf(WorkedToolOutcome.Blocked to 1),
+        listOf(activity.copy(status = "skipped")) to mapOf(WorkedToolOutcome.Skipped to 1),
         listOf(activity.copy(status = null)) to mapOf(WorkedToolOutcome.Unknown to 1),
         listOf(activity.copy(status = "completed")) to emptyMap(),
         listOf(activity.copy(hideFromChannelProgress = true)) to emptyMap(),

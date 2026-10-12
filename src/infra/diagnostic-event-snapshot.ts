@@ -14,13 +14,7 @@ export function deepFreezeDiagnosticValue<T>(value: T, seen = new WeakSet<object
     return value;
   }
   seen.add(value);
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      deepFreezeDiagnosticValue(item, seen);
-    }
-    return Object.freeze(value);
-  }
-  for (const nested of Object.values(value)) {
+  for (const nested of Array.isArray(value) ? value : Object.values(value)) {
     deepFreezeDiagnosticValue(nested, seen);
   }
   return Object.freeze(value);

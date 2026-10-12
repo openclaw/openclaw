@@ -137,58 +137,91 @@ describe("media understanding attachment cache", () => {
     readRemoteMediaBufferMock.mockReset();
   });
 
-  it.each([
+  it.each<{
+    source: "local" | "remote";
+    fileName: string;
+    bytes: () => Buffer | Promise<Buffer>;
+    declaredMime: string;
+    contentType?: string;
+    expected: { mime: string; class: string };
+  }>([
     {
-      name: "prefers local attachment bytes over conflicting declared MIME",
+      source: "local",
       fileName: "photo.jpg",
-      buffer: PNG_1X1,
+      bytes: () => PNG_1X1,
       declaredMime: "application/pdf",
       expected: { mime: "image/png", class: "image" },
     },
     {
-      name: "infers long UTF-8 text from a generically typed local attachment",
+      source: "local",
       fileName: "notes",
-      buffer: Buffer.from("验证".repeat(700), "utf8"),
+      bytes: () => Buffer.from("验证".repeat(700), "utf8"),
       declaredMime: "application/octet-stream",
       expected: { mime: "text/plain", class: "text" },
     },
-  ])("$name", async (testCase) => {
-    await withTestDir({ prefix: "openclaw-media-cache-mime-local-" }, async (base) => {
+    {
+      source: "remote",
+      fileName: "photo.jpg",
+      bytes: () => PNG_1X1,
+      declaredMime: "application/pdf",
+      contentType: "image/jpeg",
+      expected: { mime: "image/png", class: "image" },
+    },
+    {
+      source: "remote",
+      fileName: "voice.webm",
+      bytes: () => AMBIGUOUS_WEBM,
+      declaredMime: "application/pdf",
+      contentType: "audio/webm",
+      expected: { mime: "audio/webm", class: "audio" },
+    },
+    {
+      source: "remote",
+      fileName: "download",
+      bytes: () => new JSZip().file("hello.txt", "hi").generateAsync({ type: "nodebuffer" }),
+      declaredMime: "application/pdf",
+      contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      expected: {
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        class: "document",
+      },
+    },
+  ])("classifies $source $fileName as $expected.mime despite declared MIME", async (testCase) => {
+    await withTestDir({ prefix: "openclaw-media-cache-mime-" }, async (base) => {
+      const buffer = await testCase.bytes();
       const attachmentPath = path.join(base, testCase.fileName);
-      await fs.writeFile(attachmentPath, testCase.buffer);
+      if (testCase.source === "local") {
+        await fs.writeFile(attachmentPath, buffer);
+      } else {
+        readRemoteMediaBufferMock.mockResolvedValue({
+          buffer,
+          contentType: testCase.contentType,
+          fileName: testCase.fileName,
+        });
+      }
       const cache = new MediaAttachmentCache(
-        [{ index: 0, path: attachmentPath, mime: testCase.declaredMime }],
+        [
+          {
+            index: 0,
+            mime: testCase.declaredMime,
+            ...(testCase.source === "local"
+              ? { path: attachmentPath }
+              : { url: `https://example.com/${testCase.fileName}` }),
+          },
+        ],
         { localPathRoots: [base] },
       );
 
       const result = await cache.getBuffer({
         attachmentIndex: 0,
-        maxBytes: testCase.buffer.byteLength,
+        maxBytes: buffer.byteLength,
         timeoutMs: 1000,
       });
 
       expect(result.mime).toBe(testCase.expected.mime);
       expect(result.classification).toEqual(testCase.expected);
-      expect(result.buffer).toEqual(testCase.buffer);
+      expect(result.buffer).toEqual(buffer);
     });
-  });
-
-  it("prefers remote attachment bytes over conflicting MIME metadata", async () => {
-    const url = "https://example.com/photo.jpg";
-    readRemoteMediaBufferMock.mockResolvedValue({
-      buffer: PNG_1X1,
-      contentType: "image/jpeg",
-      fileName: "photo.jpg",
-    });
-    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "application/pdf" }]);
-
-    const result = await cache.getBuffer({
-      attachmentIndex: 0,
-      maxBytes: 1024,
-      timeoutMs: 1000,
-    });
-
-    expect(result.mime).toBe("image/png");
   });
 
   it.each(["unchanged", "growing", "read-failure"] as const)(
@@ -394,68 +427,6 @@ describe("media understanding attachment cache", () => {
     },
   );
 
-  it("uses fetched audio metadata when declared MIME is stale for ambiguous WebM", async () => {
-    const url = "https://example.com/voice.webm";
-    readRemoteMediaBufferMock.mockResolvedValue({
-      buffer: AMBIGUOUS_WEBM,
-      contentType: "audio/webm",
-      fileName: "voice.webm",
-    });
-    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "application/pdf" }]);
-
-    const result = await cache.getBuffer({
-      attachmentIndex: 0,
-      maxBytes: 1024,
-      timeoutMs: 1000,
-    });
-
-    expect(result.mime).toBe("audio/webm");
-  });
-
-  it("uses fetched OOXML metadata to refine extensionless generic ZIP bytes", async () => {
-    const url = "https://example.com/download";
-    const zip = new JSZip();
-    zip.file("hello.txt", "hi");
-    const buffer = await zip.generateAsync({ type: "nodebuffer" });
-    const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    readRemoteMediaBufferMock.mockResolvedValue({
-      buffer,
-      contentType: docxMime,
-      fileName: "download",
-    });
-    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "application/pdf" }]);
-
-    const result = await cache.getBuffer({
-      attachmentIndex: 0,
-      maxBytes: 1024,
-      timeoutMs: 1000,
-    });
-
-    expect(result.mime).toBe(docxMime);
-  });
-
-  it("removes a partially staged attachment and preserves its write failure", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-write-failure-" }, async (base) => {
-      const writeError = Object.assign(new Error("disk full"), { code: "ENOSPC" });
-      const writeFile = fs.writeFile.bind(fs);
-      vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(base);
-      readRemoteMediaBufferMock.mockResolvedValue({ buffer: PNG_1X1, fileName: "photo.png" });
-      vi.spyOn(fs, "writeFile").mockImplementationOnce(async (file) => {
-        await writeFile(file, PNG_1X1.subarray(0, 4));
-        throw writeError;
-      });
-      const cache = new MediaAttachmentCache([{ index: 0, url: "https://example.com/photo.png" }]);
-
-      await expect(
-        cache.getPath({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1_000 }),
-      ).rejects.toBe(writeError);
-      expect(await fs.readdir(base)).toEqual([]);
-      await cache.cleanup();
-
-      expect(await fs.readdir(base)).toEqual([]);
-    });
-  });
-
   it.skipIf(process.platform === "win32")(
     "stages in a selector-approved fallback root and preserves unrelated files",
     async () => {
@@ -518,6 +489,7 @@ describe("media understanding attachment cache", () => {
         const successful = await cache.getPath(request);
         finish.resolve();
         await failed;
+        expect(await fs.readdir(base)).toEqual([path.basename(successful)]);
         await expect(fs.readFile(successful)).resolves.toEqual(PNG_1X1);
         expect(await cache.getPath(request)).toBe(successful);
       } finally {

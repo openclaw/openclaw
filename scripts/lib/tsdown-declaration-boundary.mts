@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { BuildContext, UserConfig, Rolldown } from "tsdown";
-import { createDeclarationInputBoundary } from "./local-check-runtime.mts";
+import { createDeclarationInputBoundary, resolveRepoToolBinPath } from "./local-check-runtime.mts";
 import type { NativeDeclaration } from "./native-declaration-emitter.mts";
 
 type Plugin = Rolldown.Plugin;
@@ -14,72 +14,6 @@ const withinRoot = (root: string, file: string) => {
 
 type BuildInputs = { roots: Set<string>; inputs: Set<string> };
 const completedBuilds = new WeakMap<BuildContext["options"], BuildInputs>();
-type BuildOutputs = { files: Set<string>; producers: Set<Set<string>> };
-const buildOutputs = new WeakMap<BuildContext["options"]["runBuild"], Map<string, BuildOutputs>>();
-
-function declarationBuildOutputs(options: BuildContext["options"], root: string) {
-  // tsdown creates one coordinator per build() invocation and preserves its
-  // identity across workspace configs and formats. Never share facts across calls.
-  let roots = buildOutputs.get(options.runBuild);
-  if (!roots) {
-    roots = new Map();
-    buildOutputs.set(options.runBuild, roots);
-  }
-  let outputs = roots.get(root);
-  if (!outputs) {
-    outputs = { files: new Set(), producers: new Set() };
-    roots.set(root, outputs);
-  }
-  return outputs;
-}
-
-function createDeclarationOutputPlugin(
-  options: BuildContext["options"],
-  boundary: ReturnType<typeof createDeclarationInputBoundary>,
-  session: BuildOutputs,
-): Plugin {
-  const produced = new Set<string>();
-  session.producers.add(produced);
-  return {
-    name: "openclaw-declaration-build-outputs",
-    buildStart: {
-      order: "pre",
-      handler() {
-        // A watch rebuild replaces only its producer's facts, retaining completed
-        // siblings while another compiler in this invocation is still running.
-        produced.clear();
-        session.files.clear();
-        for (const sibling of session.producers) {
-          for (const file of sibling) {
-            session.files.add(file);
-          }
-        }
-      },
-    },
-    generateBundle: {
-      order: "post",
-      handler(output, bundle, isWrite) {
-        if (!isWrite) {
-          return;
-        }
-        const directory = boundary.resolve(
-          output.dir ?? (output.file ? path.dirname(output.file) : options.outDir),
-        );
-        for (const file of Object.keys(bundle)) {
-          const target = path.resolve(directory, file);
-          if (!withinRoot(directory, target) || target === directory) {
-            throw new Error(`Build output escapes its declared directory: ${file}`);
-          }
-          // Keep the producer's spelling. Resolving an output symlink here would
-          // expand its exception into a different source directory.
-          produced.add(target);
-          session.files.add(target);
-        }
-      },
-    },
-  };
-}
-
 export function readDeclarationBuildInputs(options: BuildContext["options"]) {
   const result = completedBuilds.get(options);
   if (!result) {
@@ -106,12 +40,14 @@ function prepareDeclarationBoundary({ options }: BuildContext) {
         ...options.dts,
         cwd: boundary.assert(options.dts.cwd ?? options.cwd),
         generator: "tsgo" as const,
+        // The bundler recognizes only stable 7.0 automatically. The compiler
+        // owner selects the checkout's pinned native executable for every build.
+        tsgo: { ...options.dts.tsgo, path: resolveRepoToolBinPath("tsgo", { cwd: boundary.root }) },
       }
     : undefined;
   if (dts) {
     options.dts = dts;
   }
-  const outputs = declarationBuildOutputs(options, boundary.root);
   const inputOptions = options.inputOptions;
   options.inputOptions = async (input, format, context) => {
     let resolved = input;
@@ -137,12 +73,31 @@ function prepareDeclarationBoundary({ options }: BuildContext) {
         return plugin;
       }
       replacements++;
-      return createNativeDeclarationPlugin(options, dts, plugin, context.cjsDts, outputs.files);
+      return createNativeDeclarationPlugin(options, dts, plugin, context.cjsDts);
     };
     resolved.plugins = await replace(resolved.plugins ?? []);
     resolved.plugins = [
       resolved.plugins,
-      createDeclarationOutputPlugin(options, boundary, outputs),
+      {
+        name: "openclaw-declaration-build-outputs",
+        generateBundle: {
+          order: "post",
+          handler(output, bundle, isWrite) {
+            if (!isWrite) {
+              return;
+            }
+            const directory = boundary.resolve(
+              output.dir ?? (output.file ? path.dirname(output.file) : options.outDir),
+            );
+            for (const file of Object.keys(bundle)) {
+              const target = path.resolve(directory, file);
+              if (!withinRoot(directory, target) || target === directory) {
+                throw new Error(`Build output escapes its declared directory: ${file}`);
+              }
+            }
+          },
+        },
+      },
     ];
     if (dts && (format === "es" || context.cjsDts) && replacements !== 1) {
       throw new Error(`Expected one declaration generator, found ${replacements}`);
@@ -156,7 +111,6 @@ function createNativeDeclarationPlugin(
   dts: Exclude<BuildContext["options"]["dts"], false>,
   upstream: Plugin,
   cjsDts: boolean,
-  producedFiles: ReadonlySet<string>,
 ): Plugin {
   const boundary = createDeclarationInputBoundary(options.cwd);
   const declarationId = (file: string) =>
@@ -215,7 +169,6 @@ function createNativeDeclarationPlugin(
           configFile: boundary.assert(config),
           roots,
           compilerOptions: dts.compilerOptions,
-          producedFiles,
         });
         for (const [source, declaration] of result.declarations) {
           emitted.set(declarationId(source), {

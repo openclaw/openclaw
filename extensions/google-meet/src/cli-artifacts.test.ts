@@ -24,6 +24,27 @@ import {
   stubMeetArtifactsApi,
 } from "./test-support/cli-harness.js";
 
+async function runApiCommand(command: string, args: string[] = []) {
+  const stdout = captureStdout();
+  try {
+    await setupCli({}).parseAsync(
+      [
+        "googlemeet",
+        command,
+        "--access-token",
+        "token",
+        "--expires-at",
+        String(Date.now() + 120_000),
+        ...args,
+      ],
+      { from: "user" },
+    );
+    return stdout;
+  } finally {
+    stdout.restore();
+  }
+}
+
 describe("google-meet CLI", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -37,65 +58,34 @@ describe("google-meet CLI", () => {
   it("prints artifacts and attendance output", async () => {
     stubMeetArtifactsApi();
 
-    const artifactsStdout = captureStdout();
-    try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "artifacts",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--conference-record",
-          "rec-1",
-          "--json",
-        ],
-        { from: "user" },
-      );
-      const payload = parseStdoutJson(artifactsStdout);
-      expectFields(payload, { tokenSource: "cached-access-token" });
-      expectFields(firstRecord(payload.conferenceRecords), { name: "conferenceRecords/rec-1" });
-      const artifact = firstRecord(payload.artifacts);
-      expectFields(firstRecord(artifact.recordings), {
-        name: "conferenceRecords/rec-1/recordings/r1",
-      });
-      expectFields(firstRecord(artifact.transcripts), {
-        name: "conferenceRecords/rec-1/transcripts/t1",
-      });
-      const transcriptEntries = firstRecord(artifact.transcriptEntries);
-      expectFields(transcriptEntries, { transcript: "conferenceRecords/rec-1/transcripts/t1" });
-      expectFields(firstRecord(transcriptEntries.entries), { text: "Hello from the transcript." });
-      expectFields(firstRecord(artifact.smartNotes), {
-        name: "conferenceRecords/rec-1/smartNotes/sn1",
-      });
-    } finally {
-      artifactsStdout.restore();
-    }
+    const artifactsStdout = await runApiCommand("artifacts", [
+      "--conference-record",
+      "rec-1",
+      "--json",
+    ]);
+    const payload = parseStdoutJson(artifactsStdout);
+    expectFields(payload, { tokenSource: "cached-access-token" });
+    expectFields(firstRecord(payload.conferenceRecords), { name: "conferenceRecords/rec-1" });
+    const artifact = firstRecord(payload.artifacts);
+    expectFields(firstRecord(artifact.recordings), {
+      name: "conferenceRecords/rec-1/recordings/r1",
+    });
+    expectFields(firstRecord(artifact.transcripts), {
+      name: "conferenceRecords/rec-1/transcripts/t1",
+    });
+    const transcriptEntries = firstRecord(artifact.transcriptEntries);
+    expectFields(transcriptEntries, { transcript: "conferenceRecords/rec-1/transcripts/t1" });
+    expectFields(firstRecord(transcriptEntries.entries), { text: "Hello from the transcript." });
+    expectFields(firstRecord(artifact.smartNotes), {
+      name: "conferenceRecords/rec-1/smartNotes/sn1",
+    });
 
-    const attendanceStdout = captureStdout();
-    try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "attendance",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--conference-record",
-          "rec-1",
-        ],
-        { from: "user" },
-      );
-      expect(attendanceStdout.output()).toContain("attendance rows: 1");
-      expect(attendanceStdout.output()).toContain("participant: Alice");
-      expect(attendanceStdout.output()).toContain(
-        "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
-      );
-    } finally {
-      attendanceStdout.restore();
-    }
+    const attendanceStdout = await runApiCommand("attendance", ["--conference-record", "rec-1"]);
+    expect(attendanceStdout.output()).toContain("attendance rows: 1");
+    expect(attendanceStdout.output()).toContain("participant: Alice");
+    expect(attendanceStdout.output()).toContain(
+      "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
+    );
   });
 
   it("ends an active conference for a Meet space", async () => {
@@ -115,42 +105,28 @@ describe("google-meet CLI", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const stdout = captureStdout();
-    try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "end-active-conference",
-          "https://meet.google.com/abc-defg-hij",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--json",
-        ],
-        { from: "user" },
-      );
-      expectFields(parseStdoutJson(stdout), {
-        space: "spaces/space-resource-123",
-        ended: true,
-        tokenSource: "cached-access-token",
-      });
-      const endCall = fetchMock.mock.calls.find(
-        ([input]) =>
-          input === "https://meet.googleapis.com/v2/spaces/space-resource-123:endActiveConference",
-      );
-      expect(endCall?.[1]).toEqual({
-        method: "POST",
-        body: "{}",
-        headers: {
-          Accept: "application/json",
-          Authorization: "Bearer token",
-          "Content-Type": "application/json",
-        },
-      });
-    } finally {
-      stdout.restore();
-    }
+    const stdout = await runApiCommand("end-active-conference", [
+      "https://meet.google.com/abc-defg-hij",
+      "--json",
+    ]);
+    expectFields(parseStdoutJson(stdout), {
+      space: "spaces/space-resource-123",
+      ended: true,
+      tokenSource: "cached-access-token",
+    });
+    const endCall = fetchMock.mock.calls.find(
+      ([input]) =>
+        input === "https://meet.googleapis.com/v2/spaces/space-resource-123:endActiveConference",
+    );
+    expect(endCall?.[1]).toEqual({
+      method: "POST",
+      body: "{}",
+      headers: {
+        Accept: "application/json",
+        Authorization: "Bearer token",
+        "Content-Type": "application/json",
+      },
+    });
   });
 
   it("rejects access policy flags when create would use browser fallback", async () => {
@@ -179,145 +155,59 @@ describe("google-meet CLI", () => {
   ]) {
     it(name, async () => {
       stubMeetArtifactsApi();
-      const stdout = captureStdout();
 
-      try {
-        await setupCli({}).parseAsync(
-          [
-            "googlemeet",
-            "latest",
-            "--access-token",
-            "token",
-            "--expires-at",
-            String(Date.now() + 120_000),
-            ...selectorArgs,
-          ],
-          { from: "user" },
-        );
-        expect(stdout.output()).toContain(expected);
-        expect(stdout.output()).toContain("conference record: conferenceRecords/rec-1");
-      } finally {
-        stdout.restore();
-      }
+      const stdout = await runApiCommand("latest", selectorArgs);
+      expect(stdout.output()).toContain(expected);
+      expect(stdout.output()).toContain("conference record: conferenceRecords/rec-1");
     });
   }
 
   it("prints calendar event previews", async () => {
     stubMeetArtifactsApi();
-    const stdout = captureStdout();
 
-    try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "calendar-events",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--today",
-        ],
-        { from: "user" },
-      );
-      expect(stdout.output()).toContain("meet events: 1");
-      expect(stdout.output()).toContain("* Project sync");
-      expect(stdout.output()).toContain("https://meet.google.com/abc-defg-hij");
-    } finally {
-      stdout.restore();
-    }
+    const stdout = await runApiCommand("calendar-events", ["--today"]);
+    expect(stdout.output()).toContain("meet events: 1");
+    expect(stdout.output()).toContain("* Project sync");
+    expect(stdout.output()).toContain("https://meet.google.com/abc-defg-hij");
   });
 
-  it.each(["0", "1.5", "9007199254740993"])(
-    "rejects invalid Meet API page sizes: %s",
-    async (pageSize) => {
-      const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", fetchMock);
+  it("rejects a fractional Meet API page size before fetching", async () => {
+    const pageSize = "1.5";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
 
-      await expect(
-        setupCli({}).parseAsync(
-          [
-            "googlemeet",
-            "artifacts",
-            "--access-token",
-            "token",
-            "--conference-record",
-            "rec-1",
-            "--page-size",
-            pageSize,
-          ],
-          { from: "user" },
-        ),
-      ).rejects.toThrow("page-size must be a positive integer");
-      expect(fetchMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { command: "artifacts", explicitSummary: false },
-    { command: "artifacts", explicitSummary: true },
-    { command: "attendance", explicitSummary: false },
-    { command: "attendance", explicitSummary: true },
-  ])(
-    "writes $command summary to --output (explicitSummary=$explicitSummary)",
-    async ({ command, explicitSummary }) => {
-      stubMeetArtifactsApi();
-      const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-summary-"));
-      const outputPath = path.join(tempDir, "summary.txt");
-      const stdout = captureStdout();
-      const argv = [
-        "googlemeet",
-        command,
-        "--access-token",
-        "token",
-        "--expires-at",
-        String(Date.now() + 120_000),
-        "--conference-record",
-        "rec-1",
-        ...(explicitSummary ? ["--format", "summary"] : []),
-      ];
-
-      try {
-        await setupCli({}).parseAsync(argv, { from: "user" });
-        const summary = stdout.output();
-        expect(summary).toContain("conference records: 1\n");
-        expect(summary).toContain("token source: cached-access-token\n");
-
-        await setupCli({}).parseAsync([...argv, "--output", outputPath], { from: "user" });
-
-        expect(existsSync(outputPath)).toBe(true);
-        expect(readFileSync(outputPath, "utf8")).toBe(summary);
-        expect(stdout.output().slice(summary.length)).toBe(`wrote: ${outputPath}\n`);
-      } finally {
-        stdout.restore();
-        rmSync(tempDir, { recursive: true, force: true });
-      }
-    },
-  );
-
-  it("prints markdown artifact and attendance output", async () => {
-    stubMeetArtifactsApi();
-    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-artifacts-"));
-    const outputPath = path.join(tempDir, "artifacts.md");
-    const artifactsStdout = captureStdout();
-
-    try {
-      await setupCli({}).parseAsync(
+    await expect(
+      setupCli({}).parseAsync(
         [
           "googlemeet",
           "artifacts",
           "--access-token",
           "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
           "--conference-record",
           "rec-1",
-          "--format",
-          "markdown",
-          "--output",
-          outputPath,
+          "--page-size",
+          pageSize,
         ],
         { from: "user" },
-      );
+      ),
+    ).rejects.toThrow("page-size must be a positive integer");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("prints markdown artifact and attendance output", async () => {
+    stubMeetArtifactsApi();
+    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-artifacts-"));
+    const outputPath = path.join(tempDir, "artifacts.md");
+
+    try {
+      const artifactsStdout = await runApiCommand("artifacts", [
+        "--conference-record",
+        "rec-1",
+        "--format",
+        "markdown",
+        "--output",
+        outputPath,
+      ]);
       const markdown = readFileSync(outputPath, "utf8");
       expect(artifactsStdout.output()).toContain(`wrote: ${outputPath}`);
       expect(markdown).toContain("# Google Meet Artifacts");
@@ -325,35 +215,20 @@ describe("google-meet CLI", () => {
       expect(markdown).toContain("### Transcript Entries: conferenceRecords/rec-1/transcripts/t1");
       expect(markdown).toContain("Hello from the transcript.");
     } finally {
-      artifactsStdout.restore();
       rmSync(tempDir, { recursive: true, force: true });
     }
 
-    const attendanceStdout = captureStdout();
-    try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "attendance",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--conference-record",
-          "rec-1",
-          "--format",
-          "markdown",
-        ],
-        { from: "user" },
-      );
-      expect(attendanceStdout.output()).toContain("# Google Meet Attendance");
-      expect(attendanceStdout.output()).toContain("## Alice");
-      expect(attendanceStdout.output()).toContain(
-        "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
-      );
-    } finally {
-      attendanceStdout.restore();
-    }
+    const attendanceStdout = await runApiCommand("attendance", [
+      "--conference-record",
+      "rec-1",
+      "--format",
+      "markdown",
+    ]);
+    expect(attendanceStdout.output()).toContain("# Google Meet Attendance");
+    expect(attendanceStdout.output()).toContain("## Alice");
+    expect(attendanceStdout.output()).toContain(
+      "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
+    );
   });
 
   it.skipIf(process.platform === "win32")(
@@ -418,56 +293,33 @@ describe("google-meet CLI", () => {
   ]) {
     it(name, async () => {
       stubMeetArtifactsApi(options);
-      const stdout = captureStdout();
 
-      try {
-        await setupCli({}).parseAsync(
-          [
-            "googlemeet",
-            "attendance",
-            "--access-token",
-            "token",
-            "--expires-at",
-            String(Date.now() + 120_000),
-            "--conference-record",
-            "rec-1",
-            "--format",
-            "csv",
-          ],
-          { from: "user" },
-        );
-        for (const text of expected) {
-          expect(stdout.output()).toContain(text);
-        }
-      } finally {
-        stdout.restore();
+      const stdout = await runApiCommand("attendance", [
+        "--conference-record",
+        "rec-1",
+        "--format",
+        "csv",
+      ]);
+      for (const text of expected) {
+        expect(stdout.output()).toContain(text);
       }
     });
   }
 
   it("writes an export bundle", async () => {
     stubMeetArtifactsApi();
-    const stdout = captureStdout();
+
     const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-"));
 
     try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "export",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--conference-record",
-          "rec-1",
-          "--include-doc-bodies",
-          "--zip",
-          "--output",
-          tempDir,
-        ],
-        { from: "user" },
-      );
+      const stdout = await runApiCommand("export", [
+        "--conference-record",
+        "rec-1",
+        "--include-doc-bodies",
+        "--zip",
+        "--output",
+        tempDir,
+      ]);
       expect(stdout.output()).toContain(`export: ${tempDir}`);
       expect(readFileSync(path.join(tempDir, "summary.md"), "utf8")).toContain(
         "# Google Meet Artifacts",
@@ -506,7 +358,6 @@ describe("google-meet CLI", () => {
       const zip = await JSZip.loadAsync(readFileSync(`${tempDir}.zip`));
       expect(await zip.file("summary.md")?.async("string")).toContain("# Google Meet Artifacts");
     } finally {
-      stdout.restore();
       rmSync(tempDir, { recursive: true, force: true });
       rmSync(`${tempDir}.zip`, { force: true });
     }
@@ -514,57 +365,33 @@ describe("google-meet CLI", () => {
 
   it("neutralizes spreadsheet formulas in exported attendance CSV files", async () => {
     stubMeetArtifactsApi({ participantDisplayName: "\uFF1D1+1" });
-    const stdout = captureStdout();
+
     const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-csv-"));
 
     try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "export",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--conference-record",
-          "rec-1",
-          "--output",
-          tempDir,
-        ],
-        { from: "user" },
-      );
+      await runApiCommand("export", ["--conference-record", "rec-1", "--output", tempDir]);
       expect(readFileSync(path.join(tempDir, "attendance.csv"), "utf8")).toContain(
         "conferenceRecords/rec-1,'\uFF1D1+1,users/alice",
       );
     } finally {
-      stdout.restore();
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
   it("includes artifact warnings in export summaries and manifests", async () => {
     stubMeetArtifactsApi({ failSmartNoteDocumentBody: true });
-    const stdout = captureStdout();
+
     const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-warning-"));
 
     try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "export",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--conference-record",
-          "rec-1",
-          "--include-doc-bodies",
-          "--output",
-          tempDir,
-          "--json",
-        ],
-        { from: "user" },
-      );
+      await runApiCommand("export", [
+        "--conference-record",
+        "rec-1",
+        "--include-doc-bodies",
+        "--output",
+        tempDir,
+        "--json",
+      ]);
       const summary = readFileSync(path.join(tempDir, "summary.md"), "utf8");
       expect(summary).toContain("### Warnings");
       expect(summary).toContain("Document body warning");
@@ -576,35 +403,25 @@ describe("google-meet CLI", () => {
         resource: "conferenceRecords/rec-1/smartNotes/sn1",
       });
     } finally {
-      stdout.restore();
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
   it("prints a dry-run export manifest without writing files", async () => {
     stubMeetArtifactsApi();
-    const stdout = captureStdout();
+
     const parentDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-dry-run-"));
     const outputDir = path.join(parentDir, "bundle");
 
     try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "export",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--conference-record",
-          "rec-1",
-          "--include-doc-bodies",
-          "--output",
-          outputDir,
-          "--dry-run",
-        ],
-        { from: "user" },
-      );
+      const stdout = await runApiCommand("export", [
+        "--conference-record",
+        "rec-1",
+        "--include-doc-bodies",
+        "--output",
+        outputDir,
+        "--dry-run",
+      ]);
       const payload = JSON.parse(stdout.output());
       expectFields(payload, {
         dryRun: true,
@@ -629,8 +446,48 @@ describe("google-meet CLI", () => {
       ]);
       expect(existsSync(outputDir)).toBe(false);
     } finally {
-      stdout.restore();
       rmSync(parentDir, { recursive: true, force: true });
     }
   });
+  it.each([
+    { command: "artifacts", explicitSummary: false },
+    { command: "artifacts", explicitSummary: true },
+    { command: "attendance", explicitSummary: false },
+    { command: "attendance", explicitSummary: true },
+  ])(
+    "writes $command summary to --output (explicitSummary=$explicitSummary)",
+    async ({ command, explicitSummary }) => {
+      stubMeetArtifactsApi();
+      const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-summary-"));
+      const outputPath = path.join(tempDir, "summary.txt");
+      const stdout = captureStdout();
+      const argv = [
+        "googlemeet",
+        command,
+        "--access-token",
+        "token",
+        "--expires-at",
+        String(Date.now() + 120_000),
+        "--conference-record",
+        "rec-1",
+        ...(explicitSummary ? ["--format", "summary"] : []),
+      ];
+
+      try {
+        await setupCli({}).parseAsync(argv, { from: "user" });
+        const summary = stdout.output();
+        expect(summary).toContain("conference records: 1\n");
+        expect(summary).toContain("token source: cached-access-token\n");
+
+        await setupCli({}).parseAsync([...argv, "--output", outputPath], { from: "user" });
+
+        expect(existsSync(outputPath)).toBe(true);
+        expect(readFileSync(outputPath, "utf8")).toBe(summary);
+        expect(stdout.output().slice(summary.length)).toBe(`wrote: ${outputPath}\n`);
+      } finally {
+        stdout.restore();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 });

@@ -74,6 +74,42 @@ function readCompletedResponse(events: Array<Record<string, unknown>>) {
 }
 
 describe("QA mock OpenAI Responses WebSocket", () => {
+  it("holds one continuation across a disconnect without holding its replacement", async () => {
+    const server = await startServer();
+    const controller = new AbortController();
+    const hold = server.holdNextContinuation("replacement-session", controller.signal);
+    const socket = await connectResponsesWebSocket(server.baseUrl);
+    const request = {
+      type: "response.create",
+      client_metadata: { session_id: "replacement-session" },
+      input: [
+        { role: "user", content: "Reply exactly: REPLACED-OK" },
+        { type: "function_call_output", call_id: "retained-call", output: "done" },
+      ],
+    };
+    try {
+      socket.send(JSON.stringify(request));
+      expect(await hold.reached).toEqual({
+        cursor: 1,
+        sessionId: "replacement-session",
+        toolOutputCallId: "retained-call",
+      });
+      const closed = once(socket, "close");
+      socket.terminate();
+      await closed;
+      const replacement = await connectResponsesWebSocket(server.baseUrl);
+      const response = readCompletedResponse(await collectResponseEvents(replacement, request));
+      expect(response.output).toMatchObject([{ content: [{ text: "REPLACED-OK" }] }]);
+      const recorded = await fetch(`${server.baseUrl}/debug/requests`).then((res) => res.json());
+      expect(recorded).toMatchObject([
+        { cursor: 1, sessionId: "replacement-session", toolOutputCallId: "retained-call" },
+        { cursor: 2, sessionId: "replacement-session", toolOutputCallId: "retained-call" },
+      ]);
+    } finally {
+      controller.abort();
+    }
+  });
+
   it("streams the native response.create protocol and records normal QA request evidence", async () => {
     const server = await startServer();
     const socket = await connectResponsesWebSocket(server.baseUrl);

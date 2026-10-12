@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
+import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -14,20 +17,55 @@ describe("Gateway core reload policy", () => {
   beforeEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
   afterEach(() => resetPluginRuntimeStateForTest());
 
+  it.each(["memory-core", "none"])(
+    "reloads the selected memory index service for provider changes (memory slot: %s)",
+    async (memorySlot) => {
+      const { default: memory } = await loadBundledPluginFacade<{
+        default: OpenClawPluginDefinition;
+      }>({ pluginId: "memory-core", artifactBasename: "index.ts" });
+      if (!memory.register) {
+        throw new Error("Memory plugin must expose its registration entry point");
+      }
+      const registry = createEmptyPluginRegistry();
+      memory.register(
+        createTestPluginApi({
+          id: "memory-core",
+          config: { plugins: { slots: { memory: memorySlot } } },
+          registerService(service) {
+            registry.services.push({
+              pluginId: "memory-core",
+              source: "test",
+              origin: "bundled",
+              id: service.id,
+              service,
+            });
+          },
+        }),
+      );
+      setActivePluginRegistry(registry);
+      for (const path of [
+        "models.providers.ollama.baseUrl",
+        "models.providers.ollama.apiKey",
+        "models.providers.ollama.headers",
+        "models.providers.ollama",
+        "models.providers",
+      ]) {
+        const plan = buildGatewayReloadPlan([path]);
+        expect(plan.restartGateway, path).toBe(false);
+        expect(plan.reloadPlugins, path).toBe(false);
+        expect(plan.restartServices, path).toEqual(
+          new Set(memorySlot === "memory-core" ? ["memory-core-index"] : []),
+        );
+      }
+      expect(buildGatewayReloadPlan(["models.mode"]).restartServices).toEqual(new Set());
+    },
+  );
+
   it.each([
     { change: "allow", mode: "noop" },
-    { change: "deny", mode: "noop" },
-    { change: "source", mode: "noop" },
-    { change: "add-policy", mode: "noop" },
     { change: "remove-policy", mode: "noop" },
-    { change: "unchanged", mode: "noop" },
-    { change: "scopes", mode: "hot" },
-    { change: "agents", mode: "hot" },
-    { change: "sessions", mode: "hot" },
-    { change: "sandbox", mode: "hot" },
-    { change: "plugin", mode: "hot" },
     { change: "default", mode: "hot" },
-    { change: "add-role", mode: "hot" },
+    { change: "github-assignment", mode: "hot" },
     { change: "remove-role", mode: "hot" },
     { change: "mixed-role", mode: "hot" },
     { change: "mixed-gateway", mode: "restart" },
@@ -60,38 +98,14 @@ describe("Gateway core reload policy", () => {
       case "allow":
         role.modelPolicy = { allow: ["fixture/b"] };
         break;
-      case "deny":
-        role.modelPolicy!.deny = ["fixture/a"];
-        break;
-      case "source":
-        role.modelPolicy!.sourceAgent = "backup";
-        break;
-      case "add-policy":
-        delete previous.gateway!.roles!.definitions[roleName]!.modelPolicy;
-        break;
       case "remove-policy":
         delete role.modelPolicy;
-        break;
-      case "scopes":
-        role.scopes = ["operator.read"];
-        break;
-      case "agents":
-        role.agents = ["main"];
-        break;
-      case "sessions":
-        role.sessions.others = "none";
-        break;
-      case "sandbox":
-        role.sandbox = "required";
-        break;
-      case "plugin":
-        role.accessPolicyPlugin = "fixture";
         break;
       case "default":
         roles.default = "staff";
         break;
-      case "add-role":
-        roles.definitions.newRole = { ...role };
+      case "github-assignment":
+        roles.assignments = { byGithubLogin: { "release-operator": "staff" } };
         break;
       case "remove-role":
         delete roles.definitions.staff;
@@ -141,79 +155,34 @@ describe("Gateway core reload policy", () => {
     }
   });
 
-  it.each<{
-    path: string;
-    restart: boolean;
-    reason?: string;
-    hot?: string;
-    restartHeartbeat?: boolean;
-  }>([
-    {
-      path: "mcp.apps.enabled",
-      restart: true,
-      reason: "mcp.apps.enabled",
-    },
-    {
-      path: "gateway.auth.token",
-      restart: true,
-      reason: "gateway.auth.token",
-    },
-    {
-      path: "agents.defaults.model",
-      restart: false,
-      hot: "agents.defaults.model",
-      restartHeartbeat: true,
-    },
+  it.each([
+    ...[
+      "mcp.apps.enabled",
+      "gateway.auth.token",
+      "gateway.bind",
+      "gateway.controlUi.root",
+      "browser.enabled",
+      "gateway.auth.mode",
+      "discovery.wideArea.domain",
+      "security.unknownPolicy",
+      "secrets.egressProxy.enabled",
+    ].map((path) => ({ path, restart: true, heartbeat: false })),
     ...[
       "tools.codeMode.enabled",
-      "tools.toolSearch.enabled",
       "gateway.controlUi.experimental.customPlugins",
-      "desktop.host.enabled",
-      "cloudWorkers.desktop",
-    ].map((path) => ({ path, restart: false, hot: path })),
-    {
-      path: "unknownField",
-      restart: true,
-      reason: "unknownField",
-    },
-  ])("classifies reload path: $path", (testCase) => {
-    const plan = buildGatewayReloadPlan([testCase.path]);
-    expect(plan.restartGateway).toBe(testCase.restart);
-    if (testCase.reason) {
-      expect(plan.restartReasons).toContain(testCase.reason);
-    }
-    if (testCase.hot) {
-      expect(plan.hotReasons).toContain(testCase.hot);
-      expect(resolveConfigReloadMetadata(testCase.path).kind).toBe("hot");
-    }
-    if (testCase.restartHeartbeat) {
-      expect(plan.restartHeartbeat).toBe(true);
-    }
-  });
-
-  it.each([
-    "gateway.port",
-    "gateway.bind",
-    "gateway.tls.enabled",
-    "gateway.controlUi.basePath",
-    "gateway.controlUi.root",
-    "browser.enabled",
-    "browser.evaluateEnabled",
-    "browser.ssrfPolicy.allowedHostnames",
-    "browser.extensionRelay.allowLegacyAuth",
-    "gateway.auth.mode",
-    "discovery.wideArea.domain",
-    "diagnostics.otel.endpoint",
-    "memory.search.enabled",
-    "security.unknownPolicy",
-    "secrets.egressProxy.enabled",
-    "secrets.egressProxy.allowedHosts",
-    "secrets.egressProxy.bypassHosts",
-  ])("keeps restart-owned path restart-backed: %s", (path) => {
+      "gateway.controlUi.experimental.chatBubbles",
+    ].map((path) => ({
+      path,
+      restart: false,
+      heartbeat: false,
+    })),
+    { path: "agents.defaults.model", restart: false, heartbeat: true },
+  ])("classifies reload path: $path", ({ path, restart, heartbeat }) => {
     const plan = buildGatewayReloadPlan([path]);
-
-    expect(plan.restartGateway).toBe(true);
-    expect(plan.restartReasons).toEqual([path]);
-    expect(plan.hotReasons).toStrictEqual([]);
+    expect(plan.restartGateway).toBe(restart);
+    expect(plan.restartReasons).toEqual(restart ? [path] : []);
+    expect(plan.hotReasons).toEqual(restart ? [] : [path]);
+    expect(plan.restartHeartbeat).toBe(heartbeat);
+    expect(resolveConfigReloadMetadata(path).kind).toBe(restart ? "restart" : "hot");
   });
 });

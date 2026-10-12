@@ -8,11 +8,7 @@ type DiscordApprovalAction = Extract<MessagePresentationAction, { type: "approva
 const DISCORD_APPROVAL_CUSTOM_ID_MAX_CHARS = 100;
 
 function encodeDiscordApprovalCustomId(action: DiscordApprovalAction): string {
-  return [
-    `execapproval:kind=${action.approvalKind}`,
-    `id=${encodeURIComponent(action.approvalId)}`,
-    `action=${action.decision}`,
-  ].join(";");
+  return `execapproval:kind=${action.approvalKind};id=${encodeURIComponent(action.approvalId)};action=${action.decision}`;
 }
 
 function encodeBoundedDiscordApprovalCustomId(action: DiscordApprovalAction): string {
@@ -59,14 +55,6 @@ export function buildExecApprovalCustomId(
   });
 }
 
-function decodeCustomIdValue(value: string): string | null {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return null;
-  }
-}
-
 export function parseExecApprovalData(data: ComponentData): {
   approvalId: string;
   approvalKind: DiscordApprovalAction["approvalKind"];
@@ -80,17 +68,18 @@ export function parseExecApprovalData(data: ComponentData): {
   const rawId = coerce(data.id);
   const rawKind = coerce(data.kind);
   const rawAction = coerce(data.action);
-  if (
-    !rawId ||
-    (rawKind !== "exec" && rawKind !== "plugin" && rawKind !== "system-agent") ||
-    !rawAction
-  ) {
+  if (!rawId || (rawKind !== "exec" && rawKind !== "plugin" && rawKind !== "system-agent")) {
     return null;
   }
   if (rawAction !== "allow-once" && rawAction !== "allow-always" && rawAction !== "deny") {
     return null;
   }
-  const approvalId = decodeCustomIdValue(rawId);
+  let approvalId: string;
+  try {
+    approvalId = decodeURIComponent(rawId);
+  } catch {
+    return null;
+  }
   if (!approvalId) {
     return null;
   }

@@ -1,7 +1,20 @@
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
-export class PreparedModelRuntimeOwnerNotPublishedError extends Error {}
+export class PreparedModelRuntimeOwnerNotPublishedError extends Error {
+  readonly admissionBlocked: boolean;
+
+  constructor(message?: string, options?: ErrorOptions & { admissionBlocked?: boolean }) {
+    super(message, options);
+    this.admissionBlocked = options?.admissionBlocked === true;
+  }
+}
+
+export function isPreparedModelRuntimeMissingOwnerError(
+  error: unknown,
+): error is PreparedModelRuntimeOwnerNotPublishedError {
+  return error instanceof PreparedModelRuntimeOwnerNotPublishedError && !error.admissionBlocked;
+}
 
 export class PreparedModelRuntimePublicationSupersededError extends PreparedModelRuntimeOwnerNotPublishedError {}
 

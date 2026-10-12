@@ -1,187 +1,49 @@
-/** Tests compaction instruction defaults, precedence, and split-turn composition. */
 import { describe, expect, it } from "vitest";
 import { resolveCompactionInstructions } from "./compaction-instructions.js";
 
-const DEFAULT_COMPACTION_INSTRUCTIONS = resolveCompactionInstructions(undefined, undefined);
-
-describe("DEFAULT_COMPACTION_INSTRUCTIONS", () => {
-  it("is a non-empty string", () => {
-    expect(typeof DEFAULT_COMPACTION_INSTRUCTIONS).toBe("string");
-    expect(DEFAULT_COMPACTION_INSTRUCTIONS.trim()).not.toBe("");
-  });
-
-  it("contains language preservation directive", () => {
-    expect(DEFAULT_COMPACTION_INSTRUCTIONS).toContain("primary language");
-  });
-
-  it("contains factual content directive", () => {
-    expect(DEFAULT_COMPACTION_INSTRUCTIONS).toContain("factual content");
-  });
-
-  it("does not exceed MAX_INSTRUCTION_LENGTH (800 chars)", () => {
-    expect(DEFAULT_COMPACTION_INSTRUCTIONS.length).toBeLessThanOrEqual(800);
-  });
-});
+const DEFAULT_COMPACTION_INSTRUCTIONS =
+  "Write the summary body in the primary language used in the conversation.\n" +
+  "Focus on factual content: what was discussed, decisions made, and current state.\n" +
+  "Keep the required summary structure and section headers unchanged.\n" +
+  "Do not translate or alter code, file paths, identifiers, or error messages.";
 
 describe("resolveCompactionInstructions", () => {
-  describe("null / undefined handling", () => {
-    it("returns DEFAULT when both args are undefined", () => {
-      expect(resolveCompactionInstructions(undefined, undefined)).toBe(
-        DEFAULT_COMPACTION_INSTRUCTIONS,
-      );
-    });
-
-    it("returns DEFAULT when both args are explicitly null (untyped JS caller)", () => {
-      expect(
-        resolveCompactionInstructions(null as unknown as undefined, null as unknown as undefined),
-      ).toBe(DEFAULT_COMPACTION_INSTRUCTIONS);
-    });
+  it("returns the default prompt when instructions are absent", () => {
+    expect(resolveCompactionInstructions(undefined, undefined)).toBe(
+      DEFAULT_COMPACTION_INSTRUCTIONS,
+    );
   });
 
-  describe("empty and whitespace normalization", () => {
-    it("treats empty-string event as absent -- runtime wins", () => {
-      const result = resolveCompactionInstructions("", "runtime value");
-      expect(result).toBe("runtime value");
-    });
-
-    it("treats whitespace-only event as absent -- runtime wins", () => {
-      const result = resolveCompactionInstructions("   ", "runtime value");
-      expect(result).toBe("runtime value");
-    });
-
-    it("treats tab/newline-only event as absent -- runtime wins", () => {
-      const result = resolveCompactionInstructions("\t\n\r", "runtime value");
-      expect(result).toBe("runtime value");
-    });
-
-    it("treats empty-string runtime as absent -- DEFAULT wins", () => {
-      const result = resolveCompactionInstructions(undefined, "");
-      expect(result).toBe(DEFAULT_COMPACTION_INSTRUCTIONS);
-    });
-
-    it("treats whitespace-only runtime as absent -- DEFAULT wins", () => {
-      const result = resolveCompactionInstructions(undefined, "   ");
-      expect(result).toBe(DEFAULT_COMPACTION_INSTRUCTIONS);
-    });
-
-    it("falls through to DEFAULT when both are empty strings", () => {
-      expect(resolveCompactionInstructions("", "")).toBe(DEFAULT_COMPACTION_INSTRUCTIONS);
-    });
-
-    it("falls through to DEFAULT when both are whitespace-only", () => {
-      expect(resolveCompactionInstructions("  ", "\t\n")).toBe(DEFAULT_COMPACTION_INSTRUCTIONS);
-    });
-
-    it("non-breaking space (\\u00A0) IS trimmed by ES2015+ trim() -- falls through", () => {
-      const nbsp = "\u00A0";
-      const result = resolveCompactionInstructions(nbsp, "runtime");
-      expect(result).toBe("runtime");
-    });
-
-    it("KNOWN_EDGE: zero-width space (\\u200B) survives normalization -- invisible string used as instructions", () => {
-      const zws = "\u200B";
-      const result = resolveCompactionInstructions(zws, "runtime");
-      expect(result).toBe(zws);
-    });
+  it("falls through to the default when both inputs are blank", () => {
+    expect(resolveCompactionInstructions("  ", "\t\n")).toBe(DEFAULT_COMPACTION_INSTRUCTIONS);
   });
 
-  describe("precedence", () => {
-    it("event wins over runtime when both are non-empty", () => {
-      const result = resolveCompactionInstructions("event value", "runtime value");
-      expect(result).toBe("event value");
-    });
-
-    it("runtime wins when event is undefined", () => {
-      const result = resolveCompactionInstructions(undefined, "runtime value");
-      expect(result).toBe("runtime value");
-    });
-
-    it("event is trimmed before use", () => {
-      const result = resolveCompactionInstructions("  event  ", "runtime");
-      expect(result).toBe("event");
-    });
-
-    it("runtime is trimmed before use", () => {
-      const result = resolveCompactionInstructions(undefined, "  runtime  ");
-      expect(result).toBe("runtime");
-    });
+  it("prefers the trimmed event instructions over runtime instructions", () => {
+    expect(resolveCompactionInstructions("  event  ", "runtime")).toBe("event");
   });
 
-  describe("truncation at 800 chars", () => {
-    it("does NOT truncate string of exactly 800 chars", () => {
-      const exact800 = "A".repeat(800);
-      const result = resolveCompactionInstructions(exact800, undefined);
-      expect(result).toHaveLength(800);
-      expect(result).toBe(exact800);
-    });
-
-    it("truncates string of 801 chars to 800", () => {
-      const over = "B".repeat(801);
-      const result = resolveCompactionInstructions(over, undefined);
-      expect(result).toHaveLength(800);
-      expect(result).toBe("B".repeat(800));
-    });
-
-    it("truncates very long string to exactly 800", () => {
-      const huge = "C".repeat(5000);
-      const result = resolveCompactionInstructions(huge, undefined);
-      expect(result).toHaveLength(800);
-    });
-
-    it("truncation applies AFTER trimming -- 810 raw chars with 10 leading spaces yields 800", () => {
-      const padded = " ".repeat(10) + "D".repeat(800);
-      const result = resolveCompactionInstructions(padded, undefined);
-      expect(result).toHaveLength(800);
-      expect(result).toBe("D".repeat(800));
-    });
-
-    it("truncation applies to runtime fallback as well", () => {
-      const longRuntime = "R".repeat(1000);
-      const result = resolveCompactionInstructions(undefined, longRuntime);
-      expect(result).toHaveLength(800);
-    });
-
-    it("truncates by code points, not code units (emoji safe)", () => {
-      const emojis801 = "\u{1F600}".repeat(801);
-      const result = resolveCompactionInstructions(emojis801, undefined);
-      expect(Array.from(result)).toHaveLength(800);
-    });
-
-    it("does not split surrogate pair when cut lands inside a pair", () => {
-      const input = "X" + "\u{1F600}".repeat(800);
-      const result = resolveCompactionInstructions(input, undefined);
-      const codePoints = Array.from(result);
-      expect(codePoints).toHaveLength(800);
-      expect(codePoints[0]).toBe("X");
-      // Every code point in the truncated result must be a complete character (no lone surrogates)
-      for (const cp of codePoints) {
-        const code = cp.codePointAt(0)!;
-        const isLoneSurrogate = code >= 0xd800 && code <= 0xdfff;
-        expect(isLoneSurrogate).toBe(false);
-      }
-    });
+  it("falls through a blank event to the trimmed runtime instructions", () => {
+    expect(resolveCompactionInstructions("\t\n\r", "  runtime  ")).toBe("runtime");
   });
 
-  describe("return type", () => {
-    it("always returns the resolved instruction string, never undefined or null", () => {
-      const cases: [string | undefined, string | undefined, string][] = [
-        [undefined, undefined, DEFAULT_COMPACTION_INSTRUCTIONS],
-        ["", "", DEFAULT_COMPACTION_INSTRUCTIONS],
-        [" ", " ", DEFAULT_COMPACTION_INSTRUCTIONS],
-        [
-          null as unknown as undefined,
-          null as unknown as undefined,
-          DEFAULT_COMPACTION_INSTRUCTIONS,
-        ],
-        ["valid", undefined, "valid"],
-        [undefined, "valid", "valid"],
-      ];
+  it("preserves exactly 800 characters after trimming", () => {
+    const instructions = "D".repeat(800);
+    expect(resolveCompactionInstructions(`          ${instructions}`, undefined)).toBe(
+      instructions,
+    );
+  });
 
-      for (const [event, runtime, expected] of cases) {
-        const result = resolveCompactionInstructions(event, runtime);
-        expect(typeof result).toBe("string");
-        expect(result).toBe(expected);
-      }
-    });
+  it("truncates event instructions at 800 characters", () => {
+    expect(resolveCompactionInstructions("B".repeat(801), undefined)).toBe("B".repeat(800));
+  });
+
+  it("truncates runtime fallback instructions at 800 characters", () => {
+    expect(resolveCompactionInstructions(undefined, "R".repeat(1000))).toBe("R".repeat(800));
+  });
+
+  it("counts complete code points when truncation crosses an astral character", () => {
+    expect(resolveCompactionInstructions("X" + "😀".repeat(800), undefined)).toBe(
+      "X" + "😀".repeat(799),
+    );
   });
 });

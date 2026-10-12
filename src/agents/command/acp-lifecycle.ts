@@ -91,7 +91,6 @@ type ActiveAcpTool = AcpRunIdentity & {
 type AcpToolLifecycleTracker = {
   active: Map<string, ActiveAcpTool>;
   terminalToolCallIds: Set<string>;
-  saturated: boolean;
 };
 
 const MAX_TRACKED_ACP_TOOLS = 4_096;
@@ -100,7 +99,6 @@ export function createAcpToolLifecycleTracker(): AcpToolLifecycleTracker {
   return {
     active: new Map(),
     terminalToolCallIds: new Set(),
-    saturated: false,
   };
 }
 
@@ -203,8 +201,7 @@ function emitAcpToolExecutionEvent(
     // lifecycle cleanup releases the complete set. Other runs own independent trackers.
     const trackedIdentities =
       params.toolTracker.active.size + params.toolTracker.terminalToolCallIds.size;
-    if (params.toolTracker.saturated || trackedIdentities >= MAX_TRACKED_ACP_TOOLS) {
-      params.toolTracker.saturated = true;
+    if (trackedIdentities >= MAX_TRACKED_ACP_TOOLS) {
       return;
     }
   }
@@ -286,7 +283,6 @@ function finalizeAcpToolsForRun(
   }
   toolTracker.active.clear();
   toolTracker.terminalToolCallIds.clear();
-  toolTracker.saturated = false;
 }
 
 function resolvePresentProxyEnvKeys(env: NodeJS.ProcessEnv = process.env): string[] {
@@ -358,20 +354,14 @@ export function emitAcpRuntimeEvent(
 ) {
   if (params.event.type === "tool_call") {
     emitAcpToolExecutionEvent({
-      runId: params.runId,
-      toolTracker: params.toolTracker,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+      ...params,
       event: params.event,
     });
   }
   if (!params.auditOnly) {
     emitAgentEvent({
-      runId: params.runId,
+      ...acpRunIdentity(params),
       stream: "acp",
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
       data: {
         phase: "runtime_event",
         ...acpRuntimeEventDiagnostics(params.event),
@@ -450,6 +440,7 @@ export function emitAcpAssistantDelta(params: { runId: string; text: string; del
     runId: params.runId,
     stream: "assistant",
     data: {
+      itemId: params.runId,
       text: params.text,
       delta: params.delta,
     },

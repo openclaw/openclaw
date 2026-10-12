@@ -6,15 +6,19 @@ import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { createPluginCache, withPluginCache } from "../plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
+import { resolvePluginRuntimeLoadContext } from "./load-context.resolve.js";
 
-const loadConfigMock = vi.fn<typeof import("../../config/config.js").loadConfig>();
-const applyPluginAutoEnableMock =
-  vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>();
-const resolvePluginControlPlaneWorkspaceMock = vi.fn(
-  (params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv; workspaceDir?: string }) => ({
+const loadConfigMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../config/config.js").loadConfig>(),
+);
+const applyPluginAutoEnableMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>(),
+);
+const resolvePluginControlPlaneWorkspaceMock = vi.hoisted(() =>
+  vi.fn((params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv; workspaceDir?: string }) => ({
     workspaceDir: params.workspaceDir ?? "/resolved-workspace",
     workspaceScope: "selected" as const,
-  }),
+  })),
 );
 const manifestRegistry = { diagnostics: [], plugins: [] };
 const index: PluginMetadataSnapshot["index"] = {
@@ -62,10 +66,9 @@ const metadataSnapshot: PluginMetadataSnapshot = {
   policyHash: "policy",
   workspaceDir: "/resolved-workspace",
 };
-const resolvePluginMetadataSnapshotMock = vi.fn(() => metadataSnapshot);
-const resolveConfigWidePluginMetadataSnapshotMock = vi.fn(() => metadataSnapshot);
+const resolvePluginMetadataSnapshotMock = vi.hoisted(() => vi.fn(() => metadataSnapshot));
+const resolveConfigWidePluginMetadataSnapshotMock = vi.hoisted(() => vi.fn(() => metadataSnapshot));
 
-let resolvePluginRuntimeLoadContext: typeof import("./load-context.resolve.js").resolvePluginRuntimeLoadContext;
 let buildPluginRuntimeLoadOptions: typeof import("./load-context.js").buildPluginRuntimeLoadOptions;
 let setPluginRuntimeLoadContext: typeof import("./load-context.js").setPluginRuntimeLoadContext;
 let getPluginRuntimeLoadContext: typeof import("./load-context.js").getPluginRuntimeLoadContext;
@@ -101,7 +104,6 @@ describe("resolvePluginRuntimeLoadContext", () => {
     ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
       await import("../../config/runtime-snapshot.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("../plugin-metadata-lifecycle.js"));
-    ({ resolvePluginRuntimeLoadContext } = await import("./load-context.resolve.js"));
     ({
       buildPluginRuntimeLoadOptions,
       setPluginRuntimeLoadContext,

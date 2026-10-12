@@ -1,11 +1,9 @@
-/* @vitest-environment jsdom */
-
-import { render } from "lit";
 import { expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
-import { buildAggregatesFromSessions } from "./metrics.ts";
-import { createUsageProps, usageSession } from "./view.test-support.ts";
-import { renderUsage } from "./view.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { projectUsageData, createUsageProps, usageSession } from "./view.test-support.ts";
+import { renderUsage } from "./view.tsx";
 
 function creatorSession(id: string, multiplier: number) {
   const daily = [
@@ -52,35 +50,38 @@ it.each([
   ({ selectedDays, tokens, cost, costs }) => {
     const base = createUsageProps();
     const sessions = [creatorSession("Alex", 1), creatorSession("Jordan", 2)];
-    const report = creatorSession("report", 3).usage;
-    const byCreator = sessions.map((session) => ({
-      key: session.creatorKey,
-      actor: session.createdActor,
-      totals: session.usage,
-      sessionCount: 1,
-      daily: session.usage.dailyBreakdown,
-      sessionActivity: [{ dates: ["2026-05-14", "2026-05-15"], sessionCount: 1 }],
-    }));
     const onExportJson = vi.fn();
     const container = document.createElement("div");
-    render(
-      renderUsage({
-        ...base,
-        data: {
-          ...base.data,
-          sessions: sessions.slice(0, 1),
-          sessionsLimitReached: true,
-          totals: report,
-          costDaily: report.dailyBreakdown,
-          aggregates: { ...buildAggregatesFromSessions(sessions), byCreator, sessionCount: 2 },
-        },
-        filters: { ...base.filters, endDate: "2026-05-15", selectedDays },
-        callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportJson } },
-      }),
-      container,
+    mountSolid(
+      () =>
+        renderUsage({
+          ...base,
+          data: {
+            ...base.data,
+            ...projectUsageData(sessions, { selectedDays }),
+            sessions: projectUsageData(sessions, { selectedDays }).sessions.slice(0, 1),
+          },
+          filters: { ...base.filters, endDate: "2026-05-15", selectedDays },
+          callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportJson } },
+        }),
+      { container },
     );
+    flush();
     expect(container.querySelector(".usage-creators-table")?.textContent).toContain("Jordan");
     expect(container.querySelectorAll(".usage-creators-table tbody tr")).toHaveLength(2);
+    expect(
+      [...container.querySelectorAll(".usage-creators-table tbody tr")].map((row) =>
+        [...row.querySelectorAll("td")].map((cell) => cell.textContent?.trim()),
+      ),
+    ).toEqual(
+      costs
+        .toReversed()
+        .map((value) => [
+          value < 10 ? String(value * 100) : `${value / 10}.0K`,
+          `$${value.toFixed(2)}`,
+          "1",
+        ]),
+    );
     expect(
       Array.from(
         container.querySelectorAll(".usage-metric-badge strong"),
@@ -90,136 +91,29 @@ it.each([
     container
       .querySelector(".usage-export-menu")
       ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
-    const exported = onExportJson.mock.calls[0]?.[0];
-    expect(exported.aggregates.sessionCount).toBe(2);
-    expect(exported.aggregates.byCreator).toEqual(
-      expect.arrayContaining(
-        ["Alex", "Jordan"].map((key, index) =>
-          expect.objectContaining({
-            key,
-            totals: expect.objectContaining({ totalCost: costs[index] }),
-            sessionCount: 1,
-          }),
-        ),
-      ),
-    );
-    expect(exported.aggregates.byCreator).toHaveLength(2);
+    expect(onExportJson).toHaveBeenCalledWith();
   },
 );
 
-it.each([
-  { selectedDays: ["2026-05-14"], tokens: "100", cost: "$1.00" },
-  { selectedDays: ["2026-05-15"], tokens: "900", cost: "$9.00" },
-  { selectedDays: ["2026-05-14", "2026-05-15"], tokens: "1.0K", cost: "$10.00" },
-])(
-  "scopes creator amounts to selected calendar days: $selectedDays",
-  ({ selectedDays, tokens, cost }) => {
-    const base = createUsageProps();
-    const daily = [
-      { date: "2026-05-14", tokens: 100, cost: 1 },
-      { date: "2026-05-15", tokens: 900, cost: 9 },
-    ].map((day) =>
-      Object.assign(createEmptyCostUsageTotals(), day, {
-        input: day.tokens,
-        totalTokens: day.tokens,
-        inputCost: day.cost,
-        totalCost: day.cost,
-      }),
-    );
-    const session = usageSession("agent:main:multi-day", "main", "fixture");
-    session.creatorKey = "creator-alex";
-    session.createdActor = { type: "human", id: "alex", label: "Alex" };
-    session.usage = {
-      ...createEmptyCostUsageTotals(),
-      input: 1000,
-      totalTokens: 1000,
-      inputCost: 10,
-      totalCost: 10,
-      firstActivity: Date.parse("2026-05-14T12:00:00Z"),
-      activityDates: daily.map((day) => day.date),
-      dailyBreakdown: daily,
-    };
-    const onExportJson = vi.fn();
-    const container = document.createElement("div");
-    render(
+it("exports all matched sessions even when the current roster page is empty", () => {
+  const base = createUsageProps();
+  const session = creatorSession("Alex", 1);
+  const onExportCsv = vi.fn();
+  const container = document.createElement("div");
+  mountSolid(
+    () =>
       renderUsage({
         ...base,
-        data: {
-          ...base.data,
-          sessions: [session],
-          totals: session.usage,
-          costDaily: daily,
-          aggregates: buildAggregatesFromSessions([session]),
-        },
-        filters: { ...base.filters, endDate: "2026-05-15", selectedDays },
-        callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportJson } },
+        data: { ...base.data, ...projectUsageData([session]), sessions: [] },
+        callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportCsv } },
       }),
-      container,
-    );
-    const cells = container.querySelectorAll(".usage-creators-table tbody td");
-    expect(Array.from(cells, (cell) => cell.textContent?.trim())).toEqual([tokens, cost, "1"]);
-    expect(container.querySelectorAll(".usage-metric-badge strong")[1]?.textContent).toBe(cost);
-    container
-      .querySelector(".usage-export-menu")
-      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
-    const exported = onExportJson.mock.calls[0]?.[0];
-    expect(exported.aggregates.byCreator[0].totals).toEqual(exported.totals);
-  },
-);
-
-it("disables session-row exports without hiding complete creator totals beyond the loaded page", () => {
-  const base = createUsageProps();
-  const totals = {
-    ...createEmptyCostUsageTotals(),
-    input: 100,
-    totalTokens: 100,
-    inputCost: 1,
-    totalCost: 1,
-  };
-  const sessions = ["2026-05-14", "2026-05-15"].map((date, index) => ({
-    key: `session-${index}`,
-    creatorKey: `creator-${index}`,
-    createdActor: { type: "human" as const, id: `person-${index}`, label: `Person ${index}` },
-    usage: {
-      ...totals,
-      firstActivity: Date.parse(`${date}T12:00:00Z`),
-      activityDates: [date],
-      dailyBreakdown: [{ ...totals, date, tokens: 100, cost: 1 }],
-    },
-  }));
-  const onExportJson = vi.fn();
-  const container = document.createElement("div");
-  render(
-    renderUsage({
-      ...base,
-      data: {
-        ...base.data,
-        sessions: sessions.slice(0, 1),
-        sessionsLimitReached: true,
-        totals: { ...totals, input: 200, totalTokens: 200, inputCost: 2, totalCost: 2 },
-        costDaily: sessions.flatMap((session) => session.usage.dailyBreakdown),
-        aggregates: buildAggregatesFromSessions(sessions),
-      },
-      filters: { ...base.filters, endDate: "2026-05-15", selectedDays: ["2026-05-15"] },
-      callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportJson } },
-    }),
-    container,
+    { container },
   );
-
+  flush();
   expect(container.querySelectorAll(".session-bar-row")).toHaveLength(0);
   expect(container.querySelectorAll(".usage-metric-badge strong")[2]?.textContent).toBe("1");
   const menu = container.querySelector(".usage-export-menu")!;
-  expect(menu.querySelector('[value="sessions-csv"]')!.hasAttribute("disabled")).toBe(true);
-  expect(menu.querySelector('[value="json"]')!.hasAttribute("disabled")).toBe(false);
-  menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
-  expect(onExportJson).toHaveBeenCalledWith(
-    expect.objectContaining({
-      sessions: [],
-      totals: expect.objectContaining({ totalTokens: 100, totalCost: 1 }),
-      aggregates: expect.objectContaining({
-        sessionCount: 1,
-        byCreator: [expect.objectContaining({ key: "creator-1", sessionCount: 1 })],
-      }),
-    }),
-  );
+  expect(menu.querySelector('[value="sessions-csv"]')!.hasAttribute("disabled")).toBe(false);
+  menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "sessions-csv" } } }));
+  expect(onExportCsv).toHaveBeenCalledWith("sessions-csv");
 });

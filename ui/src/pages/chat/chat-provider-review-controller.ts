@@ -12,17 +12,15 @@ import {
 import { isTerminalFailureChatSendAck, normalizeChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 
-type ReviewState = ChatHost;
-
 export class ChatProviderReviewController implements ReactiveController {
   private canWrite = false;
 
   private binding: {
-    state: ReviewState;
+    state: ChatHost;
     sessionKey: string;
     sessionId: string;
     agentId?: string;
-    client: ReviewState["client"];
+    client: ChatHost["client"];
     connectionEpoch: number;
     connectionGeneration: number | undefined;
     review: ChatProviderReview;
@@ -38,7 +36,7 @@ export class ChatProviderReviewController implements ReactiveController {
 
   constructor(
     private readonly host: ReactiveControllerHost,
-    private readonly readState: () => ReviewState | undefined,
+    private readonly readState: () => ChatHost | undefined,
   ) {
     host.addController(this);
   }
@@ -136,6 +134,16 @@ export class ChatProviderReviewController implements ReactiveController {
       .join(" ");
   }
 
+  private clearCurrentFlag(
+    binding: NonNullable<ChatProviderReviewController["binding"]>,
+    flag: "open" | "loading" | "pending" | "refreshing",
+  ) {
+    if (this.isCurrent(binding)) {
+      binding[flag] = false;
+      this.host.requestUpdate();
+    }
+  }
+
   private async open(binding: NonNullable<ChatProviderReviewController["binding"]>) {
     if (!this.isCurrent(binding) || binding.loading) {
       return;
@@ -152,10 +160,7 @@ export class ChatProviderReviewController implements ReactiveController {
         binding.error = formatUiError(error);
       }
     } finally {
-      if (this.isCurrent(binding)) {
-        binding.loading = false;
-        this.host.requestUpdate();
-      }
+      this.clearCurrentFlag(binding, "loading");
     }
   }
 
@@ -206,10 +211,7 @@ export class ChatProviderReviewController implements ReactiveController {
         binding.error = formatUiError(error);
       }
     } finally {
-      if (this.isCurrent(binding)) {
-        binding.pending = false;
-        this.host.requestUpdate();
-      }
+      this.clearCurrentFlag(binding, "pending");
     }
   }
 
@@ -230,10 +232,7 @@ export class ChatProviderReviewController implements ReactiveController {
         binding.error = t("chat.providerReview.refreshFailed");
       }
     } finally {
-      if (this.isCurrent(binding)) {
-        binding.refreshing = false;
-        this.host.requestUpdate();
-      }
+      this.clearCurrentFlag(binding, "refreshing");
     }
   }
 
@@ -282,12 +281,7 @@ export class ChatProviderReviewController implements ReactiveController {
     const canContinue =
       review.canContinue &&
       Boolean(review.explanation?.trim() && review.continuationMessage?.trim());
-    const close = () => {
-      if (this.isCurrent(binding)) {
-        binding.open = false;
-        this.host.requestUpdate();
-      }
-    };
+    const close = () => this.clearCurrentFlag(binding, "open");
     return html`
       <openclaw-modal-dialog label=${t("chat.providerReview.review")} @modal-cancel=${close}>
         <section class="exec-approval-card chat-provider-review-dialog">

@@ -5,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -66,6 +67,11 @@ function terminalBindingSchemaSql(): string {
   return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + 1);
 }
 
+const ensureTerminalBindingSchema = createSqliteSchemaEnsurer(terminalBindingSchemaSql, {
+  tables: ["outbound_message_execution_bindings"],
+  indexes: ["outbound_message_execution_bindings_execution_event_idx"],
+});
+
 /** Install the terminal binding companion only when an exact producer first uses it. */
 export function ensureTerminalMessageExecutionBindingSchema(
   options: OpenClawStateDatabaseOptions,
@@ -76,8 +82,7 @@ export function ensureTerminalMessageExecutionBindingSchema(
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; bindings use Kysely.
-      db.exec(terminalBindingSchemaSql());
+      ensureTerminalBindingSchema(db);
     },
     { ...options, database },
     { operationLabel: "audit.outbound-message.execution-binding.schema.ensure" },

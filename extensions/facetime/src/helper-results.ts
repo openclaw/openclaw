@@ -63,50 +63,30 @@ export function projectFaceTimeNativeAction(
     throw new FaceTimeHelperAmbiguousError(`FaceTime ${action} carrier owner is missing`, result);
   }
   if (
-    action === "unmute" &&
+    (action === "unmute" || action === "activate") &&
     present.every(
       (observed) =>
         observed.muted === false &&
         observed.is_uplink_muted === false &&
-        typeof observed.conversation_audio_error !== "string",
+        typeof observed.conversation_audio_error !== "string" &&
+        (action === "unmute" ||
+          (observed.is_sending_audio === true && observed.is_sending_transmission === true)),
     )
   ) {
     return { status: "media-active" };
   }
   if (
-    action === "answer" &&
+    (action === "answer" || action === "safe-mute") &&
     present.every(
       (observed) =>
-        observed.outcome === "answered-muted" &&
         observed.muted === true &&
-        observed.is_uplink_muted === true,
+        observed.is_uplink_muted === true &&
+        (action === "answer"
+          ? observed.outcome === "answered-muted"
+          : observed.downlink_muted === true),
     )
   ) {
-    return { status: "answered-muted" };
-  }
-  if (
-    action === "safe-mute" &&
-    present.every(
-      (observed) =>
-        observed.downlink_muted === true &&
-        observed.muted === true &&
-        observed.is_uplink_muted === true,
-    )
-  ) {
-    return { status: "safe-muted" };
-  }
-  if (
-    action === "activate" &&
-    present.every(
-      (observed) =>
-        observed.muted === false &&
-        observed.is_uplink_muted === false &&
-        observed.is_sending_audio === true &&
-        observed.is_sending_transmission === true &&
-        typeof observed.conversation_audio_error !== "string",
-    )
-  ) {
-    return { status: "media-active" };
+    return { status: action === "answer" ? "answered-muted" : "safe-muted" };
   }
   if (
     action === "terminate" &&

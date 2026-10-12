@@ -134,10 +134,17 @@ export async function commitSetupInferenceActivation(params: {
       })
     : undefined;
   const restore = async () => {
+    const rollbackCredential = async () => {
+      await credential?.rollback();
+      credential = undefined;
+    };
     const restoredApplication = application
       ? createRuntimeConfigWriteApplication(continuation, {
           prepare: async (assertCurrent) => {
             assertApplicationCurrent = assertCurrent;
+            assertCurrent();
+            // Recovery must capture auth only after restoring this activation's credential.
+            await rollbackCredential();
           },
         })
       : undefined;
@@ -145,7 +152,7 @@ export async function commitSetupInferenceActivation(params: {
       configCommitted && undoConfig
         ? await undoConfig(attachRuntimeConfigWriteApplication({}, restoredApplication))
         : { config: (await params.configTarget.read()).config, written: false };
-    credential?.rollback();
+    await rollbackCredential();
     if (restoredApplication && restored.written) {
       if (!restoredApplication.claimed || (await restoredApplication.result) !== "applied") {
         throw new Error(

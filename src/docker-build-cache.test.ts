@@ -33,10 +33,6 @@ async function readRepoFile(path: string): Promise<string> {
   return cached;
 }
 
-function indexOfPattern(source: string, pattern: RegExp): number {
-  return source.search(pattern);
-}
-
 describe("docker build cache layout", () => {
   beforeAll(async () => {
     await Promise.all(dockerfilePaths.map((path) => readRepoFile(path)));
@@ -50,9 +46,7 @@ describe("docker build cache layout", () => {
 
     expect(installIndex).toBeGreaterThan(-1);
     expect(copyAllIndex).toBeGreaterThan(installIndex);
-    if (scriptsCopyIndex === -1) {
-      expect(scriptsCopyIndex).toBe(-1);
-    } else {
+    if (scriptsCopyIndex !== -1) {
       expect(scriptsCopyIndex).toBeGreaterThan(installIndex);
     }
   });
@@ -120,44 +114,42 @@ describe("docker build cache layout", () => {
 
   it("copies manifests before install in the qr-import image", async () => {
     const dockerfile = await readRepoFile("scripts/e2e/Dockerfile.qr-import");
-    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const installIndex = dockerfile.indexOf(
+      "pnpm --filter 'openclaw...' install --frozen-lockfile",
+    );
+    const manifestCopyIndex = dockerfile.search(
+      /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.\/$/m,
+    );
+    const uiCopyIndex = dockerfile.search(
+      /^COPY(?:\s+--chown=\S+)?\s+ui\/package\.json \.\/ui\/package\.json$/m,
+    );
 
+    expect(manifestCopyIndex).toBeGreaterThan(-1);
+    expect(manifestCopyIndex).toBeLessThan(installIndex);
+    expect(uiCopyIndex).toBeGreaterThan(-1);
+    expect(uiCopyIndex).toBeLessThan(installIndex);
+    const workspaceCopyIndex = dockerfile.indexOf(
+      "COPY --parents --chown=appuser:appuser packages/*/package.json extensions/*/package.json examples/*/package.json ./",
+    );
+    expect(workspaceCopyIndex).toBeGreaterThan(-1);
+    expect(workspaceCopyIndex).toBeLessThan(installIndex);
     expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.\/$/m,
-      ),
-    ).toBeLessThan(installIndex);
-    expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+ui\/package\.json \.\/ui\/package\.json$/m,
-      ),
-    ).toBeLessThan(installIndex);
-    expect(dockerfile).toContain("This image only exercises the root QR runtime dependency path.");
-    expect(
-      indexOfPattern(
-        dockerfile,
+      dockerfile.search(
         /^COPY(?:\s+--chown=\S+)?\s+extensions\/memory-core\/package\.json \.\/extensions\/memory-core\/package\.json$/m,
       ),
     ).toBe(-1);
-    expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+\.\s+\.$/m)).toBeGreaterThan(
-      installIndex,
-    );
+    expect(dockerfile.search(/^COPY(?:\s+--chown=\S+)?\s+\.\s+\.$/m)).toBeGreaterThan(installIndex);
   });
 
   it("copies .npmrc before install in the cleanup smoke image", async () => {
     const dockerfile = await readRepoFile("scripts/docker/cleanup-smoke/Dockerfile");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
-
-    expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.npmrc \.\/$/m,
-      ),
-    ).toBeLessThan(installIndex);
-    expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+\.\s+\.$/m)).toBeGreaterThan(
-      installIndex,
+    const manifestCopyIndex = dockerfile.search(
+      /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.npmrc \.\/$/m,
     );
+
+    expect(manifestCopyIndex).toBeGreaterThan(-1);
+    expect(manifestCopyIndex).toBeLessThan(installIndex);
+    expect(dockerfile.search(/^COPY(?:\s+--chown=\S+)?\s+\.\s+\.$/m)).toBeGreaterThan(installIndex);
   });
 });

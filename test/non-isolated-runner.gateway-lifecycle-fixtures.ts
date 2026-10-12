@@ -6,7 +6,7 @@ export function gatewayWorkerLifetimeFixtureFiles(repoRoot: string): Record<stri
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
 import { openOpenClawStateDatabase, closeOpenClawStateDatabase } from ${source("state/openclaw-state-db.ts")};
-import { readCachedClawInstallSchemaVersions, registerClawInstallSchemaVersionSnapshotListener } from ${source("claws/provenance-runtime-read.ts")};
+import { initializeCachedClawInstallSchemaVersions, readCachedClawInstallSchemaVersions, registerClawInstallSchemaVersionSnapshotListener } from ${source("claws/provenance-runtime-read.ts")};
 const root = process.env.GATEWAY_LIFETIME_PROBE_ROOT!;
 const log = path.join(root, "events.log");
 const lines = () => readFileSync(log, "utf8").trim().split("\\n");
@@ -32,6 +32,7 @@ registerClawInstallSchemaVersionSnapshotListener(() => {
 it("keeps live provenance notifications through afterAll", () => {
   database = openOpenClawStateDatabase(options);
   expect(database.db.isOpen).toBe(true);
+  initializeCachedClawInstallSchemaVersions(options);
   expect(lines()).toContain("A:ready");
 });
 afterAll(() => {
@@ -55,6 +56,7 @@ it("drains the prior file and retires its provenance generation", () => {
   try {
     const database = openOpenClawStateDatabase(options);
     expect(database.db.isOpen).toBe(true);
+    initializeCachedClawInstallSchemaVersions(options);
     closeOpenClawStateDatabase();
     expect(database.db.isOpen).toBe(false);
     const observed = lines().slice(before);

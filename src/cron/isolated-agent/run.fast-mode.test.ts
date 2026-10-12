@@ -1,167 +1,263 @@
-// Fast mode tests cover isolated cron run behavior in fast execution mode.
-import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+// Invocation ownership is independent of a persistent automation's transcript identity.
+import { assert, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  runInitialModelFallbackAttempt,
-  type TestModelFallbackRunnerParams,
-} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  getAgentRunContext,
+  registerAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
+  clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
+  loadSessionEntryMock,
   makeCronSession,
+  mockRunCronFallbackPassthrough,
+  preflightCronModelProviderMock,
+  resetRunCronIsolatedAgentTurnHarness,
+  resolveCronSessionMock,
+  resolveDeliveryTargetMock,
+  restoreFastTestEnv,
+  runEmbeddedAgentMock,
   callGatewayMock,
   dispatchCronDeliveryMock,
   retireSessionMcpRuntimeMock,
   resolveCronDeliveryPlanMock,
-  resolveFastModeStateMock,
-  resolveCronSessionMock,
-  runEmbeddedAgentMock,
-  runCliAgentMock,
-  isCliProviderMock,
-  runWithModelFallbackMock,
+  makeCronSessionEntry,
+  readSessionMessagesAsyncMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
-const OPENAI_GPT4_MODEL = "openai/gpt-4";
-const EXPECTED_OPENAI_MODEL = "gpt-5.4";
-
-function mockSuccessfulModelFallback() {
-  runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
-    await runInitialModelFallbackAttempt(params);
-    return {
-      result: {
-        result: {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: {} },
-        },
-      },
-      provider: params.provider,
-      model: params.model,
-      attempts: [],
-    };
+function makeParams(sessionTarget = "isolated") {
+  return makeIsolatedAgentParamsFixture({
+    job: makeIsolatedAgentJobFixture({
+      id: "message-tool-policy",
+      name: "Message Tool Policy",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "send a message" },
+      delivery: { mode: "none" },
+      sessionTarget,
+    }),
+    message: "send a message",
+    sessionKey: "cron:message-tool-policy",
   });
 }
 
-async function runFastModeCase(params: {
-  configFastMode: boolean | "auto";
-  configFastAutoOnSeconds?: number;
-  expectedFastMode: boolean | "auto";
-  expectedFastModeAutoOnSeconds?: number;
-  expectedCleanupBundleMcpOnRunEnd?: boolean;
-  expectedRetiredSessionId?: string;
-  message: string;
-  previousSessionId?: string;
+function expectCronInvocationContext(runParams: {
+  runId: string;
   sessionId?: string;
-  sessionFastMode?: boolean | "auto";
-  sessionTarget?: string;
-  cli?: boolean;
-}) {
-  const baseSession = makeCronSession();
-  resolveCronSessionMock.mockReturnValue(
-    makeCronSession({
-      ...baseSession,
-      ...(params.previousSessionId ? { previousSessionId: params.previousSessionId } : {}),
-      sessionEntry: {
-        ...baseSession.sessionEntry,
-        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-        ...(params.sessionFastMode === undefined ? {} : { fastMode: params.sessionFastMode }),
-      },
-    }),
-  );
-  mockSuccessfulModelFallback();
-  if (params.cli) {
-    isCliProviderMock.mockReturnValue(true);
-    runCliAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { agentMeta: {} } });
-  }
-  resolveFastModeStateMock.mockImplementation(({ cfg, sessionEntry }) => {
-    const sessionFastMode = sessionEntry?.fastMode;
-    if (typeof sessionFastMode === "boolean" || sessionFastMode === "auto") {
-      return {
-        mode: sessionFastMode,
-        enabled: sessionFastMode === "auto" ? true : sessionFastMode,
-        source: "session",
-        fastAutoOnSeconds: params.configFastAutoOnSeconds ?? 60,
-      };
-    }
-    const mode = cfg.agents?.defaults?.models?.[OPENAI_GPT4_MODEL]?.params?.fastMode;
-    return {
-      mode,
-      enabled: mode === "auto" ? true : Boolean(mode),
-      source: "config",
-      fastAutoOnSeconds: params.configFastAutoOnSeconds ?? 60,
-    };
+  sessionKey?: string;
+}): string {
+  expect(runParams.runId).toEqual(expect.any(String));
+  expect(runParams.runId).not.toBe("");
+  expect(runParams.runId).not.toBe("test-session-id");
+  expect(runParams.sessionId).toBe("test-session-id");
+  expect(getAgentRunContext(runParams.runId)).toMatchObject({
+    sessionId: runParams.sessionId,
+    sessionKey: runParams.sessionKey,
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    cronRunsByJobId: new Map([["message-tool-policy", { pacingEnabled: false }]]),
   });
-
-  const result = await runCronIsolatedAgentTurn(
-    makeIsolatedAgentParamsFixture({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              [OPENAI_GPT4_MODEL]: {
-                params: {
-                  fastMode: params.configFastMode,
-                  ...(params.configFastAutoOnSeconds === undefined
-                    ? {}
-                    : { fastAutoOnSeconds: params.configFastAutoOnSeconds }),
-                },
-              },
-            },
-          },
-        },
-      },
-      job: makeIsolatedAgentJobFixture({
-        sessionTarget: params.sessionTarget ?? "isolated",
-        payload: {
-          kind: "agentTurn",
-          message: params.message,
-          model: OPENAI_GPT4_MODEL,
-        },
-      }),
-    }),
-  );
-
-  expect(result.status).toBe("ok");
-  const selectedRunner = params.cli ? runCliAgentMock : runEmbeddedAgentMock;
-  expect(selectedRunner).toHaveBeenCalledOnce();
-  const [embeddedRunParams] = expectDefined(selectedRunner.mock.calls[0], "embedded run call");
-  expect(embeddedRunParams.provider).toBe("openai");
-  expect(embeddedRunParams.model).toBe(EXPECTED_OPENAI_MODEL);
-  expect(embeddedRunParams.fastMode).toBe(params.expectedFastMode);
-  expect(embeddedRunParams.fastModeAutoOnSeconds).toBe(params.expectedFastModeAutoOnSeconds ?? 60);
-  if (!params.cli) {
-    expect(embeddedRunParams.cleanupBundleMcpOnRunEnd).toBe(
-      params.expectedCleanupBundleMcpOnRunEnd ?? true,
-    );
-    expect(embeddedRunParams.allowGatewaySubagentBinding).toBe(true);
-  }
-  const isIsolated = (params.sessionTarget ?? "isolated") === "isolated";
-  if (params.expectedRetiredSessionId) {
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
-    const [retireParams] = expectDefined(
-      retireSessionMcpRuntimeMock.mock.calls[0],
-      "MCP retirement call",
-    );
-    expect(retireParams.sessionId).toBe(params.expectedRetiredSessionId);
-    expect(retireParams.reason).toBe("cron-session-rollover");
-    return;
-  }
-  if (isIsolated) {
-    // disposeCronRunContext now retires MCP for isolated sessions
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
-    const [disposeRetireParams] = expectDefined(
-      retireSessionMcpRuntimeMock.mock.calls[0],
-      "MCP disposal call",
-    );
-    expect(disposeRetireParams.reason).toBe("isolated-cron-dispose");
-  } else {
-    expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled();
-  }
+  return runParams.runId;
 }
 
-describe("runCronIsolatedAgentTurn — fast mode", () => {
+describe("runCronIsolatedAgentTurn invocation ownership", () => {
+  let previousFastTestEnv: string | undefined;
+
+  beforeEach(() => {
+    previousFastTestEnv = clearFastTestEnv();
+    resetRunCronIsolatedAgentTurnHarness();
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "messagechat",
+      to: "123",
+      accountId: undefined,
+      error: undefined,
+    });
+  });
+
+  afterEach(() => {
+    restoreFastTestEnv(previousFastTestEnv);
+  });
+
+  it("retains the selected owner while reusing a global session", async () => {
+    mockRunCronFallbackPassthrough();
+    const session = makeCronSession({ isNewSession: false });
+    resolveCronSessionMock.mockReturnValue(session);
+    let admittedOwner: { sessionKey?: string; agentId?: string } | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
+      const admitted = getAgentRunContext(runParams.runId);
+      admittedOwner = { sessionKey: admitted?.sessionKey, agentId: admitted?.agentId };
+      return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
+    });
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        cfg: {
+          agents: { entries: { main: {}, research: {} } },
+          session: { scope: "global" },
+        },
+        agentId: "research",
+        sessionKey: "main",
+        job: makeIsolatedAgentJobFixture({
+          sessionTarget: "session:main",
+          delivery: { mode: "none" },
+        }),
+      }),
+    );
+    expect(result.status).toBe("ok");
+    expect(result.sessionKey).toBe("global");
+    expect(admittedOwner).toEqual({ sessionKey: "global", agentId: "research" });
+  });
+
+  it("releases current invocation context without clearing an existing physical context", async () => {
+    mockRunCronFallbackPassthrough();
+    const sessionKey = "agent:default:cron:message-tool-policy";
+    const initialSessionEntry = { retained: true };
+    const cronSession = makeCronSession({
+      store: { [sessionKey]: initialSessionEntry },
+      initialSessionEntry,
+    });
+    loadSessionEntryMock.mockImplementation((_storePath, key) =>
+      key === sessionKey ? initialSessionEntry : undefined,
+    );
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    const previousGeneration = getAgentEventLifecycleGeneration();
+    registerAgentRunContext("test-session-id", { sessionKey, verboseLevel: "off" });
+    const expectedContext = { ...getAgentRunContext("test-session-id") };
+    const onExecutionStarted = vi.fn();
+    let invocationRunId = "";
+    runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
+      invocationRunId = expectCronInvocationContext(runParams);
+      await runParams.onExecutionStarted?.();
+      return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
+    });
+    try {
+      const result = await runCronIsolatedAgentTurn({
+        ...makeParams("current"),
+        onExecutionStarted,
+      });
+      expect(result).toMatchObject({ status: "ok" });
+      expect(invocationRunId).not.toBe("");
+      expect(getAgentRunContext(invocationRunId)).toBeUndefined();
+      expect(getAgentRunContext("test-session-id")).toEqual(expectedContext);
+      expect(cronSession.store).toEqual({});
+      expect(onExecutionStarted).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionId: "test-session-id", runId: invocationRunId }),
+      );
+    } finally {
+      clearAgentRunContext("test-session-id", previousGeneration);
+    }
+  });
+
+  it("does not let old cron cleanup clear a newer same-id run context", async () => {
+    mockRunCronFallbackPassthrough();
+    let invocationRunId = "";
+    let newerLifecycleGeneration = "";
+    runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
+      invocationRunId = expectCronInvocationContext(runParams);
+      runParams.onExecutionStarted?.();
+      newerLifecycleGeneration = rotateAgentEventLifecycleGeneration();
+      claimAgentRunContext(invocationRunId, {
+        sessionKey: runParams.sessionKey,
+        sessionId: "test-session-id",
+        lifecycleGeneration: newerLifecycleGeneration,
+      });
+      return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
+    });
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(invocationRunId).not.toBe("");
+    expect(getAgentRunContext(invocationRunId)).toEqual(
+      expect.objectContaining({
+        sessionId: "test-session-id",
+        lifecycleGeneration: newerLifecycleGeneration,
+      }),
+    );
+    clearAgentRunContext(invocationRunId, newerLifecycleGeneration);
+  });
+
+  it("rejects cron work when the gateway lifecycle rotates during preparation", async () => {
+    const preflightStarted = createDeferred();
+    const releasePreflight = createDeferred();
+    preflightCronModelProviderMock.mockImplementationOnce(async () => {
+      preflightStarted.resolve();
+      await releasePreflight.promise;
+      return { status: "available" };
+    });
+
+    const runPromise = runCronIsolatedAgentTurn(makeParams());
+    await preflightStarted.promise;
+    rotateAgentEventLifecycleGeneration();
+    releasePreflight.resolve();
+
+    await expect(runPromise).resolves.toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Agent run belongs to a stale gateway lifecycle"),
+    });
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(getAgentRunContext("test-session-id")).toBeUndefined();
+  });
+
+  it("releases overlapping persistent-session invocation contexts independently", async () => {
+    // Exercise process-local ownership without the persistent session admission
+    // that serializes real turns on one key.
+    process.env.OPENCLAW_TEST_FAST = "1";
+    mockRunCronFallbackPassthrough();
+    resolveCronSessionMock.mockImplementation(() => makeCronSession());
+    const invocationRunIds: string[] = [];
+    const firstStarted = createDeferred();
+    const secondStarted = createDeferred();
+    const firstBlocked = createDeferred();
+    const secondBlocked = createDeferred();
+    runEmbeddedAgentMock.mockImplementation(async (runParams) => {
+      invocationRunIds.push(expectCronInvocationContext(runParams));
+      if (invocationRunIds.length === 1) {
+        firstStarted.resolve();
+        await firstBlocked.promise;
+      } else {
+        secondStarted.resolve();
+        await secondBlocked.promise;
+      }
+      return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
+    });
+    const sessionKey = "agent:default:messagechat:direct:123";
+    const runParams = { ...makeParams(`session:${sessionKey}`), sessionKey };
+
+    const firstRun = runCronIsolatedAgentTurn(runParams);
+    await firstStarted.promise;
+    const secondRun = runCronIsolatedAgentTurn(runParams);
+    await secondStarted.promise;
+
+    expect(invocationRunIds).toHaveLength(2);
+    const [firstRunId, secondRunId] = invocationRunIds;
+    assert(firstRunId && secondRunId);
+    expect(firstRunId).not.toBe(secondRunId);
+    expect(getAgentRunContext(firstRunId)).toBeDefined();
+    expect(getAgentRunContext(secondRunId)).toBeDefined();
+    expect(getAgentRunContext("test-session-id")).toBeUndefined();
+
+    firstBlocked.resolve();
+    expect((await firstRun).status).toBe("ok");
+    expect(getAgentRunContext(firstRunId)).toBeUndefined();
+    expect(getAgentRunContext(secondRunId)).toBeDefined();
+
+    secondBlocked.resolve();
+    const secondResult = await secondRun;
+    expect(secondResult.status, secondResult.error).toBe("ok");
+    expect(getAgentRunContext(firstRunId)).toBeUndefined();
+    expect(getAgentRunContext(secondRunId)).toBeUndefined();
+  });
+});
+
+describe("runCronIsolatedAgentTurn session cleanup", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
   it("deletes the run-scoped cron session after delivery-none deleteAfterRun jobs", async () => {
@@ -174,7 +270,7 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
         job: makeIsolatedAgentJobFixture({
           deleteAfterRun: true,
           delivery: { mode: "none" },
-          payload: { kind: "agentTurn", message: "cleanup me", model: OPENAI_GPT4_MODEL },
+          payload: { kind: "agentTurn", message: "cleanup me", model: "openai/gpt-4" },
         }),
       }),
     );
@@ -194,125 +290,172 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
     });
   });
 
-  it.each([false, true])(
-    "leaves transcript cleanup with dispatch when it rejects=%s",
-    async (rejects) => {
-      resolveCronDeliveryPlanMock.mockReturnValue({
-        requested: true,
-        mode: "announce",
-        channel: "messagechat",
-        to: "test-target",
-      });
-      dispatchCronDeliveryMock.mockImplementationOnce(
-        ({ deliveryPayloads, summary, outputText, synthesizedText }) => {
-          if (rejects) {
-            throw new Error("delivery receipt store unavailable");
-          }
-          return {
-            delivered: true,
-            deliveryAttempted: true,
-            summary,
-            outputText,
-            synthesizedText,
-            deliveryPayloads,
-          };
-        },
-      );
+  it("leaves transcript cleanup with dispatch when delivery rejects", async () => {
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    dispatchCronDeliveryMock.mockRejectedValueOnce(new Error("delivery receipt store unavailable"));
 
-      const result = await runCronIsolatedAgentTurn(
-        makeIsolatedAgentParamsFixture({
-          job: makeIsolatedAgentJobFixture({
-            deleteAfterRun: true,
-            delivery: { mode: "announce", channel: "messagechat", to: "test-target" },
-            payload: { kind: "agentTurn", message: "cleanup once", model: OPENAI_GPT4_MODEL },
-          }),
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          deleteAfterRun: true,
+          delivery: { mode: "announce", channel: "messagechat", to: "test-target" },
+          payload: { kind: "agentTurn", message: "cleanup once", model: "openai/gpt-4" },
         }),
-      );
+      }),
+    );
 
-      expect(result.status).toBe(rejects ? "error" : "ok");
-      if (rejects) {
-        expect(result.error).toBe("delivery receipt store unavailable");
-      }
-      expect(dispatchCronDeliveryMock).toHaveBeenCalledOnce();
-      expect(callGatewayMock).not.toHaveBeenCalled();
-      expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith({
-        sessionId: "test-session-id",
-        reason: "isolated-cron-dispose",
-        onError: expect.any(Function),
-      });
-    },
-  );
-
-  it("passes config-driven fast mode into embedded cron runs", async () => {
-    await runFastModeCase({
-      configFastMode: true,
-      expectedFastMode: true,
-      message: "test fast mode",
-    });
-  });
-
-  it.each([true, false, "auto"] as const)(
-    "forwards fast mode %s through CLI cron runs",
-    async (mode) => {
-      await runFastModeCase({
-        configFastMode: mode,
-        expectedFastMode: mode,
-        configFastAutoOnSeconds: 15,
-        expectedFastModeAutoOnSeconds: 15,
-        message: "CLI fast mode",
-        cli: true,
-      });
-    },
-  );
-
-  it("passes config-driven fast auto cutoff into embedded cron runs", async () => {
-    await runFastModeCase({
-      configFastMode: "auto",
-      configFastAutoOnSeconds: 30,
-      expectedFastMode: "auto",
-      expectedFastModeAutoOnSeconds: 30,
-      message: "test fast auto mode",
-    });
-  });
-
-  it("honors session fastMode=false over config fastMode=true", async () => {
-    await runFastModeCase({
-      configFastMode: true,
-      expectedFastMode: false,
-      message: "test fast mode override",
-      sessionFastMode: false,
-    });
-  });
-
-  it("honors session fastMode=true over config fastMode=false", async () => {
-    await runFastModeCase({
-      configFastMode: false,
-      expectedFastMode: true,
-      message: "test fast mode session override",
-      sessionFastMode: true,
-    });
-  });
-
-  it("preserves bundled MCP runtime state for persistent cron session targets", async () => {
-    await runFastModeCase({
-      configFastMode: true,
-      expectedFastMode: true,
-      expectedCleanupBundleMcpOnRunEnd: false,
-      message: "test persistent cron session",
-      sessionTarget: "session:agent:main:main:thread:9999",
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("delivery receipt store unavailable");
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledOnce();
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith({
+      sessionId: "test-session-id",
+      reason: "isolated-cron-dispose",
+      onError: expect.any(Function),
     });
   });
 
   it("retires the previous bundled MCP runtime when a persistent cron session rolls over", async () => {
-    await runFastModeCase({
-      configFastMode: true,
-      expectedFastMode: true,
-      expectedCleanupBundleMcpOnRunEnd: false,
-      expectedRetiredSessionId: "stale-session-id",
-      message: "test persistent cron session rollover",
-      previousSessionId: "stale-session-id",
-      sessionId: "rotated-session-id",
-      sessionTarget: "session:agent:main:main:thread:9999",
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        previousSessionId: "stale-session-id",
+        sessionEntry: { ...makeCronSession().sessionEntry, sessionId: "rotated-session-id" },
+      }),
+    );
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        sessionKey: "agent:main:main:thread:9999",
+        job: makeIsolatedAgentJobFixture({ sessionTarget: "session:agent:main:main:thread:9999" }),
+      }),
+    );
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cleanupBundleMcpOnRunEnd: false,
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledExactlyOnceWith({
+      sessionId: "stale-session-id",
+      reason: "cron-session-rollover",
+      onError: expect.any(Function),
     });
+  });
+});
+
+const sourceSessionKey = "agent:default:telegram:direct:42";
+
+function embeddedPrompt(): string {
+  const prompt = runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt;
+  if (typeof prompt !== "string") {
+    throw new Error("expected embedded run prompt");
+  }
+  return prompt;
+}
+
+describe("runCronIsolatedAgentTurn — current conversation context", () => {
+  setupRunCronIsolatedAgentTurnSuite({ fast: true });
+
+  it("prepends the bound source conversation to a current-target payload", async () => {
+    mockRunCronFallbackPassthrough();
+    const sourceSessionEntry = makeCronSessionEntry({
+      sessionId: "source-session",
+      lifecycleRevision: "source-revision",
+    });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({ store: { [sourceSessionKey]: sourceSessionEntry } }),
+    );
+    readSessionMessagesAsyncMock.mockResolvedValue([
+      { role: "user", content: "Otters hold hands while sleeping." },
+      { role: "assistant", content: "Got it." },
+    ]);
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          sessionKey: sourceSessionKey,
+          sessionTarget: "current",
+          payload: { kind: "agentTurn", message: "Summarize the animal fact." },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(readSessionMessagesAsyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEntry: sourceSessionEntry,
+        sessionId: "source-session",
+        sessionKey: sourceSessionKey,
+      }),
+      { mode: "recent", maxBytes: 256 * 1024, maxLines: 220, maxMessages: 220 },
+    );
+    expect(embeddedPrompt()).toContain(
+      "Recent conversation:\n- User: Otters hold hands while sleeping.\n- Assistant: Got it.\n\nSummarize the animal fact.",
+    );
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceSessionKey,
+        sourceSessionGeneration: {
+          sessionId: "source-session",
+          lifecycleRevision: "source-revision",
+        },
+      }),
+    );
+  });
+
+  it("keeps an isolated run detached and delivers against its creation-bound generation", async () => {
+    mockRunCronFallbackPassthrough();
+    const sourceConversation = {
+      sessionKey: "agent:default:webchat:direct:creator",
+      sessionId: "original-source-session",
+      lifecycleRevision: "original-source-revision",
+    };
+    const replacementSource = makeCronSessionEntry({
+      sessionId: "replacement-source-session",
+      lifecycleRevision: "replacement-source-revision",
+      thinkingLevel: "high",
+    });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({ store: { [sourceConversation.sessionKey]: replacementSource } }),
+    );
+    readSessionMessagesAsyncMock.mockResolvedValue([
+      { role: "user", content: "This conversation is private to its own turns." },
+    ]);
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          sessionKey: sourceConversation.sessionKey,
+          sourceConversation,
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: "Reply tick in your own session." },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.sessionKey).not.toBe(sourceConversation.sessionKey);
+    expect(readSessionMessagesAsyncMock).not.toHaveBeenCalled();
+    expect(embeddedPrompt()).toContain("Reply tick in your own session.");
+    expect(embeddedPrompt()).not.toContain("This conversation is private");
+    expect(resolveCronSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceSessionKey: undefined, forceNew: true }),
+    );
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceSessionKey: sourceConversation.sessionKey,
+        sourceSessionGeneration: {
+          sessionId: "original-source-session",
+          lifecycleRevision: "original-source-revision",
+        },
+      }),
+    );
   });
 });

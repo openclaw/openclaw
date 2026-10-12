@@ -1,5 +1,6 @@
-// Verifies tool-result middleware validation, sanitization, and fail-closed behavior.
+// Verifies trusted middleware composition, native content adaptation, and failure presentation.
 import { describe, expect, it } from "vitest";
+import { PluginInstanceUnavailableError } from "../../plugins/plugin-instance-error.js";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
 describe("createAgentToolResultMiddlewareRunner", () => {
@@ -33,27 +34,12 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
   });
 
-  it("fails closed for invalid middleware results", async () => {
-    const original = { content: [{ type: "text" as const, text: "raw" }], details: {} };
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
-      () => ({ result: { content: "not an array" } as never }),
-    ]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "exec",
-      args: {},
-      result: original,
-    });
-
-    expect(result.details).toEqual({ status: "error", middlewareError: true });
-  });
-
-  it("fails closed when middleware mutates the current result into an invalid shape", async () => {
+  it("fails closed when a handler mutates the result and then reports a retired plugin", async () => {
+    // A live handler can fail on a nested retired dependency after writing in place.
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
       (event) => {
         event.result.content = "not an array" as never;
-        return undefined;
+        throw new PluginInstanceUnavailableError("nested-dependency");
       },
     ]);
 
@@ -67,57 +53,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(result.details).toEqual({ status: "error", middlewareError: true });
   });
 
-  it.each([
-    { name: "multibyte", details: { payload: "é".repeat(60_000) } },
-    { name: "shape", details: Array.from({ length: 1_001 }, () => null) },
-  ])("rejects oversized $name middleware details", async ({ details }) => {
-    // Details are serialized into harness/tool payloads; cap them before a
-    // middleware result can create unbounded transcript growth.
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
-      () => ({
-        result: {
-          content: [{ type: "text", text: "compacted" }],
-          details,
-        },
-      }),
-    ]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "exec",
-      args: {},
-      result: { content: [{ type: "text", text: "raw" }], details: {} },
-    });
-
-    expect(result.details).toEqual({ status: "error", middlewareError: true });
-  });
-
-  it("rejects cyclic middleware details", async () => {
-    const details: Record<string, unknown> = {};
-    details.self = details;
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
-      () => ({
-        result: {
-          content: [{ type: "text", text: "compacted" }],
-          details,
-        },
-      }),
-    ]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "exec",
-      args: {},
-      result: { content: [{ type: "text", text: "raw" }], details: {} },
-    });
-
-    expect(result.details).toEqual({ status: "error", middlewareError: true });
-  });
-
   it("delivers tool result unchanged when no middleware is registered", async () => {
-    // Without a middleware handler, the harness has no validator contract to
-    // satisfy and must not penalize tool emitters that legitimately produce
-    // dependency payloads (functions, cycles) on `details`.
     const client: Record<string, unknown> = { type: "fake-channel-client" };
     const cyclicDetails: Record<string, unknown> = {
       ok: true,
@@ -142,7 +78,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(result).toBe(original);
   });
 
-  it("sanitizes incoming cyclic details so a no-op middleware does not fail closed", async () => {
+  it("passes cyclic tool details through a no-op middleware by reference", async () => {
     // The bug class behind silent Discord delivery in 2026.5.5: any plugin
     // that registers a tool-result middleware (e.g. bundled tokenjuice)
     // causes the harness to validate `event.result` against shape rules,
@@ -170,14 +106,10 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
 
     expect((result.details as { middlewareError?: boolean }).middlewareError).toBeUndefined();
-    expect(result.details).toEqual({
-      ok: true,
-      messageId: "1501757759073419394",
-      client: { type: "fake-channel-client" },
-    });
+    expect(result.details).toBe(payload);
   });
 
-  it("truncates oversized incoming text before a no-op middleware", async () => {
+  it("leaves native text unchanged before a no-op middleware", async () => {
     let observedText = "";
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
       (event) => {
@@ -197,19 +129,18 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       },
     });
 
-    expect(observedText).toHaveLength(100_000);
+    expect(observedText).toHaveLength(100_001);
     expect(result.details).toEqual({ ok: true });
-    expect(result.content).toEqual([{ type: "text", text: "x".repeat(100_000) }]);
+    expect(result.content).toEqual([{ type: "text", text: "x".repeat(100_001) }]);
   });
 
-  it("fails closed when middleware returns oversized top-level text", async () => {
+  it("passes trusted middleware output through by reference", async () => {
+    const replacement = {
+      content: [{ type: "text" as const, text: "x".repeat(100_001) }],
+      details: { ok: true },
+    };
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
-      () => ({
-        result: {
-          content: [{ type: "text", text: "x".repeat(100_001) }],
-          details: { ok: true },
-        },
-      }),
+      () => ({ result: replacement }),
     ]);
 
     const result = await runner.applyToolResultMiddleware({
@@ -222,38 +153,10 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       },
     });
 
-    expect(result.details).toEqual({ status: "error", middlewareError: true });
+    expect(result).toBe(replacement);
   });
 
-  it("sanitizes incoming details before failing closed on uncoercible content", async () => {
-    const details: Record<string, unknown> = {
-      ok: true,
-      callback: () => 1,
-    };
-    details.self = details;
-    let observedDetails: unknown;
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
-      (event) => {
-        observedDetails = event.result.details;
-        return undefined;
-      },
-    ]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "message",
-      args: {},
-      result: {
-        content: [{ type: "unknown", payload: "raw" } as never],
-        details,
-      },
-    });
-
-    expect(result.details).toEqual({ status: "error", middlewareError: true });
-    expect(observedDetails).toEqual({ ok: true });
-  });
-
-  it("coerces incoming nested toolResult content before middleware validation", async () => {
+  it("adapts incoming nested toolResult content before middleware", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
 
     const result = await runner.applyToolResultMiddleware({
@@ -313,32 +216,6 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(result.details).toEqual({ status: "sent" });
   });
 
-  it("does not coerce tool/function call blocks as middleware results", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
-      () => ({
-        result: {
-          content: [
-            {
-              type: "function",
-              name: "send_message",
-              arguments: { text: "raw" },
-            } as never,
-          ],
-          details: {},
-        },
-      }),
-    ]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "message",
-      args: {},
-      result: { content: [{ type: "text", text: "raw" }], details: {} },
-    });
-
-    expect(result.details).toEqual({ status: "error", middlewareError: true });
-  });
-
   it("bounds nested toolResult content before flattening", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
 
@@ -370,58 +247,6 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     }
     expect(content.text.length).toBeLessThanOrEqual(100_000);
     expect(content.text).not.toContain("late chunk");
-  });
-
-  it("preserves nested image toolResult content without stringifying data", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "vision",
-      args: {},
-      result: {
-        content: [
-          {
-            type: "toolResult",
-            toolUseId: "call-1",
-            content: [{ type: "image", mimeType: "image/png", data: "base64-image" }],
-          } as never,
-        ],
-        details: {},
-      },
-    });
-
-    expect(result.content).toEqual([
-      { type: "image", mimeType: "image/png", data: "base64-image" },
-    ]);
-  });
-
-  it("preserves mixed nested text and image toolResult content", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "screenshot",
-      args: {},
-      result: {
-        content: [
-          {
-            type: "toolResult",
-            toolUseId: "call-1",
-            content: [
-              { type: "text", text: "captured screenshot" },
-              { type: "image", mimeType: "image/png", data: "base64-image" },
-            ],
-          } as never,
-        ],
-        details: {},
-      },
-    });
-
-    expect(result.content).toEqual([
-      { type: "text", text: "captured screenshot" },
-      { type: "image", mimeType: "image/png", data: "base64-image" },
-    ]);
   });
 
   it("preserves images from deeper nested toolResult content", async () => {
@@ -510,71 +335,6 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(result.details).toEqual({ status: "error", middlewareError: true });
   });
 
-  it("sanitizes incoming function/symbol/bigint values in details", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "exec",
-      args: {},
-      result: {
-        content: [{ type: "text", text: "ok" }],
-        details: {
-          ok: true,
-          exitCode: 0,
-          callback: () => 1,
-          tag: Symbol("x"),
-          missing: undefined,
-          id: 10n,
-        },
-      },
-    });
-
-    expect(result.details).toEqual({ ok: true, exitCode: 0, id: "10" });
-  });
-
-  it("collapses oversized incoming details to a truncation marker", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
-      () => undefined,
-    ]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "exec",
-      args: {},
-      result: {
-        content: [{ type: "text", text: "ok" }],
-        details: { blob: "x".repeat(200_000) },
-      },
-    });
-
-    const sanitized = result.details as { truncated?: boolean; originalSizeBytes?: number };
-    expect(sanitized.truncated).toBe(true);
-    expect(sanitized.originalSizeBytes ?? 0).toBeGreaterThan(100_000);
-  });
-
-  it("measures multibyte incoming details by serialized UTF-8 bytes", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
-      () => undefined,
-    ]);
-    const details = { blob: "é".repeat(60_000) };
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "exec",
-      args: {},
-      result: {
-        content: [{ type: "text", text: "ok" }],
-        details,
-      },
-    });
-
-    expect(result.details).toEqual({
-      truncated: true,
-      originalSizeBytes: Buffer.byteLength(JSON.stringify(details)),
-    });
-  });
-
   it.each([10, 147])("preserves the wiki_lint summary with %i issues", async (count) => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
       (event) => ({ result: event.result }),
@@ -592,13 +352,6 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       issuesByCategory: { quality: [...issues] },
       reportPath: "reports/lint.md",
     };
-    // The wiki shares issue objects; incoming normalization removes repeated references.
-    const normalizedDetails = {
-      ...details,
-      issuesByCategory: { quality: issues.map(() => null) },
-    };
-    const originalSizeBytes = Buffer.byteLength(JSON.stringify(normalizedDetails));
-    expect(originalSizeBytes).toBeLessThanOrEqual(100_000);
     const summary = `Issues: ${count} total (0 errors, ${count} warnings)`;
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -608,12 +361,10 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
 
     expect(result.content).toEqual([{ type: "text", text: summary }]);
-    expect(result.details).toEqual(
-      count === 10 ? normalizedDetails : { truncated: true, originalSizeBytes },
-    );
+    expect(result.details).toBe(details);
   });
 
-  it("snapshots confirmed delivery before oversized details are collapsed", async () => {
+  it("snapshots confirmed delivery before a middleware failure", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => {
         throw new Error("post-processing failed");

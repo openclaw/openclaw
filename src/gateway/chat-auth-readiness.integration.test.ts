@@ -130,7 +130,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       await Promise.all(publications);
       await waitForFast(() => expect(retained.chatModelCatalog[0]?.available).toBe(true));
       expect(sibling.chatModelCatalog[0]?.available).toBe(false);
-      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(3);
+      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2);
       expect(retained.chatMessage).toBe("Keep this draft");
       expect(retained.chatMessages).toBe(transcript);
     } finally {

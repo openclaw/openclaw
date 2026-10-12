@@ -6,6 +6,11 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
+import type {
+  UpdateRunReconciliationCandidate,
+  UpdateRunReconciliationInput,
+} from "./update-run-reconciliation.types.js";
 import { UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
@@ -84,6 +89,7 @@ export function readInterruptedUpdateCandidate(db: DatabaseSync) {
 export type UpdateRunListInput = {
   limit?: number;
   active?: boolean;
+  succeeded?: boolean;
   reason?: string;
   excludeReason?: string;
   includeRunId?: string;
@@ -98,6 +104,9 @@ export function readUpdateRuns(db: DatabaseSync, input: UpdateRunListInput) {
     .selectAll();
   if (input.active) {
     query = query.where("status", "=", "running");
+  }
+  if (input.succeeded) {
+    query = query.where("status", "=", "succeeded");
   }
   if (input.reason) {
     query = query.where("reason", "=", input.reason);
@@ -123,4 +132,28 @@ export function readUpdateRuns(db: DatabaseSync, input: UpdateRunListInput) {
     }
   }
   return runs;
+}
+
+export function canReconcileUpdateRunCandidates(
+  candidates: UpdateRunReconciliationCandidate[],
+  input: UpdateRunReconciliationInput,
+): boolean {
+  return (
+    candidates.some(
+      ({ rule }) => rule && (!input.legacyOnly || rule === LEGACY_UPDATE_RUN_EXPIRED_REASON),
+    ) &&
+    !(input.explicit && candidates.some(({ record, rule }) => record.status === "running" && !rule))
+  );
+}
+
+export function readUpdateRunStatusInDatabase(db: DatabaseSync) {
+  return { activeRun: readActiveUpdateRun(db), lastRun: readLatestUpdateRun(db) };
+}
+
+export function readUpdateRunHistoryStatusInDatabase(db: DatabaseSync) {
+  return {
+    activeRun: readActiveUpdateRun(db),
+    lastRun: readUpdateRuns(db, { limit: 1, excludeReason: "dry-run" })[0],
+    expiredRun: readUpdateRuns(db, { limit: 1, reason: LEGACY_UPDATE_RUN_EXPIRED_REASON })[0],
+  };
 }

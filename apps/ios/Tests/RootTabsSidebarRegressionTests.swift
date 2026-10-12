@@ -20,7 +20,7 @@ struct RootTabsSidebarRegressionTests {
         let revealButton = try Self.extract(
             source,
             from: "struct OpenClawSidebarControlButton: View",
-            to: "struct OpenClawSidebarHeaderLeadingSlot: View")
+            to: "struct OpenClawSidebarToolbarItem: ToolbarContent")
         let toolbarItem = try Self.extract(
             source,
             from: "struct OpenClawSidebarToolbarItem: ToolbarContent",

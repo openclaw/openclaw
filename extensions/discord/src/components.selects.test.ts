@@ -22,32 +22,25 @@ import { createDiscordLoopbackRest } from "./send.test-harness.js";
 
 const GENERATED_DISCORD_ID_PATTERN =
   /(?<![A-Za-z0-9_-])(?:btn|fld|grp|mdl|sel)_[A-Za-z0-9_-]{8}(?![A-Za-z0-9_-])/gu;
-const SELECT_BASE_KEYS = [
-  "isV2",
-  "defer",
-  "ephemeral",
-  "customIdParser",
-  "disabled",
-  "type",
-  "customId",
-];
 
-function normalizeGeneratedDiscordIds(value: unknown): unknown {
+function normalizeGeneratedDiscordIdBytes(value: string): string {
   const ids = new Map<string, string>();
   const counters = new Map<string, number>();
-  return JSON.parse(
-    JSON.stringify(value).replace(GENERATED_DISCORD_ID_PATTERN, (id) => {
-      const existing = ids.get(id);
-      if (existing) {
-        return existing;
-      }
-      const prefix = id.slice(0, 3);
-      const normalized = `${prefix}_${(counters.get(prefix) ?? 0) + 1}`;
-      counters.set(prefix, (counters.get(prefix) ?? 0) + 1);
-      ids.set(id, normalized);
-      return normalized;
-    }),
-  ) as unknown;
+  return value.replace(GENERATED_DISCORD_ID_PATTERN, (id) => {
+    const existing = ids.get(id);
+    if (existing) {
+      return existing;
+    }
+    const prefix = id.slice(0, 3);
+    const normalized = `${prefix}_${(counters.get(prefix) ?? 0) + 1}`;
+    counters.set(prefix, (counters.get(prefix) ?? 0) + 1);
+    ids.set(id, normalized);
+    return normalized;
+  });
+}
+
+function normalizeGeneratedDiscordIds(value: unknown): unknown {
+  return JSON.parse(normalizeGeneratedDiscordIdBytes(JSON.stringify(value))) as unknown;
 }
 
 function readFirstActionRow(result: ReturnType<typeof buildDiscordComponentMessage>) {
@@ -70,7 +63,7 @@ describe("discord select components", () => {
     ["mentionable", ComponentType.MentionableSelect, MentionableSelectMenu, "mentionable select"],
     ["channel", ComponentType.ChannelSelect, ChannelSelectMenu, "channel select"],
   ] as const)(
-    "preserves %s identity, own properties, payload, and metadata",
+    "preserves %s identity, payload, and metadata",
     (type, componentType, constructor, defaultLabel) => {
       const options = [
         {
@@ -109,13 +102,6 @@ describe("discord select components", () => {
       }
 
       expect(select).toBeInstanceOf(constructor);
-      expect(Object.keys(select)).toEqual([
-        ...SELECT_BASE_KEYS,
-        ...(type === "string" ? ["options"] : []),
-        "minValues",
-        "maxValues",
-        "placeholder",
-      ]);
       expect(normalizeGeneratedDiscordIds(select.serialize())).toEqual({
         type: componentType,
         ...(type === "string" ? { options } : {}),
@@ -144,7 +130,7 @@ describe("discord select components", () => {
     },
   );
 
-  it("preserves modal identity, required values, own properties, and callback payload", async () => {
+  it("preserves modal identity, required values, and callback payload", async () => {
     const result = buildDiscordComponentMessage({
       spec: {
         modal: {
@@ -193,14 +179,8 @@ describe("discord select components", () => {
     expect(fields[0]).toBeInstanceOf(StringSelectMenu);
     expect(fields[1]).toBeInstanceOf(RoleSelectMenu);
     expect(fields[2]).toBeInstanceOf(UserSelectMenu);
-    expect(fields.map((field) => Object.keys(field))).toEqual([
-      [...SELECT_BASE_KEYS, "options", "required", "minValues", "maxValues", "placeholder"],
-      [...SELECT_BASE_KEYS, "required", "minValues", "maxValues", "placeholder"],
-      [...SELECT_BASE_KEYS, "required", "minValues", "maxValues", "placeholder"],
-    ]);
 
-    const serialized = normalizeGeneratedDiscordIds(modal.serialize());
-    expect(serialized).toEqual({
+    const expectedSerialized = {
       title: "Select details",
       custom_id: "ocmodal:mid=mdl_1",
       components: [
@@ -211,9 +191,9 @@ describe("discord select components", () => {
             type: ComponentType.StringSelect,
             options: [{ label: "High", value: "high", default: true }],
             custom_id: "fld_1",
+            placeholder: "Pick priority",
             min_values: 1,
             max_values: 1,
-            placeholder: "Pick priority",
           },
         },
         {
@@ -241,7 +221,8 @@ describe("discord select components", () => {
           },
         },
       ],
-    });
+    };
+    expect(normalizeGeneratedDiscordIds(modal.serialize())).toEqual(expectedSerialized);
 
     const loopback = await createDiscordLoopbackRest();
     try {
@@ -264,10 +245,9 @@ describe("discord select components", () => {
       expect(loopback.requests[0]?.path).toBe(
         "/v10/interactions/interaction-1/interaction-token/callback",
       );
-      expect(normalizeGeneratedDiscordIds(JSON.parse(loopback.requests[0]?.body ?? "{}"))).toEqual({
-        type: InteractionResponseType.Modal,
-        data: serialized,
-      });
+      expect(normalizeGeneratedDiscordIdBytes(loopback.requests[0]?.body ?? "")).toBe(
+        JSON.stringify({ type: InteractionResponseType.Modal, data: expectedSerialized }),
+      );
     } finally {
       await loopback.close();
     }

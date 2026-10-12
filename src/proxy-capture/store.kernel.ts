@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { StringDecoder } from "node:string_decoder";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { InferResult } from "kysely";
@@ -526,4 +527,26 @@ export class DebugProxyCaptureKernel {
       rows.map((row) => row.blobId?.trim()).filter((blobId): blobId is string => Boolean(blobId)),
     );
   }
+}
+
+export function persistEventPayload(
+  store: {
+    persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord;
+  },
+  params: { data?: Buffer | string | null; contentType?: string; previewLimit?: number },
+): { dataText?: string; dataBlobId?: string; dataSha256?: string } {
+  if (params.data == null) {
+    return {};
+  }
+  const buffer = Buffer.isBuffer(params.data) ? params.data : Buffer.from(params.data);
+  const previewLimit = params.previewLimit ?? 8192;
+  // Store the whole payload as a blob but keep a small UTF-8 preview inline for
+  // fast CLI listings and query output. write(), unlike end(), omits an incomplete
+  // trailing code point introduced by the byte cap instead of injecting U+FFFD.
+  const blob = store.persistPayload(buffer, params.contentType);
+  return {
+    dataText: new StringDecoder("utf8").write(buffer.subarray(0, previewLimit)),
+    dataBlobId: blob.blobId,
+    dataSha256: blob.sha256,
+  };
 }

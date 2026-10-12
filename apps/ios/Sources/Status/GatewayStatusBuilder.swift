@@ -26,9 +26,7 @@ enum GatewayStatusBuilder {
         if gatewayServerName != nil { return .connected }
 
         let text = gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.localizedCaseInsensitiveContains("connecting") ||
-            text.localizedCaseInsensitiveContains("reconnecting")
-        {
+        if text.localizedCaseInsensitiveContains("connecting") {
             return .connecting
         }
 

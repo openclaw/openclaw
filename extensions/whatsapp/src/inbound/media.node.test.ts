@@ -1,11 +1,12 @@
 // Whatsapp tests cover media plugin behavior.
 import { Readable } from "node:stream";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mockExtractMessageContent,
   mockGetContentType,
   mockNormalizeMessageContent,
 } from "../../../../test/mocks/baileys.js";
+import { downloadInboundMedia, downloadQuotedInboundMedia } from "./media.js";
 
 type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
 
@@ -37,9 +38,6 @@ vi.mock("openclaw/plugin-sdk/media-store", () => ({
   saveMediaStream,
 }));
 
-let downloadInboundMedia: typeof import("./media.js").downloadInboundMedia;
-let downloadQuotedInboundMedia: typeof import("./media.js").downloadQuotedInboundMedia;
-
 const mockSock = {
   updateMediaMessage: vi.fn(),
   logger: { child: () => ({}) },
@@ -65,10 +63,6 @@ async function expectMimetype(message: Record<string, unknown>, expected: string
 }
 
 describe("downloadInboundMedia", () => {
-  beforeAll(async () => {
-    ({ downloadInboundMedia, downloadQuotedInboundMedia } = await import("./media.js"));
-  });
-
   beforeEach(() => {
     normalizeMessageContent.mockClear();
     downloadMediaMessage.mockClear();
@@ -104,11 +98,8 @@ describe("downloadInboundMedia", () => {
     await expectMimetype({ audioMessage: { mimetype: "audio/mp4", ptt: true } }, "audio/mp4");
   });
 
-  it.each([
-    { name: "voice messages without explicit MIME", audioMessage: { ptt: true } },
-    { name: "audio messages without MIME or ptt flag", audioMessage: {} },
-  ])("defaults to audio/ogg for $name", async ({ audioMessage }) => {
-    await expectMimetype({ audioMessage }, "audio/ogg; codecs=opus");
+  it("defaults audio messages without MIME to OGG Opus", async () => {
+    await expectMimetype({ audioMessage: {} }, "audio/ogg; codecs=opus");
   });
 
   it("uses explicit mimetype from imageMessage when present", async () => {

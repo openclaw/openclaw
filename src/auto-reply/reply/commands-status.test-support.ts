@@ -1,12 +1,7 @@
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { buildStatusReply } from "./commands-status.js";
-import {
-  baseCommandTestConfig,
-  buildCommandTestParams,
-  configureInMemoryTaskRegistryStoreForTests,
-} from "./commands.test-harness.js";
+import { baseCommandTestConfig, buildCommandTestParams } from "./commands.test-harness.js";
 
 export async function buildStatusReplyForTest(params: {
   sessionKey?: string;
@@ -43,9 +38,7 @@ export async function buildStatusReplyForTest(params: {
 }
 
 export async function buildKiraStatusReply(cfg: OpenClawConfig) {
-  resetTaskRegistryForTests({ persist: false });
-  configureInMemoryTaskRegistryStoreForTests();
-  try {
+  {
     const reply = await buildStatusReply({
       cfg,
       command: buildCommandTestParams("/status", cfg).command,
@@ -61,7 +54,5 @@ export async function buildKiraStatusReply(cfg: OpenClawConfig) {
     });
     expect(reply).toMatchObject({ presentationTextMode: "fallback" });
     return reply;
-  } finally {
-    resetTaskRegistryForTests({ persist: false });
   }
 }

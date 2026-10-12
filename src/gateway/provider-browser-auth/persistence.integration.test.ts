@@ -114,7 +114,7 @@ describe("provider browser HTTP callback persistence", () => {
         }
         const localOrigin = `http://127.0.0.1:${address.port}`;
         config = {
-          agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
+          agents: { entries: { main: { workspace: state.workspaceDir } } },
           plugins: { allow: [providerId], entries: { [providerId]: { enabled: true } } },
           gateway: {
             mode: "local",

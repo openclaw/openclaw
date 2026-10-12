@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ShellNewSessionHost } from "../app/app-shell-new-session.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import "./keyboard-shortcuts-dialog.ts";
+import "./keyboard-shortcuts-dialog.tsx";
 
 type KeyboardShortcutsTestDialog = HTMLElement & {
   isOpen: boolean;
@@ -33,51 +33,46 @@ describe("keyboard shortcuts dialog", () => {
       dialog.toggle();
       await dialog.updateComplete;
 
-      expect(dialog.shadowRoot?.querySelector("h2")?.textContent).toBe("Keyboard shortcuts");
+      expect(dialog.querySelector("h2")?.textContent).toBe("Keyboard shortcuts");
       expect(
-        Array.from(
-          dialog.shadowRoot?.querySelectorAll("h3") ?? [],
-          (heading) => heading.textContent,
-        ),
+        Array.from(dialog.querySelectorAll("h3") ?? [], (heading) => heading.textContent),
       ).toEqual(["General", "Chat", "Panels", "Sidebar", "Image viewer", "Approvals"]);
       for (const [label, key] of [
         ["Open New Session", "O"],
         ["Archive current session", "A"],
       ] as const) {
-        const row = Array.from(dialog.shadowRoot?.querySelectorAll(".shortcut-row") ?? []).find(
-          (candidate) => candidate.textContent?.includes(label),
+        const row = Array.from(dialog.querySelectorAll(".shortcut-row") ?? []).find((candidate) =>
+          candidate.textContent?.includes(label),
         );
-        expect(Array.from(row?.querySelectorAll("kbd") ?? [], (kbd) => kbd.textContent)).toEqual([
-          modifier,
-          shift,
-          key,
-        ]);
+        expect(
+          Array.from(row?.querySelectorAll("kbd") ?? [], (kbd) => kbd.textContent?.trim()),
+        ).toEqual([modifier, shift, key]);
       }
-      const selectionRow = Array.from(
-        dialog.shadowRoot?.querySelectorAll(".shortcut-row") ?? [],
-      ).find((row) => row.textContent?.includes("Select multiple sessions"));
+      const selectionRow = Array.from(dialog.querySelectorAll(".shortcut-row") ?? []).find((row) =>
+        row.textContent?.includes("Select multiple sessions"),
+      );
       expect(
-        Array.from(selectionRow?.querySelectorAll("kbd") ?? [], (key) => key.textContent),
+        Array.from(selectionRow?.querySelectorAll("kbd") ?? [], (key) => key.textContent?.trim()),
       ).toEqual([alt, "Click"]);
 
       const sendRow = () =>
-        Array.from(dialog.shadowRoot?.querySelectorAll(".shortcut-row") ?? []).find((row) =>
+        Array.from(dialog.querySelectorAll(".shortcut-row") ?? []).find((row) =>
           row.textContent?.includes("Send message"),
         );
       expect(
-        Array.from(sendRow()?.querySelectorAll("kbd") ?? [], (key) => key.textContent),
+        Array.from(sendRow()?.querySelectorAll("kbd") ?? [], (key) => key.textContent?.trim()),
       ).toEqual([enter]);
 
       dialog.sendShortcut = "modifier-enter";
       await dialog.updateComplete;
 
       expect(
-        Array.from(sendRow()?.querySelectorAll("kbd") ?? [], (key) => key.textContent),
+        Array.from(sendRow()?.querySelectorAll("kbd") ?? [], (key) => key.textContent?.trim()),
       ).toEqual([modifier, enter]);
-      dialog.shadowRoot?.querySelector<HTMLButtonElement>("button[aria-label='Close']")?.click();
+      dialog.querySelector<HTMLButtonElement>("button[aria-label='Close']")?.click();
       await dialog.updateComplete;
       expect(dialog.isOpen).toBe(false);
-      expect(dialog.shadowRoot?.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(dialog.querySelector("openclaw-modal-dialog")).toBeNull();
     },
   );
 
@@ -118,7 +113,7 @@ describe("keyboard shortcuts dialog", () => {
       try {
         dialog.toggle();
         await dialog.updateComplete;
-        const { dialog: modal } = await getRenderedModalDialog(dialog.shadowRoot!);
+        const { dialog: modal } = await getRenderedModalDialog(dialog);
         const key = (init: KeyboardEventInit) => {
           const event = new KeyboardEvent("keydown", {
             ...modifier,
@@ -177,7 +172,7 @@ describe("keyboard shortcuts dialog", () => {
     await dialog.updateComplete;
 
     const cancellation = new CustomEvent("modal-cancel", { cancelable: true });
-    dialog.shadowRoot?.querySelector("openclaw-modal-dialog")?.dispatchEvent(cancellation);
+    dialog.querySelector("openclaw-modal-dialog")?.dispatchEvent(cancellation);
     expect(cancellation.defaultPrevented).toBe(true);
     await dialog.updateComplete;
 

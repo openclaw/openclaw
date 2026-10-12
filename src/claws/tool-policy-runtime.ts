@@ -4,6 +4,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION } from "./provenance-agent-origin.js";
 import {
   initializeCachedClawInstallSchemaVersions,
   prepareClawInstallSchemaVersions,
@@ -74,21 +75,28 @@ function applyPreparedClawToolPolicyConsent(
       });
       continue;
     }
-    if (
-      schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION &&
-      schemaVersionRead.agentConfigDigest !== candidate.agentConfigDigest
-    ) {
+    const adopted = schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION;
+    const current =
+      adopted || schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION;
+    try {
+      if (
+        current &&
+        schemaVersionRead.agentConfigDigest !==
+          (adopted
+            ? candidate.adoptedAgentConfigDigest(stateOptions.env)
+            : candidate.agentConfigDigest)
+      ) {
+        throw new Error("Claw agent configuration does not match its consent provenance.");
+      }
+    } catch (error) {
       preparedClawToolPolicies.set(candidate.tools, {
         kind: "state-error",
-        error: new Error("Claw agent configuration does not match its consent provenance."),
+        error,
       });
       continue;
     }
     preparedClawToolPolicies.set(candidate.tools, {
-      kind:
-        schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION
-          ? "current"
-          : "legacy",
+      kind: current ? "current" : "legacy",
     });
   }
 }
@@ -132,6 +140,7 @@ async function prepareClawToolPolicyConsentAsync(
   return () => {
     replaceClawToolPolicyCandidates(collectClawToolPolicyCandidates(config), {
       path: preparedSchemaVersions.path,
+      env: context.env,
     });
     preparedSchemaVersions.publish();
     applyPreparedClawToolPolicyConsent();

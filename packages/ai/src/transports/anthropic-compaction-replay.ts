@@ -1,7 +1,9 @@
 import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AnthropicContextManagementOptions } from "../provider-options.js";
 import {
   buildProviderReplayContext,
+  isProviderReplayContext,
   providerReplayContextMatches,
 } from "./provider-replay-context.js";
 
@@ -90,12 +92,8 @@ function isAnthropicCompactionState(
   if (
     state.v !== 1 ||
     typeof state.data !== "string" ||
-    typeof state.provider !== "string" ||
-    typeof state.api !== "string" ||
-    typeof state.model !== "string" ||
     typeof state.baseUrlHash !== "string" ||
-    (state.sessionHash !== undefined && typeof state.sessionHash !== "string") ||
-    (state.authProfileHash !== undefined && typeof state.authProfileHash !== "string")
+    !isProviderReplayContext(state)
   ) {
     return false;
   }
@@ -144,10 +142,17 @@ function captureAnthropicCompaction(
   output.providerReplay = replay;
 }
 
+/**
+ * Record a rejected replay on the failed output and notify the transcript owner, which must
+ * durably strip the checkpoint: hosts may persist failed turns without their replay state.
+ */
 export function suppressAnthropicCompaction(
   output: ReplayOut,
   model: Model,
-  options?: ReplayOpts,
+  options:
+    | (ReplayOpts & Pick<AnthropicContextManagementOptions, "onCompactionRejected">)
+    | undefined,
+  rejected: AnthropicCompactionBlock,
 ): void {
   const context = buildProviderReplayContext(model, options);
   if (!context.baseUrlHash) {
@@ -160,6 +165,7 @@ export function suppressAnthropicCompaction(
     ...context,
     baseUrlHash: context.baseUrlHash,
   };
+  options?.onCompactionRejected?.({ data: rejected.content });
 }
 
 export function resolveNewestAnthropicCompaction(

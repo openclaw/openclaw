@@ -205,13 +205,15 @@ Supplied sweep:
 | `v2026.5.27`        | PASS |   2,231ms |   2,226ms |        649.0MB |
 | `v2026.5.28`        | PASS |   1,908ms |   1,870ms |        581.0MB |
 
-## Source probes
+<a id="source-probes" />
 
-Source probes were skipped for 17 successful older refs because those source
-trees did not yet have the required probe entry points. Agent-turn metrics still
+## Source checks
+
+Source checks were skipped for 17 successful older refs because those source
+trees did not yet have the required check entry points. Agent-turn metrics still
 exist for those refs.
 
-Representative source-probe points:
+Representative source-check points:
 
 | Release             | Default `readyz` p50 | 50 plugins `readyz` p50 | CLI health p50 | Plugin max RSS |
 | ------------------- | -------------------: | ----------------------: | -------------: | -------------: |
@@ -227,7 +229,7 @@ Representative source-probe points:
 | `v2026.5.28`        |              1,457ms |                 1,474ms |          623ms |        386.1MB |
 
 The `v2026.5.22` CLI health spike is visible in this table even though the
-agent-turn lane still passed. Keep the source probes when investigating
+agent-turn lane still passed. Keep the source checks when investigating
 targeted CLI or gateway regressions.
 
 ## Install footprint audit

@@ -1,7 +1,7 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { maskApiKey } from "../security/secret-mask.js";
 import { shortenHomePath } from "../utils.js";
@@ -10,11 +10,10 @@ import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isProfileInCooldown,
   resolveAuthProfileDisplayLabel,
-  resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "./model-selection.js";
 
@@ -23,7 +22,7 @@ function resolveStoredCredentialLabel(params: { value: unknown; refValue: unknow
   if (masked !== "missing") {
     return masked;
   }
-  if (coerceSecretRef(params.refValue)) {
+  if (parseSecretRef(params.refValue)) {
     return "ref";
   }
   return "missing";
@@ -64,7 +63,7 @@ export function formatModelCatalogAuthLabel(
       return true;
     }
     const mode = store.profiles[id]?.type ?? cfg.auth?.profiles?.[id]?.mode;
-    return !isStoredAuthProfileType(mode) || mode === "api_key";
+    return mode !== "oauth" && mode !== "token";
   });
   if (!order.length) {
     return label.fallback;
@@ -99,10 +98,6 @@ export function formatModelCatalogAuthLabel(
     return `${label.profiles[profileId]}${flags.length ? ` (${flags.join(", ")})` : ""}`;
   });
   return `${profiles.join(", ")} (${label.source})`;
-}
-
-function isStoredAuthProfileType(value: unknown): value is AuthProfileCredential["type"] {
-  return value === "api_key" || value === "oauth" || value === "token";
 }
 
 function captureProfileLabel(
@@ -171,6 +166,7 @@ export type ModelCatalogAuthLabels = ReadonlyMap<
 export function prepareModelCatalogAuthLabels(params: {
   config: OpenClawConfig;
   agentDir: string;
+  authStorePath: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   store: AuthProfileStore;
@@ -202,7 +198,7 @@ export function prepareModelCatalogAuthLabels(params: {
             : label,
         ]),
       ),
-      source: `auth profile store: ${shortenHomePath(resolveAuthStorePathForDisplay(params.agentDir))}`,
+      source: `auth profile store: ${shortenHomePath(params.authStorePath)}`,
       fallback: captureFallbackLabel(
         provider,
         params.config,

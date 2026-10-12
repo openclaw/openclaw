@@ -1,4 +1,3 @@
-// Qwen plugin module implements models behavior.
 import {
   applyProviderNativeStreamingUsageCompat,
   buildManifestModelProviderConfig,
@@ -94,15 +93,11 @@ export function isQwenCodingPlanBaseUrl(baseUrl: string | undefined): boolean {
   if (!trimmed) {
     return false;
   }
-  try {
-    const hostname = new URL(trimmed).hostname.toLowerCase().replace(/\.+$/, "");
-    return (
-      hostname === "coding.dashscope.aliyuncs.com" ||
-      hostname === "coding-intl.dashscope.aliyuncs.com"
-    );
-  } catch {
-    return false;
-  }
+  const hostname = URL.parse(trimmed)?.hostname.toLowerCase().replace(/\.+$/, "");
+  return (
+    hostname === "coding.dashscope.aliyuncs.com" ||
+    hostname === "coding-intl.dashscope.aliyuncs.com"
+  );
 }
 
 export function isQwen36PlusSupportedBaseUrl(_baseUrl: string | undefined): boolean {

@@ -1,5 +1,4 @@
 import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
-// Devices page view contracts.
 import type { PresenceEntry } from "../../api/types.ts";
 import type { DevicePairingList } from "../../lib/nodes/index.ts";
 import type {

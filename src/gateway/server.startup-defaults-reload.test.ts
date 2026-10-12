@@ -22,7 +22,7 @@ it("preserves computed defaults from cold startup through a live config reload",
   });
   const sourceConfig = {
     agents: {
-      entries: { main: { default: true } },
+      entries: { main: {} },
       defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
     },
     models: { providers: { anthropic: { apiKey: "synthetic-api-key" } } },

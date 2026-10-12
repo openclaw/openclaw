@@ -11,6 +11,15 @@ import {
 } from "../../infra/outbound/channel-target.js";
 export { optionalStringEnum, stringEnum } from "./string-enum.js";
 
+export function requesterProfileSchema() {
+  return Type.Optional(
+    Type.String({
+      description:
+        "The person's requester_profile.id, required when several people have steered this turn.",
+    }),
+  );
+}
+
 /** Describe the intended work; completion is reported by the tool result. */
 export function executionTitleSchema(options: { required: true }): TString;
 export function executionTitleSchema(options?: { required?: false }): TOptional<TString>;
@@ -56,22 +65,16 @@ export function optionalFiniteNumberSchema(options: NumberSchemaOptions = {}) {
   return Type.Optional(Type.Number(options));
 }
 
+function optionalIntegerSchema(minimum: number, options: IntegerSchemaOptions) {
+  return Type.Optional(Type.Integer({ minimum, ...options }));
+}
+
 /** Builds an optional positive integer schema. */
 export function optionalPositiveIntegerSchema(options: IntegerSchemaOptions = {}) {
-  return Type.Optional(
-    Type.Integer({
-      minimum: 1,
-      ...options,
-    }),
-  );
+  return optionalIntegerSchema(1, options);
 }
 
 /** Builds an optional non-negative integer schema. */
 export function optionalNonNegativeIntegerSchema(options: IntegerSchemaOptions = {}) {
-  return Type.Optional(
-    Type.Integer({
-      minimum: 0,
-      ...options,
-    }),
-  );
+  return optionalIntegerSchema(0, options);
 }

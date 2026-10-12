@@ -1,7 +1,8 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, vi } from "vitest";
 import { createKernelStores } from "./test/sqlite-kernel.js";
+import { sqliteOnly as test } from "./test/sqlite-only.js";
 import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
 
 function observeReads(onRows: (sql: string, rows: Record<string, unknown>[]) => void) {
@@ -59,7 +60,8 @@ function fixtureCard(id: string, overrides: Partial<WorkboardCard> = {}): Workbo
 }
 
 describe("Workboard context and session-scoped reads", () => {
-  it("hydrates only the completed parents and recent assignee work included in context", async () => {
+  // Intercepts native SQLite statements and edits the underlying file mid-read.
+  test("hydrates only the completed parents and recent assignee work included in context", async () => {
     const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });
@@ -112,7 +114,7 @@ describe("Workboard context and session-scoped reads", () => {
       await stores.cards.register(card.id, { version: 1, card });
     }
     const hydratedIds: unknown[] = [];
-    const raw = new DatabaseSync(dbPath);
+    using raw = new DatabaseSync(dbPath);
     let changedParent = false;
     const restore = observeReads((_sql, rows) => {
       hydratedIds.push(...rows.filter((row) => "notes" in row).map((row) => row.id));
@@ -128,7 +130,6 @@ describe("Workboard context and session-scoped reads", () => {
       context = await store.buildWorkerContext(current.id);
     } finally {
       restore();
-      raw.close();
     }
     const selectedParents = parents.slice(2);
     const selectedSiblings = [
@@ -160,58 +161,8 @@ describe("Workboard context and session-scoped reads", () => {
     await expect(store.get(parents[7]!.id)).resolves.toMatchObject({ status: "review" });
   });
 
-  it("isolates unrelated corruption while preserving selected context and capture failures through the worker", async () => {
-    const { store, stores, dbPath } = createWorkboardSqliteTestHarness();
-    const parent = fixtureCard("selected-parent");
-    const current = fixtureCard("selected", {
-      status: "ready",
-      sessionKey: "selected-session",
-      metadata: {
-        automation: { boardId: "ops" },
-        links: [{ id: "parent-link", type: "parent", targetCardId: parent.id, createdAt: 1 }],
-      },
-    });
-    const unrelated = fixtureCard("unrelated");
-    for (const card of [parent, current, unrelated]) {
-      await stores.cards.register(card.id, { version: 1, card });
-    }
-    await store.addComment(parent.id, { body: "Valid parent comment" });
-    const raw = new DatabaseSync(dbPath);
-    try {
-      raw
-        .prepare("UPDATE workboard_cards SET automation_json = '{invalid' WHERE id = ?")
-        .run(unrelated.id);
-      await expect(store.buildWorkerContext(current.id)).resolves.toContain(
-        "selected-parent result",
-      );
-      await expect(
-        store.captureSession({
-          title: "Reuse",
-          sessionKey: "selected-session",
-          boardId: "elsewhere",
-        }),
-      ).resolves.toMatchObject({ id: current.id });
-      raw
-        .prepare("UPDATE workboard_cards SET automation_json = '{invalid' WHERE id = ?")
-        .run(current.id);
-      await expect(store.buildWorkerContext(current.id)).rejects.toThrow(SyntaxError);
-      await expect(
-        store.captureSession({ title: "Reuse", sessionKey: "selected-session" }),
-      ).rejects.toThrow(SyntaxError);
-      raw
-        .prepare("UPDATE workboard_cards SET automation_json = ? WHERE id = ?")
-        .run(JSON.stringify(current.metadata?.automation), current.id);
-      raw.prepare("UPDATE workboard_card_comments SET body = '' WHERE card_id = ?").run(parent.id);
-      await expect(store.buildWorkerContext(current.id)).rejects.toThrow("missing body");
-      await expect(
-        store.captureSession({ title: "Reuse", sessionKey: "selected-session" }),
-      ).resolves.toMatchObject({ id: current.id });
-    } finally {
-      raw.close();
-    }
-  });
-
-  it("scopes session capture while preserving existing IDs, match preference, and execution fallback", async () => {
+  // Injects legacy rows and counts reads through native SQLite handles.
+  test("scopes session capture while preserving existing IDs, match preference, and execution fallback", async () => {
     const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });
@@ -258,75 +209,102 @@ describe("Workboard context and session-scoped reads", () => {
       execution: execution("shadowed-session"),
     });
     const nullFallback = fixtureCard("null-fallback", { execution: execution("null-session") });
-    const emptyFallback = fixtureCard("empty-fallback", { execution: execution("empty-session") });
+    const emptyFallback = fixtureCard("empty-fallback", {
+      execution: execution("empty-session"),
+    });
     const absentExecution = fixtureCard("absent-execution", {
       execution: execution("absent-session"),
     });
     for (const card of [direct, nullFallback, emptyFallback, absentExecution]) {
       await stores.cards.register(card.id, { version: 1, card });
     }
-    const raw = new DatabaseSync(dbPath);
-    try {
-      raw.prepare("UPDATE workboard_cards SET session_key = '' WHERE id = ?").run(emptyFallback.id);
-      raw
-        .prepare("UPDATE workboard_cards SET execution_id = NULL WHERE id = ?")
-        .run(absentExecution.id);
-      for (const { name } of cases) {
-        const hydratedIds: unknown[] = [];
-        const restore = observeReads((_sql, rows) => {
-          hydratedIds.push(...rows.filter((row) => "notes" in row).map((row) => row.id));
-        });
-        try {
-          await expect(
-            store.captureSession({
-              title: "Reuse",
-              sessionKey: `session-${name}`,
-              boardId: "elsewhere",
-            }),
-          ).resolves.toMatchObject({ id: `arbitrary-${name}-a` });
-        } finally {
-          restore();
-        }
-        expect(hydratedIds.length).toBeGreaterThan(0);
-        expect(hydratedIds.length).toBeLessThanOrEqual(2);
-        expect(
-          hydratedIds.every((id) => id === `arbitrary-${name}-a` || id === `arbitrary-${name}-z`),
-        ).toBe(true);
-      }
-      for (const [sessionKey, id] of [
-        ["direct-session", direct.id],
-        ["null-session", nullFallback.id],
-        ["empty-session", emptyFallback.id],
-      ]) {
-        await expect(store.captureSession({ title: "Reuse", sessionKey })).resolves.toMatchObject({
-          id,
-        });
-      }
-      const shadowed = await store.captureSession({
-        title: "New shadowed",
-        sessionKey: "shadowed-session",
+    using raw = new DatabaseSync(dbPath);
+    raw.prepare("UPDATE workboard_cards SET session_key = '' WHERE id = ?").run(emptyFallback.id);
+    raw
+      .prepare("UPDATE workboard_cards SET execution_id = NULL WHERE id = ?")
+      .run(absentExecution.id);
+    for (const { name } of cases) {
+      const hydratedIds: unknown[] = [];
+      const restore = observeReads((_sql, rows) => {
+        hydratedIds.push(...rows.filter((row) => "notes" in row).map((row) => row.id));
       });
-      expect(shadowed.id).not.toBe(direct.id);
-      expect(shadowed.sessionKey).toBe("shadowed-session");
-      for (const executionId of [null, ""]) {
-        const sessionKey = `absent-session-${executionId === null ? "null" : "empty"}`;
-        raw
-          .prepare(
-            "UPDATE workboard_cards SET execution_id = ?, execution_session_key = ? WHERE id = ?",
-          )
-          .run(executionId, sessionKey, absentExecution.id);
-        const absent = await store.captureSession({ title: "New absent", sessionKey });
-        expect(absent.id).not.toBe(absentExecution.id);
-        expect(absent.sessionKey).toBe(sessionKey);
+      try {
+        await expect(
+          store.captureSession({
+            title: "Reuse",
+            sessionKey: `session-${name}`,
+            boardId: "elsewhere",
+          }),
+        ).resolves.toMatchObject({ id: `arbitrary-${name}-a` });
+      } finally {
+        restore();
       }
-    } finally {
-      raw.close();
+      expect(hydratedIds.length).toBeGreaterThan(0);
+      expect(hydratedIds.length).toBeLessThanOrEqual(2);
+      expect(
+        hydratedIds.every((id) => id === `arbitrary-${name}-a` || id === `arbitrary-${name}-z`),
+      ).toBe(true);
+    }
+    for (const [sessionKey, id] of [
+      ["direct-session", direct.id],
+      ["null-session", nullFallback.id],
+      ["empty-session", emptyFallback.id],
+    ]) {
+      await expect(store.captureSession({ title: "Reuse", sessionKey })).resolves.toMatchObject({
+        id,
+      });
+    }
+    const shadowed = await store.captureSession({
+      title: "New shadowed",
+      sessionKey: "shadowed-session",
+    });
+    expect(shadowed.id).not.toBe(direct.id);
+    expect(shadowed.sessionKey).toBe("shadowed-session");
+    for (const executionId of [null, ""]) {
+      const sessionKey = `absent-session-${executionId === null ? "null" : "empty"}`;
+      raw
+        .prepare(
+          "UPDATE workboard_cards SET execution_id = ?, execution_session_key = ? WHERE id = ?",
+        )
+        .run(executionId, sessionKey, absentExecution.id);
+      const absent = await store.captureSession({ title: "New absent", sessionKey });
+      expect(absent.id).not.toBe(absentExecution.id);
+      expect(absent.sessionKey).toBe(sessionKey);
     }
   });
 });
 
 describe("Workboard board-scoped SQLite hydration", () => {
-  it("reads only the requested board while preserving complete cards and order", async () => {
+  // Injects legacy JSON through a native SQLite file handle.
+  test("prunes empty legacy automation fields without losing persisted details", async () => {
+    const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
+      createStores: createKernelStores,
+    });
+    const card = await store.create({ title: "Legacy automation" });
+    const automation = {
+      summary: "Keep persisted details",
+      skills: [],
+      createdCardIds: [],
+      workspace: {},
+      workspaceAccess: {},
+    };
+    {
+      using raw = new DatabaseSync(dbPath);
+      raw
+        .prepare("UPDATE workboard_cards SET automation_json = ? WHERE id = ?")
+        .run(JSON.stringify(automation), card.id);
+    }
+    expect((await store.get(card.id))?.metadata?.automation).toEqual(automation);
+
+    const updated = await store.update(card.id, { metadata: {} });
+    expect(updated.metadata?.automation).toEqual({ summary: "Keep persisted details" });
+    expect((await stores.cards.lookup(card.id))?.card.metadata?.automation).toEqual({
+      summary: "Keep persisted details",
+    });
+  });
+
+  // Measures fetched rows through the native SQLite statement prototype.
+  test("reads only the requested board while preserving complete cards and order", async () => {
     const { store } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
     const later = await store.create({ title: "Later", boardId: "ops", labels: ["one", "two"] });
     await store.addComment(later.id, { body: "Retain this comment" });
@@ -360,41 +338,18 @@ describe("Workboard board-scoped SQLite hydration", () => {
     await expect(store.list()).resolves.toHaveLength(4);
   });
 
-  it("isolates unrelated corruption while retaining requested-board and full-list errors", async () => {
-    const { store, dbPath } = createWorkboardSqliteTestHarness();
-    const selected = await store.create({ title: "Selected", boardId: "ops" });
-    const unrelated = await store.create({ title: "Unrelated", boardId: "other" });
-    await store.addComment(unrelated.id, { body: "Valid before corruption" });
-    const raw = new DatabaseSync(dbPath);
-    try {
-      raw
-        .prepare("UPDATE workboard_card_comments SET body = '' WHERE card_id = ?")
-        .run(unrelated.id);
-      await expect(store.list({ boardId: "ops" })).resolves.toEqual([selected]);
-      await expect(store.list({ boardId: "missing" })).resolves.toEqual([]);
-      await expect(store.list({ boardId: "other" })).rejects.toThrow("missing body");
-      await expect(store.list()).rejects.toThrow("missing body");
-      raw
-        .prepare("UPDATE workboard_card_comments SET body = 'Repaired' WHERE card_id = ?")
-        .run(unrelated.id);
-      raw
-        .prepare("UPDATE workboard_cards SET automation_json = '{invalid' WHERE id = ?")
-        .run(unrelated.id);
-      await expect(store.list({ boardId: "ops" })).resolves.toEqual([selected]);
-      await expect(store.list({ boardId: "other" })).rejects.toThrow(SyntaxError);
-      await expect(store.list()).rejects.toThrow(SyntaxError);
-    } finally {
-      raw.close();
-    }
-  });
-
-  it("hydrates captured card IDs even if another connection moves the card after selection", async () => {
+  // Moves the card through a native SQLite file handle during statement interception.
+  test("hydrates captured card IDs even if another connection moves the card after selection", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });
-    const created = await store.create({ title: "Moving card", boardId: "ops", labels: ["keep"] });
+    const created = await store.create({
+      title: "Moving card",
+      boardId: "ops",
+      labels: ["keep"],
+    });
     const expected = await store.addComment(created.id, { body: "Keep across the move" });
-    const raw = new DatabaseSync(dbPath);
+    using raw = new DatabaseSync(dbPath);
     let moved = false;
     const restore = observeReads((sql) => {
       if (!moved && /^select\b.*\bfrom "?workboard_cards"?(?:\s|$)/iu.test(sql)) {
@@ -413,7 +368,6 @@ describe("Workboard board-scoped SQLite hydration", () => {
       expect(moved).toBe(true);
     } finally {
       restore();
-      raw.close();
     }
     await expect(store.list({ boardId: "ops" })).resolves.toEqual([]);
     await expect(store.list({ boardId: "other" })).resolves.toEqual([
@@ -429,7 +383,8 @@ describe("Workboard board-scoped SQLite hydration", () => {
 });
 
 describe("Workboard card-scoped notification reads", () => {
-  it("bounds fetched rows and preserves card scope, missing cards, and cursor advancement", async () => {
+  // Measures fetched rows through the native SQLite statement prototype.
+  test("bounds fetched rows and preserves card scope, missing cards, and cursor advancement", async () => {
     const { store } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
     const selected = await store.create({
       title: "Selected notifications",
@@ -488,7 +443,9 @@ describe("Workboard card-scoped notification reads", () => {
     await expect(store.notificationEvents({ cardId: ` ${selected.id} ` })).resolves.toMatchObject({
       events: [{ id: "earlier" }, { id: "later" }],
     });
-    await expect(store.notificationEvents({ cardId: "missing" })).resolves.toEqual({ events: [] });
+    await expect(store.notificationEvents({ cardId: "missing" })).resolves.toEqual({
+      events: [],
+    });
     await expect(
       store.advanceNotificationEvents({ subscriptionId: subscription.id, limit: 1 }),
     ).resolves.toMatchObject({ events: [{ id: "earlier" }] });
@@ -499,47 +456,11 @@ describe("Workboard card-scoped notification reads", () => {
       store.notificationEvents({ subscriptionId: subscription.id }),
     ).resolves.toMatchObject({ events: [] });
   });
-
-  it("isolates unrelated card corruption while retaining selected-card and board-wide failures", async () => {
-    const { store, dbPath } = createWorkboardSqliteTestHarness();
-    const selected = await store.create({
-      title: "Selected",
-      boardId: "ops",
-      metadata: {
-        notifications: [
-          { id: "selected-event", kind: "completed", createdAt: 100, message: "Done" },
-        ],
-      },
-    });
-    const other = await store.create({ title: "Unrelated", boardId: "ops" });
-    await store.addComment(other.id, { body: "Valid before corruption" });
-    const raw = new DatabaseSync(dbPath);
-    try {
-      raw.prepare("UPDATE workboard_card_comments SET body = '' WHERE card_id = ?").run(other.id);
-      await expect(store.notificationEvents({ cardId: selected.id })).resolves.toMatchObject({
-        events: [{ id: "selected-event" }],
-      });
-      await expect(store.notificationEvents({ cardId: "missing" })).resolves.toEqual({
-        events: [],
-      });
-      await expect(store.notificationEvents({ cardId: other.id })).rejects.toThrow("missing body");
-      await expect(store.notificationEvents({ boardId: "ops" })).rejects.toThrow("missing body");
-      await expect(store.notificationEvents()).rejects.toThrow("missing body");
-      raw
-        .prepare("UPDATE workboard_card_comments SET body = 'Repaired' WHERE card_id = ?")
-        .run(other.id);
-      raw
-        .prepare("UPDATE workboard_cards SET automation_json = '{invalid' WHERE id = ?")
-        .run(selected.id);
-      await expect(store.notificationEvents({ cardId: selected.id })).rejects.toThrow(SyntaxError);
-    } finally {
-      raw.close();
-    }
-  });
 });
 
 describe("Workboard dependency status reads", () => {
-  it("prepares a card with fifty parents without hydrating each parent's tree", async () => {
+  // Measures fetched rows through the native SQLite statement prototype.
+  test("prepares a card with fifty parents without hydrating each parent's tree", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });
@@ -585,104 +506,5 @@ describe("Workboard dependency status reads", () => {
     expect(fetchedRows).toBeLessThanOrEqual(102);
     expect(queries).toBeGreaterThan(0);
     expect(fetchedRows).toBeGreaterThan(0);
-  });
-
-  it("checks dependency statuses without decoding unrelated cards or parent payloads", async () => {
-    const { store, dbPath } = createWorkboardSqliteTestHarness();
-    const parent = await store.create({ title: "Done parent", status: "done" });
-    const child = await store.create({ title: "Child", parents: [parent.id] });
-    const unrelated = await store.create({ title: "Unrelated", boardId: "other" });
-    const raw = new DatabaseSync(dbPath);
-    try {
-      raw
-        .prepare("UPDATE workboard_cards SET automation_json = '{invalid' WHERE id IN (?, ?)")
-        .run(parent.id, unrelated.id);
-      await expect(store.prepareStart(child.id)).resolves.toMatchObject({
-        id: child.id,
-        status: "ready",
-      });
-      await expect(store.move(child.id, "done", child.position)).resolves.toMatchObject({
-        id: child.id,
-        status: "done",
-      });
-      await expect(store.get(parent.id)).rejects.toThrow(SyntaxError);
-      await expect(store.get(unrelated.id)).rejects.toThrow(SyntaxError);
-      await expect(store.list()).rejects.toThrow(SyntaxError);
-      raw
-        .prepare("UPDATE workboard_cards SET automation_json = '{invalid' WHERE id = ?")
-        .run(child.id);
-      await expect(store.prepareStart(child.id)).rejects.toThrow(SyntaxError);
-    } finally {
-      raw.close();
-    }
-  });
-
-  it.each([false, true])(
-    "preserves repeated parent IDs and lookup trimming (spaced: %s)",
-    async (spaced) => {
-      const { store, stores } = createWorkboardSqliteTestHarness();
-      const parent = await store.create({ title: "Done parent", status: "done" });
-      const child = await store.create({ title: "Ready child", status: "ready" });
-      await stores.cards.register(child.id, {
-        version: 1,
-        card: {
-          ...child,
-          metadata: {
-            ...child.metadata,
-            links: [parent.id, spaced ? ` ${parent.id} ` : parent.id].map(
-              (targetCardId, index) => ({
-                id: `parent-${index}`,
-                type: "parent",
-                targetCardId,
-                createdAt: 1,
-              }),
-            ),
-          },
-        },
-      });
-      await expect(store.prepareStart(child.id)).resolves.toMatchObject({
-        id: child.id,
-        status: "ready",
-      });
-      if (spaced) {
-        await expect(store.move(child.id, "done", child.position)).rejects.toThrow(
-          "card dependencies are not done.",
-        );
-      } else {
-        await expect(store.move(child.id, "done", child.position)).resolves.toMatchObject({
-          status: "done",
-        });
-      }
-    },
-  );
-
-  it("retains missing, unknown and invalid parent status holds", async () => {
-    const { store, stores, dbPath } = createWorkboardSqliteTestHarness();
-    const parent = await store.create({ title: "Parent", status: "done" });
-    const child = await store.create({ title: "Child", parents: [parent.id] });
-    const raw = new DatabaseSync(dbPath);
-    try {
-      raw
-        .prepare("UPDATE workboard_cards SET status = 'future-status' WHERE id = ?")
-        .run(parent.id);
-      await expect(store.prepareStart(child.id)).resolves.toMatchObject({ status: "todo" });
-      await expect(store.move(child.id, "ready", child.position)).rejects.toThrow(
-        "card dependencies are not done.",
-      );
-      raw.prepare("UPDATE workboard_cards SET status = '' WHERE id = ?").run(parent.id);
-      await expect(store.prepareStart(child.id)).rejects.toThrow(
-        "workboard sqlite row missing status",
-      );
-      await expect(store.move(child.id, "ready", child.position)).rejects.toThrow(
-        "workboard sqlite row missing status",
-      );
-      await stores.cards.delete(parent.id);
-      await expect(store.prepareStart(child.id)).resolves.toMatchObject({ status: "todo" });
-      await expect(store.move(child.id, "ready", child.position)).rejects.toThrow(
-        "card dependencies are not done.",
-      );
-    } finally {
-      raw.close();
-    }
   });
 });

@@ -4,6 +4,11 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import {
+  isUserGitHubConnectionCommit,
+  type UserGitHubConnectionCommit,
+} from "./user-github-connections.types.js";
+import { isProfileDisplayRow } from "./user-profile-display-validation.js";
 import type { ProfileDisplayRow, UserProfileEmailBinding } from "./user-profiles.types.js";
 
 export type UserProfileMutationChanges = {
@@ -23,6 +28,7 @@ export type UserProfileMutationPublication = {
   before: Array<[string, ProfileDisplayRow | undefined]>;
   after: Array<[string, ProfileDisplayRow | undefined]>;
   emailBindings: UserProfileEmailBindingChange[];
+  githubConnections?: UserGitHubConnectionCommit;
 };
 export type UserProfileMutationContext = {
   runTransaction<T>(db: DatabaseSync, operation: () => T): T;
@@ -30,6 +36,7 @@ export type UserProfileMutationContext = {
   authority(...profileIds: string[]): void;
   identity(...profileIds: string[]): void;
   publish(...profileIds: string[]): void;
+  publishGitHubConnections?(receipt: UserGitHubConnectionCommit): void;
 };
 export type UserProfileMutationOptions = OpenClawStateDatabaseOptions & {
   mutation?: UserProfileMutationContext;
@@ -51,18 +58,6 @@ export function runUserProfileWriteTransaction<T>(
   );
 }
 
-function isDisplayRow(value: unknown): value is ProfileDisplayRow {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.updated_at === "number" &&
-    (value.has_avatar === 0 || value.has_avatar === 1) &&
-    ["display_name", "avatar_mime", "avatar_sha256", "merged_into"].every(
-      (key) => value[key] === null || typeof value[key] === "string",
-    ) &&
-    (value.role === undefined || value.role === null || typeof value.role === "string")
-  );
-}
 function isDisplayEntries(value: unknown): value is Array<[string, ProfileDisplayRow | undefined]> {
   return (
     Array.isArray(value) &&
@@ -71,7 +66,7 @@ function isDisplayEntries(value: unknown): value is Array<[string, ProfileDispla
         Array.isArray(entry) &&
         entry.length === 2 &&
         typeof entry[0] === "string" &&
-        (entry[1] === undefined || (isDisplayRow(entry[1]) && entry[1].id === entry[0])),
+        (entry[1] === undefined || (isProfileDisplayRow(entry[1]) && entry[1].id === entry[0])),
     )
   );
 }
@@ -97,6 +92,8 @@ export function isUserProfileMutationPublication(
     ) &&
     isDisplayEntries(value.before) &&
     isDisplayEntries(value.after) &&
+    (value.githubConnections === undefined ||
+      isUserGitHubConnectionCommit(value.githubConnections)) &&
     Array.isArray(value.emailBindings) &&
     value.emailBindings.every(
       (change) =>

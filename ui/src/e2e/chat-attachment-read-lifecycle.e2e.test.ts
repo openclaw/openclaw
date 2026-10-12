@@ -18,6 +18,8 @@ import {
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat attachment read lifecycle",
@@ -122,7 +124,8 @@ suite.define(() => {
         buffer: Buffer.from("Synthetic attachment payload survives Home handoff."),
       });
       await home.locator('.chat-attachment-thumb[aria-busy="true"]').waitFor();
-      await page.getByRole("link", { name: "Agents", exact: true }).click();
+      const pages = await openSidebarPages(page);
+      await pages.getByRole("link", { name: "Agents", exact: true }).click();
       await page.waitForURL((url) => url.pathname.endsWith("/agents"));
       await page.getByRole("region", { name: "Agents", exact: true }).waitFor();
       await page.locator(".sidebar-footer-bar__home").click();
@@ -145,7 +148,7 @@ suite.define(() => {
         }
         await proof.finish();
       });
-      await page.locator("a.nav-item--home").click();
+      await openHomeFullPage(page);
       await composer.waitFor({ state: "visible" });
       await expect.poll(() => dockComposer.isVisible()).toBe(false);
       const receipt = {
@@ -793,11 +796,13 @@ suite.define(() => {
     }
   });
 
-  it("rejects a combined attachment frame before the Gateway connection is lost", async () => {
+  it("rejects the file that would overflow one send's frame at intake", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      // 400 bytes past the 256 KiB envelope slack leaves a 300-byte decoded batch
+      // budget: each 200-byte file fits the per-file ceiling, both together do not.
       const gateway = await installMockGateway(page, {
         attachmentMaxBytes: 256,
-        maxPayload: 700,
+        maxPayload: 256 * 1024 + 400,
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -807,23 +812,14 @@ suite.define(() => {
         { name: "first.txt", mimeType: "text/plain", buffer: Buffer.alloc(200, 0x61) },
         { name: "second.txt", mimeType: "text/plain", buffer: Buffer.alloc(200, 0x62) },
       ]);
+
+      await page
+        .locator(".app-toast")
+        .filter({ hasText: "Too large to send: second.txt" })
+        .waitFor();
       await expect
         .poll(() => page.locator('.chat-attachment-thumb[aria-busy="false"]').count())
-        .toBe(2);
-
-      await composer.press("Enter");
-
-      const alert = page
-        .getByRole("alert")
-        .filter({ hasText: "Remove one or more attachments and retry" });
-      const outcome = await Promise.race([
-        alert.waitFor().then(() => "rejected" as const),
-        gateway.waitForRequest("chat.send").then(() => "sent" as const),
-      ]);
-      expect(outcome).toBe("rejected");
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(2);
-      await expect.poll(() => composer.inputValue()).toBe("Send both files");
+        .toBe(1);
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
@@ -831,11 +827,10 @@ suite.define(() => {
         await page.screenshot({ path: path.join(artifactDir, "attachment-frame-rejected.png") });
       }
 
-      await page.locator(".chat-attachment-remove").first().click();
       await composer.press("Enter");
       const request = await gateway.waitForRequest("chat.send");
       expect(request.params).toMatchObject({
-        attachments: [{ fileName: "second.txt", mimeType: "text/plain", origin: "file" }],
+        attachments: [{ fileName: "first.txt", mimeType: "text/plain", origin: "file" }],
         message: "Send both files",
       });
     });

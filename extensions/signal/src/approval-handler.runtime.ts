@@ -1,4 +1,3 @@
-// Signal plugin module implements approval handler behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelApprovalExpiredText,
@@ -212,7 +211,6 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
             ? { sessionKey: normalizeOptionalString(request.request.sessionKey) }
             : {}),
         },
-        routeAllowed: true,
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
       }))
         ? true

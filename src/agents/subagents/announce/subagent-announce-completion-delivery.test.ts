@@ -28,6 +28,33 @@ it("does not dispatch a private handoff after its caller has already cancelled",
   }
 });
 
+it("keeps genuine cancellation attached after requester execution starts", async () => {
+  const caller = new AbortController();
+  const started = vi.fn();
+  const dispatch = vi.fn(async (_method, _params, options) => {
+    options?.onExecutionStarted?.();
+    return await new Promise((_resolve, reject) => {
+      options?.signal?.addEventListener("abort", () => reject(options.signal?.reason as Error), {
+        once: true,
+      });
+    });
+  });
+  setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
+  try {
+    const delivery = runAnnounceAgentCall({
+      agentParams: {},
+      signal: caller.signal,
+      onExecutionStarted: started,
+      isExecutionAllowed: () => true,
+    });
+    expect(started).toHaveBeenCalledOnce();
+    caller.abort(new Error("requester stopped"));
+    await expect(delivery).rejects.toThrow("requester stopped");
+  } finally {
+    setSubagentAnnounceDeliveryDepsForTest();
+  }
+});
+
 describe("hasFailedSubagentNoOutputCompletion", () => {
   it.each([
     [

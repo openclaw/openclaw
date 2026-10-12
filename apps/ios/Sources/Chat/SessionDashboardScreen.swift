@@ -64,7 +64,7 @@ struct SessionDashboardScreen: View {
             }
         }
         .navigationDestination(isPresented: self.$showsDesktop) {
-            DesktopHubScreen(session: self.sessionKey, usesNativeNavigationChrome: true)
+            ControlUIHubScreen(page: .desktop(source: nil, session: self.sessionKey), usesNativeNavigationChrome: true)
         }
     }
 

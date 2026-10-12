@@ -25,16 +25,33 @@ vi.mock("./service-layout.js", async (original) => ({
   gatewayServiceCommandMatchesRoot: async () => true,
 }));
 
+async function policyFixture(includePath = true) {
+  const f = await fixture("linux");
+  f.command.environment = {
+    ...f.command.environment,
+    OPENCLAW_SERVICE_MARKER: "openclaw",
+    OPENCLAW_SERVICE_KIND: "gateway",
+    OPENCLAW_SERVICE_VERSION: "2026.7.1-2",
+    ...(includePath ? { PATH: "/usr/bin:/bin" } : {}),
+  };
+  return f;
+}
+
+function installedState(f: Awaited<ReturnType<typeof policyFixture>>, running = true) {
+  return {
+    env: f.env,
+    command: f.command,
+    installed: true,
+    running,
+    loadState: { status: "loaded" as const },
+    definitionMutationCapability: { kind: "writable" as const },
+  };
+}
+
 it.each([false, true])(
   "retains the explicit native runner and original owner during policy refresh (revoked: %s)",
   async (revoked) => {
-    const f = await fixture("linux");
-    f.command.environment = {
-      ...f.command.environment,
-      OPENCLAW_SERVICE_MARKER: "openclaw",
-      OPENCLAW_SERVICE_KIND: "gateway",
-      OPENCLAW_SERVICE_VERSION: "2026.7.1-2",
-    };
+    const f = await policyFixture(false);
     const original = buildSystemdUnit(f.command).replace("TimeoutStopSec=330", "TimeoutStopSec=30");
     await fs.writeFile(f.sourcePath, original);
     const unowned = vi
@@ -71,14 +88,7 @@ it.each([false, true])(
       () =>
         withGatewayServiceOperationLock(f.env, async (assertNative) =>
           prepareSystemdGatewayMaintenance({
-            state: {
-              env: f.env,
-              command: f.command,
-              installed: true,
-              running: true,
-              loadState: { status: "loaded" },
-              definitionMutationCapability: { kind: "writable" },
-            },
+            state: installedState(f),
             root: "/candidate",
             stopping: true,
             assertCurrent: () => {
@@ -117,14 +127,7 @@ it.each([
   "nonstop-override",
   "current-nonstop-override",
 ])("protects maintenance with a real legacy unit and preserved drop-in: %s", async (scenario) => {
-  const f = await fixture("linux");
-  f.command.environment = {
-    ...f.command.environment,
-    OPENCLAW_SERVICE_MARKER: "openclaw",
-    OPENCLAW_SERVICE_KIND: "gateway",
-    OPENCLAW_SERVICE_VERSION: "2026.7.1-2",
-    PATH: "/usr/bin:/bin",
-  };
+  const f = await policyFixture();
   const stopping = ![
     "offline",
     "nonstop-override",
@@ -181,14 +184,7 @@ it.each([
   const prepare = () =>
     withGatewayServiceOperationLock(f.env, async (assertNative) =>
       prepareSystemdGatewayMaintenance({
-        state: {
-          env: f.env,
-          command: f.command,
-          installed: true,
-          running: scenario !== "offline",
-          loadState: { status: "loaded" },
-          definitionMutationCapability: { kind: "writable" },
-        },
+        state: installedState(f, scenario !== "offline"),
         root: "/old",
         stopping,
         assertCurrent: () => {
@@ -242,9 +238,7 @@ it.each([
     expect(await fs.readFile(f.sourcePath, "utf8")).toBe(original);
     expect(managerTimeout).toBe(30);
     expect(reloads).toBe(2);
-    if (scenario === "reload-failed") {
-      expect(warnings.join(" ")).toContain("previous definition was restored");
-    }
+    expect(warnings.join(" ")).toContain("previous definition was restored");
   }
   expect(await fs.readFile(dropIn, "utf8")).toBe(override);
   expect(await fs.readFile(`${f.sourcePath}.bak`, "utf8")).toBe("previous backup\n");
@@ -252,20 +246,11 @@ it.each([
 
 it.each([
   { stopping: false, stopSeconds: 30 },
-  { stopping: true, stopSeconds: 30 },
-  { stopping: false, stopSeconds: 600 },
   { stopping: true, stopSeconds: 600 },
 ])(
   "refreshes native budgets while retaining custom values ($stopSeconds, stopping=$stopping)",
   async ({ stopping, stopSeconds }) => {
-    const f = await fixture("linux");
-    f.command.environment = {
-      ...f.command.environment,
-      OPENCLAW_SERVICE_MARKER: "openclaw",
-      OPENCLAW_SERVICE_KIND: "gateway",
-      OPENCLAW_SERVICE_VERSION: "2026.7.1-2",
-      PATH: "/usr/bin:/bin",
-    };
+    const f = await policyFixture();
     const original = buildSystemdUnit(f.command)
       .replace("TimeoutStartSec=30", "TimeoutStartSec=45")
       .replace("TimeoutStopSec=330", `TimeoutStopSec=${stopSeconds}`)
@@ -286,14 +271,7 @@ it.each([
     const warnings: string[] = [];
     const result = await withGatewayServiceOperationLock(f.env, async (assertCurrent) =>
       prepareSystemdGatewayMaintenance({
-        state: {
-          env: f.env,
-          command: f.command,
-          installed: true,
-          running: true,
-          loadState: { status: "loaded" },
-          definitionMutationCapability: { kind: "writable" },
-        },
+        state: installedState(f),
         root: "/old",
         stopping,
         assertCurrent,

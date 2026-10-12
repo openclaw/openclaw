@@ -1,4 +1,4 @@
-// Tavily plugin module implements tavily search tool behavior.
+import { optionalStringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   jsonResult,
@@ -9,7 +9,6 @@ import {
 import { Type } from "typebox";
 import { runTavilySearch } from "./tavily-client.js";
 import { resolveTavilyToolConfig, type TavilyToolConfigContext } from "./tavily-tool-config.js";
-import { optionalStringEnum } from "./tavily-tool-schema.js";
 
 const TavilySearchToolSchema = Type.Object(
   {
@@ -63,29 +62,20 @@ export function createTavilySearchTool(api: OpenClawPluginApi, ctx?: TavilyToolC
       signal?: AbortSignal,
     ) => {
       signal?.throwIfAborted();
-      const query = readStringParam(rawParams, "query", { required: true });
-      const searchDepth = readStringParam(rawParams, "search_depth") || undefined;
-      const topic = readStringParam(rawParams, "topic") || undefined;
-      const maxResults = readPositiveIntegerParam(rawParams, "max_results", {
-        max: 20,
-        message: "max_results must be an integer from 1 to 20.",
-      });
-      const includeAnswer = rawParams.include_answer === true;
-      const timeRange = readStringParam(rawParams, "time_range") || undefined;
-      const includeDomains = readStringArrayParam(rawParams, "include_domains");
-      const excludeDomains = readStringArrayParam(rawParams, "exclude_domains");
-
       return jsonResult(
         await runTavilySearch({
+          query: readStringParam(rawParams, "query", { required: true }),
+          searchDepth: readStringParam(rawParams, "search_depth") || undefined,
+          topic: readStringParam(rawParams, "topic") || undefined,
+          maxResults: readPositiveIntegerParam(rawParams, "max_results", {
+            max: 20,
+            message: "max_results must be an integer from 1 to 20.",
+          }),
+          includeAnswer: rawParams.include_answer === true,
+          timeRange: readStringParam(rawParams, "time_range") || undefined,
+          includeDomains: readStringArrayParam(rawParams, "include_domains"),
+          excludeDomains: readStringArrayParam(rawParams, "exclude_domains"),
           cfg: resolveTavilyToolConfig(api, ctx),
-          query,
-          searchDepth,
-          topic,
-          maxResults,
-          includeAnswer,
-          timeRange,
-          includeDomains,
-          excludeDomains,
           ...(signal ? { signal } : {}),
         }),
       );

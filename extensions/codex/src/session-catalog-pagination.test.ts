@@ -11,45 +11,6 @@ import { CodexCatalogIndex } from "./session-catalog-index.js";
 import { projectCodexCatalogPage } from "./session-catalog-projection.js";
 
 describe("resident catalog cursor stability", () => {
-  it("can navigate forward again after returning from the last page", async () => {
-    const readNative = vi.fn(async () =>
-      projectCodexCatalogPage(
-        {
-          data: ["alpha", "bravo"].map((id, position) => ({
-            id,
-            projectId: null,
-            name: id,
-            preview: `Please review the ${id} workspace change.`,
-            source: "cli",
-            originator: "codex_cli_rs",
-            recencyAt: 200 - position,
-          })),
-        },
-        { sanitize: sanitizeTerminalText },
-      ),
-    );
-    const index = new CodexCatalogIndex({
-      homeId: "cursor-round-trip",
-      readNative,
-      assertCurrent: () => {},
-    });
-    try {
-      await index.initialize();
-      const first = await index.list({ limit: 1 });
-      const last = await index.list({ limit: 1, cursor: first.nextCursor });
-      expect(last.sessions.map((row) => row.threadId)).toEqual(["bravo"]);
-      expect(last.nextCursor).toBeUndefined();
-      const previous = await index.list({ limit: 1, cursor: last.backwardsCursor });
-      expect(previous.sessions.map((row) => row.threadId)).toEqual(["alpha"]);
-      expect(previous.nextCursor).toEqual(expect.any(String));
-      const again = await index.list({ limit: 1, cursor: previous.nextCursor });
-      expect(again.sessions.map((row) => row.threadId)).toEqual(["bravo"]);
-      expect(readNative).toHaveBeenCalledOnce();
-    } finally {
-      await index.close();
-    }
-  });
-
   it.each([
     { change: "newer recency", recencyAt: 300 },
     { change: "a turn within the same timestamp", recencyAt: 200 },

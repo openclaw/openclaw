@@ -1,6 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { createNativeStorageUsageAccess } from "./session-cost-usage-collection.test-support.js";
 import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
 
@@ -52,6 +53,7 @@ async function scan(rows: Row[], previous?: UsageCostRollupEntry) {
     readRows: async (_marker, afterSeq, throughSeq) =>
       rows.filter((row) => row.seq > afterSeq && row.seq <= throughSeq).slice(0, 2),
     access: {
+      ...createNativeStorageUsageAccess(),
       readSqliteStats: async () => [
         { maxSeq, eventCount: rows.length, sizeBytes, lastMutationAtMs: timestamp },
       ],
@@ -84,21 +86,14 @@ describe("paged SQLite usage rollups", () => {
     expect(result.checkpoint).toMatchObject({ maxSeq: 20, eventCount: 6 });
   });
 
-  it("carries the previous rollup and visible leaf through every append page", async () => {
-    const previous = await scan(initial);
-    const result = await scan(
-      [
-        ...initial,
-        { seq: 9, event: message("b", "a", 4) },
-        { seq: 12, event: message("c", "b", 8) },
-        { seq: 16, event: message("d", "c", 16) },
-      ],
-      previous,
-    );
-    expectUsage(result, 31, 5, "d");
-  });
-
   it.each([
+    {
+      kind: "append",
+      suffix: [{ seq: 16, event: message("d", "c", 16) }],
+      tokens: 31,
+      records: 5,
+      leaf: "d",
+    },
     {
       kind: "leaf",
       suffix: [{ seq: 20, event: { type: "leaf", id: "switch", parentId: "c", targetId: "root" } }],
@@ -117,7 +112,7 @@ describe("paged SQLite usage rollups", () => {
       leaf: "after-reset",
     },
   ])(
-    "rebuilds when a later append page changes the $kind selection",
+    "preserves the selected rollup through later $kind pages",
     async ({ suffix, tokens, records, leaf }) => {
       const previous = await scan(initial);
       const result = await scan(

@@ -8,12 +8,14 @@ import path from "node:path";
 import {
   disposeAllSessionMcpRuntimes,
   acquireSessionMcpRuntime,
+  setSessionMcpRuntimeScheduler,
 } from "../../../../dist/agents/agent-bundle-mcp-manager-api.js";
 import { materializeBundleMcpToolsForRun } from "../../../../dist/agents/agent-bundle-mcp-materialize.js";
+import { toToolDefinitions } from "../../../../dist/agents/agent-tool-definition-adapter.js";
 import { resolveConversationCapabilityProfile } from "../../../../dist/agents/conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "../../../../dist/agents/embedded-agent-runner/effective-tool-policy.js";
-import { splitSdkTools } from "../../../../dist/agents/embedded-agent-runner/tool-split.js";
 import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
+import { GatewayScheduler } from "../../../../dist/infra/gateway-scheduler.js";
 import { getPluginToolMeta } from "../../../../dist/plugins/tool-metadata.js";
 import { createE2eStateDir } from "../../../../scripts/e2e/lib/temp-state-dir.ts";
 
@@ -113,7 +115,9 @@ async function main() {
   };
 
   let materialized: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+  const scheduler = new GatewayScheduler();
   try {
+    await setSessionMcpRuntimeScheduler(scheduler);
     const acquisition = await acquireSessionMcpRuntime({
       sessionId: `docker-agent-bundle-mcp-${randomUUID()}`,
       sessionKey: "agent:main:docker-agent-bundle-mcp",
@@ -170,18 +174,11 @@ async function main() {
 
     // The disputed boundary on #76063 is what reaches the SDK as `customTools`,
     // since that is the exact value serialized to the outbound provider request.
-    // Prove the live stdio probe survives the materialize -> filter -> split chain
-    // through `splitSdkTools` for the same four profiles already asserted above.
-    const codingCustom = splitSdkTools({ tools: coding.tools, sandboxEnabled: false }).customTools;
-    const messagingCustom = splitSdkTools({
-      tools: messaging.tools,
-      sandboxEnabled: false,
-    }).customTools;
-    const minimalCustom = splitSdkTools({
-      tools: minimal.tools,
-      sandboxEnabled: false,
-    }).customTools;
-    const deniedCustom = splitSdkTools({ tools: denied.tools, sandboxEnabled: false }).customTools;
+    // Prove the live stdio probe survives materialization, policy, and session adaptation.
+    const codingCustom = toToolDefinitions(coding.tools, undefined, undefined);
+    const messagingCustom = toToolDefinitions(messaging.tools, undefined, undefined);
+    const minimalCustom = toToolDefinitions(minimal.tools, undefined, undefined);
+    const deniedCustom = toToolDefinitions(denied.tools, undefined, undefined);
     assert(
       codingCustom.some((tool) => tool.name === probeTool.name),
       "expected coding profile customTools to include bundle MCP tools",
@@ -232,7 +229,11 @@ async function main() {
     try {
       await materialized?.dispose();
     } finally {
-      await disposeAllSessionMcpRuntimes();
+      try {
+        await disposeAllSessionMcpRuntimes();
+      } finally {
+        await scheduler.stop();
+      }
     }
   }
 }

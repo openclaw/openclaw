@@ -21,7 +21,9 @@ import { formatNativeHookRelayApprovalPresentation } from "./native-hook-relay-a
 import {
   nativeHookRelayParamsWereRewritten,
   normalizeNativeHookToolName,
+  readCodexToolInput,
 } from "./native-hook-relay-codec.js";
+import { codexNativeHookRelayResponseCodec as codexResponses } from "./native-hook-relay-response-codec.js";
 import {
   MAX_NATIVE_HOOK_RELAY_INVOCATIONS,
   nativeHookRelayState,
@@ -36,17 +38,14 @@ import type {
   NativeHookRelayPendingPermissionApproval,
   NativeHookRelayPreToolUseApproval,
   NativeHookRelayProcessResponse,
-  NativeHookRelayProviderAdapter,
   NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
-import { readOptionalNonEmptyString, truncateRelayText } from "./native-hook-relay-utils.js";
+import { readOptionalNonEmptyString } from "./native-hook-relay-utils.js";
 
 type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
 
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
 const PERMISSION_ALLOW_ALWAYS_TTL_MS = 30 * 60 * 1000;
-const MAX_PERMISSION_FALLBACK_KEYS = 200;
-const MAX_PERMISSION_FALLBACK_KEY_CHARS = 240;
 const MAX_PERMISSION_FINGERPRINT_SORT_KEYS = 200;
 const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
 const PERMISSION_APPROVAL_WINDOW_MS = 60_000;
@@ -194,7 +193,6 @@ async function resolveNativeHookRelayPreToolUseApproval(
 export async function runNativeHookRelayPermissionRequest(params: {
   registration: NativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
-  adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
   const mcpToolName = params.invocation.toolName?.startsWith("mcp__")
     ? params.invocation.toolName
@@ -202,7 +200,7 @@ export async function runNativeHookRelayPermissionRequest(params: {
   // Native MCP names can be hashed or trimmed. Only Codex knows the exact server;
   // defer so full posture cannot bypass plugin-app policy before elicitation.
   if (mcpToolName && params.registration.deferMcpToolApprovals) {
-    return params.adapter.renderNoopResponse(params.invocation.event);
+    return codexResponses.renderNoopResponse();
   }
   const request: NativeHookRelayPermissionApprovalRequest = {
     provider: params.registration.provider,
@@ -214,7 +212,7 @@ export async function runNativeHookRelayPermissionRequest(params: {
     ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
     ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
     ...(params.invocation.model ? { model: params.invocation.model } : {}),
-    toolInput: params.adapter.readToolInput(params.invocation.rawPayload),
+    toolInput: readCodexToolInput(params.invocation.rawPayload),
     ...(params.registration.signal ? { signal: params.registration.signal } : {}),
   };
   const mcpServerName = /^mcp__(.+?)__/.exec(request.toolName)?.[1];
@@ -222,7 +220,7 @@ export async function runNativeHookRelayPermissionRequest(params: {
   // File preparation yields; a disconnected callback must not create a new approval.
   params.registration.assertActive?.();
   if (!mutableFileBinding.ok) {
-    return params.adapter.renderPermissionDecisionResponse("deny", mutableFileBinding.message);
+    return codexResponses.renderPermissionDecisionResponse("deny", mutableFileBinding.message);
   }
   const approvalKey = nativeHookRelayPermissionApprovalKey({
     registration: params.registration,
@@ -243,10 +241,10 @@ export async function runNativeHookRelayPermissionRequest(params: {
       });
       params.registration.assertActive?.();
       if (!current.ok) {
-        return params.adapter.renderPermissionDecisionResponse("deny", current.message);
+        return codexResponses.renderPermissionDecisionResponse("deny", current.message);
       }
     }
-    return params.adapter.renderPermissionDecisionResponse("allow");
+    return codexResponses.renderPermissionDecisionResponse("allow");
   }
   try {
     const decision = await waitForNativeHookRelayPermissionApproval({
@@ -264,11 +262,11 @@ export async function runNativeHookRelayPermissionRequest(params: {
       });
       params.registration.assertActive?.();
       if (!current.ok) {
-        return params.adapter.renderPermissionDecisionResponse("deny", current.message);
+        return codexResponses.renderPermissionDecisionResponse("deny", current.message);
       }
     }
     if (decision === "allow") {
-      return params.adapter.renderPermissionDecisionResponse("allow");
+      return codexResponses.renderPermissionDecisionResponse("allow");
     }
     if (decision === "allow-always") {
       rememberNativeHookRelayPermissionAllowAlways({
@@ -276,11 +274,11 @@ export async function runNativeHookRelayPermissionRequest(params: {
         relayId: params.registration.relayId,
         mcpTool: mcpToolName !== undefined,
       });
-      return params.adapter.renderPermissionDecisionResponse("allow");
+      return codexResponses.renderPermissionDecisionResponse("allow");
     }
     if (decision === "deny" || (decision === "timed-out" && mcpToolName)) {
       const reason = decision === "deny" ? "Denied by user" : "MCP tool approval timed out";
-      return params.adapter.renderPermissionDecisionResponse(
+      return codexResponses.renderPermissionDecisionResponse(
         "deny",
         mcpToolName ? `${reason}. ${formatMcpCodexApprovalRemedy(mcpServerName)}` : reason,
       );
@@ -293,7 +291,7 @@ export async function runNativeHookRelayPermissionRequest(params: {
   }
   // A PermissionRequest no-op is not an allow decision. Codex interprets it as
   // "no hook decision" and falls through to its normal guardian/user approval path.
-  return params.adapter.renderNoopResponse(params.invocation.event);
+  return codexResponses.renderNoopResponse();
 }
 
 async function waitForNativeHookRelayPermissionApproval(params: {
@@ -363,9 +361,7 @@ function nativeHookRelayPermissionApprovalKey(params: {
   return JSON.stringify([
     params.registration.relayId,
     params.registration.runId,
-    params.request.toolCallId
-      ? ["call", params.request.toolCallId]
-      : ["fallback", permissionRequestFallbackKey(params.request)],
+    params.request.toolCallId,
     permissionRequestContentFingerprint(params.request),
     params.binding ? permissionRequestBindingFingerprint(params.binding) : "no-file-binding",
   ]);
@@ -422,34 +418,6 @@ function nativeHookRelayPermissionAllowAlwaysKey(params: {
     .digest("hex");
 }
 
-function permissionRequestFallbackKey(request: NativeHookRelayPermissionApprovalRequest): string {
-  const command = readOptionalNonEmptyString(request.toolInput.command);
-  if (command) {
-    return `${request.toolName}:command:${truncateRelayText(command, 240)}`;
-  }
-  return `${request.toolName}:keys:${permissionRequestToolInputKeyFingerprint(request.toolInput)}`;
-}
-
-export { permissionRequestToolInputKeyFingerprint as permissionRequestToolInputKeyFingerprintForTests };
-
-function permissionRequestToolInputKeyFingerprint(toolInput: Record<string, unknown>): string {
-  let fingerprint = "";
-  const { keys, truncated } = readBoundedOwnKeys(toolInput, MAX_PERMISSION_FALLBACK_KEYS);
-  for (const key of keys) {
-    const separator = fingerprint ? "," : "";
-    const remaining = MAX_PERMISSION_FALLBACK_KEY_CHARS - fingerprint.length - separator.length;
-    if (remaining <= 0) {
-      break;
-    }
-    fingerprint += `${separator}${key.slice(0, remaining)}`;
-  }
-  if (truncated && fingerprint.length < MAX_PERMISSION_FALLBACK_KEY_CHARS) {
-    const marker = `${fingerprint ? "," : ""}...`;
-    fingerprint += marker.slice(0, MAX_PERMISSION_FALLBACK_KEY_CHARS - fingerprint.length);
-  }
-  return fingerprint || "none";
-}
-
 export { permissionRequestContentFingerprint as permissionRequestContentFingerprintForTests };
 
 function permissionRequestContentFingerprint(
@@ -469,17 +437,9 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
     hash.update("null");
     return;
   }
-  if (typeof value === "string") {
-    hash.update("string:");
-    hash.update(JSON.stringify(value));
-    return;
-  }
-  if (typeof value === "number") {
-    hash.update(`number:${String(value)}`);
-    return;
-  }
-  if (typeof value === "boolean") {
-    hash.update(`boolean:${String(value)}`);
+  if (typeof value !== "object") {
+    hash.update(`${typeof value}:`);
+    hash.update(typeof value === "string" ? JSON.stringify(value) : String(value));
     return;
   }
   if (Array.isArray(value)) {
@@ -493,7 +453,7 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
   }
   hash.update("{");
   const { keys, truncated } = readBoundedOwnKeys(value, MAX_PERMISSION_FINGERPRINT_SORT_KEYS);
-  for (const key of keys) {
+  const appendEntry = (key: string) => {
     hash.update(JSON.stringify(key));
     hash.update(":");
     const item = value[key];
@@ -501,6 +461,9 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
       updateJsonHash(hash, item);
     }
     hash.update(",");
+  };
+  for (const key of keys) {
+    appendEntry(key);
   }
   if (truncated) {
     // Keep ordinary objects order-independent without sorting a broad native
@@ -511,13 +474,7 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
       if (!Object.hasOwn(value, key) || sortedKeySet.has(key)) {
         continue;
       }
-      hash.update(JSON.stringify(key));
-      hash.update(":");
-      const item = value[key];
-      if (item !== undefined) {
-        updateJsonHash(hash, item);
-      }
-      hash.update(",");
+      appendEntry(key);
     }
   }
   hash.update("}");

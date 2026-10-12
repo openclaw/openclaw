@@ -1,13 +1,22 @@
-// Defines common channel messaging configuration types.
 import type { z } from "zod";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { ChannelGroupEntrySchema } from "../channels/plugins/config-schema.js";
 import type { NativeExecApprovalEnableMode } from "./types.approvals.js";
 import type { ChannelDeliveryStreamingConfig } from "./types.base.js";
 import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channel-health.js";
 import type { DmConfig } from "./types.messages.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { CommonChannelAccountSchema } from "./zod-schema.channel-messaging-common.js";
 
 type SchemaCommonChannelMessagingConfig = z.input<typeof CommonChannelAccountSchema>;
+
+export type CommonChannelGroupConfig = SchemaContract<
+  Omit<z.input<typeof ChannelGroupEntrySchema>, "tools" | "toolsBySender">
+> & {
+  tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+};
 
 export type CommonChannelMessagingConfig<
   TCapabilities = string[],
@@ -28,14 +37,12 @@ export type CommonChannelMessagingConfig<
   heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
 
-export type ChannelExecApprovalTarget = "dm" | "channel" | "both";
-
 export type ChannelExecApprovalConfig<TApprover = string | number> = {
   enabled?: NativeExecApprovalEnableMode;
   approvers?: TApprover[];
   agentFilter?: string[];
   sessionFilter?: string[];
-  target?: ChannelExecApprovalTarget;
+  target?: "dm" | "channel" | "both";
 };
 
 export type ChannelBotInteractionConfig<TAllowBots = boolean | "mentions"> = {

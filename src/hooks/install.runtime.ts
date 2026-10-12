@@ -8,11 +8,7 @@ export {
   resolveTimedInstallModeOptions,
 } from "../infra/install-mode-options.js";
 export { installPackageDir } from "../infra/install-package-dir.js";
-export {
-  type NpmIntegrityDrift,
-  type NpmSpecResolution,
-  resolveArchiveSourcePath,
-} from "../infra/install-source-utils.js";
+export { resolveArchiveSourcePath } from "../infra/install-source-utils.js";
 export {
   ensureInstallTargetAvailable,
   resolveCanonicalInstallTarget,

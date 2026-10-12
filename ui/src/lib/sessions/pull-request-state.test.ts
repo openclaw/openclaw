@@ -190,7 +190,8 @@ function publicationHarness() {
     )!;
     publicationChanges.set(binding, () => changed.promise);
     binding.sync({
-      canWrite: true,
+      canPublishShared: true,
+      canPublishPersonal: true,
       personalReady: true,
       isPresented: () => true,
       isCurrent: () => binding.matches(session),

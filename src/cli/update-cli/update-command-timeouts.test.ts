@@ -6,16 +6,16 @@ import * as shared from "./shared.js";
 import * as execution from "./update-command-execution.js";
 import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
 import * as commandRun from "./update-command-run.js";
-import * as servicePlan from "./update-command-service-plan.js";
+import * as runtimePlan from "./update-command-runtime-preflight.js";
 import { updateCommand } from "./update-command.js";
 
 installFreshUpdateFixture();
 
-it.each(
-  ["cli", "campaign"].flatMap((trigger) =>
-    [undefined, "3600"].map((timeout) => ({ trigger, timeout })),
-  ),
-)(
+it.each([
+  { trigger: "cli", timeout: undefined },
+  { trigger: "campaign", timeout: undefined },
+  { trigger: "campaign", timeout: "3600" },
+] as const)(
   "keeps $trigger step defaults separate from explicit timeout $timeout",
   async ({ trigger, timeout }) => {
     const record = createUpdateRun({ trigger: trigger === "campaign" ? "campaign" : "cli" });
@@ -26,14 +26,13 @@ it.each(
       ...(await prepare(opts)),
       timeoutMs: shared.parseUpdateTimeoutMs(opts.timeout),
     }));
-    vi.mocked(shared.resolveTargetVersion).mockResolvedValue("2026.9.4");
+    vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: "2026.9.4" });
     vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
-      target: "2026.9.4",
       version: "2026.9.4",
       nodeEngine: null,
       schemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 },
     });
-    vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
+    vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
       ok: true,
       value: { nodeRunner: process.execPath },
     });
@@ -55,7 +54,7 @@ it.each(
 
     const stepTimeoutMs =
       timeout === undefined ? (trigger === "campaign" ? 45 : 30) * 60_000 : 3_600_000;
-    expect(servicePlan.resolvePackageRuntimePreflight).toHaveBeenCalledWith(
+    expect(runtimePlan.resolvePackageRuntimePreflight).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: stepTimeoutMs }),
     );
     expect(execute).toHaveBeenCalledExactlyOnceWith(

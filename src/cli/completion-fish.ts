@@ -1,8 +1,7 @@
-// Fish completion line builders for subcommands and options.
 import type { ShellCompletionCommandTree } from "./completion-command-tree.js";
 
 function escapeFishDescription(value: string): string {
-  return value.replace(/'/g, "'\\''");
+  return value.replace(/\\/g, "\\\\").replace(/'/g, "'\\''");
 }
 
 function quoteFishCompletionChoice(value: string): string {

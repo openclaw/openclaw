@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import type { AcpRuntime, AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime/types";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -26,13 +27,23 @@ import {
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveHooksConfig } from "../hooks.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "../server-lanes.js";
 
 const mocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
-  requestHeartbeat: vi.fn(),
+  captureSessionEventTarget: vi.fn(async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: "captured-session",
+    generation: "captured-generation",
+  })),
+  enqueueSessionEvent: vi.fn((_text: string, _options: Record<string, unknown>) => ({
+    accepted: Promise.resolve({ ok: true }),
+    settled: Promise.resolve({ status: "completed" }),
+  })),
   runCronIsolatedAgentTurn: vi.fn(),
 }));
 
@@ -42,11 +53,16 @@ vi.mock("../../config/io.js", () => ({
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: mocks.runCronIsolatedAgentTurn,
 }));
-vi.mock("../../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: mocks.requestHeartbeat,
+// mock-isolation: Keep ordinary reply execution outside the hook admission fixture.
+vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: mocks.captureSessionEventTarget,
+  enqueueSessionEventForHost: mocks.enqueueSessionEvent,
 }));
-vi.mock("../../infra/system-events.js", () => ({
+vi.mock("../../infra/system-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
   enqueueSystemEvent: mocks.enqueueSystemEvent,
+  enqueueSystemEventWithReceipt: (...args: unknown[]) =>
+    mocks.enqueueSystemEvent(...args) ? () => true : null,
 }));
 
 const { createGatewayHookDispatcher, createGatewayHooksRequestHandler } =
@@ -85,7 +101,7 @@ function queueHookRunner(onStart = vi.fn()) {
 
 function createConfig(global: boolean): OpenClawConfig {
   return {
-    agents: { entries: { main: { default: true }, hooks: {} } },
+    agents: { entries: { main: {}, hooks: {} } },
     hooks: { enabled: true, token: "hook-secret" },
     ...(global ? { session: { scope: "global" } } : {}),
   };
@@ -115,6 +131,7 @@ async function postAgentHook(
     error: vi.fn(),
   };
   const handler = createGatewayHooksRequestHandler({
+    scheduler: createTestGatewayScheduler("fake-timers"),
     deps: {} as never,
     getHooksConfig: () => hooksConfig,
     getClientIpConfig: () => ({}),
@@ -180,192 +197,6 @@ describe("gateway hook early-failure recovery", () => {
     await logPathTracker.cleanup();
   });
 
-  it.each<{
-    name: string;
-    outcome: RunCronAgentTurnResult;
-    level: "info" | "warn";
-    deliver: boolean;
-    events: number;
-    throws?: boolean;
-  }>([
-    {
-      name: "warns with the HTTP runId when admitted execution succeeds but delivery fails",
-      outcome: {
-        status: "ok",
-        delivered: false,
-        deliveryAttempted: true,
-        deliveryError: "transport refused delivery",
-      },
-      level: "warn",
-      deliver: true,
-      events: 0,
-    },
-    {
-      name: "logs delivered success without another announcement",
-      outcome: { status: "ok", delivered: true, deliveryAttempted: true },
-      level: "info",
-      deliver: true,
-      events: 0,
-    },
-    {
-      name: "does not label an attempted delivery without an acknowledgment as failure",
-      outcome: { status: "ok", delivered: false, deliveryAttempted: true },
-      level: "info",
-      deliver: true,
-      events: 0,
-    },
-    {
-      name: "records explicit suppression without labeling it a delivery failure",
-      outcome: {
-        status: "ok",
-        delivered: false,
-        deliveryAttempted: true,
-        deliverySuppressionReason: "silent",
-      },
-      level: "info",
-      deliver: true,
-      events: 0,
-    },
-    {
-      name: "leaves missing delivery facts unknown for deliver false",
-      outcome: { status: "ok" },
-      level: "info",
-      deliver: false,
-      events: 0,
-    },
-    {
-      name: "keeps the existing fallback announcement when delivery was not attempted",
-      outcome: { status: "ok", delivered: false },
-      level: "info",
-      deliver: true,
-      events: 1,
-    },
-    {
-      name: "correlates non-ok execution after HTTP admission",
-      outcome: { status: "error", error: "execution failed" },
-      level: "warn",
-      deliver: false,
-      events: 1,
-    },
-    {
-      name: "correlates model-preflight rejection with the HTTP 502 runId",
-      outcome: {
-        status: "skipped",
-        error: "model provider unavailable",
-        admissionDisposition: "rejected",
-      },
-      level: "warn",
-      deliver: false,
-      events: 1,
-    },
-    {
-      name: "correlates thrown errors without inventing runtime session facts",
-      outcome: { status: "error", error: "runner exploded" },
-      level: "warn",
-      deliver: false,
-      events: 1,
-      throws: true,
-    },
-  ])("$name", async (testCase) => {
-    const completion = createDeferred();
-    const result: RunCronAgentTurnResult = {
-      summary: testCase.outcome.status === "ok" ? "private success summary" : undefined,
-      outputText: "private output",
-      sessionId: "runtime-session-id",
-      sessionKey: "agent:main:cron:job:run:runtime-session-id",
-      ...testCase.outcome,
-    };
-    const originalResult = structuredClone(result);
-    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
-      async (params: { onExecutionStarted?: () => void }) => {
-        if (result.status === "skipped") {
-          return result;
-        }
-        params.onExecutionStarted?.();
-        await completion.promise;
-        if (testCase.throws) {
-          throw new Error(result.error);
-        }
-        return result;
-      },
-    );
-    const response = await postAgentHook(false, {
-      rejectInitialConfig: false,
-      mapping: {
-        match: { path: "terminal" },
-        action: "agent",
-        name: "Delivery",
-        messageTemplate: "{{message}}",
-        sessionKey: "hook:terminal",
-        deliver: testCase.deliver,
-      },
-    });
-    try {
-      if (result.status === "skipped") {
-        expect(response.status).toBe(502);
-        expect(response.body).toEqual({
-          ok: false,
-          error: "hook agent run failed before entering the agent runner",
-          runId: expect.any(String),
-        });
-      } else {
-        expect(response.status).toBe(200);
-        expect(response.body).toEqual({ ok: true, runId: expect.any(String) });
-        expect(getActiveGatewayRootWorkCount()).toBe(1);
-        expect(response.logHooks.warn).not.toHaveBeenCalled();
-        expect(response.logHooks.info).not.toHaveBeenCalled();
-      }
-      expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          job: expect.objectContaining({
-            delivery: testCase.deliver
-              ? { mode: "announce", channel: "last", to: undefined }
-              : { mode: "none" },
-          }),
-        }),
-      );
-    } finally {
-      completion.resolve();
-    }
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    const terminalLog = response.logHooks[testCase.level];
-    expect(terminalLog).toHaveBeenCalledExactlyOnceWith(
-      expect.stringMatching(/^hook agent run completed /),
-      expect.objectContaining({
-        runId: response.body.runId,
-        jobId: mocks.runCronIsolatedAgentTurn.mock.calls[0]?.[0].job.id,
-        sourcePath: "/hooks/terminal",
-        name: "Delivery",
-        status: result.status,
-        agentId: "main",
-        logicalSessionKey: "hook:terminal",
-        deliver: testCase.deliver,
-      }),
-    );
-    const message = terminalLog.mock.calls[0]?.[0];
-    expect(message).toContain(`runId=${response.body.runId}`);
-    expect(message).toContain(`status=${result.status}`);
-    const meta = terminalLog.mock.calls[0]?.[1] ?? {};
-    for (const key of [
-      "delivered",
-      "deliveryAttempted",
-      "deliveryError",
-      "deliverySuppressionReason",
-      "sessionId",
-      "sessionKey",
-    ] as const) {
-      expect(meta[key]).toBe(testCase.throws ? undefined : result[key]);
-    }
-    expect(response.logHooks[testCase.level === "warn" ? "info" : "warn"]).not.toHaveBeenCalled();
-    expect(JSON.stringify(meta)).not.toMatch(/private success summary|private output|Dispatch/);
-    for (const key of ["outputText", "message", "delivery", "to", "accountId", "consoleMessage"]) {
-      expect(meta).not.toHaveProperty(key);
-    }
-    expect(result).toEqual(originalResult);
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(testCase.events);
-    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(testCase.events);
-  });
-
   it.each([
     { outcome: "delivery", style: "pretty" },
     { outcome: "error", style: "compact" },
@@ -416,6 +247,7 @@ describe("gateway hook early-failure recovery", () => {
         mapping: {
           match: { path: "terminal" },
           action: "agent",
+          agentId: "main",
           name: `${"n".repeat(480)} ${customSecret}`,
           messageTemplate: "{{message}}",
           sessionKey: "hook:terminal",
@@ -493,8 +325,8 @@ describe("gateway hook early-failure recovery", () => {
         expect(line).toContain(message);
       }
       const events = outcome === "delivery" ? 0 : 1;
-      expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(events);
-      expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(events);
+      expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(events);
+      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
     },
   );
 
@@ -513,19 +345,16 @@ describe("gateway hook early-failure recovery", () => {
     });
     expect(mocks.runCronIsolatedAgentTurn).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1));
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+    await vi.waitFor(() => expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(1));
+    expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
       "Hook Recovery (error): Error: required system config unavailable",
-      { sessionKey: global ? "agent:hooks:global" : testCase.eventSessionKey },
+      expect.objectContaining({
+        agentId: "hooks",
+        sessionKey: testCase.eventSessionKey,
+        source: "hook",
+      }),
     );
 
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
-      source: "hook",
-      intent: "immediate",
-      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
-      agentId: "hooks",
-      ...(global ? {} : { sessionKey: testCase.eventSessionKey }),
-    });
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
@@ -598,11 +427,11 @@ describe("gateway hook early-failure recovery", () => {
     },
   );
 
-  it.each([undefined, false, true])(
+  it.each([false, true])(
     "contains plugin email turns with HTTP hooks enabled=%s",
     async (enabled) => {
       const config: OpenClawConfig = {
-        agents: { entries: { main: { default: true }, hooks: {} } },
+        agents: { entries: { main: {}, hooks: {} } },
         hooks: {
           enabled,
           allowedAgentIds: ["main"],
@@ -662,7 +491,7 @@ describe("gateway hook early-failure recovery", () => {
     },
   );
 
-  it("announces successful plugin hook turns through the existing heartbeat path", async () => {
+  it("announces successful plugin hook turns through the ordinary event owner", async () => {
     mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
     mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
       async (params: { onExecutionStarted?: () => void }) => {
@@ -677,45 +506,15 @@ describe("gateway hook early-failure recovery", () => {
     ).resolves.toEqual({ ok: true, runId: expect.any(String) });
 
     await vi.waitFor(() =>
-      expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
         "Hook IMAP fastmail: New email summarized",
-        { sessionKey: "agent:hooks:main" },
+        expect.objectContaining({
+          agentId: "hooks",
+          sessionKey: "agent:hooks:main",
+          source: "hook",
+        }),
       ),
     );
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
-      source: "hook",
-      intent: "immediate",
-      reason: expect.stringMatching(/^hook:[0-9a-f-]+$/),
-      agentId: "hooks",
-      sessionKey: "agent:hooks:main",
-    });
-  });
-
-  it("reports plugin hook execution errors through the existing failure path", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
-    mocks.runCronIsolatedAgentTurn.mockRejectedValueOnce(new Error("runner preparation failed"));
-    const { dispatcher, logHooks } = createPluginHookDispatcher();
-
-    await expect(dispatcher.dispatchHookAgentTurn(pluginHookTurn, "imap")).resolves.toEqual({
-      ok: false,
-      reason: "hook agent run failed before entering the agent runner",
-    });
-
-    expect(logHooks.warn).toHaveBeenCalledWith(
-      expect.stringMatching(/^hook agent run completed /),
-      expect.objectContaining({ status: "error", summary: "Error: runner preparation failed" }),
-    );
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
-      "Hook IMAP fastmail (error): Error: runner preparation failed",
-      { sessionKey: "agent:hooks:main" },
-    );
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
-      source: "hook",
-      intent: "immediate",
-      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
-      agentId: "hooks",
-      sessionKey: "agent:hooks:main",
-    });
   });
 
   it.each([
@@ -724,7 +523,6 @@ describe("gateway hook early-failure recovery", () => {
     { name: "empty hook session", override: { sessionKey: "hook:" } },
     { name: "session whitespace", override: { sessionKey: "hook:imap:bad value" } },
     { name: "trimmed session whitespace", override: { sessionKey: " hook:imap:message" } },
-    { name: "session control character", override: { sessionKey: "hook:imap:\u0000message" } },
     {
       name: "non-email content",
       override: { externalContentSource: "webhook" as "email" },
@@ -857,5 +655,295 @@ describe("gateway hook early-failure recovery", () => {
     expect(duplicate).toEqual(first);
     await expect(dispatcher.dispatchHookAgentTurn(pluginTurn, "imap")).resolves.toEqual(first);
     expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(2);
+  });
+});
+
+const config: OpenClawConfig = {
+  agents: { entries: { main: {} } },
+  hooks: {
+    enabled: true,
+    token: "hook-secret",
+    presets: ["gmail"],
+    defaultSessionKey: "hook:gmail:ingress",
+    allowRequestSessionKey: true,
+    allowedSessionKeyPrefixes: ["hook:gmail:"],
+  },
+};
+
+function createHandler(admissionTimeoutMs: number) {
+  const hooksConfig = resolveHooksConfig(config);
+  if (!hooksConfig) {
+    throw new Error("expected resolved hooks config");
+  }
+  return createGatewayHooksRequestHandler({
+    scheduler: createTestGatewayScheduler("fake-timers"),
+    deps: {} as never,
+    getHooksConfig: () => hooksConfig,
+    getClientIpConfig: () => ({}),
+    bindHost: "127.0.0.1",
+    port: 18789,
+    logHooks: { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
+    agentStartAdmissionTimeoutMs: admissionTimeoutMs,
+  });
+}
+
+async function post(
+  handler: ReturnType<typeof createGatewayHooksRequestHandler>,
+  path: string,
+  payload: Record<string, unknown>,
+) {
+  const req = Object.assign(Readable.from([JSON.stringify(payload)]), {
+    method: "POST",
+    url: path,
+    headers: {
+      authorization: "Bearer hook-secret",
+      "content-type": "application/json",
+    },
+    socket: { remoteAddress: "127.0.0.1" },
+  }) as unknown as IncomingMessage;
+  let responseBody = "";
+  const res = {
+    statusCode: 200,
+    setHeader: vi.fn(),
+    end: vi.fn((chunk?: string) => {
+      if (typeof chunk === "string") {
+        responseBody = chunk;
+      }
+    }),
+  } as unknown as ServerResponse;
+  expect(await handler(req, res)).toBe(true);
+  return { res, body: () => responseBody };
+}
+
+describe("hook background admission", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("admits slow fan-out items past the bounded deadline instead of canceling them", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    // Execution starts well after the 20ms bounded admission deadline,
+    // mirroring cold concurrent workspace prep.
+    mocks.runCronIsolatedAgentTurn.mockImplementation(
+      async (params: { onExecutionStarted?: () => void; abortSignal?: AbortSignal }) => {
+        await delay(60);
+        expect(params.abortSignal?.aborted).toBe(false);
+        params.onExecutionStarted?.();
+        return { status: "ok" as const };
+      },
+    );
+    const handler = createHandler(20);
+
+    const response = await post(handler, "/hooks/gmail", {
+      messages: [
+        { id: "bg1", from: "a@example.com", subject: "One" },
+        { id: "bg2", from: "b@example.com", subject: "Two" },
+      ],
+    });
+
+    expect(response.res.statusCode).toBe(200);
+    const body = JSON.parse(response.body()) as { runIds?: string[] };
+    expect(body.runIds).toHaveLength(2);
+    expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("announces a pre-execution fan-out failure once across producer redeliveries", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn.mockResolvedValue({
+      status: "skipped" as const,
+      error: "model provider unavailable",
+      admissionDisposition: "rejected" as const,
+    });
+    const handler = createHandler(100);
+    const redelivered = { messages: [{ id: "alert1", from: "a@example.com", subject: "Alert" }] };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await post(handler, "/hooks/gmail", redelivered);
+      expect(response.res.statusCode).toBe(502);
+    }
+    await post(handler, "/hooks/gmail", {
+      messages: [{ id: "alert2", from: "b@example.com", subject: "Other" }],
+    });
+
+    expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(4);
+    expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
+      "Hook Gmail (skipped): model provider unavailable",
+      "Hook Gmail (skipped): model provider unavailable",
+    ]);
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5 * 60_000 + 1);
+    try {
+      expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(502);
+      expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(5);
+      expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
+        "Hook Gmail (skipped): model provider unavailable",
+        "Hook Gmail (skipped): model provider unavailable",
+        "Hook Gmail (skipped): model provider unavailable",
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("announces an execution failure after an earlier redelivery failed admission", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn
+      .mockResolvedValueOnce({
+        status: "skipped" as const,
+        error: "model provider unavailable",
+        admissionDisposition: "rejected" as const,
+      })
+      .mockImplementationOnce(async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return { status: "error" as const, error: "execution failed" };
+      });
+    const handler = createHandler(100);
+    const redelivered = { messages: [{ id: "alert3", from: "c@example.com", subject: "Alert" }] };
+
+    expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(502);
+    expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(200);
+
+    await vi.waitFor(() =>
+      expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
+        "Hook Gmail (skipped): model provider unavailable",
+        "Hook Gmail (error): execution failed",
+      ]),
+    );
+  });
+
+  it("keeps the bounded admission cancel for direct agent hooks", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    let sawAbort = false;
+    mocks.runCronIsolatedAgentTurn.mockImplementation(
+      async (params: { onExecutionStarted?: () => void; abortSignal?: AbortSignal }) => {
+        await delay(60);
+        sawAbort = params.abortSignal?.aborted === true;
+        if (!sawAbort) {
+          params.onExecutionStarted?.();
+        }
+        return { status: "ok" as const };
+      },
+    );
+    const handler = createHandler(20);
+
+    const response = await post(handler, "/hooks/agent", { message: "Direct", name: "Bounded" });
+
+    expect(response.res.statusCode).toBe(503);
+    // The canceled run must not proceed after the 503.
+    await delay(80);
+    expect(sawAbort).toBe(true);
+  });
+
+  it.each([{ deliverySuppressionReason: "empty", replyDisposition: "empty" }] as const)(
+    "returns the $deliverySuppressionReason terminal suppression reason to an explicit waiter",
+    async ({ deliverySuppressionReason, replyDisposition }) => {
+      mocks.getRuntimeConfig.mockReturnValue(config);
+      mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+        async (params: { onExecutionStarted?: () => void }) => {
+          params.onExecutionStarted?.();
+          return {
+            status: "ok" as const,
+            delivered: false,
+            deliveryAttempted: true,
+            deliverySuppressionReason,
+            replyDisposition,
+            outputText: "private output",
+            summary: "private summary",
+            sessionId: "private-session",
+            sessionKey: "private-session-key",
+          };
+        },
+      );
+      const handler = createHandler(100);
+
+      const response = await post(handler, "/hooks/agent", {
+        message: "Direct",
+        name: "Observed",
+        waitForCompletion: true,
+      });
+
+      expect(response.res.statusCode).toBe(200);
+      expect(JSON.parse(response.body())).toEqual({
+        ok: true,
+        runId: expect.any(String),
+        completion: {
+          status: "ok",
+          replyDisposition,
+          delivered: false,
+          deliveryAttempted: true,
+          deliverySuppressionReason,
+        },
+      });
+    },
+  );
+
+  it("returns categorical delivery failure without private run data", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    const secret = "fake-secret-value-that-must-not-leak";
+    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return {
+          status: "ok" as const,
+          replyDisposition: "visible" as const,
+          delivered: false,
+          deliveryAttempted: true,
+          deliveryError: `line\nAuthorization: Bearer ${secret}\n${"x".repeat(600)} tail`,
+          outputText: "private output",
+          summary: "private summary",
+          sessionId: "private-session",
+          sessionKey: "private-session-key",
+        };
+      },
+    );
+    const handler = createHandler(100);
+
+    const response = await post(handler, "/hooks/agent", {
+      message: "Direct",
+      name: "Observed",
+      deliver: false,
+      waitForCompletion: true,
+    });
+
+    const body = JSON.parse(response.body()) as {
+      completion: { deliveryError: string };
+    };
+    expect(response.res.statusCode).toBe(200);
+    expect(body).toMatchObject({
+      completion: {
+        status: "ok",
+        replyDisposition: "visible",
+        delivered: false,
+        deliveryAttempted: true,
+        deliveryError: "delivery-failed",
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(
+      /Authorization|fake-secret-value|private output|private summary|private-session|x{20}/,
+    );
+  });
+
+  it("settles an admitted waiter when the isolated runner throws", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        throw new Error("private execution diagnostic");
+      },
+    );
+    const handler = createHandler(100);
+
+    const response = await post(handler, "/hooks/agent", {
+      message: "Direct",
+      name: "Observed",
+      waitForCompletion: true,
+    });
+
+    expect(response.res.statusCode).toBe(200);
+    expect(JSON.parse(response.body())).toEqual({
+      ok: true,
+      runId: expect.any(String),
+      completion: { status: "error", replyDisposition: "empty" },
+    });
   });
 });

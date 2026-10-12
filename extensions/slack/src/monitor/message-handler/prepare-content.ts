@@ -87,10 +87,7 @@ function filterInheritedParentFiles(params: {
   threadStarter: SlackThreadStarter | null;
 }): SlackFile[] | undefined {
   const { files, isThreadReply, threadStarter } = params;
-  if (!isThreadReply || !files?.length) {
-    return files;
-  }
-  if (!threadStarter?.files?.length) {
+  if (!isThreadReply || !files?.length || !threadStarter?.files?.length) {
     return files;
   }
   const starterFileIds = new Set(threadStarter.files.map((file) => file.id));
@@ -147,16 +144,15 @@ export async function resolveSlackMessageContent(params: {
 
   let botAttachmentText: string | undefined;
   if (params.isBotMessage && !attachmentContent?.text) {
-    const botAttachmentTextParts: string[] = [];
-    for (const attachment of params.message.attachments ?? []) {
-      const text =
-        normalizeOptionalString(attachment.text) ?? normalizeOptionalString(attachment.fallback);
-      if (text) {
-        botAttachmentTextParts.push(text);
-      }
-    }
     botAttachmentText =
-      botAttachmentTextParts.length > 0 ? botAttachmentTextParts.join("\n") : undefined;
+      (params.message.attachments ?? [])
+        .map(
+          (attachment) =>
+            normalizeOptionalString(attachment.text) ??
+            normalizeOptionalString(attachment.fallback),
+        )
+        .filter(Boolean)
+        .join("\n") || undefined;
   }
 
   const primaryText = resolveSlackMessageText(params.message);
@@ -191,10 +187,12 @@ export async function resolveSlackMessageContent(params: {
   const commandSourceText =
     renderSlackUserMentions(normalizeOptionalString(params.message.text), renderedMentions) ?? "";
 
-  const body =
-    [...textParts.map((text) => renderSlackUserMentions(text, renderedMentions)), mediaPlaceholder]
-      .filter(Boolean)
-      .join("\n") || "";
+  const body = [
+    ...textParts.map((text) => renderSlackUserMentions(text, renderedMentions)),
+    mediaPlaceholder,
+  ]
+    .filter(Boolean)
+    .join("\n");
   const rawBody = formatSlackUnavailableMedia({
     body,
     files: attachmentContent?.files,

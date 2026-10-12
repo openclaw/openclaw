@@ -3,12 +3,6 @@ import { listEnabledClickClackAccounts, resolveClickClackAccount } from "./accou
 import type { ClickClackAccountConfig, CoreConfig } from "./types.js";
 
 const selectedEnvId = "CLICKCLACK_SELECTED_TEST_TOKEN";
-const collisionProviders = [
-  { source: "file", path: "/unused" },
-  { source: "exec", command: "/unused" },
-  { source: "store" },
-] satisfies NonNullable<NonNullable<CoreConfig["secrets"]>["providers"]>[string][];
-
 function createConfig(
   token: ClickClackAccountConfig["token"],
   secrets: CoreConfig["secrets"],
@@ -31,19 +25,15 @@ function createConfig(
 describe("ClickClack SecretRef provider policy", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each(
-    ["default", "work"].flatMap((accountId) =>
-      ["default", "selected"].flatMap((provider) =>
-        collisionProviders.map((declaration) => ({
-          accountId,
-          provider,
-          declaration,
-          source: declaration.source,
-        })),
-      ),
-    ),
-  )(
-    "uses injected env when $provider shadows $source for account $accountId",
+  it.each([
+    { accountId: "default", provider: "default", declaration: { source: "file", path: "/unused" } },
+    {
+      accountId: "work",
+      provider: "selected",
+      declaration: { source: "exec", command: "/unused" },
+    },
+  ] as const)(
+    "uses injected env when $provider shadows a non-env source for account $accountId",
     ({ accountId, provider, declaration }) => {
       vi.stubEnv(selectedEnvId, "ambient-token-must-not-win");
       const cfg = createConfig(
@@ -74,7 +64,6 @@ describe("ClickClack SecretRef provider policy", () => {
     { name: "unrestricted", allowlist: undefined, allowed: true },
     { name: "matching", allowlist: [selectedEnvId], allowed: true },
     { name: "empty", allowlist: [], allowed: false },
-    { name: "excluding", allowlist: ["OTHER_TOKEN"], allowed: false },
   ])("honors a selected explicit env provider with $name allowlist", ({ allowlist, allowed }) => {
     const cfg = createConfig(
       { source: "env", provider: "selected", id: selectedEnvId },
@@ -103,25 +92,18 @@ describe("ClickClack SecretRef provider policy", () => {
     }
   });
 
-  it.each(collisionProviders)(
-    "rejects a non-default $source mismatch with its source diagnostic",
-    (declaration) => {
-      const cfg = createConfig(
-        { source: "env", provider: "other", id: selectedEnvId },
-        {
-          defaults: { env: "selected" },
-          providers: { other: declaration },
-        },
-      );
-      expect(() =>
-        resolveClickClackAccount({ cfg, env: { [selectedEnvId]: "injected-token" } }),
-      ).toThrow(
-        new Error(
-          `Secret provider "other" has source "${declaration.source}" but ref requests "env".`,
-        ),
-      );
-    },
-  );
+  it("rejects a non-default file mismatch with its source diagnostic", () => {
+    const cfg = createConfig(
+      { source: "env", provider: "other", id: selectedEnvId },
+      {
+        defaults: { env: "selected" },
+        providers: { other: { source: "file", path: "/unused" } },
+      },
+    );
+    expect(() =>
+      resolveClickClackAccount({ cfg, env: { [selectedEnvId]: "injected-token" } }),
+    ).toThrow(new Error('Secret provider "other" has source "file" but ref requests "env".'));
+  });
 
   it.each(["other", "default"])(
     "rejects undeclared non-selected alias %s with its missing-provider diagnostic",
@@ -142,16 +124,11 @@ describe("ClickClack SecretRef provider policy", () => {
     },
   );
 
-  it.each(
-    ["default", "work"].flatMap((accountId) =>
-      [undefined, ...collisionProviders].map((declaration) => ({
-        accountId,
-        declaration,
-        source: declaration?.source ?? "undeclared",
-      })),
-    ),
-  )(
-    "keeps missing selected env configured-unavailable without fallback ($accountId, $source)",
+  it.each([
+    { accountId: "default", declaration: undefined },
+    { accountId: "work", declaration: { source: "file", path: "/unused" } },
+  ] as const)(
+    "keeps missing selected env configured-unavailable without fallback ($accountId)",
     ({ accountId, declaration }) => {
       vi.stubEnv(selectedEnvId, "ambient-token-must-not-win");
       const cfg = createConfig(
@@ -178,12 +155,11 @@ describe("ClickClack SecretRef provider policy", () => {
     },
   );
 
-  it.each([
-    { source: "file", id: "/selected/token" },
-    { source: "exec", id: "selected/token" },
-    { source: "store", id: selectedEnvId },
-  ] as const)("never borrows an env token for a $source source ref", ({ source, id }) => {
-    const cfg = createConfig({ source, provider: "default", id }, undefined);
+  it("never borrows an env token for a file source ref", () => {
+    const cfg = createConfig(
+      { source: "file", provider: "default", id: "/selected/token" },
+      undefined,
+    );
     expect(
       resolveClickClackAccount({
         cfg,

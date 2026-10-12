@@ -11,7 +11,7 @@ import {
 } from "./admitted-run-context.js";
 import { externalCliDiscoveryScoped } from "./auth-profiles/external-cli-discovery.js";
 import { resolveSubscriptionAuthModeForProfiles } from "./auth-profiles/profile-list.js";
-import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
 import {
   FailoverError,
   buildProviderReauthCommand,
@@ -181,11 +181,11 @@ async function runWithModelFallbackInternal<T>(
   const authRuntime =
     !params.skipAuthProfileRuntime &&
     params.cfg &&
-    (userLockedAuthProfileId || hasAnyAuthProfileStoreSource(params.agentDir))
+    (userLockedAuthProfileId || (await hasAnyAuthProfileStoreSourceAsync(params.agentDir)))
       ? await modelFallbackAuthRuntimeLoader.load()
       : null;
   const authStore = authRuntime
-    ? authRuntime.ensureAuthProfileStore(params.agentDir, {
+    ? await authRuntime.ensureAuthProfileStoreAsync(params.agentDir, {
         profileId: userLockedAuthProfileId,
         externalCli: externalCliDiscoveryScoped({
           config: params.cfg,
@@ -198,6 +198,7 @@ async function runWithModelFallbackInternal<T>(
   const attempts: FallbackAttempt[] = [];
   const profileIdsByCandidate = new Map<ModelFallbackCandidate, string[]>();
   let lastError: unknown;
+  let selectionChanged = false;
   let latestClassifiedResult: ModelFallbackClassifiedResult<T> | undefined;
   let exhaustionResult: ModelFallbackExhaustionResult<T> | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
@@ -252,9 +253,8 @@ async function runWithModelFallbackInternal<T>(
 
   const hasFallbackCandidates = candidates.length > 1;
   const requestedCandidate = candidates.find((candidate) => candidate.routeOrigin === "requested");
-  const runAttribution = { sessionId: params.sessionId, lane: params.lane };
+  const runAttribution = { runId: params.runId, sessionId: params.sessionId, lane: params.lane };
   const runObs = {
-    runId: params.runId,
     ...runAttribution,
     requestedProvider: params.provider,
     requestedModel: params.model,
@@ -474,7 +474,7 @@ async function runWithModelFallbackInternal<T>(
           // Same-provider siblings share one transient cooldown probe per run.
           const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
           if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
-            const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
+            const error = `Provider ${candidate.provider} is in cooldown (check already attempted this run)`;
             pushSkippedAttempt(error, decision.reason, authMode);
             await observeCandidateDecision("skip_candidate", {
               reason: decision.reason,
@@ -513,6 +513,7 @@ async function runWithModelFallbackInternal<T>(
           requestedProvider: params.provider,
           requestedModel: params.model,
           stage: isPrimary ? "initial" : "fallback",
+          selectionChanged,
           fallbackReason: isPrimary ? undefined : attempts.at(-1)?.reason,
         },
       },
@@ -625,6 +626,7 @@ async function runWithModelFallbackInternal<T>(
 
     // Jump to later live selections; stale targets remain classified failures.
     if (err instanceof LiveSessionModelSwitchError) {
+      selectionChanged = true;
       // The outer owner must apply runtime changes before selecting another model.
       if (
         hasDifferentLiveSessionRuntimeSelection({
@@ -728,7 +730,7 @@ async function runWithModelFallbackInternal<T>(
       `${attempt.provider}/${attempt.model}: ${attempt.error}${
         attempt.reason ? ` (${attempt.reason})` : ""
       }`,
-    soonestCooldownExpiry: resolveFallbackSoonestCooldownExpiry({
+    soonestCooldownExpiry: await resolveFallbackSoonestCooldownExpiry({
       authRuntime,
       userLockedAuthProfileId,
       agentDir: params.agentDir,

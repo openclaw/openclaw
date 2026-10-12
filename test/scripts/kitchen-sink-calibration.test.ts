@@ -93,8 +93,16 @@ function fixture() {
 }
 
 describe("Kitchen Sink resource calibration", () => {
-  it("asserts CPU, allocation, ticking, reset and retirement with resources held", async () => {
+  it.each([false, true])("calibrates held resources with obscured signals=%s", async (obscured) => {
     const setup = fixture();
+    if (obscured) {
+      const sample = setup.sample;
+      setup.sample = async () => ({
+        ...(await sample()),
+        memory: { rss: 100, heapTotal: 100, heapUsed: 100, external: 0, arrayBuffers: 0 },
+        activeResources: { Timeout: 5 },
+      });
+    }
     const result = await calibrateKitchenSinkResources(setup);
     expect(result.status, result.error).toBe("exercised");
     expect(result.phases.map(({ name }) => name)).toEqual([
@@ -111,7 +119,13 @@ describe("Kitchen Sink resource calibration", () => {
         ({ operations }) => operations.completed === 1 && operations.failed === 0,
       ),
     ).toBe(true);
-    expect(Object.values(result.signals).every(({ status }) => status === "observed")).toBe(true);
+    if (obscured) {
+      for (const name of ["heldBuffer", "referencedTimer", "timerRetirement"]) {
+        expect(result.signals[name]).toMatchObject({ status: "inconclusive", value: 0 });
+      }
+    } else {
+      expect(Object.values(result.signals).every(({ status }) => status === "observed")).toBe(true);
+    }
     expect(result.states.reset).toMatchObject({
       bufferBytes: 0,
       timerActive: false,
@@ -132,21 +146,6 @@ describe("Kitchen Sink resource calibration", () => {
       params: { pluginId: "fixture", enabled: false },
     });
     expect(setup.calls.at(-1)?.method).toBe("plugins.list");
-  });
-
-  it("keeps obscured signals inconclusive without changing completed workload receipts", async () => {
-    const setup = fixture();
-    const sample = setup.sample;
-    setup.sample = async () => ({
-      ...(await sample()),
-      memory: { rss: 100, heapTotal: 100, heapUsed: 100, external: 0, arrayBuffers: 0 },
-      activeResources: { Timeout: 5 },
-    });
-    const result = await calibrateKitchenSinkResources(setup);
-    expect(result.status, result.error).toBe("exercised");
-    for (const name of ["heldBuffer", "referencedTimer", "timerRetirement"]) {
-      expect(result.signals[name]).toMatchObject({ status: "inconclusive", value: 0 });
-    }
   });
 
   it("rejects a wrong checksum without retrying CPU work or reaching disable", async () => {

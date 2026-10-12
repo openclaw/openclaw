@@ -1,3 +1,4 @@
+import { readExecRequestOwners } from "../infra/exec-request-context.js";
 import {
   markExited,
   settleExecSessionFinalization,
@@ -38,8 +39,6 @@ export async function settleExecProcessExit({
     }
     if (shouldNotify) {
       markProcessExited();
-    }
-    if (shouldNotify) {
       notifyOnExit(session, finalOutcome.status);
     }
   } catch (error) {
@@ -60,11 +59,18 @@ export async function settleExecProcessExit({
       // Notifications need start-time routing, but completed logs must not
       // retain it, including when a task callback or notification throws.
       delete session.sessionKey;
-      delete session.agentId;
       delete session.eventRouting;
       delete session.notifyDeliveryContext;
+      delete session.notifySessionTarget;
+      delete session.notifyFromConversationTurn;
       delete session.notifyOnExit;
       delete session.notifyOnExitEmptySuccess;
+      if (session.finalizationFailed || session.cleanupUncertain) {
+        // Publish before releasing waiters; output eviction must not erase the verdict.
+        for (const owner of readExecRequestOwners(session) ?? []) {
+          owner.cleanupUncertain = true;
+        }
+      }
       settleExecSessionFinalization(session);
     }
   }

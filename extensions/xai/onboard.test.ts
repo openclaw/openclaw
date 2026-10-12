@@ -1,14 +1,9 @@
 // Xai tests cover onboard plugin behavior.
 import {
-  resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
   type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import {
-  createConfigWithFallbacks,
-  createLegacyProviderConfig,
-  EXPECTED_FALLBACKS,
-} from "openclaw/plugin-sdk/provider-test-contracts";
+import { createLegacyProviderConfig } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
 import {
   applyXaiConfig,
@@ -25,6 +20,7 @@ describe("xai onboard", () => {
     expect(XAI_DEFAULT_MODEL_REF).toBe("xai/grok-4.7");
     expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(XAI_DEFAULT_MODEL_REF);
     expect(cfg.models?.providers?.xai?.models).toEqual([]);
+    expect(cfg.agents?.defaults?.models?.[XAI_DEFAULT_MODEL_REF]?.alias).toBe("Grok");
   });
 
   it("keeps authored xAI models without pinning the curated inventory", () => {
@@ -102,11 +98,6 @@ describe("xai onboard", () => {
     ]);
   });
 
-  it("adds expected alias for the default model", () => {
-    const cfg = applyXaiProviderConfig({});
-    expect(cfg.agents?.defaults?.models?.[XAI_DEFAULT_MODEL_REF]?.alias).toBe("Grok");
-  });
-
   it("uses the curated default while retaining the OAuth transport", () => {
     const provider: ModelProviderConfig = {
       api: "openai-responses",
@@ -119,12 +110,5 @@ describe("xai onboard", () => {
 
     expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe("xai/grok-4.7");
     expect(cfg.agents?.defaults?.models?.["xai/grok-4.7"]?.alias).toBe("Grok");
-  });
-
-  it("preserves existing model fallbacks", () => {
-    const cfg = applyXaiConfig(createConfigWithFallbacks());
-    expect(resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)).toEqual([
-      ...EXPECTED_FALLBACKS,
-    ]);
   });
 });

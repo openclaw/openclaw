@@ -6,8 +6,8 @@ import {
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
+import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
-import * as subagentStore from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -20,6 +20,7 @@ import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-a
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { resolveApprovalSessionAudienceWithFallback } from "../approval-session-audience.js";
 import { createPreparedTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import { sanitizeSystemRunParamsForForwarding } from "../node-invoke-system-run-approval.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
@@ -143,7 +144,7 @@ describe("exec approval signed agent runtime", () => {
           sessionId: source.sessionId,
           ownerEpoch: 3,
         });
-        let placement = placements.startDispatch(source);
+        let placement = await placements.startDispatch(source);
         for (const [to, patch] of [
           ["provisioning", { environmentId: "worker-approval-environment" }],
           ["syncing", { workerBundleHash: "a".repeat(64) }],
@@ -156,7 +157,7 @@ describe("exec approval signed agent runtime", () => {
           ],
           ["active", { activeOwnerEpoch: 3 }],
         ] as const) {
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId: source.sessionId,
             from: placement.state,
             to,
@@ -164,7 +165,7 @@ describe("exec approval signed agent runtime", () => {
             patch,
           });
         }
-        const claim = placements.claimTurn({
+        const claim = await placements.claimTurn({
           ...source,
           claimId: "worker-approval-claim",
           runId: "worker-approval-run",
@@ -228,7 +229,7 @@ describe("exec approval signed agent runtime", () => {
             throw new Error("registered worker approval is missing");
           }
           if (revoked) {
-            placements.releaseTurn(claim);
+            await placements.releaseTurn(claim);
           }
           await fixture.manager.resolve(record.id, "allow-once");
           await pending;
@@ -241,7 +242,7 @@ describe("exec approval signed agent runtime", () => {
           }
         } finally {
           if (placements.validateTurnClaim(claim)) {
-            placements.releaseTurn(claim);
+            await placements.releaseTurn(claim);
           }
           releaseAgentRunDelegatedAuthority(delegated);
         }
@@ -267,7 +268,7 @@ describe("exec approval signed agent runtime", () => {
           completion: { required: false },
           delivery: { status: "not_required" },
         });
-        subagentStore.saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+        saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: parent },
           {
@@ -341,6 +342,83 @@ describe("exec approval signed agent runtime", () => {
       expect(await manager.listPendingRecords()).toHaveLength(0);
       expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
         message: expect.stringContaining("no longer active"),
+      });
+    });
+  });
+
+  it("records an omitted node session before approved replay", async (testContext) => {
+    const fixture = await createPreparedTestApprovalManager(testContext, {
+      validateAgentRuntimeDelegatedAuthority: () => true,
+    });
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      const handler = createExecApprovalHandlers(manager)["exec.approval.request"];
+      if (!handler) {
+        throw new Error("exec approval request handler is missing");
+      }
+      const runtimeIdentity = identity(false);
+      const options = requestOptions(runtimeIdentity);
+      const command = ["/usr/bin/echo", "ok"];
+      const commandText = "/usr/bin/echo ok";
+      Object.assign(options.params, {
+        host: "node",
+        nodeId: "node-1",
+        command: commandText,
+        systemRunPlan: {
+          argv: command,
+          commandText,
+          cwd: "/tmp",
+          agentId: "main",
+          sessionKey: null,
+          policySnapshot: {
+            security: "allowlist",
+            ask: "always",
+            askFallback: "deny",
+            autoAllowSkills: false,
+            allowlistRules: [],
+          },
+        },
+      });
+      const { pending } = await waitForApprovalRequested(
+        options.context,
+        "exec.approval.requested",
+        () => fixture.track(Promise.resolve(handler(options))),
+      );
+      const record = (await manager.listPendingRecords())[0];
+      if (!record) {
+        throw new Error("registered node approval is missing");
+      }
+      await manager.resolve(record.id, "allow-once");
+      await pending;
+
+      const result = await sanitizeSystemRunParamsForForwarding({
+        nodeId: "node-1",
+        rawParams: {
+          runId: record.id,
+          approved: true,
+          command,
+          rawCommand: commandText,
+          cwd: "/tmp",
+          agentId: runtimeIdentity.agentId,
+          sessionKey: runtimeIdentity.sessionKey,
+        },
+        client: options.client,
+        execApprovalManager: manager,
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        params: {
+          cwd: "/tmp",
+          agentId: runtimeIdentity.agentId,
+          sessionKey: runtimeIdentity.sessionKey,
+          systemRunPlan: {
+            argv: command,
+            commandText,
+            cwd: "/tmp",
+            agentId: runtimeIdentity.agentId,
+            sessionKey: runtimeIdentity.sessionKey,
+          },
+        },
       });
     });
   });

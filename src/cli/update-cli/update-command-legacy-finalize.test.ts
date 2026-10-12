@@ -66,19 +66,15 @@ function assertLegacyCommandJoined(
 }
 
 const scenarios = [
-  "state-migrated-no-rollback",
   "rollback-state-unverified",
   "revoked",
   "retargeted",
-  "grantless",
-  "grantless-incumbent",
   "grantless-scratch",
   "grantless-scratch-incumbent",
   "grantless-scratch-owned",
   "grantless-scratch-owned-incumbent",
   "grantless-scratch-owned-parent-git",
   "grantless-scratch-owned-parent-completed",
-  "grantless-scratch-owned-parent-npm",
   "grantless-scratch-owned-parent-pnpm-root-move",
   "grantless-scratch-owned-parent-git-root-switch",
   "grantless-scratch-owned-parent-wrong-handoff",

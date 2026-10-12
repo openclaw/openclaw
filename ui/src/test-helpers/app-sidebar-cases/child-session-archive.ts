@@ -5,6 +5,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import { createGatewayHarness, mountSidebar } from "../app-sidebar.ts";
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
 import { waitForFast } from "../wait-for.ts";
@@ -124,19 +125,7 @@ describe("AppSidebar child session archives", () => {
       return;
     }
     expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
-    const selectStatus = async (value: string) => {
-      sidebar
-        .querySelector<HTMLButtonElement>(".sidebar-session-toolbar .sidebar-session-sort")!
-        .click();
-      await sidebar.updateComplete;
-      sidebar.querySelector(".sidebar-session-sort-menu")!.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value } },
-        }),
-      );
-      await sidebar.updateComplete;
-    };
+    const selectStatus = (value: string) => activateSessionMenuValue(sidebar, value);
     await selectStatus("status:all");
     await waitForFast(() =>
       expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).not.toBeNull(),

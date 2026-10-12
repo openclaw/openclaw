@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ToolSearchCatalogToolExecutor } from "./tool-search.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -82,9 +83,6 @@ function createHarness() {
   applyCodeModeCatalog({
     tools: [...codeModeTools, nodesTool],
     config,
-    sessionId: ctx.sessionId,
-    sessionKey: ctx.sessionKey,
-    runId: ctx.runId,
     catalogRef,
   });
   return {
@@ -295,7 +293,7 @@ describe("Code Mode nodes", () => {
 
     expect(details).toMatchObject({
       status: "failed",
-      failurePhase: "bridge",
+      failurePhase: "guest",
       bridgeDispatchStarted: true,
     });
   });
@@ -312,7 +310,7 @@ describe("Code Mode nodes", () => {
 
     expect(details).toMatchObject({
       status: "failed",
-      failurePhase: "bridge",
+      failurePhase: "guest",
       bridgeDispatchStarted: true,
     });
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(

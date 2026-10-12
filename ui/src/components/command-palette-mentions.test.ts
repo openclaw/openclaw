@@ -216,34 +216,58 @@ describe("command palette people mentions", () => {
     expect(f.recipients()).toHaveLength(0);
   });
 
-  it("preserves same-name identity through exact editing and inserts at the caret", async () => {
-    const f = await mount();
-    await f.search();
-    await f.key("Enter");
-    await f.search();
-    await f.key("ArrowDown");
-    await f.key("Enter");
-    await f.edit({ start: 0, end: 6, text: "", inputType: "deleteContentForward" });
-    expect(f.recipients()).toHaveLength(1);
-    await f.edit({ start: 0, end: 0, text: "Review " });
-    await f.append(" tail");
-    await f.edit({ start: 13, end: 13, text: "@" });
-    await vi.advanceTimersByTimeAsync(150);
-    await f.key("End");
-    await f.key("Enter");
-    expect(f.input.value).toBe("Review @Alex @Jordan Rivera  tail");
-    expect(f.input.selectionStart).toBe(28);
-    await f.send();
-    expect(f.request).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.objectContaining({
-        mentions: [
-          { profileId: "alex-two", start: 7, end: 12 },
-          { profileId: "jordan", start: 13, end: 27 },
-        ],
-      }),
-    );
-  });
+  it.each(["same-name token", "inside token"])(
+    "preserves recipient identity after deleting %s",
+    async (change) => {
+      const f = await mount();
+      await f.search();
+      await f.key("Enter");
+      await f.search();
+      await f.key(change === "same-name token" ? "ArrowDown" : "End");
+      await f.key("Enter");
+      await f.edit({
+        start: change === "same-name token" ? 0 : 3,
+        end: change === "same-name token" ? 6 : 4,
+        text: "",
+        inputType: "deleteContentForward",
+      });
+      expect(f.recipients()).toHaveLength(1);
+      if (change === "same-name token") {
+        await f.edit({ start: 0, end: 0, text: "Review " });
+        await f.append(" tail");
+        await f.edit({ start: 13, end: 13, text: "@" });
+        await vi.advanceTimersByTimeAsync(150);
+        await f.key("End");
+        await f.key("Enter");
+        expect(f.input.value).toBe("Review @Alex @Jordan Rivera  tail");
+        expect(f.input.selectionStart).toBe(28);
+        await f.send();
+        expect(f.request).toHaveBeenCalledWith(
+          "sessions.create",
+          expect.objectContaining({
+            mentions: [
+              { profileId: "alex-two", start: 7, end: 12 },
+              { profileId: "jordan", start: 13, end: 27 },
+            ],
+          }),
+        );
+      } else {
+        const value = f.input.value;
+        vi.mocked(f.context.sessions.list).mockClear();
+        f.palette.querySelector<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
+        await f.palette.updateComplete;
+        expect(f.input.value).toBe(value);
+        expect(f.recipients()).toHaveLength(0);
+        await vi.advanceTimersByTimeAsync(200);
+        expect(f.context.sessions.list).toHaveBeenCalledWith(
+          expect.objectContaining({ search: value.trim() }),
+        );
+        await f.send();
+        const create = f.request.mock.calls.find(([method]) => method === "sessions.create")?.[1];
+        expect(create).not.toHaveProperty("mentions");
+      }
+    },
+  );
 
   it("keeps name selections but closes when the selection leaves the invocation", async () => {
     const f = await mount();
@@ -269,41 +293,25 @@ describe("command palette people mentions", () => {
     expect(f.recipients()).toHaveLength(0);
   });
 
-  it("removes edited references and clears selections without deleting prose", async () => {
-    const f = await mount();
-    await f.search();
-    await f.key("Enter");
-    await f.search();
-    await f.key("End");
-    await f.key("Enter");
-    await f.edit({ start: 3, end: 4, text: "", inputType: "deleteContentForward" });
-    expect(f.recipients()).toHaveLength(1);
-    const value = f.input.value;
-    vi.mocked(f.context.sessions.list).mockClear();
-    f.palette.querySelector<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
-    await f.palette.updateComplete;
-    expect(f.input.value).toBe(value);
-    expect(f.recipients()).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(200);
-    expect(f.context.sessions.list).toHaveBeenCalledWith(
-      expect.objectContaining({ search: value.trim() }),
-    );
-    await f.send();
-    const create = f.request.mock.calls.find(([method]) => method === "sessions.create")?.[1];
-    expect(create).not.toHaveProperty("mentions");
-  });
-
-  it.each(["insertFromPaste", "insertFromDrop"])(
-    "does not select or look up text from %s",
+  it.each(["insertFromPaste", "insertFromDrop", "modified send"])(
+    "does not turn unselected text into a mention on %s",
     async (inputType) => {
       const f = await mount();
-      await f.replace("@Alex", inputType);
-      await vi.advanceTimersByTimeAsync(150);
-      expect(f.directory).not.toHaveBeenCalled();
+      const message = inputType === "modified send" ? "@" : "@Alex";
+      if (inputType === "modified send") {
+        await f.search();
+        expect((await f.key("Enter", { shiftKey: true })).defaultPrevented).toBe(false);
+        expect((await f.key("Tab", { shiftKey: true })).defaultPrevented).toBe(false);
+        expect(f.recipients()).toHaveLength(0);
+      } else {
+        await f.replace(message, inputType);
+        await vi.advanceTimersByTimeAsync(150);
+        expect(f.directory).not.toHaveBeenCalled();
+      }
       await f.send();
       expect(f.request).toHaveBeenCalledWith(
         "sessions.create",
-        expect.objectContaining({ message: "@Alex" }),
+        expect.objectContaining({ message }),
       );
       const create = f.request.mock.calls.find(([method]) => method === "sessions.create")?.[1];
       expect(create).not.toHaveProperty("mentions");
@@ -429,22 +437,6 @@ describe("command palette people mentions", () => {
       expect(f.menu()).toBeNull();
     },
   );
-
-  it("keeps Shift+Enter and modified send independent from people selection", async () => {
-    const f = await mount();
-    await f.search();
-    expect((await f.key("Enter", { shiftKey: true })).defaultPrevented).toBe(false);
-    expect((await f.key("Tab", { shiftKey: true })).defaultPrevented).toBe(false);
-    expect(f.recipients()).toHaveLength(0);
-    await f.send();
-    expect(f.request).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.objectContaining({ message: "@" }),
-    );
-    expect(
-      f.request.mock.calls.find(([method]) => method === "sessions.create")?.[1],
-    ).not.toHaveProperty("mentions");
-  });
 
   it.each(["close", "owner", "detach", "reconnect", "destination"])(
     "keeps a new visible invocation authoritative after %s",

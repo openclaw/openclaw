@@ -1,3 +1,4 @@
+import type { ParsedCodexPluginConfig } from "./app-server/config-parsing.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./app-server/config.js";
 import { isOpenAiCuratedMarketplaceName } from "./app-server/plugin-inventory.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
@@ -6,17 +7,8 @@ import {
   type CodexAvailablePlugin,
 } from "./plugin-marketplace-discovery.js";
 
-export type CodexPluginConfigEntry = {
-  enabled?: boolean;
-  marketplaceName?: string;
-  pluginName?: string;
-  allow_destructive_actions?: boolean | "auto" | "ask";
-};
-
-export type CodexPluginsConfigBlock = {
-  enabled?: boolean;
-  plugins?: Record<string, CodexPluginConfigEntry>;
-};
+export type CodexPluginsConfigBlock = NonNullable<ParsedCodexPluginConfig["codexPlugins"]>;
+export type CodexPluginConfigEntry = NonNullable<CodexPluginsConfigBlock["plugins"]>[string];
 
 /** Config IO shared by command handlers and their scoped runtime. */
 export type CodexPluginsManagementIO = {

@@ -1,5 +1,4 @@
-/** Session MCP runtime manager install path: static get-or-create + requester resolve/install. */
-import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import type {
   SessionMcpConfigPublication,
   SessionMcpRuntimeManagerLifecycle,
@@ -66,6 +65,10 @@ export function createSessionMcpRuntimeManagerInstall(
   const { store } = lifecycle;
   const reconcileReusableRetirement = (params: RuntimeEntryParams, runtime: SessionMcpRuntime) => {
     const { sessionId } = params;
+    const owner = sessionMcpRuntimeOwners.get(runtime);
+    if (owner && params.agentId) {
+      owner.agentId = params.agentId;
+    }
     const slot = store.runtimeSlots.get(runtime);
     if (slot) {
       slot.idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(store.configReload?.cfg ?? params.cfg);
@@ -130,16 +133,13 @@ export function createSessionMcpRuntimeManagerInstall(
       });
       store.runtimeSlots.set(runtime, slot);
       store.runtimesBySessionId.set(runtimeKey, runtime);
-      let publication = configReloadAtAdmission;
-      // Keep explicit run snapshots, but fence any publish crossed by acquisition.
-      // Plugin epochs survive subsequent ordinary config publishes.
-      while (store.configReload && store.configReload !== publication) {
-        const next = store.configReload;
+      const next = store.configReload;
+      // Catch up once after creation; published runtimes receive later reloads directly.
+      if (next && next !== configReloadAtAdmission) {
         await sessionMcpRuntimeOwners.get(runtime)?.reload({
           ...next,
-          reloadPlugins: next.pluginGeneration !== (publication?.pluginGeneration ?? 0),
+          reloadPlugins: next.pluginGeneration !== (configReloadAtAdmission?.pluginGeneration ?? 0),
         });
-        publication = next;
       }
       if (!(sessionMcpRuntimeOwners.get(runtime)?.hasServers() ?? hasServers)) {
         await lifecycle.releaseEmptyRuntimeSlot(runtimeKey, runtime);
@@ -175,7 +175,7 @@ export function createSessionMcpRuntimeManagerInstall(
     if (store.runtimesBySessionId.get(params.runtimeKey) === runtime) {
       store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
         connectionHash,
-        resolvedAt: store.now(),
+        resolvedAt: store.scheduler.now(),
       });
     }
     return runtime;
@@ -216,7 +216,7 @@ export function createSessionMcpRuntimeManagerInstall(
     // Revocation/rotation takes effect within MCP_CONNECTION_REVALIDATE_MS even for
     // continuously active requesters (markUsed does not extend this clock alone).
     const withinRevalidateWindow =
-      meta !== undefined && store.now() - meta.resolvedAt < MCP_CONNECTION_REVALIDATE_MS;
+      meta !== undefined && store.scheduler.now() - meta.resolvedAt < MCP_CONNECTION_REVALIDATE_MS;
     if (withinRevalidateWindow && existing && matchesRuntime(existing, params, scopedFingerprint)) {
       reconcileReusableRetirement(params, existing);
       existing.markUsed();
@@ -246,6 +246,7 @@ export function createSessionMcpRuntimeManagerInstall(
       configReloadAtAdmission: params.configReloadAtAdmission,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       cfg: params.cfg,

@@ -3,20 +3,20 @@ import { stripVTControlCharacters } from "node:util";
 import { recordCodexAppServerSpawnFailure } from "./spawn-error.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
-/** The official npm launcher prints Node's native spawn error and exits before initialization. */
+/** The official npm launcher prints the native spawn error and exits before initialization. */
 export function observeManagedCodexLauncherFailure(
   child: ChildProcessWithoutNullStreams,
   nativeCommand: string,
 ): void {
   let prefix = "";
   let launchCode: string | undefined;
-  const startupFailure: NonNullable<CodexAppServerTransport["startupFailure"]> = {
-    complete() {
-      child.stderr.off("data", onData);
-      child.off("exit", onExit);
-      prefix = "";
-    },
+  const complete = () => {
+    child.stderr.off("data", onData);
+    child.off("exit", onExit);
+    child.off("close", complete);
+    prefix = "";
   };
+  const startupFailure: NonNullable<CodexAppServerTransport["startupFailure"]> = { complete };
   const onData = (chunk: string | Buffer) => {
     if (launchCode || prefix.length >= 16_384) {
       return;
@@ -34,9 +34,26 @@ export function observeManagedCodexLauncherFailure(
       /Error: Missing optional dependency @openai\/codex-[\w-]+\. Reinstall Codex:/u.test(prefix)
     ) {
       launchCode = "ENOENT";
+    } else {
+      const bunError =
+        /^(ENOENT|EACCES|EBADARCH|Unknown system error -86): [^\r\n]*, (?:posix_spawn|spawn) (['"])([^\r\n]*)\2\r?$/mu.exec(
+          prefix,
+        );
+      const syscall = /^\s+syscall: (['"])([^\r\n]*)\1,\r?$/mu.exec(prefix)?.[2];
+      if (bunError?.[3] === nativeCommand && syscall === `spawn ${nativeCommand}`) {
+        launchCode = bunError[1];
+      }
+    }
+    if (child.exitCode !== null) {
+      onExit(child.exitCode);
     }
   };
   const onExit = (code: number | null) => {
+    // Exit can precede pipe data; registration already drains that data before
+    // choosing its failure. Keep observing until the diagnostic or pipe close.
+    if (code === 1 && !launchCode) {
+      return;
+    }
     startupFailure.complete();
     if (code !== 1 || !launchCode) {
       return;
@@ -52,5 +69,6 @@ export function observeManagedCodexLauncherFailure(
   };
   child.stderr.on("data", onData);
   child.once("exit", onExit);
+  child.once("close", complete);
   Object.assign(child, { startupFailure });
 }

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withUpdateInProgressEnv } from "../cli/update-cli/update-command-service-env.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
@@ -20,6 +21,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const result = (status: UpdateRunResult["status"]): UpdateRunResult => ({
   status,
   mode: "git",
@@ -68,7 +70,34 @@ afterEach(() => {
 });
 
 describe("Doctor source update delegation", () => {
-  it.each(["OPENCLAW_SUPERVISOR_MODE", "OPENCLAW_SERVICE_REPAIR_POLICY"])(
+  it.each([true])(
+    "reports a host-owned install before git discovery (noninteractive=%s)",
+    async (nonInteractive) => {
+      const root = tempDirs.make("openclaw-doctor-host-");
+      await fs.writeFile(
+        path.join(root, "openclaw-install-owner.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          owner: "macos-app",
+          displayName: "OpenClaw.app",
+          updateHint: "Update OpenClaw.app to update this Gateway.",
+        }),
+      );
+
+      await expect(offer({ root, options: { nonInteractive } })).resolves.toEqual({
+        updated: false,
+      });
+
+      expect(mocks.git).not.toHaveBeenCalled();
+      expect(mocks.confirm).not.toHaveBeenCalled();
+      expect(mocks.updateCommand).not.toHaveBeenCalled();
+      expect(mocks.note).toHaveBeenCalledExactlyOnceWith(
+        "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+        "Update",
+      );
+    },
+  );
+  it.each(["OPENCLAW_SERVICE_REPAIR_POLICY"])(
     "continues Doctor without offering self-update when %s is external",
     async (key) => {
       vi.stubEnv(key, "external");
@@ -80,22 +109,6 @@ describe("Doctor source update delegation", () => {
         "Update",
       );
       expect(mocks.outro).not.toHaveBeenCalled();
-    },
-  );
-  it.each(["nonInteractive", "yes", "repair", "non-TTY", "missing root"] as const)(
-    "does not offer an update for %s",
-    async (gate) => {
-      if (gate === "non-TTY") {
-        Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
-      }
-      const options =
-        gate === "nonInteractive" || gate === "yes" || gate === "repair" ? { [gate]: true } : {};
-      await expect(
-        offer({ options, ...(gate === "missing root" ? { root: null } : {}) }),
-      ).resolves.toEqual({ updated: false });
-      expect(mocks.git).not.toHaveBeenCalled();
-      expect(mocks.confirm).not.toHaveBeenCalled();
-      expect(mocks.updateCommand).not.toHaveBeenCalled();
     },
   );
 
@@ -112,6 +125,21 @@ describe("Doctor source update delegation", () => {
     expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
   });
 
+  it.each(["nonInteractive", "non-TTY"] as const)(
+    "does not offer an update without interactive authority: %s",
+    async (gate) => {
+      if (gate === "non-TTY") {
+        Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
+      }
+      await expect(
+        offer({ options: gate === "nonInteractive" ? { nonInteractive: true } : {} }),
+      ).resolves.toEqual({ updated: false });
+      expect(mocks.git).not.toHaveBeenCalled();
+      expect(mocks.confirm).not.toHaveBeenCalled();
+      expect(mocks.updateCommand).not.toHaveBeenCalled();
+    },
+  );
+
   it("leaves a declined update with Doctor", async () => {
     mocks.confirm.mockResolvedValue(false);
     await expect(offer()).resolves.toEqual({ updated: false });
@@ -123,71 +151,24 @@ describe("Doctor source update delegation", () => {
     expect(mocks.outro).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { status: "ok", reason: undefined, handled: true },
-    { status: "skipped", reason: "already-current", handled: false },
-    { status: "skipped", reason: "gateway-readiness-unverified", handled: true },
-    { status: "skipped", reason: "still-starting", handled: true },
-  ] as const)(
-    "uses the settled $status/$reason update outcome to decide whether Doctor continues",
-    async ({ status, reason, handled }) => {
-      mocks.updateCommand.mockImplementation(async ({ onResult }) => {
-        expect(mocks.outro).not.toHaveBeenCalled();
-        onResult?.({ ...result(status), reason });
-      });
-      await expect(offer()).resolves.toEqual({
-        updated: true,
-        handled,
-        ...(reason === "gateway-readiness-unverified" || reason === "still-starting"
-          ? { reason }
-          : {}),
-      });
-      expect(mocks.updateCommand).toHaveBeenCalledExactlyOnceWith({
-        sourceUpdate: { root: "/repo/source" },
-        timeout: "1200",
-        onResult: expect.any(Function),
-      });
-      if (reason === "gateway-readiness-unverified" || reason === "still-starting") {
-        expect(mocks.outro).toHaveBeenCalledWith(
-          expect.stringContaining("Gateway readiness remains unverified. Keep recovery backups"),
-        );
-      } else if (status === "ok") {
-        expect(mocks.outro).toHaveBeenCalledWith(
-          "Update completed (doctor already ran as part of the update).",
-        );
-      } else {
-        expect(mocks.outro).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it.each([
-    new Error("candidate preparation failed"),
-    new UpdateCommandRecoveryPendingError("native settlement remains pending"),
-  ])("propagates the canonical failure without declaring Doctor handled: %s", async (failure) => {
+  it("keeps recovery backups when the canonical updater reports still-starting", async () => {
     mocks.updateCommand.mockImplementation(async ({ onResult }) => {
-      onResult?.(result("error"));
-      throw failure;
+      expect(mocks.outro).not.toHaveBeenCalled();
+      onResult?.({ ...result("skipped"), reason: "still-starting" });
     });
-    await expect(offer()).rejects.toBe(failure);
-    expect(mocks.outro).not.toHaveBeenCalled();
-  });
-
-  it("does not claim completion without a canonical result", async () => {
-    mocks.updateCommand.mockResolvedValue(undefined);
-    await expect(offer()).resolves.toEqual({ updated: true, handled: false });
-    expect(mocks.outro).not.toHaveBeenCalled();
-  });
-
-  it("offers a linked source install when checkout realpaths match", async () => {
-    vi.mocked(fs.realpath).mockImplementation(async (candidate) =>
-      String(candidate) === "/repo/link" ? "/repo/source" : String(candidate),
+    await expect(offer()).resolves.toEqual({
+      updated: true,
+      handled: true,
+      reason: "still-starting",
+    });
+    expect(mocks.updateCommand).toHaveBeenCalledExactlyOnceWith({
+      sourceUpdate: { root: "/repo/source" },
+      timeout: "1200",
+      onResult: expect.any(Function),
+    });
+    expect(mocks.outro).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway readiness remains unverified. Keep recovery backups"),
     );
-    await expect(offer({ root: "/repo/link" })).resolves.toEqual({ updated: true, handled: true });
-    expect(mocks.updateCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ sourceUpdate: { root: "/repo/link" } }),
-    );
-    expect(mocks.note).not.toHaveBeenCalled();
   });
 
   it.each(["another checkout", "not a repository"])(

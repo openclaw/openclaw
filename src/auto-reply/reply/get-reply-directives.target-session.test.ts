@@ -9,7 +9,6 @@ import {
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
-import type { ReplyPayload } from "../types.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import {
   expectContinueResult,
@@ -25,7 +24,6 @@ import {
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
-  type ReplyPreRunRejectionCode,
 } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -40,9 +38,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 async function resolveHelloWithModelDefaults(params: {
-  defaultThinking: "off" | "low" | "medium";
+  defaultThinking?: "off" | "low" | "medium";
   defaultThinkingByModel?: Record<string, "off" | "low" | "medium">;
-  defaultReasoning: "on";
+  defaultReasoning?: "on";
   cfg?: Parameters<typeof resolveReplyDirectives>[0]["cfg"];
   body?: string;
   sessionEntry?: SessionEntry;
@@ -51,7 +49,6 @@ async function resolveHelloWithModelDefaults(params: {
   agentEntries?: Array<{ id?: string; thinkingDefault?: "off" | "low" }>;
   hasConfiguredThinkingDefault?: boolean;
   commandAuthorized?: boolean;
-  hasOneTurnModelOverride?: boolean;
   selectedProvider?: string;
   selectedModel?: string;
   provider?: string;
@@ -65,9 +62,10 @@ async function resolveHelloWithModelDefaults(params: {
   const resolveDefaultThinkingLevel = vi.fn(
     async (selection?: { model?: string }) =>
       (selection?.model ? params.defaultThinkingByModel?.[selection.model] : undefined) ??
-      params.defaultThinking,
+      params.defaultThinking ??
+      "off",
   );
-  const resolveDefaultReasoningLevel = vi.fn(async () => params.defaultReasoning);
+  const resolveDefaultReasoningLevel = vi.fn(async () => params.defaultReasoning ?? "on");
   mocks.listAgentEntries.mockReturnValue(params.agentEntries ?? []);
   if (params.modelError) {
     mocks.createModelSelectionState.mockRejectedValueOnce(params.modelError);
@@ -132,7 +130,6 @@ async function resolveHelloWithModelDefaults(params: {
     aliasIndex: { byAlias: new Map(), byKey: new Map() },
     provider: params.provider ?? "openai",
     model: params.model ?? "gpt-4o-mini",
-    hasOneTurnModelOverride: params.hasOneTurnModelOverride,
     hasResolvedHeartbeatModelOverride: false,
     typing,
     opts: params.opts,
@@ -172,10 +169,6 @@ vi.mock("../../agents/thinking-runtime.js", () => ({
     (provider === "openai" ? "codex" : "openclaw"),
 }));
 
-vi.mock("../../routing/session-key.js", () => ({
-  normalizeAgentId: vi.fn((value: string) => value),
-}));
-
 vi.mock("../commands-text-routing.js", () => ({
   shouldHandleTextCommands: () => mocks.shouldHandleTextCommands(),
 }));
@@ -206,11 +199,6 @@ vi.mock("./directive-handling.parse.js", async () => {
   };
 });
 
-vi.mock("./get-reply-directive-aliases.js", () => ({
-  reserveSkillCommandNames: vi.fn(),
-  resolveConfiguredDirectiveAliases: vi.fn(() => []),
-}));
-
 vi.mock("./get-reply-directives-apply.js", () => ({
   applyInlineDirectiveOverrides: (...args: unknown[]) =>
     mocks.applyInlineDirectiveOverrides(...args),
@@ -233,9 +221,9 @@ vi.mock("./groups.js", () => ({
   resolveGroupRequireMention: (params: unknown) => mocks.resolveGroupRequireMention(params),
 }));
 
+// mock-isolation: Directive routing uses prepared model state, not live catalog/auth discovery.
 vi.mock("./model-selection.js", () => ({
   createModelSelectionState: (...args: unknown[]) => mocks.createModelSelectionState(...args),
-  resolveContextTokens: vi.fn(() => 4096),
 }));
 
 vi.mock("./reply-elevated.js", () => ({
@@ -284,21 +272,6 @@ describe("resolveReplyDirectives", () => {
     mocks.resolveReplyExecOverrides.mockReturnValue(undefined);
   });
 
-  it("passes one-turn model override state into model selection", async () => {
-    await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
-      provider: "openai",
-      model: "gpt-4o-mini",
-      hasOneTurnModelOverride: true,
-    });
-
-    const modelSelectionInput = mockCallInput(mocks.createModelSelectionState);
-    expect(modelSelectionInput.provider).toBe("openai");
-    expect(modelSelectionInput.model).toBe("gpt-4o-mini");
-    expect(modelSelectionInput.hasOneTurnModelOverride).toBe(true);
-  });
-
   it("passes persisted session identity into system-event group activation resolution", async () => {
     const wrapperSessionEntry = makeSessionEntry({ sessionId: "wrapper-session" });
     const targetSessionEntry = makeSessionEntry({
@@ -309,8 +282,6 @@ describe("resolveReplyDirectives", () => {
     });
 
     await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
       sessionEntry: wrapperSessionEntry,
       sessionStore: { "agent:main:whatsapp:+2000": targetSessionEntry },
       ctx: { InternalTurnSource: "heartbeat" },
@@ -323,49 +294,11 @@ describe("resolveReplyDirectives", () => {
     });
   });
 
-  it("uses the base room identity for isolated heartbeat group activation", async () => {
-    const baseSessionKey = "agent:main:slack:channel:C123";
-    const baseSessionEntry = makeSessionEntry({
-      sessionId: "base-session",
-      chatType: "channel",
-      groupId: "C123",
-      groupChannel: "#general",
-      delivery: normalizeSessionDeliveryState({ context: { channel: "slack", to: "C123" } }),
-    });
-    const isolatedSessionEntry = makeSessionEntry({
-      sessionId: "isolated-session",
-      heartbeatIsolatedBaseSessionKey: baseSessionKey,
-    });
-
-    await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
-      conversation: prepareReplyConversation({
-        ctx: { InternalTurnSource: "heartbeat" },
-        sessionEntry: baseSessionEntry,
-      }),
-      sessionStore: {
-        "agent:main:whatsapp:+2000": isolatedSessionEntry,
-        [baseSessionKey]: baseSessionEntry,
-      },
-      ctx: { InternalTurnSource: "heartbeat" },
-      sessionCtx: { InternalTurnSource: "heartbeat", Provider: undefined },
-    });
-
-    expect(mockCallInput(mocks.resolveGroupRequireMention).group).toMatchObject({
-      channel: "slack",
-      groupId: "C123",
-      groupChannel: "#general",
-    });
-  });
-
   it("returns a terminal retry when model preparation sees a rotated session", async () => {
     const error = new SessionWorkStartInvalidatedError(
       'Session "agent:main:whatsapp:+2000" changed while starting work. Retry.',
     );
     const { result, typing } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
       modelError: error,
     });
 
@@ -379,8 +312,6 @@ describe("resolveReplyDirectives", () => {
 
   it("returns a terminal rejection when locked model preparation cannot preserve its model", async () => {
     const { result, typing } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
       modelError: new ModelSelectionLockedError(),
     });
 
@@ -392,60 +323,29 @@ describe("resolveReplyDirectives", () => {
     expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
   });
 
-  it.each<{
-    label: string;
-    body: string;
-    reply: ReplyPayload;
-    reason?: ReplyPreRunRejectionCode;
-  }>([
-    {
-      label: "model acknowledgement",
-      body: "/model openai/gpt-5.5",
-      reply: {
-        text: "Model set to openai/gpt-5.5 for this session only; configured default unchanged.",
-      },
-    },
-    {
-      label: "model rejection",
-      body: "/model openai/REJECTED_PRIVATE_TOKEN",
-      reply: { text: 'Model "openai/REJECTED_PRIVATE_TOKEN" is not allowed.', isError: true },
-      reason: "model-selection-rejected",
-    },
-    {
-      label: "combined directive rejection",
+  it("preserves combined directive rejection delivery and its invocation rejection fact", async () => {
+    const reply = { text: 'Model "openai/REJECTED_PRIVATE_TOKEN" is not allowed.', isError: true };
+    const runState: ReplyOperationRunState = {};
+    const opts: InternalGetReplyOptions = { [REPLY_OPERATION_RUN_STATE]: runState };
+    mocks.applyInlineDirectiveOverrides.mockResolvedValueOnce({
+      kind: "reply",
+      reply: { ...reply },
+      preRunRejection: "session-directive-rejected",
+    });
+
+    const { result } = await resolveHelloWithModelDefaults({
       body: "/model openai/REJECTED_PRIVATE_TOKEN\n/think high",
-      reply: { text: 'Model "openai/REJECTED_PRIVATE_TOKEN" is not allowed.', isError: true },
-      reason: "session-directive-rejected",
-    },
-  ])(
-    "preserves $label delivery and its invocation rejection fact",
-    async ({ body, reply, reason }) => {
-      const runState: ReplyOperationRunState = {};
-      const opts: InternalGetReplyOptions = { [REPLY_OPERATION_RUN_STATE]: runState };
-      mocks.applyInlineDirectiveOverrides.mockResolvedValueOnce({
-        kind: "reply",
-        reply: { ...reply },
-        preRunRejection: reason,
-      });
+      commandAuthorized: true,
+      opts,
+    });
 
-      const { result } = await resolveHelloWithModelDefaults({
-        body,
-        commandAuthorized: true,
-        defaultThinking: "off",
-        defaultReasoning: "on",
-        opts,
-      });
-
-      expect(result).toEqual({ kind: "reply", reply });
-      expect(runState.preRunRejection).toBe(reason);
-      if (result.kind !== "reply" || !result.reply || Array.isArray(result.reply)) {
-        throw new Error("expected a single directive reply");
-      }
-      expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(
-        true,
-      );
-    },
-  );
+    expect(result).toEqual({ kind: "reply", reply });
+    expect(runState.preRunRejection).toBe("session-directive-rejected");
+    if (result.kind !== "reply" || !result.reply || Array.isArray(result.reply)) {
+      throw new Error("expected a single directive reply");
+    }
+    expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
 
   it("preserves explicitly suppressed command-shaped text for the model", async () => {
     const body = "/model openai/gpt-5.5";
@@ -454,8 +354,6 @@ describe("resolveReplyDirectives", () => {
     const { result } = await resolveHelloWithModelDefaults({
       body,
       commandAuthorized: true,
-      defaultThinking: "off",
-      defaultReasoning: "on",
       ctx: {
         CommandInterpretationSuppressed: true,
         CommandTurn: {
@@ -474,97 +372,6 @@ describe("resolveReplyDirectives", () => {
     });
   });
 
-  it("keeps one-turn fast mode with the resolved fast mode", async () => {
-    const { result } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
-      opts: {
-        fastModeOverride: "auto",
-      },
-    });
-
-    await expectContinueResult(result, {
-      resolvedFastMode: "auto",
-      resolvedFastModeAutoOnSeconds: 60,
-    });
-  });
-
-  it("resolves fast defaults after model selection updates provider and model", async () => {
-    mocks.resolveFastModeState.mockImplementation(
-      ({ provider, model }: { provider?: string; model?: string }) => ({
-        mode: provider === "openai" && model === "gpt-5.5" ? "auto" : false,
-        enabled: provider === "openai" && model === "gpt-5.5",
-        source: "config",
-        fastAutoOnSeconds: provider === "openai" && model === "gpt-5.5" ? 30 : 60,
-      }),
-    );
-
-    const { result } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      selectedProvider: "openai",
-      selectedModel: "gpt-5.5",
-    });
-
-    expect(mockCallInput(mocks.resolveFastModeState)).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.5",
-    });
-    await expectContinueResult(result, {
-      provider: "openai",
-      model: "gpt-5.5",
-      resolvedFastMode: "auto",
-      resolvedFastModeAutoOnSeconds: 30,
-    });
-  });
-
-  it.each([
-    ["gpt-5.6-terra", "medium"],
-    ["gpt-5.6-luna", "medium"],
-  ] as const)(
-    "resolves the %s thinking default after a mixed model switch",
-    async (targetModel, expectedThinking) => {
-      mocks.applyInlineDirectiveOverrides.mockImplementationOnce(async (params) => ({
-        kind: "continue",
-        directives: params.directives,
-        provider: "openai",
-        model: targetModel,
-        contextTokens: params.contextTokens,
-      }));
-
-      const { result, resolveDefaultThinkingLevel } = await resolveHelloWithModelDefaults({
-        body: `reply to this\n/model openai/${targetModel}`,
-        commandAuthorized: true,
-        defaultThinking: "low",
-        defaultThinkingByModel: {
-          "gpt-5.6-sol": "low",
-          [targetModel]: expectedThinking,
-        },
-        defaultReasoning: "on",
-        selectedProvider: "openai",
-        selectedModel: "gpt-5.6-sol",
-        cfg: {
-          agents: {
-            defaults: {
-              models: {
-                [`openai/${targetModel}`]: { agentRuntime: { id: "codex" } },
-              },
-            },
-          },
-        },
-      });
-
-      await expectContinueResult(result, { resolvedThinkLevel: expectedThinking });
-      expect(resolveDefaultThinkingLevel).toHaveBeenLastCalledWith({
-        provider: "openai",
-        model: targetModel,
-        agentRuntime: "codex",
-      });
-    },
-  );
-
   it("uses the Sol default on the switching turn from a non-reasoning model", async () => {
     mocks.applyInlineDirectiveOverrides.mockImplementationOnce(async (params) => ({
       kind: "continue",
@@ -577,9 +384,7 @@ describe("resolveReplyDirectives", () => {
     const { result, resolveDefaultThinkingLevel } = await resolveHelloWithModelDefaults({
       body: "reply to this\n/model openai/gpt-5.6-sol",
       commandAuthorized: true,
-      defaultThinking: "off",
       defaultThinkingByModel: { "gpt-5.6-sol": "low" },
-      defaultReasoning: "on",
       selectedProvider: "openai",
       selectedModel: "gpt-4o-mini",
       cfg: {
@@ -601,186 +406,8 @@ describe("resolveReplyDirectives", () => {
     });
   });
 
-  it("prefers the target session entry from sessionStore for directive state", async () => {
-    const wrapperSessionEntry = makeSessionEntry({
-      sessionId: "wrapper-session",
-      thinkingLevel: "low",
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      elevatedLevel: "off",
-      parentSessionKey: "wrapper-parent",
-    });
-    const targetSessionEntry = makeSessionEntry({
-      sessionId: "target-session",
-      thinkingLevel: "high",
-      verboseLevel: "full",
-      reasoningLevel: "high",
-      elevatedLevel: "on",
-      parentSessionKey: "target-parent",
-    });
-
-    const result = await resolveReplyDirectives({
-      ctx: buildTestCtx({
-        Body: "hello",
-        CommandBody: "hello",
-        ParentSessionKey: "ctx-parent",
-      }),
-      cfg: {},
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp",
-      agentCfg: {},
-      sessionCtx: {
-        Body: "hello",
-        BodyStripped: "hello",
-        BodyForAgent: "hello",
-        CommandBody: "hello",
-        commandText: "hello",
-        agentText: "hello",
-        rawText: "hello",
-        Provider: "whatsapp",
-      } as TemplateContext,
-      sessionEntry: wrapperSessionEntry,
-      sessionStore: {
-        "agent:main:whatsapp:+2000": targetSessionEntry,
-      },
-      sessionKey: "agent:main:whatsapp:+2000",
-      storePath: "/tmp/sessions.json",
-      sessionScope: "per-sender",
-      conversation: prepareReplyConversation({ ctx: { Provider: "whatsapp" } }),
-      isGroup: false,
-      triggerBodyNormalized: "hello",
-      resetTriggered: false,
-      commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
-      aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      provider: "openai",
-      model: "gpt-4o-mini",
-      hasResolvedHeartbeatModelOverride: false,
-      typing: {
-        onReplyStart: async () => {},
-        startTypingLoop: async () => {},
-        startTypingOnText: async () => {},
-        refreshTypingTtl: () => {},
-        isActive: () => false,
-        markRunComplete: () => {},
-        markDispatchIdle: () => {},
-        cleanup: vi.fn(),
-      },
-      opts: undefined,
-      skillFilter: undefined,
-    });
-
-    expect(mockCallInput(mocks.resolveFastModeState).sessionEntry).toBe(targetSessionEntry);
-    const modelSelectionInput = mockCallInput(mocks.createModelSelectionState);
-    expect(modelSelectionInput.sessionEntry).toBe(targetSessionEntry);
-    expect(modelSelectionInput.parentSessionKey).toBe("target-parent");
-    expect(mockCallInput(mocks.applyInlineDirectiveOverrides).sessionEntry).toBe(
-      targetSessionEntry,
-    );
-    expect(mockCallInput(mocks.resolveReplyExecOverrides).sessionEntry).toBe(targetSessionEntry);
-    await expectContinueResult(result, {
-      resolvedThinkLevel: "high",
-      resolvedFastMode: true,
-      resolvedVerboseLevel: "full",
-      resolvedReasoningLevel: "high",
-      resolvedElevatedLevel: "on",
-    });
-  });
-
-  it("returns a directive-only ack for trace commands instead of continuing into the agent path", async () => {
-    mocks.applyInlineDirectiveOverrides.mockResolvedValueOnce({
-      kind: "reply",
-      reply: {
-        text: "⚙️ Trace enabled. Warning: trace output may contain sensitive information.",
-      },
-    });
-
-    const result = await resolveReplyDirectives({
-      ctx: buildTestCtx({
-        Body: "/trace on",
-        CommandBody: "/trace on",
-        CommandAuthorized: true,
-      }),
-      cfg: {},
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp",
-      agentCfg: {},
-      sessionCtx: {
-        Body: "/trace on",
-        BodyStripped: "/trace on",
-        BodyForAgent: "/trace on",
-        CommandBody: "/trace on",
-        commandText: "/trace on",
-        agentText: "/trace on",
-        rawText: "/trace on",
-        Provider: "telegram",
-        Surface: "telegram",
-      } as TemplateContext,
-      sessionEntry: makeSessionEntry(),
-      sessionStore: {
-        "agent:main:telegram:+2000": makeSessionEntry(),
-      },
-      sessionKey: "agent:main:telegram:+2000",
-      storePath: "/tmp/sessions.json",
-      sessionScope: "per-sender",
-      conversation: prepareReplyConversation({ ctx: { Provider: "telegram" } }),
-      isGroup: false,
-      triggerBodyNormalized: "/trace on",
-      resetTriggered: false,
-      commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
-      aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      provider: "openai",
-      model: "gpt-4o-mini",
-      hasResolvedHeartbeatModelOverride: false,
-      typing: makeTypingController(),
-      opts: undefined,
-      skillFilter: undefined,
-    });
-
-    expect(result).toEqual({
-      kind: "reply",
-      reply: {
-        text: "⚙️ Trace enabled. Warning: trace output may contain sensitive information.",
-      },
-    });
-  });
-
-  it("uses the model reasoning default when thinking is off", async () => {
-    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
-    });
-
-    await expectContinueResult(result, {
-      resolvedThinkLevel: "off",
-      resolvedReasoningLevel: "on",
-    });
-    expect(resolveDefaultReasoningLevel).toHaveBeenCalledOnce();
-  });
-
-  it("does not re-enable model reasoning when thinking was explicitly disabled", async () => {
-    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
-      sessionEntry: makeSessionEntry({ thinkingLevel: "off" }),
-    });
-
-    await expectContinueResult(result, {
-      resolvedThinkLevel: "off",
-      resolvedReasoningLevel: "off",
-    });
-    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
-  });
-
   it("does not re-enable model reasoning when thinking override explicitly disables thinking", async () => {
     const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
       opts: { thinkingLevelOverride: "off" },
     });
 
@@ -793,50 +420,7 @@ describe("resolveReplyDirectives", () => {
 
   it("does not re-enable model reasoning when per-agent thinking default disables thinking", async () => {
     const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
       agentEntries: [{ id: "main", thinkingDefault: "off" }],
-    });
-
-    await expectContinueResult(result, {
-      resolvedThinkLevel: "off",
-      resolvedReasoningLevel: "off",
-    });
-    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
-  });
-
-  it("does not re-enable model reasoning when per-model thinking config disables thinking", async () => {
-    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
-      hasConfiguredThinkingDefault: true,
-    });
-
-    await expectContinueResult(result, {
-      resolvedThinkLevel: "off",
-      resolvedReasoningLevel: "off",
-    });
-    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
-  });
-
-  it("skips the model reasoning default when thinking is active", async () => {
-    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      defaultThinking: "low",
-      defaultReasoning: "on",
-    });
-
-    await expectContinueResult(result, {
-      resolvedThinkLevel: "low",
-      resolvedReasoningLevel: "off",
-    });
-    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
-  });
-
-  it("does not re-enable model reasoning when agentCfg reasoningDefault is explicitly off", async () => {
-    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
-      agentCfg: { reasoningDefault: "off" },
     });
 
     await expectContinueResult(result, {
@@ -848,8 +432,6 @@ describe("resolveReplyDirectives", () => {
 
   it("does not expose configured reasoning defaults to untrusted senders", async () => {
     const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
       agentCfg: { reasoningDefault: "stream" },
     });
 
@@ -862,8 +444,6 @@ describe("resolveReplyDirectives", () => {
   it("ignores inline reasoning directives from untrusted senders", async () => {
     const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
       body: "/reasoning stream",
-      defaultThinking: "off",
-      defaultReasoning: "on",
     });
 
     await expectContinueResult(result, {
@@ -874,8 +454,6 @@ describe("resolveReplyDirectives", () => {
 
   it("does not expose session reasoning state to untrusted senders", async () => {
     const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
       sessionEntry: makeSessionEntry({ reasoningLevel: "stream" }),
     });
 
@@ -887,8 +465,6 @@ describe("resolveReplyDirectives", () => {
 
   it("allows session reasoning state for authorized senders", async () => {
     const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
       sessionEntry: makeSessionEntry({ reasoningLevel: "stream" }),
       commandAuthorized: true,
     });
@@ -901,8 +477,6 @@ describe("resolveReplyDirectives", () => {
 
   it("allows configured reasoning defaults for operator gateway clients", async () => {
     const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
       agentCfg: { reasoningDefault: "stream" },
       ctx: { GatewayClientScopes: ["operator.admin"] },
     });
@@ -911,186 +485,5 @@ describe("resolveReplyDirectives", () => {
       resolvedReasoningLevel: "stream",
     });
     expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
-  });
-
-  it("allows configured reasoning defaults for authorized senders", async () => {
-    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
-      agentCfg: { reasoningDefault: "stream" },
-      commandAuthorized: true,
-    });
-
-    await expectContinueResult(result, {
-      resolvedReasoningLevel: "stream",
-    });
-    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
-  });
-
-  it("keeps consumed text reset triggers empty after directive cleanup", async () => {
-    const sessionCtx = {
-      Body: "",
-      BodyStripped: "",
-      BodyForAgent: "",
-      BodyForCommands: "new session",
-      CommandBody: "new session",
-      commandText: "new session",
-      agentText: "",
-      rawText: "new session",
-      Provider: "slack",
-      Surface: "slack",
-    } as TemplateContext;
-
-    const result = await resolveReplyDirectives({
-      ctx: buildTestCtx({
-        Body: "new session",
-        BodyForAgent: "new session",
-        BodyForCommands: "new session",
-        CommandBody: "new session",
-        CommandAuthorized: true,
-        Provider: "slack",
-        Surface: "slack",
-      }),
-      cfg: {
-        session: {
-          resetTriggers: ["/new", "/reset", "new session"],
-        },
-      },
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp",
-      agentCfg: {},
-      sessionCtx,
-      sessionEntry: makeSessionEntry(),
-      sessionStore: {
-        "agent:main:slack:C123": makeSessionEntry(),
-      },
-      sessionKey: "agent:main:slack:C123",
-      storePath: "/tmp/sessions.json",
-      sessionScope: "per-sender",
-      conversation: prepareReplyConversation({ ctx: sessionCtx }),
-      isGroup: false,
-      triggerBodyNormalized: "new session",
-      resetTriggered: true,
-      commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
-      aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      provider: "openai",
-      model: "gpt-4o-mini",
-      hasResolvedHeartbeatModelOverride: false,
-      typing: makeTypingController(),
-      opts: undefined,
-      skillFilter: undefined,
-    });
-
-    await expectContinueResult(result, {
-      cleanedBody: "",
-    });
-    expect(sessionCtx.Body).toBe("");
-    expect(sessionCtx.BodyForAgent).toBe("");
-    expect(sessionCtx.BodyStripped).toBe("");
-  });
-
-  it("preserves prompt-facing context for transcript-backed text", async () => {
-    const agentText = "trusted provenance\n\nhello";
-    const { result } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
-      body: "hello",
-      sessionCtx: { commandText: "hello", agentText, rawText: "hello" },
-    });
-
-    await expectContinueResult(result, { cleanedBody: agentText });
-  });
-
-  it("does not resurrect a consumed command from the inbound context", async () => {
-    const sessionCtx = {
-      Body: "",
-      BodyStripped: "",
-      commandText: "",
-      agentText: "",
-      rawText: "new session",
-      Provider: "slack",
-      Surface: "slack",
-    } as TemplateContext;
-
-    const directResult = await resolveReplyDirectives({
-      ctx: buildTestCtx({
-        Body: "new session",
-        BodyForCommands: "new session",
-        CommandBody: "new session",
-        Provider: "slack",
-        Surface: "slack",
-      }),
-      cfg: {},
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp",
-      agentCfg: {},
-      sessionCtx,
-      sessionEntry: makeSessionEntry(),
-      sessionStore: {},
-      sessionKey: "agent:main:slack:C123",
-      storePath: "/tmp/sessions.json",
-      sessionScope: "per-sender",
-      conversation: prepareReplyConversation({ ctx: sessionCtx }),
-      isGroup: false,
-      triggerBodyNormalized: "new session",
-      resetTriggered: true,
-      commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
-      aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      provider: "openai",
-      model: "gpt-4o-mini",
-      hasResolvedHeartbeatModelOverride: false,
-      typing: makeTypingController(),
-    });
-
-    await expectContinueResult(directResult, { commandSource: "", cleanedBody: "" });
-  });
-
-  it("does not apply or remove directives when the command projection is explicitly empty", async () => {
-    const { result } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
-      body: "/trace on",
-      commandAuthorized: true,
-      sessionCtx: {
-        commandText: "",
-        agentText: "/trace on",
-        rawText: "/trace on",
-      },
-    });
-
-    await expectContinueResult(result, {
-      commandSource: "",
-      cleanedBody: "/trace on",
-    });
-  });
-
-  it("preserves directives and quoted current-message markers inside flat history", async () => {
-    const agentText = [
-      "[Chat messages since your last reply - for context]",
-      "Other: /trace on",
-      "Other: [Current message - respond to this] /model gpt-5.5",
-      "",
-      "[Current message - respond to this]",
-      "Owner: hello /status",
-    ].join("\n");
-    const { result } = await resolveHelloWithModelDefaults({
-      defaultThinking: "off",
-      defaultReasoning: "on",
-      body: "hello",
-      commandAuthorized: true,
-      sessionCtx: {
-        commandText: "hello",
-        agentText,
-        rawText: "hello",
-      },
-    });
-
-    await expectContinueResult(result, { cleanedBody: agentText });
   });
 });

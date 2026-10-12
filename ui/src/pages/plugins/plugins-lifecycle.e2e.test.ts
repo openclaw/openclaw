@@ -102,11 +102,18 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         expect(await page.locator(".plugin-catalog-detail__actions .btn__spinner").count()).toBe(0);
       }
       await page.locator(".settings-sidebar").getByRole("button", { name: "Back to app" }).click();
-      const workboardRoute = page.locator(
-        'openclaw-app-sidebar .sidebar-zone-entry[data-sidebar-entry="plugin:workboard/workboard"] > .nav-item',
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+      const workboardRoute = sidebar.locator(
+        '.sidebar-pages [data-sidebar-entry="plugin:workboard/workboard"] > .nav-item',
       );
       await workboardRoute.waitFor();
       expect(await workboardRoute.getAttribute("href")).toBe("/workboard");
+      expect(
+        await sidebar
+          .locator('.sidebar-rail [data-sidebar-entry="plugin:workboard/workboard"]')
+          .count(),
+      ).toBe(0);
       expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(3);
       expect(await gateway.getRequests("connect")).toHaveLength(connects);
       expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
@@ -115,7 +122,11 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
     }
   });
 
-  it.each([false, true])("retains uninstall warnings (%s)", async (withWarnings) => {
+  it.each([
+    { withWarnings: false, inspection: "before" },
+    { withWarnings: true, inspection: "during" },
+  ])("retains uninstall feedback through $inspection inspection", async (scenario) => {
+    const { withWarnings, inspection } = scenario;
     const context = await newContext();
     const page = await context.newPage();
     const installedCalendar = { ...calendarPlugin, catalogId: calendarDiscoveryPlugin.id };
@@ -165,6 +176,29 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         .getByRole("link", { name: "Calendar Plus", exact: true })
         .click();
       await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
+      const inspectionReads = (await gateway.getRequests("plugins.inspect")).length;
+      await gateway.setMethodResponse("plugins.uiDescriptors", {
+        ...enabledWorkboardCapabilities(),
+        generation: 17,
+        controlUiTabs: [],
+      });
+      if (inspection === "before") {
+        await gateway.deferNext("plugins.inspect");
+        await gateway.emitGatewayEvent("plugins.changed", { generation: 17 });
+        await gateway.waitForRequest("plugins.inspect", { after: inspectionReads });
+      }
+      const removalErrors = await page.evaluateHandle(() => {
+        const errors = new Set<string>();
+        const observer = new MutationObserver(() => {
+          for (const alert of document.querySelectorAll(
+            ".plugin-catalog-detail .oc-banner-error",
+          )) {
+            errors.add(alert.textContent?.trim() ?? "");
+          }
+        });
+        observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+        return { errors, observer };
+      });
       await gateway.deferNext("plugins.uninstall");
       await page.getByRole("button", { name: "Uninstall Calendar Plus", exact: true }).click();
       await page
@@ -185,6 +219,19 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       expect(await removing.locator(".btn__spinner").count()).toBe(1);
       expect(await page.locator(".plugin-catalog-detail__actions .btn__spinner").count()).toBe(1);
       await captureScreenshot(page, "lifecycle-uninstall-pending.png");
+      const missingPlugin = {
+        code: "INVALID_REQUEST",
+        message: "Plugin 'calendar-plus' not found",
+      };
+      if (inspection === "before") {
+        await gateway.rejectDeferred("plugins.inspect", missingPlugin);
+      } else {
+        const listReads = (await gateway.getRequests("plugins.list")).length;
+        await gateway.setMethodResponse("plugins.inspect", { __mockError: missingPlugin });
+        await gateway.emitGatewayEvent("plugins.changed", { generation: 17 });
+        await gateway.waitForRequest("plugins.list", { after: listReads });
+      }
+      await captureScreenshot(page, `lifecycle-uninstall-inspection-${inspection}.png`);
       await gateway.setMethodResponse("plugins.list", initialInventory);
       await gateway.resolveDeferred("plugins.uninstall", {
         ok: true,
@@ -201,6 +248,17 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         await gateway.resolveDeferred("config.get", configSnapshot(false));
       }
       await page.getByRole("button", { name: "Install", exact: true }).waitFor();
+      expect(
+        await removalErrors.evaluate(({ errors, observer }) => {
+          observer.disconnect();
+          return [...errors];
+        }),
+      ).toEqual([]);
+      await removalErrors.dispose();
+      await gateway.setMethodResponse("plugins.inspect", {
+        ...calendarInspection,
+        plugin: installedCalendar,
+      });
       await captureScreenshot(page, `uninstall-${withWarnings ? "warnings" : "quiet"}.png`);
       const notice = page.locator(".plugins-row-message");
       if (withWarnings) {

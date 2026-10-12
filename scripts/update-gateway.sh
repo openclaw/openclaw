@@ -56,10 +56,25 @@ else
 fi
 
 pnpm_dir=""
+automatic_adapter_started=0
 log() { echo "[update-gateway] $*"; }
+check_build_roots() {
+  for build_path in dist dist-runtime .artifacts; do
+    if [ -L "$build_path" ]; then
+      log "$build_path is a symlink; refusing to clean through it"
+      return 1
+    fi
+  done
+}
 on_exit() {
   local code=$?
-  if [ -n "$pnpm_dir" ]; then rm -rf "$pnpm_dir"; fi
+  if [ -n "$pnpm_dir" ]; then
+    if [ "$code" -ne 0 ] && [ "$automatic_adapter_started" -eq 1 ]; then
+      log "retained scoped pnpm launcher at $pnpm_dir; remove it only after all update children have stopped"
+    else
+      rm -rf "$pnpm_dir"
+    fi
+  fi
   if [ "$code" -ne 0 ]; then
     echo "[update-gateway] FAILED (exit $code)" >&2
   fi
@@ -146,6 +161,17 @@ if ! target_sha="$(git rev-parse --verify 'FETCH_HEAD^{commit}')" ||
 fi
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
+# Current automatic updates prepare privately and stop before publishing source
+# or dependencies. The old three-argument adapter remains for shipped callers.
+if [ "$manual_lifecycle" -eq 0 ]; then
+  check_build_roots
+  automatic_adapter_started=1
+  node --import ./scripts/tsx.mjs \
+    scripts/update-gateway-build.mts "$stop_cmd" "$restart_cmd" "$pnpm_dir" "$target_sha"
+  log "OK $(git rev-parse --short HEAD) ($branch)"
+  exit 0
+fi
+
 if [ "$branch" = "main" ]; then
   log "fast-forwarding main"
   git merge --ff-only "$target_sha"
@@ -170,21 +196,9 @@ run_pnpm install --frozen-lockfile
 log "clean building"
 # These deletes must stay inside the checkout: a symlinked build dir would
 # redirect the recursion into its target, so refuse symlinks outright.
-for build_path in dist dist-runtime .artifacts; do
-  if [ -L "$build_path" ]; then
-    log "$build_path is a symlink; refusing to clean through it"
-    exit 1
-  fi
-done
-# The update adapter consumes the build's artifact ownership and output list.
-# Manual lifecycle remains operator-owned: stop this checkout's Gateway before
-# invoking the update and restart it yourself once the update has finished.
-if [ "$manual_lifecycle" -eq 1 ]; then
-  log "manual lifecycle: automatic stop/restart skipped (OPENCLAW_UPDATE_RESTART_CMD is empty)"
-  OPENCLAW_UPDATE_IN_PROGRESS=1 run_pnpm build
-else
-  node --import ./scripts/tsx.mjs \
-    scripts/update-gateway-build.mts "$stop_cmd" "$restart_cmd" "$pnpm_dir"
-fi
+check_build_roots
+# Manual lifecycle remains operator-owned, including recovery after failure.
+log "manual lifecycle: automatic stop/restart skipped (OPENCLAW_UPDATE_RESTART_CMD is empty)"
+OPENCLAW_UPDATE_IN_PROGRESS=1 run_pnpm build
 
 log "OK $(git rev-parse --short HEAD) ($branch)"

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
 let container: HTMLDivElement | undefined;
@@ -15,7 +16,7 @@ afterEach(() => {
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("narrow tool activity rows", () => {
-  it("truncates long progress receipts while keeping short tool labels intact", () => {
+  it("truncates long progress receipts while keeping tool identity visible", async () => {
     container = document.body.appendChild(document.createElement("div"));
     container.style.width = "220px";
     const step = "Verify the implementation and report the result. ".repeat(12).slice(0, 512);
@@ -39,6 +40,7 @@ describe.runIf("__vitest_browser__" in globalThis)("narrow tool activity rows", 
       container,
     );
 
+    await settleToolBridges(container);
     const receipt = container.querySelector<HTMLElement>('[role="status"]')!;
     const text = receipt.querySelector<HTMLElement>(":scope > span:last-child")!;
     expect(receipt.textContent).toContain(step);
@@ -48,11 +50,11 @@ describe.runIf("__vitest_browser__" in globalThis)("narrow tool activity rows", 
     expect(text.scrollWidth).toBeGreaterThan(text.clientWidth);
     expect(getComputedStyle(text).textOverflow).toBe("ellipsis");
 
-    const label = Array.from(
-      container.querySelectorAll<HTMLElement>(".chat-tool-msg-summary__label"),
-    ).find((element) => element.textContent === "Yield")!;
-    expect(label).toBeDefined();
-    expect(label.scrollWidth).toBe(label.clientWidth);
+    const icon = container.querySelector<HTMLElement>('[role="img"][aria-label="yield"]')!;
+    expect(icon).not.toBeNull();
+    expect(icon.title).toBe("yield");
+    expect(icon.clientWidth).toBeGreaterThan(0);
+    expect(icon.scrollWidth).toBe(icon.clientWidth);
   });
 });
 

@@ -7,7 +7,7 @@ import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-pr
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { BUILTIN_AGENT_HARNESS_METADATA } from "../../agents/harness/builtin-openclaw-metadata.js";
 import {
-  createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
 } from "../../agents/model-catalog-decisions.js";
 import { findModelCatalogEntry } from "../../agents/model-catalog-lookup.js";
@@ -28,7 +28,7 @@ import {
   resolveWebSearchProviderId,
 } from "../../web-search/runtime.js";
 import { readPreparedCatalog } from "../server-model-catalog-auth.js";
-import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
+import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ProviderStatus = WebSearchStatusResult["providers"][number];
@@ -72,7 +72,7 @@ export async function prepareWebSearchStatus(
   const config = context.getRuntimeConfig();
   const scope = resolveModelAuthAgentScope(config, request.agentId);
   if (!scope.ok) {
-    return { error: modelAuthAgentScopeError(scope) };
+    return { error: scope.error };
   }
   // Missing publication is unavailable auth, never permission to reopen storage on a request.
   const authStore = getPreparedRuntimeAuthProfileStoreSnapshot(scope.agentDir) ?? {
@@ -185,7 +185,7 @@ export async function prepareWebSearchStatus(
       modelId: modelRef.model,
     });
     if (entry) {
-      const decisions = createModelCatalogDecisions({
+      const decisions = await prepareModelCatalogDecisions({
         cfg: config,
         agentId: scope.agentId,
         agentDir: scope.agentDir,
@@ -203,7 +203,7 @@ export async function prepareWebSearchStatus(
       const variants = catalog.routeVariants.filter(
         (row) => row.provider === entry.provider && row.id === entry.id,
       );
-      const host = await decisions.evaluateEntry(entry, variants);
+      const host = decisions.evaluateEntry(entry, variants);
       const evaluation = decisions.evaluateNative(entry, host);
       if (!catalog.isCurrent()) {
         throw new Error("Model catalog changed during search status projection.");

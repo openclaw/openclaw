@@ -28,42 +28,51 @@ afterEach(() => {
 });
 
 describe("image lightbox gallery resource lifecycle", () => {
-  it.each(["close", "reset", "evict"] as const)(
-    "releases a late full-resolution image after %s without replacing newer intent",
+  it.each(["upgrade reset", "upgrade evict", "neighbor reset"] as const)(
+    "releases a late image once without replacing newer intent: %s",
     async (action) => {
       const initial = imageItem("preview");
-      const original = imageItem("original");
+      const late = imageItem("original");
       const replacement = imageItem("replacement");
       const beyond = imageItem("beyond");
       const pending = createDeferred<ImageLightboxItem | null>();
       const load = vi.fn(() => pending.promise);
-      const preview = { ...initial, loadFullResolution: load };
+      const moving = action === "neighbor reset";
+      const preview = moving ? initial : { ...initial, loadFullResolution: load };
       controller.reset(
         {
           index: 0,
-          items: [async () => preview, async () => replacement, async () => beyond],
+          items: [async () => preview, moving ? load : async () => replacement, async () => beyond],
         },
         preview,
       );
+      const navigation = moving ? controller.move(1) : undefined;
       await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-
-      if (action === "reset") {
-        controller.reset(undefined, replacement);
-      } else if (action === "evict") {
+      if (moving) {
+        expect(controller.current).toBe(initial);
+        expect(controller.busy).toBe(true);
+      }
+      if (action === "upgrade evict") {
         expect(await controller.move(1)).toBe(true);
         expect(await controller.move(1)).toBe(true);
       } else {
-        controller.dispose();
+        controller.reset(undefined, replacement);
       }
-      pending.resolve(original);
-      await vi.waitFor(() => expect(original.release).toHaveBeenCalledOnce());
-      expect(controller.current).toBe(
-        action === "close" ? undefined : action === "evict" ? beyond : replacement,
-      );
+      pending.resolve(late);
+      if (navigation) {
+        expect(await navigation).toBe(false);
+      }
+      await vi.waitFor(() => expect(late.release).toHaveBeenCalledOnce());
+      expect(controller.current).toBe(action === "upgrade evict" ? beyond : replacement);
+      expect(controller.busy).toBe(false);
+      expect(controller.failed).toBe(false);
       controller.dispose();
       await Promise.resolve();
-      expect(original.release).toHaveBeenCalledOnce();
+      expect(late.release).toHaveBeenCalledOnce();
       expect(initial.release).not.toHaveBeenCalled();
+      if (moving) {
+        expect(replacement.release).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -114,40 +123,6 @@ describe("image lightbox gallery resource lifecycle", () => {
       expect(controller.current).toBe(initial);
       expect(controller.failed).toBe(false);
       expect(initial.release).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["close", "reset"] as const)(
-    "releases a late image once after %s without replacing the current selection",
-    async (action) => {
-      const initial = imageItem("initial");
-      const late = imageItem("late");
-      const replacement = imageItem("replacement");
-      const pending = createDeferred<ImageLightboxItem | null>();
-      const load = vi.fn(() => pending.promise);
-      controller.reset({ index: 0, items: [async () => initial, load] }, initial);
-      const moving = controller.move(1);
-      await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-      expect(controller.current).toBe(initial);
-      expect(controller.busy).toBe(true);
-
-      if (action === "reset") {
-        controller.reset(undefined, replacement);
-      } else {
-        controller.dispose();
-      }
-      pending.resolve(late);
-
-      expect(await moving).toBe(false);
-      await vi.waitFor(() => expect(late.release).toHaveBeenCalledOnce());
-      expect(controller.current).toBe(action === "reset" ? replacement : undefined);
-      expect(controller.busy).toBe(false);
-      expect(controller.failed).toBe(false);
-      controller.dispose();
-      await Promise.resolve();
-      expect(late.release).toHaveBeenCalledOnce();
-      expect(initial.release).not.toHaveBeenCalled();
-      expect(replacement.release).not.toHaveBeenCalled();
     },
   );
 

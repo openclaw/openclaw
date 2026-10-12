@@ -1,11 +1,6 @@
 // Imessage tests cover targets plugin behavior.
 import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import {
-  resolveIMessageGroupRequireMention,
-  resolveIMessageGroupToolPolicy,
-} from "./group-policy.js";
 import { imessageDmPolicy } from "./setup-core.js";
 import { parseIMessageAllowFromEntries } from "./setup-surface.js";
 import {
@@ -207,36 +202,6 @@ describe("imessage targets", () => {
     expect(parseIMessageTarget(identifier)).toEqual({
       kind: "chat_identifier",
       chatIdentifier: identifier,
-    });
-  });
-});
-
-describe("imessage group policy", () => {
-  it("uses generic channel group policy helpers", () => {
-    const cfg = {
-      channels: {
-        imessage: {
-          groups: {
-            "chat:family": {
-              requireMention: false,
-              tools: { deny: ["exec"] },
-            },
-            "*": {
-              requireMention: true,
-              tools: { allow: ["message.send"] },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveIMessageGroupRequireMention({ cfg, groupId: "chat:family" })).toBe(false);
-    expect(resolveIMessageGroupRequireMention({ cfg, groupId: "chat:other" })).toBe(true);
-    expect(resolveIMessageGroupToolPolicy({ cfg, groupId: "chat:family" })).toEqual({
-      deny: ["exec"],
-    });
-    expect(resolveIMessageGroupToolPolicy({ cfg, groupId: "chat:other" })).toEqual({
-      allow: ["message.send"],
     });
   });
 });

@@ -1,4 +1,22 @@
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+import type { TranscriptsSummary } from "./summary.js";
+
+export type TranscriptReadEntry = {
+  session: TranscriptSessionDescriptor;
+  selector: string;
+  hasSummary: boolean;
+  utteranceCount: number;
+  participants: string[];
+  overview: string | undefined;
+  summarySource: TranscriptsSummary["source"] | undefined;
+  updatedAt: string;
+  lastUtteranceAt: string | null;
+};
+
+export type TranscriptReadNotes = {
+  summary?: Omit<TranscriptsSummary, "transcript">;
+  markdown?: string;
+};
 
 export type TranscriptSummarySnapshot = {
   inputRevision: string;

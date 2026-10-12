@@ -1,4 +1,3 @@
-// Workspace audit helpers inspect local skill folders for security and trust issues.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
@@ -8,7 +7,7 @@ import {
   listAgentWorkspaceDirs,
   listExplicitAgentWorkspaceDirs,
 } from "../../agents/workspace-dirs.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../config/legacy.roster.js";
 import type { SecurityAuditFinding } from "../../security/audit.types.js";
 import { isPathInside } from "../../security/scan-paths.js";
 
@@ -82,7 +81,7 @@ async function listWorkspaceSkillMarkdownFiles(
 }
 
 export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
-  cfg: OpenClawConfig;
+  cfg: OpenClawConfigWithLegacyRoster;
   workspaceDir?: string;
   skillScanLimits?: WorkspaceSkillScanLimits;
 }): Promise<SecurityAuditFinding[]> {
@@ -141,21 +140,13 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
       seenSkillPaths.add(canonicalSkillPath);
 
       const skillRealPath = await realpathWithTimeout(canonicalSkillPath);
-      if (!skillRealPath) {
-        escapedSkillFiles.push({
-          workspaceDir: workspacePath,
-          skillFilePath: canonicalSkillPath,
-          skillRealPath: "(realpath timed out - symlink target unverifiable)",
-        });
-        continue;
-      }
-      if (isPathInside(workspaceRealPath, skillRealPath)) {
+      if (skillRealPath && isPathInside(workspaceRealPath, skillRealPath)) {
         continue;
       }
       escapedSkillFiles.push({
         workspaceDir: workspacePath,
         skillFilePath: canonicalSkillPath,
-        skillRealPath,
+        skillRealPath: skillRealPath || "(realpath timed out - symlink target unverifiable)",
       });
     }
   }

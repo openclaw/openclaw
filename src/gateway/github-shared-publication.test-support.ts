@@ -1,15 +1,14 @@
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
-import type { SharedGitHubPublicationSession } from "./github-publication-shared-read.js";
-import {
-  digestGitHubPublicationRequest,
-  ensureGitHubPublicationStore,
-  insertGitHubPublicationRequest,
-} from "./github-publication-store.js";
+import type { PublicationSessionIdentity } from "./github-publication-availability.js";
+import { digestGitHubPublicationRequest } from "./github-publication-receipt.js";
+import { ensureGitHubPublicationStoreFixture } from "./github-publication-store.test-support.js";
+import { insertGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import {
   BRANCH,
   OLD_HEAD,
@@ -23,7 +22,7 @@ import {
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-export const sharedPublicationSession: SharedGitHubPublicationSession = {
+export const sharedPublicationSession: PublicationSessionIdentity = {
   sessionId: SESSION_ID,
   sessionKey: SESSION_KEY,
   agentId: "main",
@@ -39,7 +38,7 @@ export function sharedPublicationCoordinator() {
 export function insertSharedWorktreeReceipt(
   requestId: string,
   options: {
-    session?: SharedGitHubPublicationSession;
+    session?: PublicationSessionIdentity;
     idempotencyKey?: string;
     createdAtMs?: number;
     worktreeId?: string;
@@ -47,7 +46,7 @@ export function insertSharedWorktreeReceipt(
     repositoryFingerprint?: string;
   } = {},
 ) {
-  ensureGitHubPublicationStore();
+  ensureGitHubPublicationStoreFixture();
   const session = options.session ?? sharedPublicationSession;
   const request = {
     sessionKey: session.sessionKey,
@@ -83,8 +82,8 @@ export function insertSharedWorktreeReceipt(
   );
 }
 
-export function sharedRepositoryWorkspace() {
-  const workspace = getSessionRepositoryWorkspaceStore().create({
+export async function sharedRepositoryWorkspace() {
+  const workspace = await getSessionRepositoryWorkspaceStore().create({
     agentId: "main",
     sessionKey: SESSION_KEY,
     url: "https://github.com/owner/repository.git",
@@ -101,11 +100,19 @@ export function sharedRepositoryWorkspace() {
         }
       : loaded;
   });
+  replaceSessionEntrySync(
+    { agentId: "main", sessionKey: SESSION_KEY },
+    {
+      ...original(SESSION_KEY).entry,
+      worktree: undefined,
+      repositoryWorkspaceId: workspace.workspaceId,
+    },
+  );
   return workspace;
 }
 
 export function repositoryReceipt(
-  workspaceId: string,
+  workspace: Pick<Awaited<ReturnType<typeof sharedRepositoryWorkspace>>, "workspaceId" | "branch">,
   overrides: Partial<RepositoryGitHubPublicationRow> = {},
 ): RepositoryGitHubPublicationRow {
   const row: RepositoryGitHubPublicationRow = {
@@ -117,7 +124,7 @@ export function repositoryReceipt(
     session_lifecycle_revision: null,
     session_key: SESSION_KEY,
     agent_id: "main",
-    workspace_id: workspaceId,
+    workspace_id: workspace.workspaceId,
     owner_profile_id: null,
     connection_generation: null,
     identity_source: "system-configured",
@@ -129,7 +136,7 @@ export function repositoryReceipt(
     push_repository: "owner/repository",
     repository: "owner/repository",
     base_branch: "main",
-    branch: getSessionRepositoryWorkspaceStore().get(workspaceId)!.branch,
+    branch: workspace.branch,
     previous_head_commit: null,
     claim_id: null,
     run_id: null,

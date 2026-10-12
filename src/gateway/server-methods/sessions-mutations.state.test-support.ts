@@ -1,9 +1,5 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../../infra/state-database-coordinator.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   createOpenClawTestState,
@@ -37,16 +33,11 @@ export function setupSessionMutationState() {
     await drainSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
   });
   return async (run: (state: OpenClawTestState) => Promise<void>) => {
-    await withStateDatabaseCoordinatorRuntimeDirectory(
-      { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
-      async () => {
-        const work = new AsyncWorkScope();
-        try {
-          await work.track(() => run(state));
-        } finally {
-          await work.drain();
-        }
-      },
-    );
+    const work = new AsyncWorkScope();
+    try {
+      await work.track(() => run(state));
+    } finally {
+      await work.drain();
+    }
   };
 }

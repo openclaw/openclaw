@@ -152,7 +152,10 @@
 }
 
 .side-panel__header
-  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base) {
+  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base),
+.side-panel__header .tabstrip-tab:not([active]):hover + .tabstrip-tab__close,
+.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:hover,
+.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:focus-visible {
   background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--text);
 }
@@ -162,14 +165,18 @@
   color: var(--text);
 }
 
-.side-panel__header .tabstrip-tab__icon {
+.side-panel__header .tabstrip-tab__icon,
+.side-panel-type-option__icon {
   display: inline-flex;
   width: 16px;
   height: 16px;
-  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   color: var(--muted);
+}
+
+.side-panel__header .tabstrip-tab__icon {
+  flex: 0 0 auto;
 }
 
 .side-panel__header .tabstrip-tab__favicon {
@@ -251,13 +258,6 @@
   opacity: 1;
 }
 
-.side-panel__header .tabstrip-tab:not([active]):hover + .tabstrip-tab__close,
-.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:hover,
-.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:focus-visible {
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-  color: var(--text);
-}
-
 .side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close {
   background: var(--bg-hover);
 }
@@ -319,8 +319,6 @@ openclaw-chat-detail-panel,
   > :is(
     .chat,
     .chat-workspace-rail,
-    .chat-tasks-rail,
-    .chat-task-detail,
     openclaw-chat-session-rail,
     openclaw-session-discussion,
     openclaw-terminal-panel,
@@ -357,13 +355,7 @@ openclaw-chat-detail-panel,
 }
 
 .side-panel-type-option__icon {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  align-items: center;
-  justify-content: center;
   flex: 0 0 16px;
-  color: var(--muted);
 }
 
 .side-panel-type-option__label {
@@ -426,6 +418,8 @@ openclaw-chat-detail-panel,
   border: 0;
   border-radius: var(--menu-item-radius);
   background: color-mix(in srgb, var(--text) 3%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   text-align: left;

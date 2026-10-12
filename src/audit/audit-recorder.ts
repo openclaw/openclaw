@@ -1,6 +1,7 @@
 /** Gateway-owned recorder joining trusted run, tool, and message lifecycle streams. */
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createAgentEventAuditRecorder,
@@ -25,6 +26,7 @@ type AuditEventRecorder = AgentEventAuditRecorder & {
 };
 
 export function createAuditEventRecorder(options: {
+  scheduler: GatewayScheduler;
   getConfig: () => OpenClawConfig;
   writer?: AuditEventWriter;
   stateDir?: string;
@@ -34,6 +36,7 @@ export function createAuditEventRecorder(options: {
   const writer =
     options.writer ??
     createAuditEventWriter({
+      scheduler: options.scheduler,
       ...(options.stateDir ? { stateDir: options.stateDir } : {}),
       onContention: (message) => log.warn(message),
       onError: (error) => {

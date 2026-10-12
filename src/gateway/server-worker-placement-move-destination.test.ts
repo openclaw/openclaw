@@ -90,7 +90,7 @@ describe("worker placement move destination owner", () => {
         loadSessionRuntime: async () =>
           ({
             managedWorktrees: {
-              findLiveByOwner: () => ({
+              findLiveByOwner: async () => ({
                 id: "worktree-recovery",
                 ownerId: SESSION_KEY,
                 path: "/gateway/workspace",
@@ -104,7 +104,7 @@ describe("worker placement move destination owner", () => {
               store: { [SESSION_KEY]: entry },
             }),
             resolveCanonicalSessionEntryFromStoreKeys: () => entry,
-            resolveWorkerPlacementSessionRuntime: () => "codex",
+            resolveWorkerPlacementSessionRuntimeAsync: async () => "codex",
             resolveWorkerPlacementCapabilities: () => ({
               executionMode: "remote-exec",
               ...(supported ? { devicePlacement: DEVICE_REQUIREMENT } : {}),
@@ -121,8 +121,8 @@ describe("worker placement move destination owner", () => {
     const destroy = vi.fn();
     const moves = createWorkerPlacementMoveService({
       placements: {
-        get: () => source,
-        getPlacementMove: () => undefined,
+        getAsync: async () => source,
+        getPlacementMoveAsync: async () => undefined,
         beginPlacementMove,
       } as never,
       environments: { get: () => undefined, destroy } as never,

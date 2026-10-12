@@ -26,11 +26,8 @@ function normalizeStatus(value) {
   const normalized = String(value ?? "")
     .trim()
     .toLowerCase();
-  if (normalized === "pass") {
-    return "pass";
-  }
-  if (normalized === "fail") {
-    return "fail";
+  if (normalized === "pass" || normalized === "fail") {
+    return normalized;
   }
   throw new Error(`Unsupported web UI chat proof status: ${value}`);
 }
@@ -66,7 +63,7 @@ function buildWebUiChatEvidenceManifest({ candidateRef, candidateSha, status, ca
         status,
         fixed: passed,
       },
-      outcome: passed ? "pass" : "fail",
+      outcome: status,
       pass: passed,
     },
     artifacts: [
@@ -91,18 +88,10 @@ function buildWebUiChatEvidenceManifest({ candidateRef, candidateSha, status, ca
           required: passed && complete,
         }),
       ]),
-      artifactEntry({
-        kind: "metadata",
-        label: "Control UI web chat Vitest log",
-        path: "vitest.log",
-        required: false,
-      }),
-      artifactEntry({
-        kind: "metadata",
-        label: "Control UI web chat setup log",
-        path: "setup.log",
-        required: false,
-      }),
+      ...[
+        { label: "Control UI web chat Vitest log", path: "vitest.log" },
+        { label: "Control UI web chat setup log", path: "setup.log" },
+      ].map((artifact) => artifactEntry({ ...artifact, kind: "metadata", required: false })),
       {
         kind: "report",
         lane: "run",

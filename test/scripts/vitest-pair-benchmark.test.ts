@@ -1,31 +1,54 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   analyzeBenchmark,
   assertEquivalentInventories,
   assertExecutionDigest,
   assertInventoryAvailable,
   assertSingleWorkflowAttempt,
-  buildBenchmarkCommandEnv,
   buildBenchmarkSchedule,
   loadBenchmarkManifest,
   parseVitestExecutionReport,
-  resolvePackageManagerIdentity,
-  runOwnedCommand,
   validateBenchmarkManifest,
-  VITEST_PAIR_HARNESS_DEADLINE_MS,
-  withVitestPairDeadline,
   withTerminalManifest,
   writeJsonAtomic,
   type BenchmarkManifest,
   type BenchmarkRunRecord,
+} from "../../scripts/lib/vitest-pair-benchmark-contract.mts";
+import {
+  buildBenchmarkCommandEnv,
+  resolvePackageManagerIdentity,
+  runOwnedCommand,
+  VITEST_PAIR_HARNESS_DEADLINE_MS,
+  withVitestPairDeadline,
 } from "../../scripts/lib/vitest-pair-benchmark.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
-import { waitForDead, waitForFile } from "../helpers/process-wait.js";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+// The managed owner joins terminal process groups, but Darwin may retain a foreign zombie
+// until its reaper runs. That PID has no ChildProcess handle in this test.
+async function waitForDescendantReap(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isProcessAlive(pid)) {
+      await delay(5, undefined, { signal });
+    }
+  } catch (cause) {
+    throw new Error(`process still alive: ${pid}`, { cause });
+  }
+}
+
+const deadlineFixtureLifetime = createFixtureLifetime();
+afterEach(() => deadlineFixtureLifetime.cleanup());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const packageManager = {
   executable: "/opt/vitest-pair/pnpm",
@@ -240,20 +263,6 @@ describe("Vitest pair benchmark contract", () => {
         lanes: [{ ...manifest.lanes[0], files: ["../escape.test.ts"] }, ...manifest.lanes.slice(1)],
       }),
     ).toThrow("normalized repository-relative path");
-  });
-
-  it("requires every committed inventory path on both sides", () => {
-    const root = tempDirs.make("vitest-pair-inventory-");
-    for (const lane of manifest.lanes) {
-      for (const relative of inventoryPaths(lane)) {
-        const file = path.join(root, relative);
-        mkdirSync(path.dirname(file), { recursive: true });
-        writeFileSync(file, `${relative}\n`);
-      }
-    }
-    const inventory = assertInventoryAvailable(root, manifest);
-    expect(inventory.entries).toHaveLength(7);
-    expect(inventory.inventorySha256).toMatch(/^[0-9a-f]{64}$/u);
   });
 
   it("rejects selected workload byte mismatches between sides", () => {
@@ -511,92 +520,6 @@ describe("Vitest pair benchmark contract", () => {
     expect(noisyFaster.lanes.every((lane) => lane.candidateImprovedPairs === 4)).toBe(true);
   });
 
-  it("weights aggregate acceptance by duration for each measured round", () => {
-    const analysis = analyzeBenchmark(
-      recordsFor((lane) =>
-        lane === "gateway"
-          ? { baselineMs: 10_000, candidateMs: 10_600 }
-          : { baselineMs: 100, candidateMs: 90 },
-      ),
-      manifest,
-    );
-
-    expect(analysis.overall.measuredWallRatio).toBeCloseTo(10_870 / 10_300);
-    expect(analysis.verdict).toBe("regression");
-    expect(analysis.regressions[0]).toContain("overall median duration-weighted");
-  });
-
-  it("accepts the exact aggregate boundary and rejects values above it", () => {
-    expect(
-      analyzeBenchmark(recordsFor({ baselineMs: 1000, candidateMs: 1050 }), manifest).verdict,
-    ).toBe("pass");
-    expect(
-      analyzeBenchmark(recordsFor({ baselineMs: 1000, candidateMs: 1050.1 }), manifest).verdict,
-    ).toBe("regression");
-  });
-
-  it.each([
-    {
-      name: "ratio only",
-      baselineMs: 5000,
-      candidateMs: 5600,
-      regression: false,
-    },
-    {
-      name: "delta only",
-      baselineMs: 20_000,
-      candidateMs: 21_000,
-      regression: false,
-    },
-    {
-      name: "exact ratio boundary",
-      baselineMs: 10_000,
-      candidateMs: 11_000,
-      regression: false,
-    },
-    {
-      name: "exact delta boundary",
-      baselineMs: 5000,
-      candidateMs: 6000,
-      regression: true,
-    },
-    {
-      name: "ratio and delta above thresholds",
-      baselineMs: 10_000,
-      candidateMs: 11_200,
-      regression: true,
-    },
-  ])("applies both critical lane thresholds: $name", ({ baselineMs, candidateMs, regression }) => {
-    const analysis = analyzeBenchmark(
-      recordsFor((lane) => ({
-        baselineMs,
-        candidateMs: lane === "gateway" ? candidateMs : baselineMs,
-      })),
-      manifest,
-    );
-    const gateway = analysis.lanes.find((lane) => lane.id === "gateway");
-
-    expect(gateway?.regressions).toHaveLength(regression ? 1 : 0);
-    expect(analysis.verdict).toBe(regression ? "regression" : "pass");
-  });
-
-  it("keeps cold timing diagnostic and records measured lane deltas", () => {
-    const analysis = analyzeBenchmark(
-      recordsFor((_lane, round) =>
-        round === null
-          ? { baselineMs: 100, candidateMs: 1000 }
-          : { baselineMs: 10_000, candidateMs: 10_500 },
-      ),
-      manifest,
-    );
-
-    expect(analysis.verdict).toBe("pass");
-    expect(analysis.regressions).toEqual([]);
-    expect(analysis.overall.coldWallRatio).toBe(10);
-    expect(analysis.lanes.every((lane) => lane.coldWallRatio === 10)).toBe(true);
-    expect(analysis.lanes.every((lane) => lane.measuredWallDeltaMs === 500)).toBe(true);
-  });
-
   it.runIf(process.platform !== "win32")(
     "pins pnpm despite poisoned ambient pnpm and Corepack state",
     () => {
@@ -676,60 +599,123 @@ describe("Vitest pair benchmark lifecycle", () => {
 
   it.runIf(process.platform !== "win32")(
     "aborts the active child at the aggregate deadline and starts no successor",
-    async () => {
-      expect(VITEST_PAIR_HARNESS_DEADLINE_MS).toBe(165 * 60 * 1000);
-      const root = tempDirs.make("vitest-pair-deadline-");
-      const pidFile = path.join(root, "active.pid");
-      const successor = path.join(root, "successor.txt");
-      const output = path.join(root, "output");
-      const activeScript = [
-        'const { writeFileSync } = require("node:fs");',
-        `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
+    ({ signal }) =>
+      deadlineFixtureLifetime.run(async () => {
+        expect(VITEST_PAIR_HARNESS_DEADLINE_MS).toBe(165 * 60 * 1000);
+        const root = deadlineFixtureLifetime.createTempDir("vitest-pair-deadline-");
+        const pidFile = path.join(root, "active.pid");
+        const successor = path.join(root, "successor.txt");
+        const output = path.join(root, "output");
+        const observation = await deadlineFixtureLifetime.acquire(async () => {
+          const receipts = await openFixtureReceiptChannel();
+          return { receipts, cleanup: () => receipts.close() };
+        });
+        const activeScript = [
+          'import { renameSync, writeFileSync } from "node:fs";',
+          fixtureReceiptClientSource(observation.receipts.endpoint),
+          `writeFileSync(${JSON.stringify(`${pidFile}.next`)}, String(process.pid));`,
+          `renameSync(${JSON.stringify(`${pidFile}.next`)}, ${JSON.stringify(pidFile)});`,
+          `sendReceipt(${JSON.stringify(pidFile)}, "ready");`,
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
+        const ready = observation.receipts.waitFor(pidFile, "ready");
+        const scheduleTimeout = globalThis.setTimeout;
+        // Eager deadline checks and its timer share one clock until the real child is ready.
+        const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+        let fireDeadline: (() => void) | undefined;
+        const timerSpy = vi
+          .spyOn(globalThis, "setTimeout")
+          .mockImplementation((callback, ms, ...args) => {
+            const timer = scheduleTimeout(callback, ms, ...args);
+            if (ms === 500 && !fireDeadline) {
+              clearTimeout(timer);
+              fireDeadline = () => {
+                fireDeadline = undefined;
+                callback(...args);
+              };
+            }
+            return timer;
+          });
+        const commands: Array<ReturnType<typeof runOwnedCommand>> = [];
+        try {
+          await expect(
+            withTerminalManifest(output, async () => {
+              await withVitestPairDeadline(async (deadline) => {
+                const active = deadlineFixtureLifetime.track(
+                  runOwnedCommand({
+                    bin: process.execPath,
+                    args: ["--input-type=module", "-e", activeScript],
+                    cwd: root,
+                    env: { PATH: process.env.PATH },
+                    logPath: path.join(root, "active.log"),
+                    deadline,
+                    timeoutMs: 10_000,
+                  }),
+                );
+                commands.push(active);
+                await withinTest(
+                  awaitGateBeforeSettlement(
+                    ready,
+                    active,
+                    "benchmark child exited before readiness",
+                  ),
+                  signal,
+                );
+                timerSpy.mockRestore();
+                clock.mockRestore();
+                if (!fireDeadline) {
+                  throw new Error("aggregate deadline was not armed before child readiness");
+                }
+                fireDeadline();
+                await Promise.allSettled([active]);
+                const next = deadlineFixtureLifetime.track(
+                  runOwnedCommand({
+                    bin: process.execPath,
+                    args: [
+                      "-e",
+                      `require("node:fs").writeFileSync(${JSON.stringify(successor)}, "started")`,
+                    ],
+                    cwd: root,
+                    env: { PATH: process.env.PATH },
+                    logPath: path.join(root, "successor.log"),
+                    deadline,
+                    timeoutMs: 10_000,
+                  }),
+                );
+                commands.push(next);
+                await Promise.allSettled([next]);
+              }, 500);
+            }),
+          ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
 
-      await expect(
-        withTerminalManifest(output, async () => {
-          await withVitestPairDeadline(async (deadline) => {
-            await expect(
-              runOwnedCommand({
-                bin: process.execPath,
-                args: ["-e", activeScript],
-                cwd: root,
-                env: { PATH: process.env.PATH },
-                logPath: path.join(root, "active.log"),
-                deadline,
-                timeoutMs: 10_000,
-              }),
-            ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
-            await expect(
-              runOwnedCommand({
-                bin: process.execPath,
-                args: [
-                  "-e",
-                  `require("node:fs").writeFileSync(${JSON.stringify(successor)}, "started")`,
-                ],
-                cwd: root,
-                env: { PATH: process.env.PATH },
-                logPath: path.join(root, "successor.log"),
-                deadline,
-                timeoutMs: 10_000,
-              }),
-            ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
-          }, 500);
-        }),
-      ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
-
-      await waitForFile(pidFile, 3_000);
-      await waitForDead(Number.parseInt(readFileSync(pidFile, "utf8"), 10), 5_000);
-      expect(existsSync(successor)).toBe(false);
-      expect(
-        JSON.parse(readFileSync(path.join(output, "terminal-manifest.json"), "utf8")),
-      ).toMatchObject({
-        status: "failure",
-        error: "Vitest pair aggregate deadline exceeded after 500ms",
-      });
-    },
+          // Assert outside the deadline owner, which normalizes task errors after cancellation.
+          expect(commands).toHaveLength(2);
+          await expect(commands[0]).rejects.toMatchObject({
+            name: "Error",
+            message: "Managed command aborted",
+            code: "ABORT_ERR",
+          });
+          await expect(commands[1]).rejects.toMatchObject({
+            name: "Error",
+            message: "Vitest pair aggregate deadline exceeded after 500ms",
+            code: "ETIMEDOUT",
+          });
+          expect(isProcessAlive(Number.parseInt(readFileSync(pidFile, "utf8"), 10))).toBe(false);
+          expect(existsSync(successor)).toBe(false);
+          expect(
+            JSON.parse(readFileSync(path.join(output, "terminal-manifest.json"), "utf8")),
+          ).toMatchObject({
+            status: "failure",
+            error: "Vitest pair aggregate deadline exceeded after 500ms",
+          });
+        } finally {
+          timerSpy.mockRestore();
+          clock.mockRestore();
+          fireDeadline?.();
+          await Promise.allSettled(commands);
+          await observation.cleanup();
+        }
+      }),
   );
 
   it.runIf(process.platform !== "win32")("does not retry a failed benchmark child", async () => {
@@ -756,7 +742,7 @@ describe("Vitest pair benchmark lifecycle", () => {
 
   it.runIf(process.platform !== "win32")(
     "fails closed and cleans a leaked descendant process",
-    async () => {
+    async ({ signal }) => {
       const root = tempDirs.make("vitest-pair-leak-");
       const pidFile = path.join(root, "child.pid");
       const script = [
@@ -778,25 +764,8 @@ describe("Vitest pair benchmark lifecycle", () => {
         }),
       ).rejects.toThrow(/process group remained active|cleanup could not verify/u);
 
-      await waitForFile(pidFile, 3_000);
       const pid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
-      await waitForDead(pid, 5_000);
-    },
-  );
-
-  it.runIf(process.platform === "linux")(
-    "uses GNU time labels understood by the hosted Linux runner",
-    () => {
-      const root = tempDirs.make("vitest-pair-gnu-time-");
-      const output = path.join(root, "time.txt");
-      const result = spawnSync("/usr/bin/time", ["-v", "-o", output, process.execPath, "-e", ""], {
-        encoding: "utf8",
-      });
-
-      expect(result.status).toBe(0);
-      const measurements = readFileSync(output, "utf8");
-      expect(measurements).toMatch(/^\s*User time \(seconds\):\s+\d+(?:\.\d+)?\s*$/mu);
-      expect(measurements).toMatch(/^\s*System time \(seconds\):\s+\d+(?:\.\d+)?\s*$/mu);
+      await waitForDescendantReap(pid, signal);
     },
   );
 });

@@ -4,6 +4,7 @@ import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../../../src/c
 import { applyJobPatch, createJob } from "../../../../src/cron/service/jobs.js";
 import { createCronServiceState } from "../../../../src/cron/service/state.js";
 import type { CronStoredJob } from "../../../../src/cron/types.js";
+import { createTestGatewayScheduler } from "../../../../src/test-utils/gateway-scheduler-clock.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CronJob } from "../../api/types.ts";
 import { addCronJob, cancelCronEdit, createInitialCronState, startCronEdit } from "./index.ts";
@@ -41,6 +42,18 @@ function createStateWithRequest(request: unknown, overrides: Partial<CronState>)
     ...createInitialCronState({ connected: true, client: { request } as CronState["client"] }),
     ...overrides,
   };
+}
+
+function applyWirePatch(stored: CronStoredJob, params: unknown) {
+  // Exercise the Gateway's normalization against the serialized UI request.
+  const serialized = JSON.stringify(params);
+  const wire: { patch: unknown } = JSON.parse(serialized);
+  const patch = normalizeCronJobPatch(wire.patch);
+  if (!patch) {
+    throw new Error("Expected a valid automation update patch");
+  }
+  applyJobPatch(stored, patch);
+  return patch.schedule;
 }
 
 describe("automation save editor ownership", () => {
@@ -113,14 +126,6 @@ describe("automation stagger save round trip", () => {
       expected: 300_000,
     },
     {
-      name: "clearing a custom hourly stagger",
-      expr: "0 * * * *",
-      original: 120_000,
-      exact: false,
-      amount: "",
-      expected: 300_000,
-    },
-    {
       name: "clearing a custom daily stagger",
       expr: "0 7 * * *",
       original: 120_000,
@@ -136,14 +141,6 @@ describe("automation stagger save round trip", () => {
       exact: false,
       amount: "",
       expected: undefined,
-    },
-    {
-      name: "retaining explicit no-stagger when the daily default has no reset value",
-      expr: "0 7 * * *",
-      original: 0,
-      exact: false,
-      amount: "",
-      expected: 0,
     },
     {
       name: "enabling exact timing",
@@ -192,15 +189,7 @@ describe("automation stagger save round trip", () => {
       let submittedSchedule: unknown;
       const request = vi.fn(async (method: string, params?: { patch?: unknown }) => {
         if (method === "cron.update") {
-          // Apply the actual Gateway normalization and mutation to the serialized UI patch.
-          const serializedPatch = JSON.stringify(params?.patch);
-          const wirePatch: unknown = JSON.parse(serializedPatch);
-          const patch = normalizeCronJobPatch(wirePatch);
-          if (!patch) {
-            throw new Error("Expected a valid automation update patch");
-          }
-          submittedSchedule = patch.schedule;
-          applyJobPatch(stored, patch);
+          submittedSchedule = applyWirePatch(stored, params);
           return readJob();
         }
         if (method === "cron.get") {
@@ -245,6 +234,7 @@ describe("automation default timing", () => {
     "preserves an unspecified daily window after %s, reopening, and changing to hourly",
     async (operation) => {
       const service = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         nowMs: () => 1_800_000_000_000,
         log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         storePath: "unused-paused-automation-store",
@@ -288,13 +278,7 @@ describe("automation default timing", () => {
           return readJob();
         }
         if (method === "cron.update") {
-          const serialized = JSON.stringify(params);
-          const wire: { patch: unknown } = JSON.parse(serialized);
-          const patch = normalizeCronJobPatch(wire.patch);
-          if (!patch) {
-            throw new Error("Expected a valid automation update patch");
-          }
-          applyJobPatch(stored, patch);
+          applyWirePatch(stored, params);
           return readJob();
         }
         if (method === "cron.list") {

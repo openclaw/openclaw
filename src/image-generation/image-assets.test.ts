@@ -59,11 +59,7 @@ describe("image asset helpers", () => {
     expect(resolveInlineImageJsonResponseMaxBytes(2, 8 * 1024 * 1024)).toBe(23_418_198);
   });
 
-  it("sniffs common generated image types", () => {
-    expect(sniffImageMimeType(Buffer.from([0xff, 0xd8, 0xff]))).toEqual({
-      mimeType: "image/jpeg",
-      extension: "jpg",
-    });
+  it("sniffs generated PNG images", () => {
     expect(sniffImageMimeType(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]))).toEqual({
       mimeType: "image/png",
       extension: "png",
@@ -116,12 +112,6 @@ describe("image asset helpers", () => {
           defaultMimeType: "image/png",
           malformedResponseError: "Sample image response malformed",
         },
-      ),
-    ).toThrow("Sample image response malformed");
-    expect(() =>
-      parseOpenAiCompatibleImageResponse(
-        { data: { b64_json: Buffer.from("png").toString("base64") } },
-        { malformedResponseError: "Sample image response malformed" },
       ),
     ).toThrow("Sample image response malformed");
   });

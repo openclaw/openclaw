@@ -1,12 +1,10 @@
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   buildChannelInboundEventContext,
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   formatInboundMediaUnavailableText,
-  resolveChannelInboundRouteEnvelope,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
-// Qa Channel plugin module implements inbound behavior.
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
@@ -15,7 +13,8 @@ import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import {
   buildQaTarget,
   deleteQaBusMessage,
@@ -23,8 +22,7 @@ import {
   sendQaBusMessage,
   type QaBusMessage,
 } from "./bus-client.js";
-import { sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
-import type { PluginRuntime } from "./runtime-api.js";
+import { collectQaMediaUrls, sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
@@ -258,18 +256,11 @@ function createQaReplyPreview(params: {
         previewStopped = true;
       }
       return withPreviewLock(async () => {
-        if (mediaUrls.length > 0) {
-          // Tool/block callbacks acknowledge real delivery, not a preview. A new
-          // attachment must survive even when its caption matches an earlier send.
+        if (mediaUrls.length > 0 || isError === true) {
+          // Preview edits cannot add attachments or a typed failure marker.
+          // Both need a durable send even when the text matches earlier output.
           await clear();
           await sendDurable(text, isError, mediaUrls);
-          return;
-        }
-        if (isError === true) {
-          // Preview edits cannot add the typed failure marker. Replace any preview
-          // with one durable marked message so QA Lab cannot accept it as success.
-          await clear();
-          await sendDurable(text, true);
           return;
         }
         // Core may close a streamed block with an identical final payload.
@@ -322,17 +313,12 @@ export async function handleQaInbound(params: {
     conversationId: inbound.conversation.id,
   });
   const toolCalls: QaBusToolCall[] = [];
-  const { route } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: params.config,
     channel: params.channelId,
     accountId: params.account.accountId,
     peer: {
-      kind:
-        inbound.conversation.kind === "direct"
-          ? "direct"
-          : inbound.conversation.kind === "group"
-            ? "group"
-            : "channel",
+      kind: inbound.conversation.kind,
       id: target,
     },
   });
@@ -350,7 +336,7 @@ export async function handleQaInbound(params: {
     threadId: inbound.threadId,
     parentSessionKey: isGroup ? route.sessionKey : undefined,
   });
-  const buildEnvelope = createChannelInboundEnvelopeBuilder({
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({
     cfg: params.config,
     route: { agentId: route.agentId, sessionKey: threadKeys.sessionKey },
   });
@@ -502,28 +488,12 @@ export async function handleQaInbound(params: {
     ctxPayload,
     delivery: {
       deliver: async (payload, info) => {
-        const reply =
-          payload && typeof payload === "object"
-            ? (payload as {
-                text?: string;
-                mediaUrl?: string;
-                mediaUrls?: string[];
-                isError?: boolean;
-              })
-            : undefined;
-        const text = reply?.text ?? "";
-        const mediaUrls = Array.from(
-          new Set(
-            [reply?.mediaUrl, ...(reply?.mediaUrls ?? [])].filter(
-              (mediaUrl): mediaUrl is string =>
-                typeof mediaUrl === "string" && mediaUrl.trim().length > 0,
-            ),
-          ),
-        );
+        const text = payload.text ?? "";
+        const mediaUrls = collectQaMediaUrls(payload.mediaUrl, ...(payload.mediaUrls ?? []));
         if (!text.trim() && mediaUrls.length === 0) {
           return;
         }
-        await preview.deliver(text, info?.kind ?? "final", reply?.isError, mediaUrls);
+        await preview.deliver(text, info?.kind ?? "final", payload.isError, mediaUrls);
       },
       onError: (error) => {
         void clearPreview();

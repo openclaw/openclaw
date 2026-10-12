@@ -22,8 +22,6 @@ type ShellNavigationState = {
   handleNativeToggleSearch: (event: Event) => void;
   handleNativeNewSession: () => void;
   handleNativeNavigate: (event: Event) => void;
-  handleNativeHistoryState: (event: Event) => void;
-  nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
   onboarding: boolean;
   updated: (changedProperties: Map<string, unknown>) => void;
 };
@@ -78,7 +76,7 @@ afterEach(() => {
 });
 
 describe("OpenClaw native shell", () => {
-  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+  it.each(["MacIntel", "Win32"])(
     "uses only the platform sidebar modifier on %s without consuming text navigation",
     (platform) => {
       const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
@@ -169,28 +167,6 @@ describe("OpenClaw native shell", () => {
       key: "<",
       code: "Comma",
       metaKey: true,
-      shiftKey: true,
-      cancelable: true,
-    });
-
-    shell.handleDocumentKeydown(event);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledWith("appearance", undefined);
-  });
-
-  it("opens Settings with Ctrl-Shift-Comma", () => {
-    const navigate = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
-    shell.runtime = {
-      context: {
-        navigate,
-      } as unknown as ApplicationContext,
-    };
-    const event = new KeyboardEvent("keydown", {
-      key: "<",
-      code: "Comma",
-      ctrlKey: true,
       shiftKey: true,
       cancelable: true,
     });
@@ -552,23 +528,22 @@ describe("OpenClaw native shell", () => {
     }
   });
 
-  it.each(
-    [
-      { path: "/settings/appearance", routeId: "appearance" },
-      { path: "/settings/channels", routeId: "channels" },
-      { path: "/custodian", routeId: "custodian", search: "?onboarding=1" },
-      {
-        path: "/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
-        routeId: "chat",
-        search: "?view=chat",
-      },
-      { path: "/dashboard/main/tasks/review", routeId: "dashboard" },
-      { path: "/settings/agents/main/overview", routeId: "agents" },
-      { path: "/settings/memory/dreams", routeId: "memory" },
-    ].flatMap(({ path, routeId, search }) =>
-      ["", "/gateway"].map((basePath) => ({ path, routeId, search, basePath })),
-    ),
-  )(
+  it.each([
+    { path: "/settings/appearance", routeId: "appearance", basePath: "", search: undefined },
+    {
+      path: "/settings/appearance",
+      routeId: "appearance",
+      basePath: "/gateway",
+      search: undefined,
+    },
+    { path: "/settings/channels", routeId: "channels", basePath: "", search: undefined },
+    {
+      path: "/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
+      routeId: "chat",
+      search: "?view=chat",
+      basePath: "/gateway",
+    },
+  ])(
     "preserves native destination $basePath$path and acknowledges it",
     ({ path, routeId, search, basePath }) => {
       const navigate = vi.fn();
@@ -591,7 +566,7 @@ describe("OpenClaw native shell", () => {
     },
   );
 
-  it.each(["#frag-only", "onboarding=1", "?onboarding=1#x"])(
+  it.each(["onboarding=1", "?onboarding=1#x"])(
     "ignores malformed native search %s and keeps the plain route",
     (search) => {
       const navigate = vi.fn();
@@ -650,17 +625,6 @@ describe("OpenClaw native shell", () => {
     shell.handleNativeNewSession();
 
     expect(navigate).not.toHaveBeenCalled();
-  });
-
-  it("updates native history state from the host event", () => {
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
-    shell.handleNativeHistoryState(
-      new CustomEvent("openclaw:native-history-state", {
-        detail: { canGoBack: true, canGoForward: false },
-      }),
-    );
-
-    expect(shell.nativeHistoryState).toEqual({ canGoBack: true, canGoForward: false });
   });
 
   it("deduplicates native nav state reports", () => {

@@ -5,7 +5,7 @@ import { withSqliteSessionImportStage } from "../config/sessions/session-accesso
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import { iterateSqliteQuerySync } from "./kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
   createTranscriptEventReader,
   readTranscriptFingerprint,
@@ -14,8 +14,8 @@ import {
 export function verifyTranscriptEvents(
   database: DatabaseSync,
   source: { path: string; sessionId: string; originalPath: string },
-  allowMissingSuffix = false,
-): { events: number; missingEvents: number } | undefined {
+  mode: "ordered" | "contained" | "appendable" = "ordered",
+): { events: number; missingEvents: number; sqliteEvents: number } | undefined {
   return withSqliteSessionImportStage((stage) => {
     let seq = 0;
     const validate = createTranscriptEventReader(
@@ -25,15 +25,24 @@ export function verifyTranscriptEvents(
       readTranscriptFingerprint(source.path),
       source.originalPath,
     )((event) => stage.append(0, seq++, JSON.stringify(event)));
-    const repair = stage.repairLegacyTranscript(0);
-    // Old metadata cannot prove that a now-discarded branch was deliberately retired then.
-    if (repair.repaired || !repair.recognized) {
-      return undefined;
+    if (mode === "ordered") {
+      const repair = stage.repairLegacyTranscript(0);
+      // Receipt adoption retains its original order and branch-repair contract.
+      if (repair.repaired || !repair.recognized) {
+        return undefined;
+      }
     }
     const db = getSessionKysely(database);
+    const sqliteEvents = executeSqliteQueryTakeFirstSync(
+      database,
+      db
+        .selectFrom("transcript_events")
+        .select((eb) => eb.fn.countAll<number>().as("count"))
+        .where("session_id", "=", source.sessionId),
+    )!.count;
     const sourceRows = stage.rows(0)[Symbol.iterator]();
+    let expected = sourceRows.next();
     try {
-      let expected = sourceRows.next();
       for (const event of iterateSqliteQuerySync(
         database,
         db
@@ -42,44 +51,59 @@ export function verifyTranscriptEvents(
           .where("session_id", "=", source.sessionId)
           .orderBy("seq", "asc"),
       )) {
-        if (allowMissingSuffix) {
+        if (mode !== "ordered") {
           stage.addSeen(event.event_json);
           const entry: unknown = JSON.parse(event.event_json);
           if (isRecord(entry) && typeof entry.id === "string") {
             stage.addSeen(`id\0${entry.id}`);
           }
         }
-        if (expected.done) {
-          break;
-        }
-        // Canonical history may contain newer events, but must preserve source order and repeats.
-        if (event.event_json === expected.value.eventJson) {
+        if (!expected.done && event.event_json === expected.value.eventJson) {
           expected = sourceRows.next();
           if (expected.done) {
             break;
           }
         }
       }
-      let missingEvents = 0;
-      if (allowMissingSuffix) {
-        while (!expected.done) {
-          const entry: unknown = JSON.parse(expected.value.eventJson);
-          // Append-only import cannot insert a missing middle row or replace an existing ID.
-          if (
-            stage.contains(expected.value.eventJson) ||
-            (isRecord(entry) && typeof entry.id === "string" && stage.contains(`id\0${entry.id}`))
-          ) {
-            return undefined;
-          }
-          missingEvents += 1;
-          expected = sourceRows.next();
-        }
-      }
-      validate();
-      return expected.done ? { events: seq, missingEvents } : undefined;
     } finally {
       sourceRows.return?.();
     }
+    if (mode === "ordered" || expected.done) {
+      validate();
+      return expected.done ? { events: seq, missingEvents: 0, sqliteEvents } : undefined;
+    }
+    let missingEvents = 0;
+    let firstMissing: string | undefined;
+    for (const row of stage.rows(0)) {
+      const entry: unknown = JSON.parse(row.eventJson);
+      const id = isRecord(entry) && typeof entry.id === "string" ? entry.id : `row ${row.seq + 1}`;
+      // Exact payloads include identity and parent links; physical SQLite order may differ.
+      if (stage.contains(row.eventJson)) {
+        if (firstMissing !== undefined) {
+          throw new Error(
+            `Missing legacy event ${firstMissing} precedes existing event ${id}; only a missing suffix can be appended`,
+          );
+        }
+        continue;
+      }
+      if (mode !== "appendable") {
+        return undefined;
+      }
+      if (stage.contains(`id\0${id}`)) {
+        throw new Error(`Legacy event ${id} conflicts with the SQLite event of the same identity`);
+      }
+      firstMissing ??= id;
+      missingEvents += 1;
+    }
+    if (missingEvents > 0) {
+      const repair = stage.repairLegacyTranscript(0);
+      // Missing history must be appendable without discarding or rewriting original rows.
+      if (repair.repaired || !repair.recognized) {
+        return undefined;
+      }
+    }
+    validate();
+    return { events: seq, missingEvents, sqliteEvents };
   });
 }
 
@@ -88,25 +112,27 @@ export function verifyCanonicalSessionTranscriptSources(params: {
   target: { agentId: string; sqlitePath: string };
   sources: readonly { path: string; sessionId: string; originalPath?: string }[];
   env: NodeJS.ProcessEnv;
-  allowMissingSuffix?: boolean;
-}): { entries: number; events: number; missingEvents: number } | undefined {
+  mode?: "ordered" | "contained" | "appendable";
+}): { entries: number; events: number; missingEvents: number; sqliteEvents: number } | undefined {
   const verified = withOpenClawAgentDatabaseReadOnly(
     (database) => {
       let events = 0;
       let missingEvents = 0;
+      let sqliteEvents = 0;
       for (const source of params.sources) {
         const verifiedSource = verifyTranscriptEvents(
           database.db,
           { ...source, originalPath: source.originalPath ?? source.path },
-          params.allowMissingSuffix,
+          params.mode,
         );
         if (!verifiedSource) {
           return undefined;
         }
         events += verifiedSource.events;
         missingEvents += verifiedSource.missingEvents;
+        sqliteEvents += verifiedSource.sqliteEvents;
       }
-      return { entries: params.sources.length, events, missingEvents };
+      return { entries: params.sources.length, events, missingEvents, sqliteEvents };
     },
     { agentId: params.target.agentId, path: params.target.sqlitePath, env: params.env },
   );

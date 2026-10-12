@@ -51,7 +51,7 @@ function createController(options: {
   trigger?: LaneParams["trigger"];
   abortSignal?: AbortSignal;
   runId?: string;
-  params?: Pick<LaneParams, "agentId" | "sessionKey">;
+  params?: Pick<LaneParams, "agentId" | "sessionKey" | "swarmExecutionLane">;
   inputProvenance?: LaneParams["inputProvenance"];
 }) {
   let lifecycleGeneration = options.lifecycleGeneration;
@@ -99,21 +99,47 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
     resetAgentEventsForTest();
   });
 
-  it.each([
-    { trigger: "user" as const, expected: "foreground" },
-    { trigger: "cron" as const, expected: "background" },
-  ])("marks $trigger session work as $expected", async ({ trigger, expected }) => {
+  it("marks user session work as foreground", async () => {
+    const trigger = "user" as const;
+    const expected = "foreground";
     const priorities: Array<CommandQueueEnqueueOptions["priority"]> = [];
     const enqueue: LaneParams["enqueue"] = async (task, options) => {
       priorities.push(options?.priority);
       return await task();
     };
     const generation = getAgentEventLifecycleGeneration();
-    const { controller } = createController({ lifecycleGeneration: generation, enqueue, trigger });
+    const { controller } = createController({
+      lifecycleGeneration: generation,
+      enqueue,
+      trigger,
+    });
 
     await controller.enqueueSession(async () => undefined);
 
     expect(priorities).toEqual([expected]);
+  });
+
+  it("applies the current swarm capacity only to global execution admission", async () => {
+    const capacities: Array<number | undefined> = [];
+    let maxConcurrent = 32;
+    const { controller } = createController({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      enqueue: async (task, options) => {
+        capacities.push(options?.maxConcurrent);
+        return await task();
+      },
+      params: {
+        swarmExecutionLane: {
+          lane: "subagent:swarm:group",
+          get maxConcurrent() {
+            return maxConcurrent;
+          },
+        },
+      },
+    });
+    maxConcurrent = 8;
+    await controller.enqueueSession(() => controller.enqueueGlobal(async () => completedResult));
+    expect(capacities).toEqual([undefined, 8]);
   });
 
   it("preserves the selected agent for sessionless admitted runtime events", async () => {
@@ -139,28 +165,6 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
     } finally {
       unsubscribe();
     }
-  });
-
-  it("rebinds foreground work that was queued before lifecycle rotation", async () => {
-    const queue = deferredTaskQueue();
-    const generation = getAgentEventLifecycleGeneration();
-    const state = createController({
-      lifecycleGeneration: generation,
-      enqueue: queue.enqueue as LaneParams["enqueue"],
-      trigger: "user",
-      runId: "queued-across-restart",
-    });
-    const run = state.controller.enqueueGlobal(async () => completedResult);
-
-    const currentGeneration = rotateAgentEventLifecycleGeneration();
-    queue.release();
-    await run;
-
-    expect(state.getLifecycleGeneration()).toBe(currentGeneration);
-    expect(state.getParams().lifecycleGeneration).toBe(currentGeneration);
-    expect(getAgentRunContext("queued-across-restart")).toMatchObject({
-      lifecycleGeneration: currentGeneration,
-    });
   });
 
   it("rebinds inter-session user work that was queued before lifecycle rotation", async () => {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -22,7 +23,8 @@ it.each(["durable", "incognito", "shared durable"] as const)(
       const readSource = { agentId: target.agentId ?? agentId, path: target.path };
       const { db } = openOpenClawAgentDatabase(readSource);
       const key = `agent:${agentId}:dashboard:incognito-collision`;
-      const unrelatedLabel = "unrelated-durable-row-must-not-be-decoded";
+      // Keep the persisted marker distinct from copies of this test in source maps.
+      const unrelatedLabel = `unrelated-durable-row-must-not-be-decoded-${randomUUID()}`;
       replaceSessionEntrySync(
         { agentId, sessionKey: `agent:${agentId}:dashboard:unrelated`, storePath },
         { sessionId: "unrelated", updatedAt: 1, label: unrelatedLabel },

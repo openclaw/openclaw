@@ -139,7 +139,6 @@ require("node:module").syncBuiltinESMExports();
 record({ kind: "preload" });
 `,
   );
-  const counts: Record<string, unknown[]> = {};
   try {
     for (const online of [true, false]) {
       if (!online) {
@@ -206,25 +205,16 @@ record({ kind: "preload" });
           .split("\n")
           .map((line) => JSON.parse(line) as { kind: string });
         expect(events).toContainEqual({ kind: "preload" });
-        counts[
-          `${online ? "online" : "offline"} ${args.slice(0, args[0] === "gateway" ? 3 : 2).join(" ")}`
-        ] = events.filter((event) =>
-          message
-            ? event.kind === "snapshot" || event.kind === "capture"
-            : event.kind !== "preload",
-        );
+        expect(
+          events.filter((event) =>
+            message
+              ? event.kind === "snapshot" || event.kind === "capture"
+              : event.kind !== "preload",
+          ),
+          `${online ? "online" : "offline"} ${args.join(" ")}`,
+        ).toEqual([]);
       }
     }
-    expect(counts).toEqual(
-      message
-        ? { "online message read": [], "offline message read": [] }
-        : {
-            "online cron list": [],
-            "online gateway call cron.status": [],
-            "offline cron list": [],
-            "offline gateway call cron.status": [],
-          },
-    );
   } finally {
     await lock?.release();
   }

@@ -53,7 +53,8 @@ final class DockIconManager: NSObject, @unchecked Sendable {
 
     func temporarilyShowDock() {
         Task { @MainActor in
-            guard AppLaunchRuntimePlan.current.allowsDockIcon else { return }
+            guard AppLaunchRuntimePlan.current.allowsDockIcon,
+                  AppLaunchRuntimePlan.current.allowsActivation else { return }
             guard NSApp != nil else {
                 self.logger.warning("NSApp not ready, cannot show Dock icon")
                 return
@@ -68,7 +69,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
         userWantsDockHidden: Bool,
         hasVisibleWindows: Bool) -> NSApplication.ActivationPolicy
     {
-        guard launchPlan.allowsDockIcon else { return .accessory }
+        guard launchPlan.allowsDockIcon, launchPlan.allowsActivation else { return .accessory }
         return !userWantsDockHidden || hasVisibleWindows ? .regular : .accessory
     }
 
@@ -97,21 +98,17 @@ final class DockIconManager: NSObject, @unchecked Sendable {
                 }
             }
 
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(self.windowVisibilityChanged),
-                name: NSWindow.didBecomeKeyNotification,
-                object: nil)
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(self.windowVisibilityChanged),
-                name: NSWindow.didResignKeyNotification,
-                object: nil)
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(self.windowVisibilityChanged),
-                name: NSWindow.willCloseNotification,
-                object: nil)
+            for name in [
+                NSWindow.didBecomeKeyNotification,
+                NSWindow.didResignKeyNotification,
+                NSWindow.willCloseNotification,
+            ] {
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(self.windowVisibilityChanged),
+                    name: name,
+                    object: nil)
+            }
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(self.dockPreferenceChanged),

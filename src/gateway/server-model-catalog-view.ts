@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getCurrentPluginMetadataSnapshotRuntime } from "../plugins/plugin-metadata-snapshot.runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedGatewayModelCatalog } from "./server-model-catalog.types.js";
 
@@ -22,4 +24,22 @@ export function readPreparedGatewayModelCatalogMetadata(
   catalog: PreparedGatewayModelCatalog | undefined,
 ): PluginMetadataSnapshot | undefined {
   return catalog ? metadataByCatalog.get(catalog) : undefined;
+}
+
+/** A prepared miss stays authoritative instead of starting discovery during presentation. */
+export function readPreparedGatewayModelMetadata(
+  cfg: OpenClawConfig,
+  catalog?: PreparedGatewayModelCatalog,
+): PluginMetadataSnapshot | null {
+  if (catalog) {
+    return readPreparedGatewayModelCatalogMetadata(catalog) ?? null;
+  }
+  return (
+    getCurrentPluginMetadataSnapshotRuntime({
+      config: cfg,
+      allowSynchronousPolicyRead: false,
+      allowScopedSnapshot: true,
+      allowWorkspaceScopedSnapshot: true,
+    }) ?? null
+  );
 }

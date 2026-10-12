@@ -1,6 +1,10 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  AgentDatabaseAdmissionError,
+  createAgentDatabaseInspectionRefusal,
+} from "../state/agent-database-admission.js";
 import { handleGatewayRequest } from "./server-methods.js";
 
 function moduleNotFoundError(filePath: string): Error {
@@ -78,4 +82,24 @@ describe("gateway stale install errors", () => {
     await expect(dispatchThrowingHandler(error, respond)).rejects.toBe(error);
     expect(respond).not.toHaveBeenCalled();
   });
+});
+
+it("returns a thrown pending admission as a retryable RPC response", async () => {
+  const refusal = createAgentDatabaseInspectionRefusal({
+    agentId: "worker",
+    paths: ["/isolated/worker.sqlite"],
+    reason: "Inspection continues in the background.",
+    pending: true,
+  });
+  const respond = await dispatchThrowingHandler(new AgentDatabaseAdmissionError(refusal));
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code: "UNAVAILABLE",
+      details: refusal,
+      retryable: true,
+      retryAfterMs: 250,
+    }),
+  );
 });

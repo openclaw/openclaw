@@ -1,19 +1,20 @@
 // Full embedded-runner stream wrapper chain around the real Codex Responses
 // provider with a mocked WebSocket, proving the idle watchdog polices provider
 // silence in the shapes seen live (fresh, cached, and consumer-parked streams).
-import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
+import { createLlmRuntime } from "@openclaw/ai";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenAICodexWebSocketSessions,
   resetOpenAICodexWebSocketStateForTest,
 } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
-// Registers built-in providers on the default registry exactly like the runtime does.
-import "../../../llm/stream.js";
 import type { Model } from "../../../llm/types.js";
+// Installs the OpenClaw transport host exactly like the runtime does.
+import "../../../llm/stream.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
-import { wrapStreamFnCodeModeSource } from "../../transcript-code-mode-source.js";
 import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
 import { wrapStreamFnTrimToolCallNames } from "./attempt-tool-call-stream-normalization.js";
@@ -51,6 +52,9 @@ const context = {
   systemPrompt: "You are a test.",
   messages: [{ role: "user", content: "hi", timestamp: 1 }],
 } as Parameters<StreamFn>[1];
+
+const llmRuntime = createLlmRuntime();
+registerBuiltInApiProviders(llmRuntime.registry);
 
 type Frame = Record<string, unknown>;
 
@@ -103,11 +107,10 @@ function buildRunnerChain(params: {
   sessionId: string;
   runSignal: AbortSignal;
   onIdleTimeout: (error: Error) => void;
-  codeMode: boolean;
 }): { streamFn: StreamFn; idleTimeoutMs: number; firstEventTimeoutMs: number; strategy: string } {
   const cfg = { agents: { defaults: { timeoutSeconds: 3600 } } };
   const { streamFn: base, strategy } = resolveEmbeddedAgentStream({
-    llmRuntime: defaultLlmRuntime,
+    llmRuntime,
     currentStreamFn: undefined,
     sessionId: params.sessionId,
     signal: params.runSignal,
@@ -153,9 +156,6 @@ function buildRunnerChain(params: {
     trace: createDiagnosticTraceContext(),
     nextCallId: () => `${params.runId}:model:${(seq += 1)}`,
   });
-  if (params.codeMode) {
-    streamFn = wrapStreamFnCodeModeSource(streamFn, new Set(["exec"]));
-  }
   return { streamFn, idleTimeoutMs, firstEventTimeoutMs, strategy };
 }
 
@@ -197,94 +197,45 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     vi.useRealTimers();
   });
 
-  it.each([{ codeMode: false }, { codeMode: true }])(
-    "A: fresh socket that never sends is aborted at the idle timeout (codeMode=$codeMode)",
-    async ({ codeMode }) => {
-      vi.useFakeTimers();
-      vi.stubGlobal("WebSocket", ControlledWebSocket);
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => new Response("", { status: 500 })),
-      );
-      const onIdleTimeout = vi.fn();
-      const runAbort = new AbortController();
-      const { streamFn, idleTimeoutMs, firstEventTimeoutMs, strategy } = buildRunnerChain({
-        runId: "run-A",
-        sessionId: "session-A",
-        runSignal: runAbort.signal,
-        onIdleTimeout,
-        codeMode,
-      });
-      expect(strategy).toBe("openclaw-native-codex-responses");
-      expect([idleTimeoutMs, firstEventTimeoutMs]).toEqual([120_000, 120_000]);
-
-      const consumed = consumeLikeAgentCore(streamFn, runAbort.signal);
-      await vi.advanceTimersByTimeAsync(10);
-      const socket = ControlledWebSocket.instances[0];
-      expect(socket?.sent).toHaveLength(1);
-
-      await vi.advanceTimersByTimeAsync(119_000);
-      expect(onIdleTimeout).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(onIdleTimeout).toHaveBeenCalledTimes(1);
-      expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(
-        /idle timeout|first-event timeout/,
-      );
-
-      const { events, result, thrown } = await consumed;
-      // Idle timeout surfaces as a thrown error from next(); the provider stream is aborted.
-      expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
-        /idle timeout|first-event timeout/,
-      );
-      // Depending on wrapper ordering the abort surfaces as a throw or as an error event.
-      expect(events.length).toBeLessThanOrEqual(1);
-      expect(socket?.closeCalls.length).toBeGreaterThan(0);
-    },
-  );
-
-  it("B: fresh socket that sends one response.created frame then stalls is aborted at the idle timeout", async () => {
+  it("A: fresh socket that never sends is aborted at the idle timeout", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("WebSocket", ControlledWebSocket);
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response("", { status: 500 })),
     );
-    ControlledWebSocket.onSend = (socket) => {
-      queueMicrotask(() =>
-        socket.deliver({
-          type: "response.created",
-          response: { id: "resp_b", status: "in_progress" },
-        }),
-      );
-    };
     const onIdleTimeout = vi.fn();
     const runAbort = new AbortController();
-    const { streamFn } = buildRunnerChain({
-      runId: "run-B",
-      sessionId: "session-B",
+    const { streamFn, idleTimeoutMs, firstEventTimeoutMs, strategy } = buildRunnerChain({
+      runId: "run-A",
+      sessionId: "session-A",
       runSignal: runAbort.signal,
       onIdleTimeout,
-      codeMode: true,
     });
+    expect(strategy).toBe("openclaw-native-codex-responses");
+    expect([idleTimeoutMs, firstEventTimeoutMs]).toEqual([120_000, 120_000]);
 
-    const seen: string[] = [];
-    const consumed = consumeLikeAgentCore(streamFn, runAbort.signal, (type) => {
-      seen.push(type);
-    });
+    const consumed = consumeLikeAgentCore(streamFn, runAbort.signal);
     await vi.advanceTimersByTimeAsync(10);
-    expect(seen).toEqual(["start"]);
+    const socket = ControlledWebSocket.instances[0];
+    expect(socket?.sent).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(119_000);
     expect(onIdleTimeout).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(onIdleTimeout).toHaveBeenCalledTimes(1);
-    expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(/idle timeout/);
-
-    const { result, thrown } = await consumed;
-    expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
-      /idle timeout/,
+    expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(
+      /idle timeout|first-event timeout/,
     );
-    expect(ControlledWebSocket.instances[0]?.closeCalls.length).toBeGreaterThan(0);
+
+    const { events, result, thrown } = await consumed;
+    // Idle timeout surfaces as a thrown error from next(); the provider stream is aborted.
+    expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
+      /idle timeout|first-event timeout/,
+    );
+    // Depending on wrapper ordering the abort surfaces as a throw or as an error event.
+    expect(events.length).toBeLessThanOrEqual(1);
+    expect(socket?.closeCalls.length).toBeGreaterThan(0);
   });
 
   it("C: cached session socket reused from a previous call, then one frame and a stall, is aborted at the idle timeout", async () => {
@@ -314,7 +265,6 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
       sessionId: "session-C",
       runSignal: runAbort.signal,
       onIdleTimeout,
-      codeMode: true,
     });
 
     const first = await consumeLikeAgentCore(streamFn, runAbort.signal);
@@ -356,18 +306,17 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
       sessionId: "session-D",
       runSignal: runAbort.signal,
       onIdleTimeout,
-      codeMode: true,
     });
-    let releaseEmit: (() => void) | undefined;
-    const parked = new Promise<void>((resolve) => {
-      releaseEmit = resolve;
-    });
+    const emitEntered = createDeferredCore();
+    const releaseEmit = createDeferredCore();
     const consumed = consumeLikeAgentCore(streamFn, runAbort.signal, async (type) => {
       if (type === "start") {
-        await parked;
+        emitEntered.resolve();
+        await releaseEmit.promise;
       }
     });
     await vi.advanceTimersByTimeAsync(10);
+    await emitEntered.promise;
     await vi.advanceTimersByTimeAsync(119_000);
     expect(onIdleTimeout).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_000);
@@ -376,7 +325,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(/idle timeout/);
     expect(ControlledWebSocket.instances[0]?.closeCalls.length).toBeGreaterThan(0);
 
-    releaseEmit?.();
+    releaseEmit.resolve();
     await vi.advanceTimersByTimeAsync(10);
     const { result, thrown } = await consumed;
     expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
@@ -403,18 +352,17 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
       sessionId: "session-F",
       runSignal: runAbort.signal,
       onIdleTimeout,
-      codeMode: true,
     });
-    let releaseEmit: (() => void) | undefined;
-    const parked = new Promise<void>((resolve) => {
-      releaseEmit = resolve;
-    });
+    const emitEntered = createDeferredCore();
+    const releaseEmit = createDeferredCore();
     const consumed = consumeLikeAgentCore(streamFn, runAbort.signal, async (type) => {
       if (type === "start") {
-        await parked;
+        emitEntered.resolve();
+        await releaseEmit.promise;
       }
     });
     await vi.advanceTimersByTimeAsync(10);
+    await emitEntered.promise;
     const socket = ControlledWebSocket.instances[0];
     // The provider keeps streaming bookkeeping frames every 60s (under the 120s budget).
     const progress = setInterval(() => {
@@ -425,7 +373,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     expect(onIdleTimeout).not.toHaveBeenCalled();
 
     socket?.deliver(completedFrame("resp_f"));
-    releaseEmit?.();
+    releaseEmit.resolve();
     await vi.advanceTimersByTimeAsync(10);
     const { result, thrown } = await consumed;
     expect(thrown).toBeUndefined();

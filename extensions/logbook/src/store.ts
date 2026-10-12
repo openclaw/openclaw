@@ -115,10 +115,6 @@ export class LogbookStore {
     return this.execute("nextPendingBatch", undefined);
   }
 
-  batchFrames(batchId: number) {
-    return this.execute("batchFrames", { batchId });
-  }
-
   replaceObservations(batchId: number, day: string, segments: LogbookObservationInput[]) {
     return this.execute("replaceObservations", { batchId, day, segments });
   }

@@ -49,49 +49,56 @@ function fixture(npmDistTag = "latest", packageName = "@openclaw/example") {
 describe("sealed publication inputs", () => {
   it.each([
     { published: false, latest: "2026.9.5", decision: "plan", route: null },
+    { published: false, latest: "2026.9.5", decision: "plan", route: null, coreBeta: true },
+    { published: false, latest: "2026.9.5", decision: "plan", route: null, bootstrap: true },
     { published: true, latest: version, decision: "already-published", route: "npm-readback" },
     { published: true, latest: "2026.9.7", decision: "superseded", route: "npm-readback" },
   ])("seals registry decision $decision without acknowledging the SDK evidence", async (row) => {
-    const input = fixture();
+    const input = row.coreBeta ? fixture("beta", "openclaw") : fixture();
     const fetchImpl = vi.fn(async () =>
-      Response.json({
-        versions: { "2026.9.5": {}, ...(row.published ? { [version]: {} } : {}) },
-        "dist-tags": { latest: row.latest, beta: row.latest },
-      }),
+      row.bootstrap
+        ? new Response("{}", { status: 404 })
+        : Response.json({
+            versions: { "2026.9.5": {}, ...(row.published ? { [version]: {} } : {}) },
+            "dist-tags": { latest: row.latest, beta: row.latest },
+          }),
     );
     const sealed = await seal({
       ...input,
       fetchImpl,
-      stableSoakWaiver: "approved\nreason",
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(sealed).toMatchObject({
       version: 1,
       targetSha,
-      npmDistTag: "latest",
+      npmDistTag: row.coreBeta ? "beta" : "latest",
       pluginSdkApiAcknowledgement: "",
       pluginSdkApiEvidenceDigest: input.digest,
-      stableSoakWaiver: "approved\nreason",
       npmDecisions: [
         {
-          packageName: "@openclaw/example",
+          packageName: row.coreBeta ? "openclaw" : "@openclaw/example",
           packageVersion: version,
           decision: row.decision,
           route: row.route,
           supersededBy: row.decision === "superseded" ? "2026.9.7" : null,
-          bootstrap: false,
+          bootstrap: row.bootstrap ?? false,
         },
       ],
     });
+    if (row.coreBeta) {
+      expect(sealed.npmDecisions?.[0]?.plan).toEqual({
+        channel: "stable",
+        publishTag: "beta",
+        mirrorDistTags: [],
+      });
+    }
     const manifest = { ...input.manifest, publishInputs: sealed };
     expect(resolveReleasePublishInputs(manifest).pluginSdkApiAcknowledgement).toBe("");
     expect(
       resolveReleasePublishInputs(manifest, {
-        stableSoakWaiver: " \n ",
         pluginSdkApiAcknowledgement: " \t ",
       }),
     ).toMatchObject({
-      stableSoakWaiver: "approved\nreason",
       pluginSdkApiAcknowledgement: "",
     });
     expect(
@@ -100,38 +107,20 @@ describe("sealed publication inputs", () => {
     ).toBe("12345678");
     expect(
       resolveReleasePublishInputs(manifest, {
-        stableSoakWaiver: "override",
         pluginSdkApiAcknowledgement: "12345678",
       }),
     ).toMatchObject({
-      stableSoakWaiver: "override",
       pluginSdkApiAcknowledgement: "12345678",
     });
     expect(() => resolveReleasePublishInputs(manifest, { targetSha: "d".repeat(40) })).toThrow(
       "target SHA mismatch",
     );
-    expect(() => resolveReleasePublishInputs(manifest, { npmDistTag: "beta" })).toThrow(
-      "dist-tag mismatch",
-    );
+    expect(() =>
+      resolveReleasePublishInputs(manifest, { npmDistTag: row.coreBeta ? "latest" : "beta" }),
+    ).toThrow("dist-tag mismatch");
     expect(() =>
       resolveReleasePublishInputs({ ...manifest, publishInputs: { ...sealed, npmDecisions: [] } }),
     ).toThrow("roster");
-  });
-
-  it("preserves the core beta publication route", async () => {
-    const sealed = await seal({
-      ...fixture("beta", "openclaw"),
-      fetchImpl: async () =>
-        Response.json({
-          versions: { "2026.9.5": {} },
-          "dist-tags": { latest: "2026.9.5", beta: "2026.9.5" },
-        }),
-    });
-    expect(sealed.npmDecisions?.[0]?.plan).toEqual({
-      channel: "stable",
-      publishTag: "beta",
-      mirrorDistTags: [],
-    });
   });
 
   it.each([
@@ -158,72 +147,31 @@ describe("sealed publication inputs", () => {
     await expect(seal({ ...input, fetchImpl })).rejects.toThrow(error);
   });
 
-  it("records a missing plugin as a bootstrap plan", async () => {
-    const sealed = await seal({
-      ...fixture(),
-      fetchImpl: async () => new Response("{}", { status: 404 }),
-    });
-    expect(sealed.npmDecisions?.[0]).toMatchObject({
-      decision: "plan",
-      bootstrap: true,
-      route: null,
-    });
-  });
-
-  it("rejects malformed historical SDK overrides before workflow outputs", () => {
-    expect(() =>
-      resolveReleasePublishInputs(
-        {},
-        {
-          pluginSdkApiAcknowledgement: "12345678\ninjected=value",
-        },
-      ),
-    ).toThrow("SDK override");
-  });
-
-  it("revokes a sealed soak waiver once the repository variable no longer holds it", () => {
-    const { manifest: base } = fixture();
-    const manifest = {
-      ...base,
-      sourceAdmission: { ...base.sourceAdmission, projection: { packages: [] } },
-      publishInputs: {
-        version: 1,
-        targetSha,
-        npmDistTag: "latest",
-        pluginSdkApiAcknowledgement: "",
-        pluginSdkApiEvidenceDigest: "a".repeat(64),
-        stableSoakWaiver: "approved\nreason",
-        npmDecisions: [],
-      },
-    };
-    const resolve = (currentStableSoakWaiver?: string, stableSoakWaiver?: string) =>
-      resolveReleasePublishInputs(manifest, { currentStableSoakWaiver, stableSoakWaiver })
-        .stableSoakWaiver;
-    expect(resolve(undefined)).toBe("approved\nreason");
-    expect(resolve("approved\nreason")).toBe("approved\nreason");
-    expect(resolve("")).toBe("");
-    expect(resolve("2026.9.7 other")).toBe("");
-    expect(resolve("", "explicit override")).toBe("explicit override");
-  });
+  it.each([
+    { manifest: fixture("alpha").manifest, overrides: {}, error: "Alpha releases are retired;" },
+    {
+      manifest: {},
+      overrides: { pluginSdkApiAcknowledgement: "12345678\ninjected=value" },
+      error: "SDK override",
+    },
+    {
+      manifest: { publishInputs: { stableSoakWaiver: "approved\nreason" } },
+      overrides: {},
+      error: "waivers are no longer supported",
+    },
+  ])(
+    "rejects invalid historical publication authority: $error",
+    ({ manifest, overrides, error }) => {
+      expect(() => resolveReleasePublishInputs(manifest, overrides)).toThrow(error);
+    },
+  );
 
   it("leaves historical manifest planning with its existing observer", () => {
-    expect(
-      resolveReleasePublishInputs(
-        {},
-        { stableSoakWaiver: " \n ", pluginSdkApiAcknowledgement: " \t " },
-      ),
-    ).toEqual({
-      stableSoakWaiver: "",
+    expect(resolveReleasePublishInputs({}, { pluginSdkApiAcknowledgement: " \t " })).toEqual({
       pluginSdkApiAcknowledgement: "",
       npmDecisions: undefined,
     });
-    expect(
-      resolveReleasePublishInputs(
-        {},
-        { stableSoakWaiver: "legacy", pluginSdkApiAcknowledgement: "12345678" },
-      ),
-    ).toEqual({
-      stableSoakWaiver: "legacy",
+    expect(resolveReleasePublishInputs({}, { pluginSdkApiAcknowledgement: "12345678" })).toEqual({
       pluginSdkApiAcknowledgement: "12345678",
       npmDecisions: undefined,
     });

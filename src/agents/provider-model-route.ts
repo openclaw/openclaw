@@ -9,6 +9,7 @@ import {
   resolveProviderModelRoutes,
 } from "../plugins/provider-model-routes.js";
 import type { ModelCatalogRoutePolicy } from "./model-catalog-route.js";
+import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 
 /** Canonicalizes a model id only when its provider owns catalog equivalence. */
@@ -34,16 +35,6 @@ export function isProviderModelRerouted(
   );
 }
 
-function normalizeRouteBaseUrl(value: string): string {
-  try {
-    const url = new URL(value);
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString();
-  } catch {
-    return value.replace(/\/+$/u, "");
-  }
-}
-
 function routeTupleMatches(
   source: { api?: string | null; baseUrl?: string },
   route: ProviderModelRouteCandidate,
@@ -51,7 +42,8 @@ function routeTupleMatches(
   return (
     source.api === route.api &&
     typeof source.baseUrl === "string" &&
-    normalizeRouteBaseUrl(source.baseUrl) === normalizeRouteBaseUrl(route.baseUrl)
+    (normalizeCatalogRouteBaseUrl(source.baseUrl) ?? "") ===
+      (normalizeCatalogRouteBaseUrl(route.baseUrl) ?? "")
   );
 }
 

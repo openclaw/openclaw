@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,12 +40,14 @@ describe("Gateway shared-state integrity readiness", () => {
     paths.add(pathname);
     const read = () =>
       executeOpenClawStateWorker(capture(), {
-        type: "tasks.list",
-        input: { ownerKey: "agent:main:main" },
+        type: "plugins.conversationBindingApprovals.read",
+        input: undefined,
       });
     expect(await read()).toEqual([]);
     await closeOpenClawStateDatabaseAsync();
 
+    fs.renameSync(pathname, `${pathname}.template`);
+    fs.copyFileSync(`${pathname}.template`, pathname, fs.constants.COPYFILE_EXCL);
     const database = new DatabaseSync(pathname);
     try {
       database.exec(`INSERT INTO audit_events

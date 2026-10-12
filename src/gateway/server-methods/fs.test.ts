@@ -28,7 +28,7 @@ const writeClient = { connect: { scopes: ["operator.write"] } };
 function workspaceContext(workspace: string) {
   return {
     getRuntimeConfig: () => ({
-      agents: { list: [{ id: "main", default: true, workspace }] },
+      agents: { entries: { main: { workspace } } },
     }),
     nodeRegistry: { get: vi.fn(), invoke: vi.fn() },
   };

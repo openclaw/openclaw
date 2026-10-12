@@ -17,8 +17,12 @@ import { getActivePluginRegistryWorkspaceDirFromStateCore } from "./runtime-work
 
 /** Caller-owned declarations or facts from an already selected metadata snapshot. */
 export type ManifestModelIdNormalizationSource =
-  | readonly Pick<PluginManifestRecord, "modelIdNormalization">[]
-  | { owners: Pick<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies"> };
+  | readonly (Pick<PluginManifestRecord, "modelIdNormalization"> &
+      Partial<Pick<PluginManifestRecord, "providers">>)[]
+  | {
+      owners: Pick<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies"> &
+        Partial<Pick<PluginMetadataSnapshot["owners"], "providers">>;
+    };
 
 type ManifestModelIdNormalizationLookupParams = {
   config?: OpenClawConfig;

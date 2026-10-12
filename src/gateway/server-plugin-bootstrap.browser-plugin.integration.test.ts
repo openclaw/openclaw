@@ -26,7 +26,7 @@ function createTestLog() {
 }
 
 describe("prepareGatewayPluginLoad browser plugin integration", () => {
-  let candidate: ReturnType<typeof prepareGatewayPluginLoad> | undefined;
+  let candidate: Awaited<ReturnType<typeof prepareGatewayPluginLoad>> | undefined;
   let bundledFixture: ReturnType<typeof createBundledBrowserPluginFixture> | null = null;
 
   beforeEach(() => {
@@ -50,8 +50,8 @@ describe("prepareGatewayPluginLoad browser plugin integration", () => {
     }
   });
 
-  it("adds browser.request and the browser control service from the bundled plugin", () => {
-    const loaded = (candidate = prepareGatewayPluginLoad({
+  it("adds browser.request and the browser control service from the bundled plugin", async () => {
+    const loaded = (candidate = await prepareGatewayPluginLoad({
       loadIntent: "startup",
       cfg: {
         plugins: {
@@ -63,7 +63,6 @@ describe("prepareGatewayPluginLoad browser plugin integration", () => {
       coreGatewayHandlers: {},
       baseMethods: [],
       pluginIds: ["browser"],
-      logDiagnostics: false,
     }));
 
     expect(loaded.gatewayMethods).toContain("browser.request");

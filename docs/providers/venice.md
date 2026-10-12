@@ -158,6 +158,16 @@ separate from the native DeepSeek provider's own thinking controls.
 | Vision/Images    | Models marked "Vision" above                           |
 | JSON mode        | Via `response_format`                                  |
 
+## Prompt caching
+
+For the native `https://api.venice.ai/api/v1` endpoint, OpenClaw sends a stable
+`prompt_cache_key` for related requests to improve cache affinity. An explicit
+request cache key takes precedence over the session ID. Setting
+`cacheRetention: "none"` suppresses this routing hint; it does not disable
+Venice's automatic cache. Custom endpoints retain their configured behavior.
+Venice manages provider-specific caching, including Claude cache markers. See
+[Venice prompt caching](https://docs.venice.ai/guides/features/prompt-caching).
+
 ## Pricing
 
 Venice uses a credit-based system. Anonymized models cost roughly the same as
@@ -197,8 +207,9 @@ overrides.
 
 Discovery reuses its existing fetched rows and cache. Usage display makes no
 price requests, and a running Gateway does not immediately adopt every upstream
-price change. Hosted catalog updates activate at the existing restart boundary;
-see [Hosted model catalog](/concepts/models#hosted-catalog-updates).
+price change. Hosted catalog rows and prices activate together after the
+Gateway prepares a replacement generation, without restarting; see
+[Hosted model catalog](/concepts/models#hosted-catalog-updates).
 Make sizing-only edits in your source configuration without copying generated
 model rows back into it: replacing an entire model array from a runtime snapshot
 can persist inherited costs as explicit overrides. Historical recorded costs are preserved; current pricing fills only missing costs or unknown-price zero placeholders. See [Token use and costs](/reference/token-use).

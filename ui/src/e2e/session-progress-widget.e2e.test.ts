@@ -5,6 +5,7 @@ import {
   openSlot,
   toggleSidebarPanelExpanded,
 } from "../pages/chat/sidebar-layout.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -269,7 +270,7 @@ suite.define(() => {
       if (viewport.name === "expanded-side") {
         const mainChat = surface.locator('.sidebar-region__primary[data-region="main"]');
         await mainChat.waitFor({ state: "hidden" });
-        await surface.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(surface, "Restore split");
         await mainChat.waitFor({ state: "visible" });
         await surface.locator('[data-panel-slot="dashboard"]').waitFor({ state: "visible" });
       }
@@ -304,9 +305,16 @@ suite.define(() => {
   it("keeps target liveness when the selected agent scope changes", async () => {
     await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
       const now = Date.now();
+      const mainSessions = sessionListResponse(sessionKey, "Main progress dashboard", {
+        hasActiveRun: true,
+        startedAt: now - 30_000,
+        updatedAt: now,
+      });
       const gateway = await installMockGateway(page, {
         sessionKey,
-        sessions: [{ key: sessionKey }],
+        heldMethods: ["sessions.describe"],
+        // Describe and startup publish full snapshots of the same running session.
+        sessions: mainSessions.sessions,
         controlUiWidgetKinds: [
           { pluginId: "session", kind: "session:progress", label: "Session progress" },
         ],
@@ -326,11 +334,7 @@ suite.define(() => {
             cases: [
               {
                 match: { agentId: "main" },
-                response: sessionListResponse(sessionKey, "Main progress dashboard", {
-                  hasActiveRun: true,
-                  startedAt: now - 30_000,
-                  updatedAt: now,
-                }),
+                response: mainSessions,
               },
               {
                 match: { agentId: "writer" },
@@ -376,6 +380,9 @@ suite.define(() => {
         };
         app.runtime?.context?.agentSelection?.setScope?.("writer");
       });
+      await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
+      // Reconcile the descriptor after the running roster and scope transition.
+      await gateway.resolveDeferred("sessions.describe");
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).some((request) => {
@@ -410,8 +417,8 @@ suite.define(() => {
           }),
         )
         .toBe(false);
-      await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
       await expect.poll(() => card.locator(".session-progress-card__step--paused").count()).toBe(0);
+      await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
       await page.screenshot({
         animations: "disabled",
         fullPage: true,
@@ -529,8 +536,14 @@ suite.define(() => {
     const splitRosterSessionKey = "agent:main:progress:dashboard:split-roster";
     await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
       const now = Date.now();
+      const targetRoster = sessionListResponse(splitRosterSessionKey, "Split roster dashboard", {
+        hasActiveRun: true,
+        startedAt: now - 30_000,
+        updatedAt: now,
+      });
       await installMockGateway(page, {
         sessionKey: splitRosterSessionKey,
+        sessions: targetRoster.sessions,
         controlUiWidgetKinds: [
           { pluginId: "session", kind: "session:progress", label: "Session progress" },
         ],
@@ -560,11 +573,7 @@ suite.define(() => {
               {
                 // The shared target roster still reports the live run.
                 match: {},
-                response: sessionListResponse(splitRosterSessionKey, "Split roster dashboard", {
-                  hasActiveRun: true,
-                  startedAt: now - 30_000,
-                  updatedAt: now,
-                }),
+                response: targetRoster,
               },
             ],
           },
@@ -604,9 +613,36 @@ suite.define(() => {
     const boardlessTargetKey = "agent:main:progress-boardless-target";
     await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
       const now = Date.now();
+      const targetRoster = {
+        count: 2,
+        defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+        path: "",
+        sessions: [
+          {
+            key: boardOwnerKey,
+            kind: "direct",
+            label: "Progress board owner",
+            status: "done",
+            hasActiveRun: false,
+            startedAt: 2,
+            endedAt: 3,
+            updatedAt: 3,
+          },
+          {
+            key: boardlessTargetKey,
+            kind: "direct",
+            label: "Board-less running target",
+            status: "running",
+            hasActiveRun: true,
+            startedAt: now - 30_000,
+            updatedAt: now,
+          },
+        ],
+        ts: now,
+      };
       await installMockGateway(page, {
         sessionKey: boardOwnerKey,
-        sessions: [{ key: boardOwnerKey }, { key: boardlessTargetKey }],
+        sessions: targetRoster.sessions,
         controlUiWidgetKinds: [
           { pluginId: "session", kind: "session:progress", label: "Session progress" },
         ],
@@ -639,33 +675,7 @@ suite.define(() => {
               },
               {
                 match: {},
-                response: {
-                  count: 2,
-                  defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-                  path: "",
-                  sessions: [
-                    {
-                      key: boardOwnerKey,
-                      kind: "direct",
-                      label: "Progress board owner",
-                      status: "done",
-                      hasActiveRun: false,
-                      startedAt: 2,
-                      endedAt: 3,
-                      updatedAt: 3,
-                    },
-                    {
-                      key: boardlessTargetKey,
-                      kind: "direct",
-                      label: "Board-less running target",
-                      status: "running",
-                      hasActiveRun: true,
-                      startedAt: now - 30_000,
-                      updatedAt: now,
-                    },
-                  ],
-                  ts: now,
-                },
+                response: targetRoster,
               },
             ],
           },

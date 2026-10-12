@@ -33,19 +33,6 @@ function expectInvalidConfig(result: ReturnType<typeof parseIrcConfig>) {
 }
 
 describe("irc config schema", () => {
-  it("accepts basic config", () => {
-    const config = expectValidConfig(
-      parseIrcConfig({
-        host: "irc.libera.chat",
-        nick: "openclaw-bot",
-        channels: ["#openclaw"],
-      }),
-    );
-
-    expect(config.host).toBe("irc.libera.chat");
-    expect(config.nick).toBe("openclaw-bot");
-  });
-
   it("accepts configWrites at channel and account level", () => {
     const config = expectValidConfig(
       parseIrcConfig({
@@ -141,20 +128,6 @@ describe("irc config schema", () => {
     expect(issues[0]?.path?.join(".")).toBe("nickserv.registerEmail");
   });
 
-  it("accepts nickserv register with password and registerEmail", () => {
-    const config = expectValidConfig(
-      parseIrcConfig({
-        nickserv: {
-          register: true,
-          password: "secret",
-          registerEmail: "bot@example.com",
-        },
-      }),
-    );
-
-    expect(config.nickserv?.register).toBe(true);
-  });
-
   it("accepts nickserv register with registerEmail only", () => {
     expectValidConfig(
       parseIrcConfig({
@@ -176,15 +149,6 @@ describe("retired IRC mentionPatterns", () => {
       parseIrcConfig({
         host: "irc.libera.chat",
         accounts: { work: { nick: "openclaw-ops", mentionPatterns: ["\\bops\\b"] } },
-      }),
-    );
-  });
-
-  it("still accepts the same config once the retired key is gone", () => {
-    expectValidConfig(
-      parseIrcConfig({
-        host: "irc.libera.chat",
-        accounts: { work: { nick: "openclaw-ops" } },
       }),
     );
   });

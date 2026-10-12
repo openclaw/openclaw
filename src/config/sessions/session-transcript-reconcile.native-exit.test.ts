@@ -5,11 +5,15 @@ import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.j
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   persistSessionTranscriptTurn,
@@ -65,7 +69,7 @@ function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () =
         acknowledged.resolve();
       }
     };
-    // Runs before the owner listener: its accepted message uses the same real FIFO.
+    // Both foreground writes and canonical publication enter this same per-path FIFO.
     observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
       if (message.type === stage && !fenced) {
         fenced = true;
@@ -234,13 +238,16 @@ it.each(cases)(
           expect.objectContaining({ id: replace ? "replacement" : "seed" }),
         ]);
         await fence.cleanup();
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
         expect(() => assertNoOpenClawAgentDatabaseLeases(databaseOptions.agentId)).not.toThrow();
       } finally {
         await fence.cleanup();
         await outcome;
         await drain;
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
       }
     });

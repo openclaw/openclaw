@@ -47,9 +47,7 @@ export async function captureTopVisibleVirtualRow(thread: Locator): Promise<Visi
     return {
       index,
       key: row.dataset.virtualRowKey ?? "",
-      totalSize:
-        element.querySelector<HTMLElement>(".chat-virtual-sizer")?.getBoundingClientRect().height ??
-        0,
+      totalSize: element.scrollHeight,
       viewportTop: row.getBoundingClientRect().top - viewport.top,
     };
   });
@@ -86,9 +84,7 @@ export async function startVirtualRowPaintProbe(thread: Locator, anchor: Visible
         intersectsViewport: Boolean(
           rect && rect.bottom > viewport.top && rect.top < viewport.bottom,
         ),
-        totalSize:
-          element.querySelector<HTMLElement>(".chat-virtual-sizer")?.getBoundingClientRect()
-            .height ?? 0,
+        totalSize: element.scrollHeight,
         viewportTop: rect ? rect.top - viewport.top : null,
       });
     };

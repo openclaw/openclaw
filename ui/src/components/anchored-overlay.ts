@@ -1,6 +1,6 @@
 import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 
-type AnchoredOverlaySide = "top" | "bottom";
+type AnchoredOverlaySide = "top" | "bottom" | "left" | "right";
 type AnchoredOverlayOptions = {
   alignment?: "start" | "end";
   anchor?: Element;
@@ -33,11 +33,19 @@ export function configureAnchoredPopup(
   popup.anchor = anchor;
   popup.placement = `${preferredSide}-${alignment}`;
   popup.boundary = "viewport";
+  // Fixed/top-layer menus escape the app's padding, but not its safe canvas.
+  const shell = anchor.closest<HTMLElement>(".shell");
+  popup.flipBoundary = shell ?? [];
+  popup.shiftBoundary = shell ?? [];
+  popup.autoSizeBoundary = shell ?? [];
   popup.distance = 6;
   popup.flip = true;
   popup.flipPadding = VIEWPORT_MARGIN;
   popup.shift = true;
-  popup.shiftPadding = VIEWPORT_SIDE_MARGIN;
+  popup.shiftPadding = shell
+    ? Number.parseFloat(getComputedStyle(shell).getPropertyValue("--shell-popup-inline-gutter")) ||
+      VIEWPORT_SIDE_MARGIN
+    : VIEWPORT_SIDE_MARGIN;
   popup.autoSize = "vertical";
   popup.autoSizePadding = VIEWPORT_MARGIN;
 }

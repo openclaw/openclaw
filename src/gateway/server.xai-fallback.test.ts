@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
+import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -124,6 +125,7 @@ it(
     let scenario: Scenario = "fallback";
     let requests: string[] = [];
     const events: ChatEvent[] = [];
+    const publishedMessages = new Map<string, unknown[]>();
     const fallbackEvents: unknown[] = [];
     const provider = createServer((request, response) => {
       void (async () => {
@@ -245,12 +247,16 @@ it(
       gateway = await startGatewayWithClient({
         cfg: {
           agents: {
-            defaults: { workspace, skipBootstrap: true },
+            ownership: "explicit",
+            defaults: {
+              workspace,
+              skipBootstrap: true,
+              systemAgent: { agentId: "fallback" },
+            },
             entries: Object.fromEntries(
               scenarios.map((name) => [
                 name,
                 {
-                  default: name === "fallback",
                   model: {
                     primary: `xai/${primaryModel}`,
                     fallbacks: name === "no-fallback" ? [] : [`openai/${fallbackModel}`],
@@ -290,6 +296,17 @@ it(
             events.push(event.payload as ChatEvent);
           }
           if (
+            event.event === "session.message" &&
+            isRecord(event.payload) &&
+            typeof event.payload.sessionKey === "string" &&
+            isRecord(event.payload.message) &&
+            event.payload.message.role === "assistant"
+          ) {
+            const messages = publishedMessages.get(event.payload.sessionKey) ?? [];
+            messages.push(event.payload.message);
+            publishedMessages.set(event.payload.sessionKey, messages);
+          }
+          if (
             event.event === "agent" &&
             isRecord(event.payload) &&
             isRecord(event.payload.data) &&
@@ -309,6 +326,7 @@ it(
         requests = [];
         const rejection = rejections.get(scenario);
         const sessionKey = `agent:${scenario}:xai-fallback`;
+        await gateway.client.request("sessions.messages.subscribe", { key: sessionKey });
         const started = await gateway.client.request<{ runId: string }>("chat.send", {
           sessionKey,
           message: "Reply with the marker.",
@@ -377,8 +395,16 @@ it(
         } else {
           expect.soft(completed.status, scenario).toBe("error");
           expect.soft(messageText(assistant), scenario).toBe(prefix);
+          expect
+            .soft(messageText(publishedMessages.get(sessionKey)?.at(-1)), scenario)
+            .toBe(prefix);
           const deltas = runEvents.filter((event) => event.state === "delta");
-          expect.soft(messageText(deltas.at(-1)?.message), scenario).toBe(prefix);
+          const liveMessage = deltas.reduce<unknown>(
+            (previous, event) => mergeChatStreamMessage(previous, event),
+            undefined,
+          );
+          // Saved assistant content belongs to canonical publication, not the unsaved live tail.
+          expect.soft(messageText(liveMessage), scenario).toBe("");
           if (scenario === "no-fallback") {
             expect.soft(requests, scenario).not.toContain(fallbackModel);
           } else {

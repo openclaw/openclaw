@@ -108,7 +108,7 @@ it.each([
       );
       const cfg: OpenClawConfig = {
         agents: {
-          entries: { main: { default: true, workspace: state.workspaceDir } },
+          entries: { main: { workspace: state.workspaceDir } },
           defaults: {
             workspace: state.workspaceDir,
             model: "candidate-provider/candidate-model",

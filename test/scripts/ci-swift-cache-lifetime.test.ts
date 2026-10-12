@@ -120,28 +120,6 @@ describe("macOS optional Swift cache lifetime", () => {
       expect(required["continue-on-error"]).not.toBe(true);
     }
     expect(budget.env?.CACHE_STARTED).toBe("${{ steps.swift-cache-clock.outputs.started }}");
-  });
-
-  it.each([
-    [0, "1000", "true"],
-    [1199, "1000", "true"],
-    [1200, "1000", "false"],
-    [1760, "1000", "false"],
-    [1800, "1000", "false"],
-    [-1, "1000", "false"],
-    [1, "", "false"],
-    [1, "broken", "false"],
-    [1, "nan", "false"],
-    [1, "inf", "false"],
-  ])("admits elapsed %s / clock %s as %s", (elapsed, started, expected) => {
-    const allowed = runClockStep(budget, 1000 + elapsed, started).allowed;
-    expect(allowed).toBe(expected);
-    for (const owner of [packageSave, metadata, buildSave]) {
-      expect(selected(owner, { allowed }), owner.name).toBe(expected === "true");
-    }
-  });
-
-  it("leaves terminal reserve even if every admitted optional step uses its entire timeout", () => {
     expect(job["timeout-minutes"]).toBe(30);
     const tail = [budget, packageSave, metadata, buildSave];
     expect(steps.slice(steps.indexOf(budget))).toEqual(tail);
@@ -153,6 +131,23 @@ describe("macOS optional Swift cache lifetime", () => {
     }
     expect(minutes).toBe(5);
     expect(20 + minutes).toBeLessThanOrEqual(job["timeout-minutes"] - 5);
+  });
+
+  it.each([
+    [0, "1000", "true"],
+    [1199, "1000", "true"],
+    [1200, "1000", "false"],
+    [-1, "1000", "false"],
+    [1, "", "false"],
+    [1, "broken", "false"],
+    [1, "nan", "false"],
+    [1, "inf", "false"],
+  ])("admits elapsed %s / clock %s as %s", (elapsed, started, expected) => {
+    const allowed = runClockStep(budget, 1000 + elapsed, started).allowed;
+    expect(allowed).toBe(expected);
+    for (const owner of [packageSave, metadata, buildSave]) {
+      expect(selected(owner, { allowed }), owner.name).toBe(expected === "true");
+    }
   });
 
   it.each([packageSave, metadata, buildSave])(

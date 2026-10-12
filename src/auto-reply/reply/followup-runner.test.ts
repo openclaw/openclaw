@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import {
@@ -36,13 +37,6 @@ vi.mock("./agent-runner-result-accounting.js", () => ({
 
 vi.mock("./followup-turn-admission.js", () => ({
   admitFollowupTurn: (...args: unknown[]) => state.admit(...args),
-  settleQueuedFollowupPresentation: async (defaults: {
-    opts?: { onQueuedFollowupSettled?: () => Promise<void> | void };
-  }) => {
-    try {
-      await defaults.opts?.onQueuedFollowupSettled?.();
-    } catch {}
-  },
 }));
 
 vi.mock("./followup-turn-execution.js", () => ({
@@ -591,6 +585,9 @@ describe("createFollowupRunner", () => {
     const sourceDelivery = vi.fn(async () => {
       order.push("completion");
     });
+    const presentationGate = createDeferred();
+    const presentationStarted = createDeferred();
+    let presentation: Promise<void> | undefined;
     turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceDelivery };
     const decision = {
       kind: "deliver" as const,
@@ -617,16 +614,35 @@ describe("createFollowupRunner", () => {
     );
     state.completeLifecycle.mockImplementation(() => order.push("lifecycle-complete"));
 
-    await createFollowupRunner({
+    const run = createFollowupRunner({
       typing,
       typingMode: "instant",
       defaultModel: "claude",
       opts: {
         onQueuedFollowupSettled: () => {
-          order.push("presentation-settled");
+          presentation = (async () => {
+            order.push("presentation-settling");
+            presentationStarted.resolve();
+            await presentationGate.promise;
+            order.push("presentation-settled");
+          })();
+          return presentation;
         },
       },
     })(turn.queued);
+
+    const settledRun = Promise.allSettled([run]);
+    try {
+      await Promise.race([presentationStarted.promise, run]);
+      expect(order).toContain("presentation-settling");
+      expect(state.completeLifecycle).not.toHaveBeenCalled();
+      expect(turn.operation.complete).not.toHaveBeenCalled();
+    } finally {
+      presentationGate.resolve();
+      await settledRun;
+      await presentation;
+    }
+    await run;
 
     expect(order).toEqual([
       "progress-drained",
@@ -634,6 +650,7 @@ describe("createFollowupRunner", () => {
       "decision",
       "delivered",
       "completion",
+      "presentation-settling",
       "presentation-settled",
       "lifecycle-complete",
       "operation-complete",
@@ -651,7 +668,7 @@ describe("createFollowupRunner", () => {
       let continuationOpen = true;
       let openAtCleanup: boolean | undefined;
       const adoptionResults: Array<boolean | undefined> = [];
-      const adopt = vi.fn(async () => continuationOpen);
+      const adopt = vi.fn(() => continuationOpen);
       const statusPayload = setReplyPayloadMetadata(
         { text: "The worker is continuing." },
         {
@@ -665,19 +682,13 @@ describe("createFollowupRunner", () => {
         },
       );
       const decision = { kind: "deliver", payloads: [statusPayload] };
-      const receipt = {
-        channel: "discord",
-        to: "user:1",
-        messageId: "existing-card",
-        text: "The worker is continuing.",
-        snapshot: { lines: ["The worker is continuing."] },
-      };
+      const draft = { push: () => undefined, retire: () => undefined };
       turn.queued.queuedFollowupReplyDisposition = {
         kind: "deliver",
         deliver: async (batch) => {
           for (const payload of batch.payloads) {
             adoptionResults.push(
-              await getReplyPayloadMetadata(payload)?.progressContinuation?.adopt(receipt),
+              getReplyPayloadMetadata(payload)?.progressContinuation?.adopt(draft),
             );
           }
           if (outcome === "completion-failed") {
@@ -710,7 +721,7 @@ describe("createFollowupRunner", () => {
         },
       })(turn.queued);
 
-      await expect(adopt()).resolves.toBe(false);
+      expect(adopt()).toBe(false);
       expect(openAtCleanup).toBe(true);
       expect(adoptionResults).toEqual(
         outcome === "delivered" || outcome === "completion-failed" ? [true] : [],

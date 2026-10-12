@@ -23,9 +23,5 @@ export function localEditorFilePath(content: EditorFile, execNode?: string | nul
 }
 
 export function observeNativeGateway(host: ReactiveControllerHost, onChange?: () => void): void {
-  void new SubscriptionsController(host).watch(
-    nativeGatewaysCapability,
-    (gateways, notify) => gateways.subscribe(notify),
-    onChange,
-  );
+  void new SubscriptionsController(host).watchStore(nativeGatewaysCapability, onChange);
 }

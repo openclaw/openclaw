@@ -1,10 +1,3 @@
-/**
- * Agent harness tool/message hook helpers.
- *
- * Harnesses use this to dispatch after-tool-call and before-message-write hooks
- * while isolating hook failures from the runtime path.
- */
-
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { cloneHookIsolationValue } from "../../plugins/hook-isolation.js";

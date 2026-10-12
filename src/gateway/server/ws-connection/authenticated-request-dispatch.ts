@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -22,7 +23,7 @@ import {
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
-import { isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
+import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import {
@@ -34,7 +35,7 @@ import { bindWebSocketRequestMutationAuthority } from "../../server-methods/sess
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
 import { classifyGatewayStaleInstall } from "../../stale-install.js";
-import { formatForLog, logWs } from "../../ws-log.js";
+import { formatForLog, logWs, summarizeSessionListForWsLog } from "../../ws-log.js";
 import {
   hasCurrentGatewayPolicyClientSource,
   invalidateGatewayPolicyClient,
@@ -44,8 +45,9 @@ import {
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 import { createGatewayRpcDiagnostics } from "./request-diagnostics.js";
-import { scheduleGatewayRequestStart } from "./request-start.js";
-import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
+import { GatewayRequestStartTimeoutError, scheduleGatewayRequestStart } from "./request-start.js";
+
+const MAX_UNAUTHORIZED_ROLE_FAILURES = 10;
 
 const loadGatewayServerMethods = createLazyPromise(
   () => import("./authenticated-request-dispatch.server-methods.runtime.js"),
@@ -75,11 +77,15 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     setCloseCause,
     logGateway,
   } = params.handler;
-  const unauthorizedFloodGuard = new UnauthorizedFloodGuard();
+  let unauthorizedRoleFailures = 0;
   let deviceCredentialMutationBarrier: Promise<void> | undefined;
 
-  const closeInvalidatedClient = (client: GatewayWsClient, method: string): boolean => {
-    const policyChanged = !isGatewayAuthPolicyCurrent(client.authPolicyGeneration);
+  const closeInvalidatedClient = (
+    client: GatewayWsClient,
+    method: string,
+    isCommittedGrantCurrent: () => boolean,
+  ): boolean => {
+    const policyChanged = !isGatewayAuthPolicyCurrent(client.authPolicy);
     if (!client.invalidated && !policyChanged) {
       return false;
     }
@@ -94,8 +100,8 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       code: 4001,
       message: `client invalidated: ${reason}`,
       close: () => close(4001, `client invalidated: ${reason}`),
-      // The mutation owner already decided whether this was a committed revocation.
-      revokeSource: false,
+      // Tentative policy and committed transport changes fence without ending accepted work.
+      revokeSource: policyChanged && !isCommittedGrantCurrent(),
     });
     return true;
   };
@@ -107,7 +113,6 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     admission?: "continuation",
     sendResponse: (frame: ResponseFrame) => ReturnType<typeof send> = send,
   ): Promise<void> => {
-    // After handshake, accept only req frames
     if (!validateRequestFrame(parsed)) {
       send({
         type: "res",
@@ -121,22 +126,21 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       return;
     }
     const req = parsed;
-    if (closeInvalidatedClient(client, req.method)) {
+    const context = buildRequestContext();
+    const sourceContext = context.resolveGatewayContext?.() ?? context;
+    const isCommittedGrantCurrent = () =>
+      isGatewayAuthGrantCurrent(
+        client.authPolicy,
+        sourceContext.getCommittedRuntimeConfig?.() ?? sourceContext.getRuntimeConfig(),
+      );
+    if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
     }
     const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers);
     logWs("in", "req", { connId, id: req.id, method: req.method });
-    const context = buildRequestContext();
     const generationState = SharedGatewaySessionGenerationState.fromReader(
       getRequiredSharedGatewaySessionGeneration,
     );
-    const sourceContext = context.resolveGatewayContext?.() ?? context;
-    const isCommittedPolicyCurrent = () =>
-      client.authPolicyGeneration === undefined ||
-      isGatewayAuthPolicyCurrent(
-        client.authPolicyGeneration,
-        sourceContext.getCommittedRuntimeConfig?.() ?? sourceContext.getRuntimeConfig(),
-      );
     const clientAuthority = captureGatewayDeviceRevocation(
       context,
       { deviceId: client.connect.device?.id, role: client.connect.role },
@@ -149,7 +153,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             close: () => close(4001, GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE),
           });
         }
-        if (closeInvalidatedClient(client, req.method)) {
+        if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
           return false;
         }
         const requiredGeneration = client.usesSharedGatewayAuth
@@ -177,27 +181,31 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             dependencies: {
               client,
               context: sourceContext,
-              authPolicyGeneration: client.authPolicyGeneration,
+              authPolicyGeneration: client.authPolicy?.grantGeneration,
               sharedGenerationOwner: client.usesSharedGatewayAuth ? generationState : undefined,
               sharedGeneration: client.usesSharedGatewayAuth
                 ? client.sharedGatewaySessionGeneration
                 : undefined,
             },
             isCurrent: () =>
-              hasCurrentGatewayPolicyClientSource(client) && isCommittedPolicyCurrent(),
+              hasCurrentGatewayPolicyClientSource(client) && isCommittedGrantCurrent(),
             subscribe: (onRevoked) => {
               const releaseClient = onGatewayPolicyClientInvalidated(client, onRevoked);
               const releasePolicy = onOperatorRolePolicyChanged((change) => {
                 if (
                   change.kind === "config" &&
                   change.context === sourceContext &&
-                  !isCommittedPolicyCurrent()
+                  !isCommittedGrantCurrent()
                 ) {
                   onRevoked();
                 }
               });
               const releaseGeneration = client.usesSharedGatewayAuth
-                ? generationState?.onInvalidated(client.sharedGatewaySessionGeneration, onRevoked)
+                ? generationState?.onInvalidated(
+                    client.sharedGatewaySessionGeneration,
+                    onRevoked,
+                    client.authPolicy,
+                  )
                 : undefined;
               return () => {
                 releaseClient();
@@ -266,35 +274,42 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           }
           diagnostics?.response(
             sendResult.kind === "sent" ? (responseOk ? "ok" : "error") : "unavailable",
+            sendResult.kind === "sent" ? sendResult.bytes : undefined,
           );
-          const unauthorizedRoleError = isUnauthorizedRoleError(responseError);
           let logMeta = meta;
-          if (unauthorizedRoleError) {
-            const unauthorizedDecision = unauthorizedFloodGuard.registerUnauthorized();
-            if (unauthorizedDecision.suppressedSinceLastLog > 0) {
+          if (
+            responseError?.code === ErrorCodes.INVALID_REQUEST &&
+            typeof responseError.message === "string" &&
+            responseError.message.startsWith("unauthorized role:")
+          ) {
+            unauthorizedRoleFailures += 1;
+            if (unauthorizedRoleFailures === MAX_UNAUTHORIZED_ROLE_FAILURES + 1) {
               logMeta = {
                 ...logMeta,
-                suppressedUnauthorizedResponses: unauthorizedDecision.suppressedSinceLastLog,
+                suppressedUnauthorizedResponses: MAX_UNAUTHORIZED_ROLE_FAILURES - 1,
               };
             }
-            if (!unauthorizedDecision.shouldLog) {
+            if (
+              unauthorizedRoleFailures > 1 &&
+              unauthorizedRoleFailures <= MAX_UNAUTHORIZED_ROLE_FAILURES
+            ) {
               return;
             }
-            if (unauthorizedDecision.shouldClose) {
+            if (unauthorizedRoleFailures > MAX_UNAUTHORIZED_ROLE_FAILURES) {
               setCloseCause("repeated-unauthorized-requests", {
-                unauthorizedCount: unauthorizedDecision.count,
+                unauthorizedCount: unauthorizedRoleFailures,
                 method: req.method,
               });
               queueMicrotask(() => close(1008, "repeated unauthorized calls"));
             }
             logMeta = {
               ...logMeta,
-              unauthorizedCount: unauthorizedDecision.count,
+              unauthorizedCount: unauthorizedRoleFailures,
             };
           } else {
-            unauthorizedFloodGuard.reset();
+            unauthorizedRoleFailures = 0;
           }
-          logWs("out", "res", {
+          logWs("out", "res", () => ({
             connId,
             id: req.id,
             ok: responseOk,
@@ -302,7 +317,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             errorCode: responseError?.code,
             errorMessage: responseError?.message,
             ...logMeta,
-          });
+            ...(req.method === "sessions.list" ? summarizeSessionListForWsLog(req.params) : {}),
+            bytes: sendResult.kind === "sent" ? sendResult.bytes : undefined,
+          }));
         } finally {
           // ws queues frames in order: send the result before starting its close handshake.
           policyResponse?.finish();
@@ -340,11 +357,14 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
 
       const executeRequest = async () => {
         diagnostics?.bindTrace();
+        const settled = createDeferredCore();
         let entry: GatewayRequestEntry | undefined;
-        // Most UI/SDK RPCs outlive a reconnect. Companion asks are the exception:
-        // without their requester there is no safe recipient for a late answer.
+        // Ordinary mutations survive reconnects; an explicit reload wait instead
+        // belongs to its requester so disconnect can release its admission fence.
         const cancelOnDisconnect =
           req.method === "sessions.companion.ask" ||
+          (req.method === "plugins.reload" &&
+            asOptionalRecord(req.params)?.waitForDrain === true) ||
           (req.method === "node.invoke" &&
             client.connect.client.id === GATEWAY_CLIENT_IDS.CLI &&
             client.connect.client.mode === GATEWAY_CLIENT_MODES.CLI);
@@ -392,7 +412,13 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           // deadline. Operator requests share bounded starts without serializing completion.
           if (client.connect.role === "operator") {
             diagnostics?.startQueue();
-            const start = scheduleGatewayRequestStart(frameBytes);
+            const start = scheduleGatewayRequestStart(
+              frameBytes,
+              req,
+              connId,
+              settled.promise,
+              context.requestEntryLifetime?.signal,
+            );
             if (!start) {
               respondWithAuthority(
                 false,
@@ -407,8 +433,11 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               );
               return;
             }
-            await start;
-            diagnostics?.finishQueue();
+            try {
+              await start;
+            } finally {
+              diagnostics?.finishQueue();
+            }
           }
           entry?.assertOpen();
           // Waiting never grants authority. Ordinary requests may outlive their socket;
@@ -422,6 +451,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 {
                   req,
                   respond: respondWithAuthority,
+                  acceptsSerializedJson: true,
                   client,
                   isWebchatConnect: params.isWebchatConnect,
                   hasCurrentClientAuthority,
@@ -440,16 +470,27 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             ),
           );
         } catch (err) {
-          dispatchOutcome = "threw";
+          const startTimedOut = err instanceof GatewayRequestStartTimeoutError;
+          dispatchOutcome = startTimedOut ? "returned" : "threw";
           // Failure diagnostics and responses belong to the same request trace as the handler.
-          logGateway.error(`request handler failed: ${formatForLog(err)}`);
+          if (!startTimedOut) {
+            logGateway.error(`request handler failed: ${formatForLog(err)}`);
+          }
           const staleInstall = classifyGatewayStaleInstall(err);
           respondWithAuthority(
             false,
             undefined,
-            staleInstall?.error ?? errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+            staleInstall?.error ??
+              errorShape(
+                ErrorCodes.UNAVAILABLE,
+                formatForLog(err),
+                startTimedOut
+                  ? { retryable: true, details: { reason: "request-start-timeout" } }
+                  : undefined,
+              ),
           );
         } finally {
+          settled.resolve();
           policyResponse?.finish();
           diagnostics?.finish(signal?.aborted ? "cancelled" : dispatchOutcome);
           entry?.release();

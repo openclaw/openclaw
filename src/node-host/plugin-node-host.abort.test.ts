@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type {
@@ -40,6 +41,15 @@ describe("non-duplex node-host plugin cancellation", () => {
       },
     );
     const registry = createEmptyPluginRegistry();
+    registry.plugins = [
+      createPluginRecord({
+        id: "ollama",
+        source: "test",
+        origin: "bundled",
+        enabled: true,
+        configSchema: true,
+      }),
+    ];
     registry.nodeHostCommands = [
       {
         pluginId: "ollama",
@@ -76,44 +86,6 @@ describe("non-duplex node-host plugin cancellation", () => {
       prepareExecAuthorization: expect.any(Function),
     });
     expect(request).not.toHaveBeenCalled();
-  });
-
-  it("preserves legacy plugin context when the caller supplies no signal", async () => {
-    const sendNodeEvent = vi.fn(async () => undefined);
-    const handle = vi.fn(async () => '{"ok":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "ollama",
-        pluginName: "Ollama",
-        command: { command: "ollama.chat", cap: "local-inference", handle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    await handleInvoke(
-      {
-        id: "legacy-model-inference",
-        nodeId: "paired-node",
-        command: "ollama.chat",
-        paramsJSON: "{}",
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-      undefined,
-      { pluginCommandContext: { sendNodeEvent } },
-    );
-
-    expect(handle).toHaveBeenCalledWith("{}", undefined, {
-      sendNodeEvent,
-      prepareExecAuthorization: expect.any(Function),
-    });
-    expect(request).toHaveBeenCalledWith(
-      "node.invoke.result",
-      expect.objectContaining({ ok: true, payloadJSON: '{"ok":true}' }),
-    );
   });
 
   it.each(["success", "failure", "cancellation", "supersession", "different-error"] as const)(

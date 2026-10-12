@@ -2,6 +2,10 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { COMMAND_PALETTE_TARGET_EVENT } from "../components/command-palette-contract.ts";
+import {
+  CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
+  CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
+} from "../pages/chat/chat-history-events.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 import "./app-host.ts";
 import type { ShellChromeHost } from "./app-shell-chrome.ts";
@@ -15,6 +19,25 @@ type ShellLifecycle = {
 afterEach(resetAppHostTestGlobals);
 
 describe("OpenClaw shell event lifecycle", () => {
+  it("refreshes the existing connection indicator for recovery and removed panes only while mounted", () => {
+    const shell = document.createElement("openclaw-app-shell") as ShellChromeHost & ShellLifecycle;
+    shell.connectedCallback();
+    const update = vi.spyOn(shell, "requestUpdate");
+    try {
+      for (const type of [CHAT_HISTORY_RECOVERY_CHANGED_EVENT, CHAT_PANE_LIFECYCLE_CHANGED_EVENT]) {
+        update.mockClear();
+        shell.dispatchEvent(new Event(type));
+        expect(update).toHaveBeenCalledOnce();
+      }
+      shell.disconnectedCallback();
+      update.mockClear();
+      shell.dispatchEvent(new Event(CHAT_HISTORY_RECOVERY_CHANGED_EVENT));
+      expect(update).not.toHaveBeenCalled();
+    } finally {
+      shell.disconnectedCallback();
+      update.mockRestore();
+    }
+  });
   it("retires host, window, and document actions on disconnect and reconnects once", () => {
     const shell = document.createElement("openclaw-app-shell") as ShellChromeHost & ShellLifecycle;
     const navigate = vi.spyOn(shell, "navigate").mockImplementation(() => {});

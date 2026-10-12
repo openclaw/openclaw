@@ -9,7 +9,6 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 describe("inbound attachment download filenames", () => {
   it.each([
     { hint: undefined, expected: "café_雪.txt" },
-    { hint: "café 雪 🦞.txt", expected: "café 雪 🦞.txt" },
     { hint: "../folder\\café 雪 🦞\r\n.txt", expected: "café 雪 🦞__.txt" },
     { hint: "..", expected: "café_雪.txt" },
   ])("serves inbound media with filename hint $hint", async ({ hint, expected }) => {

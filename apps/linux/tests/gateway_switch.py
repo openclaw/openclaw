@@ -88,6 +88,34 @@ class SwitchHandler(FixtureHandler):
         self.reply(200, b"{}", "application/json")
 
 
+def stop_private_vault(vault):
+    if vault is not None and vault.poll() is None:
+        vault.terminate()
+        vault.wait(timeout=5)
+
+
+def start_private_vault(chrome):
+    from gi.repository import Gio, GLib
+
+    vault = subprocess.Popen(
+        ["gnome-keyring-daemon", "--foreground", "--unlock", "--components=secrets"],
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        vault.stdin.write(b"synthetic-private-vault\n")
+        vault.stdin.close()
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        chrome.until(lambda: bus.call_sync(
+            "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+            "NameHasOwner", GLib.Variant("(s)", ("org.freedesktop.secrets",)), None,
+            Gio.DBusCallFlags.NONE, 1000, None,
+        ).unpack()[0], "the isolated credential vault")
+    except BaseException:
+        stop_private_vault(vault)
+        raise
+    return vault
+
+
 class GatewaySwitchFixture(GatewayFixture):
     def __init__(self, artifacts_dir):
         super().__init__(artifacts_dir)
@@ -101,21 +129,8 @@ class GatewaySwitchFixture(GatewayFixture):
         self.config_hash = None
 
     def start(self):
-        from gi.repository import Gio, GLib
-
         self.chrome.start()
-        self.vault = subprocess.Popen(
-            ["gnome-keyring-daemon", "--foreground", "--unlock", "--components=secrets"],
-            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        self.vault.stdin.write(b"synthetic-private-vault\n")
-        self.vault.stdin.close()
-        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-        self.chrome.until(lambda: bus.call_sync(
-            "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
-            "NameHasOwner", GLib.Variant("(s)", ("org.freedesktop.secrets",)), None,
-            Gio.DBusCallFlags.NONE, 1000, None,
-        ).unpack()[0], "the isolated credential vault")
+        self.vault = start_private_vault(self.chrome)
         super().start()
         self.config_hash = self.primary_hash()
 
@@ -434,9 +449,7 @@ class GatewaySwitchFixture(GatewayFixture):
         self.shutdown()
         self.server_close()
         self.server_thread.join(timeout=5)
-        if self.vault is not None and self.vault.poll() is None:
-            self.vault.terminate()
-            self.vault.wait(timeout=5)
+        stop_private_vault(self.vault)
         self.chrome.close()
         if self.artifacts_dir:
             (self.artifacts_dir / "gateway-switch-results.json").write_text(json.dumps({
@@ -494,7 +507,7 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
 
     def stage_binary(self, binary):
         # Tauri's documented Cargo resource layout is target/<profile> with
-        # .cargo-lock. Only the installer resource is synthetic; binary bytes match.
+        # .cargo-lock. Carry the resources compiled into the app, as packaging does.
         directory = Path.home() / "target/debug"
         directory.mkdir(parents=True)
         (directory / ".cargo-lock").touch()
@@ -503,22 +516,30 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
         self.binary_sha256 = hashlib.sha256(binary.read_bytes()).hexdigest()
         if hashlib.sha256(staged.read_bytes()).hexdigest() != self.binary_sha256:
             raise RuntimeError("Staging changed the native application binary")
-        wrapper = (
-            "#!/usr/bin/python3\nimport os, sys\nfrom pathlib import Path\n"
-            "if sys.argv[1:] == ['doctor', '--fix', '--non-interactive']:\n"
-            "    Path('fixture-doctor-called').touch()\n    print('{}')\n"
-            "else:\n    os.execv('/usr/bin/python3', ['python3', str(Path.home() / 'fixture-cli.py'), *sys.argv[1:]])\n"
-        )
+        shutil.copytree(binary.parent / "desktop-runtime", directory / "desktop-runtime")
+        shutil.copy2(Path(__file__).parent / "fixtures/onboarding-cli.mjs", directory / "entry.js")
+        prefix = Path.home() / ".openclaw"
+        entry = prefix / "dev/openclaw/dist/entry.js"
+        node = prefix / "tools/node/bin/node"
+        bootstrap = '#!/bin/sh\n[ "$#" = 2 ] && [ "$2" = --version ] || exit 1\nprintf "OpenClaw fixture\\n"\n'
+        launcher = f'#!/usr/bin/env bash\nset -euo pipefail\nexec "{node}" "{entry}" "$@"\n'
         installer = directory / "install-cli.sh"
         installer.write_text(
             "#!/bin/bash\nset -euo pipefail\n/usr/bin/python3 - \"$@\" <<'PY'\n"
-            "import json, sys\nfrom pathlib import Path\n"
+            "import json, shutil, sys\nfrom pathlib import Path\n"
             "prefix = Path.home() / '.openclaw'\n"
             "expected = ['--json', '--no-onboard', '--prefix', str(prefix), '--version', 'main', "
-            "'--install-method', 'git', '--git-dir', str(prefix / 'dev/openclaw')]\n"
+            "'--runtime-only', '--install-method', 'git', '--git-dir', str(prefix / 'dev/openclaw')]\n"
             "assert sys.argv[1:] == expected, 'Unexpected native installer arguments'\n"
+            "entry = prefix / 'dev/openclaw/dist/entry.js'\n"
+            "entry.parent.mkdir(parents=True)\n"
+            f"shutil.copy2({str(directory / 'entry.js')!r}, entry)\n"
+            # Discovery verifies --version before the app binds the real bundled Bun.
+            "node = prefix / 'tools/node/bin/node'\nnode.parent.mkdir(parents=True)\n"
+            f"node.write_text({bootstrap!r})\n"
+            "node.chmod(0o700)\n"
             "cli = prefix / 'bin/openclaw'\n"
-            f"cli.write_text({wrapper!r})\ncli.chmod(0o700)\n"
+            f"cli.write_text({launcher!r})\ncli.chmod(0o700)\n"
             "(prefix / 'openclaw.json').write_text(json.dumps({'gateway': {'mode': 'local'}}))\n"
             "Path('fixture-installer-called').touch()\n"
             "print(json.dumps({'event': 'install_complete'}))\nPY\n"
@@ -547,8 +568,8 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
         wait("Choose a release channel", "heading")
         click("Install OpenClaw")
         wait("Local model setup", "heading")
-        if not Path("fixture-installer-called").is_file() or not Path("fixture-doctor-called").is_file():
-            raise RuntimeError("The native installation/Doctor entrypoint did not run")
+        if not Path("fixture-installer-called").is_file() or not Path("fixture-runtime-installed.json").is_file():
+            raise RuntimeError("The native installation/bundled-runtime entrypoint did not run")
         if not self.document_requests or self.document_requests[0] != {
             "path": "/fixture/settings/model-setup", "query": {"firstRun": ["explicit"]},
         }:

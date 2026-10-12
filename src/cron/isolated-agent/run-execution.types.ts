@@ -18,12 +18,14 @@ export type CronRunExecutionParams = Pick<
   | "runSessionKey"
   | "usesDetachedRunSession"
   | "workspaceDir"
-  | "executionRoot"
+  | "cwd"
   | "timeoutMs"
   | "runTimeoutOverrideMs"
   | "suppressExecNotifyOnExit"
   | "resolvedDelivery"
   | "deliveryRequested"
+  | "deliverySystemPrompt"
+  | "messageToolFormatPrompt"
   | "sourceDelivery"
   | "skillsSnapshot"
   | "agentPayload"
@@ -35,10 +37,17 @@ export type CronRunExecutionParams = Pick<
   | "commandBody"
   | "inputProvenance"
   | "persistSessionEntry"
+  | "preRunSessionPersisted"
 > &
   Pick<
     RunCronAgentTurnParams,
-    "cfg" | "job" | "lane" | "onLaneWait" | "executionIdentity" | "admissionSource"
+    | "cfg"
+    | "job"
+    | "lane"
+    | "onLaneWait"
+    | "executionIdentity"
+    | "admissionSource"
+    | "deliveryAttemptFence"
   > & {
     runId: string;
     agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];
@@ -50,11 +59,11 @@ export type CronRunExecutionParams = Pick<
       agentRuntime: string,
     ) => Promise<ModelCatalogEntry[]>;
     persistRunContinuationSession?: CronRunContinuationSession["sync"];
-    setRunContinuationCliExecutionProvider?: (provider?: string) => Promise<void>;
     abortSignal?: AbortSignal;
     abortReason: () => string;
     isAborted: () => boolean;
     lifecycle: Omit<AgentLifecycleTerminalBackstop, "emit">;
+    onPromptAdmission: (admission: { close: () => void; finish: () => Promise<void> }) => void;
     onExecutionStarted?: (info?: CronRunnerStartedInfo) => void;
     onExecutionPhase?: (
       info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &

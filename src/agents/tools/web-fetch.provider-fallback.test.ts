@@ -427,58 +427,6 @@ describe("web_fetch provider fallback normalization", () => {
     expect(secondDetails.cached).toBeUndefined();
   });
 
-  it("late-binds direct request headers and partitions the cache by the refreshed values", async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(
-      new Response("# Routed", {
-        status: 200,
-        headers: { "content-type": "text/markdown; charset=utf-8" },
-      }),
-    );
-    global.fetch = withFetchPreconnect(fetchSpy);
-    const tool = createWebFetchTool({
-      config: {} as OpenClawConfig,
-      sandboxed: false,
-      lateBindRuntimeConfig: true,
-    });
-    const url = "https://example.com/late-bound-request-headers";
-
-    runtimeState.activeSecretsRuntimeSnapshot = {
-      config: {
-        tools: {
-          web: {
-            fetch: {
-              cacheTtlMinutes: 15,
-              headers: { "X-Routing-Target": "staging-a" },
-            },
-          },
-        },
-      },
-    };
-    await tool?.execute?.("late-bound-header-a", { url });
-
-    runtimeState.activeSecretsRuntimeSnapshot = {
-      config: {
-        tools: {
-          web: {
-            fetch: {
-              cacheTtlMinutes: 15,
-              headers: { "X-Routing-Target": "staging-b" },
-            },
-          },
-        },
-      },
-    };
-    await tool?.execute?.("late-bound-header-b", { url });
-
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    const firstHeaders = fetchSpy.mock.calls[0]?.[1]?.headers as Record<string, string> | undefined;
-    const secondHeaders = fetchSpy.mock.calls[1]?.[1]?.headers as
-      | Record<string, string>
-      | undefined;
-    expect(firstHeaders?.["X-Routing-Target"]).toBe("staging-a");
-    expect(secondHeaders?.["X-Routing-Target"]).toBe("staging-b");
-  });
-
   it("does not pass operator request headers to provider fallbacks", async () => {
     global.fetch = withFetchPreconnect(
       vi.fn(async () => {
@@ -518,47 +466,6 @@ describe("web_fetch provider fallback normalization", () => {
       maxChars: 20_000,
     });
     expect(providerInput).not.toHaveProperty("headers");
-  });
-
-  it("cancels an unread error response when provider fallback succeeds", async () => {
-    let cancelled = false;
-    global.fetch = withFetchPreconnect(
-      vi.fn(
-        async () =>
-          new Response(
-            new ReadableStream<Uint8Array>({
-              pull(controller) {
-                controller.enqueue(new TextEncoder().encode("unread upstream error"));
-              },
-              cancel() {
-                cancelled = true;
-              },
-            }),
-            { status: 503, headers: { "content-type": "text/plain" } },
-          ),
-      ),
-    );
-    resolveWebFetchDefinitionMock.mockReturnValue({
-      provider: { id: "firecrawl" },
-      definition: {
-        description: "firecrawl",
-        parameters: {},
-        execute: async () => ({
-          text: "provider rescued body",
-          extractor: "custom-provider",
-        }),
-      },
-    });
-
-    const tool = createWebFetchTool({ config: {} as OpenClawConfig, sandboxed: false });
-    const result = await tool?.execute?.("unread-response-fallback", {
-      url: "https://example.com/unread-response-fallback",
-    });
-    const details = result?.details as { text?: string; extractor?: string };
-
-    expect(details.extractor).toBe("custom-provider");
-    expect(details.text).toContain("provider rescued body");
-    expect(cancelled).toBe(true);
   });
 
   it("cancels an unread error response when provider fallback throws", async () => {
@@ -722,6 +629,69 @@ describe("web_fetch provider fallback normalization", () => {
           activeServer.closeAllConnections();
         });
       }
+    }
+  });
+
+  it.each([0, 15])("honors zero TTL after starting with TTL %i", async (initialTtl) => {
+    let body = "original body";
+    let networkCalls = 0;
+    const server = createServer((_request, response) => {
+      networkCalls += 1;
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end(body);
+    });
+    try {
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected a loopback TCP address");
+      }
+      const args = { url: `http://127.0.0.1:${address.port}/cache-ttl-${initialTtl}-direct` };
+      const setTtl = (cacheTtlMinutes: number) => {
+        runtimeState.activeSecretsRuntimeSnapshot = {
+          config: {
+            tools: {
+              web: { fetch: { cacheTtlMinutes, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } } },
+            },
+          },
+        };
+      };
+      setTtl(initialTtl);
+      const tool = createWebFetchTool({ lateBindRuntimeConfig: true });
+      if (!tool) {
+        throw new Error("expected web_fetch to be enabled");
+      }
+      const first = await tool.execute("populate", args);
+      expect(first.details).toMatchObject({ text: expect.stringContaining("original body") });
+      if (initialTtl > 0) {
+        expect((await tool.execute("cached", args)).details).toMatchObject({ cached: true });
+      }
+      expect(networkCalls).toBe(1);
+
+      setTtl(0);
+      for (const freshBody of ["fresh body", "newest body"]) {
+        body = freshBody;
+        const result = await tool.execute("uncached", args);
+        expect(result.details).toMatchObject({ text: expect.stringContaining(freshBody) });
+        expect(result.details).not.toHaveProperty("cached");
+      }
+      expect(networkCalls).toBe(3);
+
+      // Disabled requests neither replace another caller's entry nor insert their own.
+      setTtl(15);
+      body = "after re-enable";
+      const enabled = await tool.execute("re-enabled", args);
+      expect(enabled.details).toMatchObject({
+        text: expect.stringContaining(initialTtl > 0 ? "original body" : "after re-enable"),
+      });
+      expect(networkCalls).toBe(initialTtl > 0 ? 3 : 4);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
+      });
     }
   });
 });

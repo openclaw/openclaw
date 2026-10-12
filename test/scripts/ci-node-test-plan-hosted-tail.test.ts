@@ -21,7 +21,8 @@ it("keeps hourly hosted tails parallel without losing tests or increasing worker
   vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", "1");
   const owners = createNodeTestShards(options);
   const jobs = createNodeTestShardBundles({ ...options, compactNodeJobCap: 70 });
-  expect(jobs.length).toBeLessThanOrEqual(70);
+  expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(70);
+  expect(jobs.length).toBeLessThanOrEqual(90);
 
   for (const [ownerName, maxFiles] of [
     ["agentic-control-plane-agent-chat", 30],

@@ -113,13 +113,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop)
 
 /* Keep the card moving while its install outlives the initiating request. */
 .sidebar-update-card__action--busy .sidebar-update-card__icon svg {
-  animation: sidebar-update-card-spin 1s linear infinite;
-}
-
-@keyframes sidebar-update-card-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: btn-spinner-spin 1s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

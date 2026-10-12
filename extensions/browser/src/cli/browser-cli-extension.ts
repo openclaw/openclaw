@@ -1,10 +1,9 @@
-/**
- * `openclaw browser extension` CLI: register the Store and development extension
- * native bootstrap host, and retain advanced manual pairing.
- */
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Command } from "commander";
+import { runCommandWithRuntime, theme } from "openclaw/plugin-sdk/cli-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { defaultRuntime, info } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveBrowserConfig,
   resolveFirstExtensionProfileName,
@@ -36,77 +35,9 @@ import {
   runBrowserExtensionSetup,
 } from "../browser/extension-setup.js";
 import { runBrowserCliCommand, type BrowserParentOpts } from "./browser-cli-shared.js";
-import {
-  defaultRuntime,
-  getRuntimeConfig,
-  info,
-  runCommandWithRuntime,
-  theme,
-} from "./core-api.js";
-
-/** Absolute path to the bundled unpacked Chrome extension directory. */
-function resolveChromeExtensionDir(pluginRoot?: string): string {
-  if (pluginRoot) {
-    return path.join(pluginRoot, "chrome-extension");
-  }
-  // extensions/browser/dist/cli/ -> extensions/browser/chrome-extension
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(here, "..", "..", "chrome-extension");
-}
-
-function resolveBrowserPluginRoot(pluginRoot?: string): string {
-  return pluginRoot ?? path.resolve(resolveChromeExtensionDir(), "..");
-}
-
-async function buildPairingString(options: {
-  gatewayUrl?: string;
-  localGateway: boolean;
-}): Promise<{
-  pairing: string;
-  relayPort: number;
-  remote: boolean;
-}> {
-  const cfg = getRuntimeConfig();
-  if (options.localGateway && options.gatewayUrl !== undefined) {
-    throw new Error("--local-gateway cannot be combined with --gateway-url");
-  }
-  if (options.localGateway && cfg.gateway?.mode === "remote") {
-    throw new Error("--local-gateway requires a local Gateway configuration");
-  }
-  const result = await buildBrowserExtensionPairing({
-    cfg,
-    gatewayUrl: options.gatewayUrl,
-    localTransport: options.localGateway ? "gateway" : undefined,
-  });
-  return {
-    pairing: result.pairingString,
-    relayPort: result.relayPort,
-    remote: result.topology === "direct-remote",
-  };
-}
-
-type BrowserRelayCdpEndpoint = {
-  browserUrl: string;
-  wsEndpoint: string;
-  auth: {
-    label: typeof BROWSER_RELAY_AUTH_LABEL;
-    version: typeof BROWSER_RELAY_AUTH_VERSION;
-    keyId: string;
-    challengeUrl: string;
-    completeUrl: string;
-    role: "cdp";
-    transport: "connection";
-    method: "SEQUENCE";
-    resource: "/json/version -> /cdp";
-    flow: "cdp";
-  };
-  headers?: { Authorization: string };
-};
 
 /** Resolve safe v2 metadata, with an explicit gated legacy credential escape hatch. */
-async function buildCdpEndpoint(options: {
-  legacyBearer: boolean;
-}): Promise<BrowserRelayCdpEndpoint> {
+async function buildCdpEndpoint(legacyBearer: boolean) {
   const cfg = getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const token = await ensureExtensionRelayToken();
@@ -130,26 +61,26 @@ async function buildCdpEndpoint(options: {
       flow: "cdp" as const,
     },
   };
-  if (!options.legacyBearer) {
-    return metadata;
-  }
-  if (!resolved.extensionRelay.allowLegacyAuth) {
+  if (legacyBearer && !resolved.extensionRelay.allowLegacyAuth) {
     throw new Error(
       "Legacy browser relay auth is disabled; remove --legacy-bearer and use Browser Relay Authentication v2.",
     );
   }
   return {
     ...metadata,
-    headers: { Authorization: `Bearer ${token}` },
+    ...(legacyBearer ? { headers: { Authorization: `Bearer ${token}` } } : {}),
   };
 }
 
-/** Register `openclaw browser extension` lifecycle and compatibility commands. */
 export function registerBrowserExtensionCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
   pluginRoot?: string,
 ) {
+  // extensions/browser/dist/cli/ -> extensions/browser/
+  const defaultPluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const resolvedPluginRoot = pluginRoot ?? defaultPluginRoot;
+  const bundledDir = path.join(pluginRoot || defaultPluginRoot, "chrome-extension");
   const extension = browser
     .command("extension")
     .description("Install and inspect the OpenClaw Chrome extension bootstrap");
@@ -161,7 +92,7 @@ export function registerBrowserExtensionCommands(
     .action(async () => {
       // The entry owns binary framing and origin validation. Never print CLI diagnostics here.
       try {
-        const entry = await resolveNativeHostPath(resolveBrowserPluginRoot(pluginRoot));
+        const entry = await resolveNativeHostPath(resolvedPluginRoot);
         await import(pathToFileURL(entry).href);
       } catch {
         process.exitCode = 1;
@@ -186,8 +117,8 @@ export function registerBrowserExtensionCommands(
           const result = await runBrowserExtensionSetup({
             action: opts.action,
             nativeHostExecutable: opts.nativeHostExecutable,
-            bundledDir: resolveChromeExtensionDir(pluginRoot),
-            pluginRoot: resolveBrowserPluginRoot(pluginRoot),
+            bundledDir,
+            pluginRoot: resolvedPluginRoot,
             cfg: getRuntimeConfig(),
             profile: opts.browserProfile ?? parentOpts(command).browserProfile,
             waitMs: normalizeExtensionInstallWaitMs(opts.waitMs),
@@ -216,9 +147,7 @@ export function registerBrowserExtensionCommands(
     .description("Print the unpacked Chrome extension directory (Load unpacked)")
     .action(async () => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        defaultRuntime.log(
-          await resolveChromeExtensionLoadPath(resolveChromeExtensionDir(pluginRoot)),
-        );
+        defaultRuntime.log(await resolveChromeExtensionLoadPath(bundledDir));
       });
     });
 
@@ -244,7 +173,6 @@ export function registerBrowserExtensionCommands(
       await runBrowserCliCommand(async () => {
         const json = opts.json === true || parentOpts(command).json === true;
         const waitMs = normalizeExtensionInstallWaitMs(opts.waitMs);
-        const bundledDir = resolveChromeExtensionDir(pluginRoot);
         if (!json) {
           defaultRuntime.log(info("Preparing the OpenClaw Chrome extension…"));
         }
@@ -252,7 +180,7 @@ export function registerBrowserExtensionCommands(
           action: "install",
           nativeHostExecutable: opts.nativeHostExecutable,
           bundledDir,
-          pluginRoot: resolveBrowserPluginRoot(pluginRoot),
+          pluginRoot: resolvedPluginRoot,
           waitMs,
           requestStoreInstall: opts.store !== false,
           profile: opts.browserProfile ?? parentOpts(command).browserProfile,
@@ -296,8 +224,8 @@ export function registerBrowserExtensionCommands(
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await repairChromeExtensionNativeHosts({
-          bundledDir: resolveChromeExtensionDir(pluginRoot),
-          pluginRoot: resolveBrowserPluginRoot(pluginRoot),
+          bundledDir,
+          pluginRoot: resolvedPluginRoot,
           fromNativeHostPath: opts.from,
           dryRun: opts.dryRun === true,
         });
@@ -330,8 +258,8 @@ export function registerBrowserExtensionCommands(
           action: "inspect",
           profile: opts.browserProfile ?? parentOpts(command).browserProfile,
           nativeHostExecutable: opts.nativeHostExecutable,
-          pluginRoot: resolveBrowserPluginRoot(pluginRoot),
-          bundledDir: resolveChromeExtensionDir(pluginRoot),
+          pluginRoot: resolvedPluginRoot,
+          bundledDir,
         });
         if (json) {
           defaultRuntime.writeJson(status);
@@ -394,25 +322,22 @@ export function registerBrowserExtensionCommands(
       await runCommandWithRuntime(defaultRuntime, async () => {
         const json = opts.json === true || parentOpts(command).json === true;
         const result = await uninstallChromeExtensionNativeHosts({
-          pluginRoot: resolveBrowserPluginRoot(pluginRoot),
+          pluginRoot: resolvedPluginRoot,
           nativeHostExecutable: opts.nativeHostExecutable,
           browserProfile: opts.browserProfile ?? parentOpts(command).browserProfile,
           removeStore: opts.removeStore === true,
         });
         if (json) {
           defaultRuntime.writeJson(result);
-          if (result.refused.length) {
-            defaultRuntime.exit(1);
+        } else {
+          defaultRuntime.log(
+            result.manualRequired
+              ? theme.warn("Windows native-host removal is manual; no registry key was changed.")
+              : info(`Removed ${result.removed.length} owned native-host artifact(s).`),
+          );
+          for (const refused of result.refused) {
+            defaultRuntime.error(theme.warn(`Refused registration removal: ${refused}`));
           }
-          return;
-        }
-        defaultRuntime.log(
-          result.manualRequired
-            ? theme.warn("Windows native-host removal is manual; no registry key was changed.")
-            : info(`Removed ${result.removed.length} owned native-host artifact(s).`),
-        );
-        for (const refused of result.refused) {
-          defaultRuntime.error(theme.warn(`Refused registration removal: ${refused}`));
         }
         if (result.refused.length) {
           defaultRuntime.exit(1);
@@ -432,19 +357,29 @@ export function registerBrowserExtensionCommands(
     .action(async (opts, command) => {
       await runBrowserCliCommand(async () => {
         const json = opts.json === true || parentOpts(command).json === true;
-        const result = await buildPairingString({
+        const cfg = getRuntimeConfig();
+        const localGateway = opts.localGateway === true;
+        if (localGateway && opts.gatewayUrl !== undefined) {
+          throw new Error("--local-gateway cannot be combined with --gateway-url");
+        }
+        if (localGateway && cfg.gateway?.mode === "remote") {
+          throw new Error("--local-gateway requires a local Gateway configuration");
+        }
+        const result = await buildBrowserExtensionPairing({
+          cfg,
           gatewayUrl: opts.gatewayUrl,
-          localGateway: opts.localGateway === true,
+          localTransport: localGateway ? "gateway" : undefined,
         });
+        const remote = result.topology === "direct-remote";
         if (json) {
           defaultRuntime.writeJson({
-            pairingString: result.pairing,
+            pairingString: result.pairingString,
             relayPort: result.relayPort,
-            remote: result.remote,
+            remote,
           });
           return;
         }
-        const setupLine = result.remote
+        const setupLine = remote
           ? info(
               "Remote pairing: load and pair the extension on the machine running Chrome; it connects to this gateway over wss://.",
             )
@@ -453,10 +388,10 @@ export function registerBrowserExtensionCommands(
           [
             setupLine,
             info("1. Load the extension: chrome://extensions → Developer mode → Load unpacked →"),
-            `   ${resolveChromeExtensionDir(pluginRoot)}`,
+            `   ${bundledDir}`,
             info("2. Open the OpenClaw popup and paste this pairing string:"),
             "",
-            theme.heading(result.pairing),
+            theme.heading(result.pairingString),
             "",
             info("The relay key is a host-local secret; keep it private."),
           ].join("\n"),
@@ -476,7 +411,7 @@ export function registerBrowserExtensionCommands(
       await runBrowserCliCommand(async () => {
         const json = opts.json === true || parentOpts(command).json === true;
         const legacyBearer = opts.legacyBearer === true;
-        const endpoint = await buildCdpEndpoint({ legacyBearer });
+        const endpoint = await buildCdpEndpoint(legacyBearer);
         if (legacyBearer) {
           defaultRuntime.error(
             theme.warn(

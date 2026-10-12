@@ -1,6 +1,5 @@
 import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../api/types.ts";
-import { t } from "../i18n/index.ts";
 import { hintForPath, isSensitiveLeafValue, pathKey } from "../lib/config-form-utils.ts";
 
 export {
@@ -31,27 +30,12 @@ export function configFieldId(path: Array<string | number>, suffix: string): str
   return `config-field-${key}-${suffix}`;
 }
 
-export function redactedPlaceholder(): string {
-  return t("configForm.redactedPlaceholder");
-}
-
 const MAX_SENSITIVE_SCAN_DEPTH = 64;
 const MAX_SENSITIVE_SCAN_NODES = 20_000;
 
 type SensitiveScanState = {
   visited: number;
 };
-
-function enterSensitiveScanNode(state: SensitiveScanState, depth: number): boolean {
-  if (depth > MAX_SENSITIVE_SCAN_DEPTH) {
-    return false;
-  }
-  state.visited += 1;
-  if (state.visited > MAX_SENSITIVE_SCAN_NODES) {
-    return false;
-  }
-  return true;
-}
 
 export function hasSensitiveConfigData(
   value: unknown,
@@ -77,7 +61,7 @@ function countSensitiveConfigValuesInner(
   depth: number,
   limit: number,
 ): number {
-  if (!enterSensitiveScanNode(scan, depth)) {
+  if (depth > MAX_SENSITIVE_SCAN_DEPTH || ++scan.visited > MAX_SENSITIVE_SCAN_NODES) {
     return 1;
   }
 
@@ -107,7 +91,7 @@ function countSensitiveConfigValuesInner(
   };
   if (Array.isArray(value)) {
     value.some(visit);
-  } else if (value && typeof value === "object") {
+  } else if (typeof value === "object") {
     Object.entries(value).some(([childKey, childValue]) => visit(childValue, childKey));
   }
   return count;

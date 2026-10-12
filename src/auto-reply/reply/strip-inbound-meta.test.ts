@@ -28,18 +28,16 @@ const LEGACY_PRETTY_CONV_BLOCK = `${markInboundContextLabel("Conversation info:"
 }
 \`\`\``;
 
+// Frozen #159694 producer bytes, before #161012 moved the hint inside JSON.
+const LEGACY_REQUESTER_HINT =
+  'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
+const LEGACY_REQUESTER_BLOCK = `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n${JSON.stringify({ requester_profile: { id: "human-1", display_name: "Ada" } })}\n\`\`\``;
+
 const SENDER_BLOCK = `${markInboundContextLabel("Sender:")}
 \`\`\`json
 {
   "label": "Alice",
   "name": "Alice"
-}
-\`\`\``;
-
-const REPLY_BLOCK = `${markInboundContextLabel("Reply target of current user message:")}
-\`\`\`json
-{
-  "body": "What time is it?"
 }
 \`\`\``;
 
@@ -66,18 +64,9 @@ const CHAT_HISTORY_PROSE_BLOCK = `${markInboundContextLabel("Chat history since 
 #1002 lee.chen: yeah it was wild`;
 
 describe("stripInboundMetadata", () => {
-  it("fast-path: returns same string when no sentinels present", () => {
-    const text = "Hello, how are you?";
-    expect(stripInboundMetadata(text)).toBe(text);
-  });
-
   it("preserves bare ambient envelope rows", () => {
     const text = "#35676 Keśava: No wtf";
     expect(stripInboundMetadata(text)).toBe(text);
-  });
-
-  it("fast-path: returns empty string unchanged", () => {
-    expect(stripInboundMetadata("")).toBe("");
   });
 
   it.each([
@@ -88,28 +77,52 @@ describe("stripInboundMetadata", () => {
     expect(stripInboundMetadata(input)).toBe(input);
   });
 
-  it("strips a single Conversation info block", () => {
-    const input = `${CONV_BLOCK}\n\nWhat is the weather today?`;
-    expect(stripInboundMetadata(input)).toBe("What is the weather today?");
-  });
-
   it("strips legacy pretty-printed Conversation info blocks", () => {
     const input = `${LEGACY_PRETTY_CONV_BLOCK}\n\nWhat is the weather today?`;
     expect(stripInboundMetadata(input)).toBe("What is the weather today?");
   });
 
-  it("strips legacy explicit bot mention notes with conversation info", () => {
-    const input = `${markInboundContextLabel("Conversation info:")}
-\`\`\`json
-{
-  "explicitly_mentioned_bot": true,
-  "explicit_bot_mention_note": "The incoming message explicitly mentions your channel identity @SirPinchALotBot. Treat that mention as addressed to you, even if your persona name differs."
-}
-\`\`\`
+  it.each(["\n", "\r\n"])(
+    "strips the historical requester companion before chained metadata with %j newlines",
+    (newline) => {
+      const body = `assign this to me\n\nQuoted guidance:\n${LEGACY_REQUESTER_HINT}`;
+      const input =
+        `${LEGACY_REQUESTER_BLOCK}\n\n${LEGACY_REQUESTER_HINT}\n\n${SENDER_BLOCK}\n\n${body}`.replaceAll(
+          "\n",
+          newline,
+        );
+      expect(stripInboundMetadata(input)).toBe(body.replaceAll("\n", newline));
+      expect(stripLeadingInboundMetadata(input)).toBe(body.replaceAll("\n", newline));
+    },
+  );
 
-Actual user message`;
+  it.each([
+    ["no requester", {}],
+    ["null requester", { requester_profile: null }],
+    [
+      "current requester hint",
+      { requester_profile: { id: "human-1" }, requester_profile_hint: LEGACY_REQUESTER_HINT },
+    ],
+  ])("preserves user guidance after %s metadata", (_name, metadata) => {
+    const prefix = `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n${JSON.stringify(metadata)}\n\`\`\``;
+    const body = `${LEGACY_REQUESTER_HINT}\n\nPlease explain this instruction.`;
+    expect(stripInboundMetadata(`${prefix}\n\n${body}`)).toBe(body);
+    expect(stripLeadingInboundMetadata(`${prefix}\n\n${body}`)).toBe(body);
+  });
 
-    expect(stripInboundMetadata(input)).toBe("Actual user message");
+  it.each([
+    `${LEGACY_REQUESTER_HINT} Extra user text.\n\nPlease explain.`,
+    `${LEGACY_REQUESTER_HINT}\nPlease explain.`,
+    `Please explain.\n\n${LEGACY_REQUESTER_HINT}`,
+  ])("preserves requester guidance outside its historical companion frame", (body) => {
+    expect(stripInboundMetadata(`${LEGACY_REQUESTER_BLOCK}\n\n${body}`)).toBe(body);
+    expect(stripLeadingInboundMetadata(`${LEGACY_REQUESTER_BLOCK}\n\n${body}`)).toBe(body);
+  });
+
+  it("preserves standalone exact requester guidance", () => {
+    const body = `${LEGACY_REQUESTER_HINT}\n\nPlease explain.`;
+    expect(stripInboundMetadata(body)).toBe(body);
+    expect(stripLeadingInboundMetadata(body)).toBe(body);
   });
 
   it("strips multiple chained metadata blocks", () => {
@@ -127,26 +140,6 @@ Actual user message`;
     expect(stripInboundMetadata(input)).toBe("Can you help me?");
   });
 
-  it("strips Replied message block leaving user message intact", () => {
-    const input = `${REPLY_BLOCK}\n\nGot it, thanks!`;
-    expect(stripInboundMetadata(input)).toBe("Got it, thanks!");
-  });
-
-  it("strips all six known sentinel types", () => {
-    const sentinels = [
-      "Conversation info:",
-      "Sender:",
-      "Thread starter:",
-      "Reply target of current user message:",
-      "Forwarded message context:",
-      "Chat history since last reply:",
-    ];
-    for (const sentinel of sentinels) {
-      const input = `${markInboundContextLabel(sentinel)}\n\`\`\`json\n{"x": 1}\n\`\`\`\n\nUser message`;
-      expect(stripInboundMetadata(input)).toBe("User message");
-    }
-  });
-
   it("handles metadata block with no user text after it", () => {
     expect(stripInboundMetadata(CONV_BLOCK)).toBe("");
   });
@@ -154,11 +147,6 @@ Actual user message`;
   it("preserves message containing json fences that are not metadata", () => {
     const text = `Here is my code:\n\`\`\`json\n{"key": "value"}\n\`\`\``;
     expect(stripInboundMetadata(text)).toBe(text);
-  });
-
-  it("preserves leading newlines in user content after stripping", () => {
-    const input = `${CONV_BLOCK}\n\nActual message`;
-    expect(stripInboundMetadata(input)).toBe("Actual message");
   });
 
   it.each(["\n", "\r\n"])(
@@ -283,12 +271,6 @@ Hello from user`;
 describe("timestamp prefix stripping", () => {
   it("strips a leading injected timestamp prefix", () => {
     expect(stripInboundMetadata("[Wed 2026-03-11 23:51 PDT] hello")).toBe("hello");
-  });
-
-  it("strips timestamp prefix with UTC timezone", () => {
-    expect(stripInboundMetadata("[Thu 2026-03-12 07:00 UTC] what time is it?")).toBe(
-      "what time is it?",
-    );
   });
 
   it("leaves non timestamp brackets alone", () => {

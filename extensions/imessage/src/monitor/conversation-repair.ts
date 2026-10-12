@@ -23,9 +23,6 @@ type RepairIMessageConversationAnchorParams = {
   client: IMessageRpcClient;
   message: IMessagePayload;
   runtime?: RuntimeLogger;
-  chatsLimit?: number;
-  perChatHistoryLimit?: number;
-  rpcTimeoutMs?: number;
 };
 
 type AuthoritativeRecoveryProjection = {
@@ -48,11 +45,9 @@ function isExplicitEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim() === "";
 }
 
-function hasUsableConversationAnchor(projection: {
-  chat_id?: number;
-  chat_guid?: string;
-  chat_identifier?: string;
-}): boolean {
+function hasUsableConversationAnchor(
+  projection: Pick<IMessagePayload, "chat_id" | "chat_guid" | "chat_identifier">,
+): boolean {
   return (
     hasPositiveChatId(projection.chat_id) ||
     isNonEmptyString(projection.chat_guid) ||
@@ -61,22 +56,17 @@ function hasUsableConversationAnchor(projection: {
 }
 
 function isIMessageAnchorless(message: IMessagePayload): boolean {
-  const hasUsableAnchor =
-    hasPositiveChatId(message.chat_id) ||
-    isNonEmptyString(message.chat_guid) ||
-    isNonEmptyString(message.chat_identifier);
-  if (hasUsableAnchor) {
+  if (hasUsableConversationAnchor(message)) {
     return false;
   }
 
-  const hasExplicitBrokenAnchor =
+  return (
     message.chat_id === null ||
     (typeof message.chat_id === "number" &&
       (!Number.isFinite(message.chat_id) || message.chat_id <= 0)) ||
     isExplicitEmptyString(message.chat_guid) ||
-    isExplicitEmptyString(message.chat_identifier);
-
-  return hasExplicitBrokenAnchor;
+    isExplicitEmptyString(message.chat_identifier)
+  );
 }
 
 function extractAuthoritativeRecoveryProjection(
@@ -151,8 +141,8 @@ export async function repairIMessageConversationAnchor(
   try {
     chatsResult = await client.request<{ chats?: ChatsListEntry[] }>(
       "chats.list",
-      { limit: params.chatsLimit ?? DEFAULT_CHATS_LIMIT },
-      { timeoutMs: params.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS },
+      { limit: DEFAULT_CHATS_LIMIT },
+      { timeoutMs: DEFAULT_RPC_TIMEOUT_MS },
     );
   } catch (err) {
     runtime?.error?.(`imessage: anchorless message recovery failed listing chats: ${String(err)}`);
@@ -174,9 +164,9 @@ export async function repairIMessageConversationAnchor(
         {
           attachments: false,
           chat_id: chatId,
-          limit: params.perChatHistoryLimit ?? DEFAULT_PER_CHAT_HISTORY_LIMIT,
+          limit: DEFAULT_PER_CHAT_HISTORY_LIMIT,
         },
-        { timeoutMs: params.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS },
+        { timeoutMs: DEFAULT_RPC_TIMEOUT_MS },
       );
     } catch {
       continue;

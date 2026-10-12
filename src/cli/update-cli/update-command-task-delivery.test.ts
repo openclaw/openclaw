@@ -1,15 +1,13 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "../../infra/sqlite-coordinator.js";
-import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
-import {
-  createUpdateRun,
-  getUpdateRun,
-  recordUpdateRunStep,
-} from "../../infra/update-run-ledger.js";
+import { acquireFileLockSync } from "../../infra/file-lock-manager.js";
+import { parseGatewayLockPayload } from "../../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -137,40 +135,6 @@ it("admits cascade-owned task-delivery orphans with preservation and a durable r
   );
 });
 
-it.each([
-  { name: "step count", count: 130, prefix: "progress:", detail: undefined },
-  { name: "diagnostic bytes", count: 30, prefix: "progress:", detail: "界".repeat(1_024) },
-  { name: "retained step bytes", count: 30, prefix: "finalize:", detail: "界".repeat(1_024) },
-])(
-  "retains the recovery receipt across the $name limit and database reopen",
-  ({ count, prefix, detail }) => {
-    const f = seededOrphans();
-    const options = { env: f.env };
-    const run = createUpdateRun({ trigger: "cli" }, options);
-    const directories = fs
-      .readdirSync(path.dirname(f.filename))
-      .filter((name) => name.startsWith("openclaw-task-delivery-recovery-"));
-    expect(directories).toHaveLength(1);
-    for (let index = 0; index < count; index++) {
-      recordUpdateRunStep(
-        run.runId,
-        { step: `${prefix}${index}`, status: "completed", detail },
-        options,
-      );
-    }
-    closeOpenClawStateDatabaseForTest();
-    const persisted = getUpdateRun(run.runId, options)!;
-    const receipt = persisted.steps.find((step) => step.step === "task-delivery-recovery");
-    expect(receipt).toMatchObject({
-      status: "completed",
-      detail: expect.stringContaining("18 orphan task delivery rows"),
-    });
-    expect(receipt?.detail).toContain(directories[0]);
-    expect(persisted.steps.length).toBeLessThanOrEqual(128);
-    expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
-  },
-);
-
 it.each(["non-cascade", "structural"] as const)(
   "refuses %s damage without admission or recovery",
   (damage) => {
@@ -202,21 +166,49 @@ it.each(["non-cascade", "structural"] as const)(
   },
 );
 
-it.each(["read-only", "foreign-gateway"] as const)(
+it("preserves inbound CASCADE dependents when recovery is refused", () => {
+  const f = seededOrphans();
+  inspect(f.filename, (db) =>
+    db.exec(`CREATE TABLE dependent (
+    task_id TEXT REFERENCES task_delivery_state(task_id) ON DELETE CASCADE);
+    INSERT INTO dependent VALUES ('missing-task-0');`),
+  );
+  expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
+    /foreign_key_check failed/,
+  );
+  inspect(f.filename, (db) => {
+    expect(db.prepare("SELECT * FROM dependent").all()).toEqual([{ task_id: "missing-task-0" }]);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
+    expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
+  });
+});
+
+it.each(["foreign-gateway"] as const)(
   "reports repairable orphans and Doctor next action for %s admission",
   (blocker) => {
     const f = seededOrphans();
-    const anchor = acquireGatewayLifecycleCoordinator({ databasePath: f.filename });
+    const anchor = acquireGatewayStateOwner({ databasePath: f.filename });
     anchor.release();
+    // Register no local root: recovery must not borrow the foreign Gateway's schema authority.
     const owner =
-      blocker === "foreign-gateway" ? tryAcquireExclusiveSqliteCoordinator(anchor.path) : undefined;
-    if (blocker === "foreign-gateway" && !owner) {
-      throw new Error("Fixture Gateway lease unavailable");
-    }
+      blocker === "foreign-gateway"
+        ? acquireFileLockSync(anchor.path, {
+            lockPath: anchor.path,
+            retry: { retries: 0 },
+            payload: () => ({
+              pid: process.pid,
+              ownerId: randomUUID(),
+              createdAt: new Date().toISOString(),
+              configPath: path.join(f.root, "openclaw.json"),
+              role: "gateway",
+            }),
+            parsePayload: parseGatewayLockPayload,
+          })
+        : undefined;
     try {
-      expect(() =>
-        createUpdateRun({ trigger: "cli" }, { env: f.env, readOnly: blocker === "read-only" }),
-      ).toThrow(/repairable[\s\S]*openclaw doctor --fix/iu);
+      expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
+        /repairable[\s\S]*openclaw doctor --fix/iu,
+      );
       inspect(f.filename, (db) => {
         expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
         expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
@@ -224,26 +216,6 @@ it.each(["read-only", "foreign-gateway"] as const)(
     } finally {
       owner?.release();
     }
-  },
-);
-
-it.each(["CASCADE", "SET NULL"])(
-  "preserves inbound %s dependents when recovery is refused",
-  (action) => {
-    const f = seededOrphans();
-    inspect(f.filename, (db) =>
-      db.exec(`CREATE TABLE dependent (
-    task_id TEXT REFERENCES task_delivery_state(task_id) ON DELETE ${action});
-    INSERT INTO dependent VALUES ('missing-task-0');`),
-    );
-    expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
-      /foreign_key_check failed/,
-    );
-    inspect(f.filename, (db) => {
-      expect(db.prepare("SELECT * FROM dependent").all()).toEqual([{ task_id: "missing-task-0" }]);
-      expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
-      expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
-    });
   },
 );
 

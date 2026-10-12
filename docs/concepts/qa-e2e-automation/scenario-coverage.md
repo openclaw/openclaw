@@ -37,8 +37,9 @@ pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline
 ```
 
 This boots a fresh Multipass guest, installs dependencies, builds OpenClaw
-inside the guest, runs `qa suite`, then copies the normal QA report and
-summary back into `.artifacts/qa-e2e/...` on the host. It reuses the same
+inside the guest, and runs `qa suite`. The guest writes the normal QA report
+and summary through the mounted workspace into `.artifacts/qa-e2e/...` on
+the host, including when a scenario fails. It reuses the same
 scenario-selection behavior as `qa suite` on the host.
 
 Host and Multipass suite runs execute multiple selected scenarios in
@@ -55,5 +56,5 @@ when you want artifacts without a failing exit code.
 
 Live runs forward the supported QA auth inputs that are practical for the
 guest: env-based provider keys, the QA live provider config path, and
-`CODEX_HOME` when present. Keep `--output-dir` under the repo root so the
-guest can write back through the mounted workspace.
+`CODEX_HOME` when present. Use a repo-relative `--output-dir` under the repo
+root so the guest can write back through the mounted workspace.

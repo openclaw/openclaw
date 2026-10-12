@@ -1,6 +1,9 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord as readObjectRecord,
+  asOptionalRecord as readRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
@@ -169,7 +172,7 @@ function projectChatHistoryMediaFacts(value: unknown): unknown[] | undefined {
 
 export function sanitizeChatHistoryContentBlock(
   block: unknown,
-  opts?: { preserveExactToolPayload?: boolean; maxChars?: number },
+  opts?: { preserveExactToolPayload?: boolean; maxChars?: number; toolResultMaxChars?: number },
 ): { block: unknown; changed: boolean; truncated: boolean } {
   if (!block || typeof block !== "object") {
     return { block, changed: false, truncated: false };
@@ -182,6 +185,10 @@ export function sanitizeChatHistoryContentBlock(
   const preserveExactToolPayload =
     opts?.preserveExactToolPayload === true || isToolHistoryBlockType(entry.type);
   const maxChars = opts?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  const toolResultMaxChars =
+    opts?.preserveExactToolPayload || isToolResultHistoryBlockType(entry.type)
+      ? opts?.toolResultMaxChars
+      : undefined;
   if (isToolResultHistoryBlockType(entry.type) && "details" in entry) {
     const projectedDetails = projectToolResultDetails(entry.details, maxChars);
     if (projectedDetails.details) {
@@ -206,7 +213,11 @@ export function sanitizeChatHistoryContentBlock(
       changed = true;
     }
     const content = entry.content.map((item) =>
-      sanitizeChatHistoryContentBlock(item, { preserveExactToolPayload: true, maxChars }),
+      sanitizeChatHistoryContentBlock(item, {
+        preserveExactToolPayload: true,
+        maxChars,
+        toolResultMaxChars,
+      }),
     );
     if (content.some((item) => item.changed)) {
       entry.content = content.map((item) => item.block);
@@ -225,6 +236,7 @@ export function sanitizeChatHistoryContentBlock(
       entry[field],
       maxChars,
       preserveExactToolPayload && (field === "text" || field === "content"),
+      field === "text" || field === "content" ? toolResultMaxChars : undefined,
     );
     entry[field] = res.text;
     changed ||= res.truncated;
@@ -242,46 +254,31 @@ export function sanitizeChatHistoryContentBlock(
   return { block: changed ? entry : block, changed, truncated };
 }
 
-function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
-  content: unknown[];
-  changed: boolean;
-} {
+function sanitizeAssistantPhasedContentBlocks(content: unknown[]): unknown[] {
   const hasExplicitPhasedText = content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const entry = block as { type?: unknown; textSignature?: unknown };
-    return isAssistantTextContentType(entry.type) && parseAssistantTextSignature(entry)?.phase;
+    const entry = readObjectRecord(block);
+    return (
+      entry && isAssistantTextContentType(entry.type) && parseAssistantTextSignature(entry)?.phase
+    );
   });
   if (!hasExplicitPhasedText) {
-    return { content, changed: false };
+    return content;
   }
   const filtered = content.filter((block) => {
-    if (!block || typeof block !== "object") {
-      return true;
-    }
-    const entry = block as { type?: unknown; textSignature?: unknown };
-    if (!isAssistantTextContentType(entry.type)) {
-      return true;
-    }
-    return parseAssistantTextSignature(entry)?.phase === "final_answer";
+    const entry = readObjectRecord(block);
+    return (
+      !entry ||
+      !isAssistantTextContentType(entry.type) ||
+      parseAssistantTextSignature(entry)?.phase === "final_answer"
+    );
   });
-  return {
-    content: filtered,
-    changed: filtered.length !== content.length,
-  };
+  return filtered.length === content.length ? content : filtered;
 }
 
-function projectAssistantMixedToolContent(
-  content: unknown[],
-  maxChars: number,
-): { content: unknown[]; changed: boolean } | null {
-  const hasToolHistoryBlock = content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    return isToolHistoryBlockType((block as { type?: unknown }).type);
-  });
+function projectAssistantMixedToolContent(content: unknown[], maxChars: number): unknown[] | null {
+  const hasToolHistoryBlock = content.some((block) =>
+    isToolHistoryBlockType(readObjectRecord(block)?.type),
+  );
   if (!hasToolHistoryBlock) {
     return null;
   }
@@ -289,10 +286,10 @@ function projectAssistantMixedToolContent(
   let hasVisibleText = false;
   const projectedContent: unknown[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") {
+    const entry = readObjectRecord(block);
+    if (!entry) {
       continue;
     }
-    const entry = block as { type?: unknown; text?: unknown; textSignature?: unknown };
     if (!isAssistantTextContentType(entry.type)) {
       projectedContent.push(block);
       continue;
@@ -312,7 +309,7 @@ function projectAssistantMixedToolContent(
 
   // Mixed messages supply both the visible bubble and its reasoning/tool trace.
   // Keep structured siblings or a history reload loses activity shown while live.
-  return hasVisibleText ? { content: projectedContent, changed: true } : null;
+  return hasVisibleText ? projectedContent : null;
 }
 
 const COST_FIELDS = ["input", "output", "cacheRead", "cacheWrite", "total"] as const;
@@ -340,10 +337,10 @@ function sanitizeNumericMetadata(
   raw: unknown,
   fields: readonly string[],
 ): Record<string, unknown> | undefined {
-  if (!raw || typeof raw !== "object") {
+  const record = readObjectRecord(raw);
+  if (!record) {
     return undefined;
   }
-  const record = raw as Record<string, unknown>;
   const projected: Record<string, unknown> = {};
   for (const key of fields) {
     const value = asFiniteNumber(record[key]);
@@ -401,6 +398,7 @@ function projectWorkspaceConflictDetails(
 export function sanitizeChatHistoryMessage(
   message: unknown,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  toolResultMaxChars?: number,
 ): { message: unknown; changed: boolean } {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
@@ -443,6 +441,8 @@ export function sanitizeChatHistoryMessage(
     typeof entry.tool_name === "string" ||
     typeof entry.toolCallId === "string" ||
     typeof entry.tool_call_id === "string";
+  const resultMaxChars =
+    preserveExactToolPayload && messageHasToolResultShape(entry) ? toolResultMaxChars : undefined;
 
   if ("details" in entry) {
     const conflictDetails = projectWorkspaceConflictDetails(entry);
@@ -495,7 +495,12 @@ export function sanitizeChatHistoryMessage(
         )
       : text;
     changed ||= controlStripped !== text;
-    const res = truncateChatHistoryText(controlStripped, maxChars, preserveExactToolPayload);
+    const res = truncateChatHistoryText(
+      controlStripped,
+      maxChars,
+      preserveExactToolPayload,
+      resultMaxChars,
+    );
     changed ||= res.truncated;
     truncated ||= res.truncated;
     return res.text;
@@ -522,6 +527,7 @@ export function sanitizeChatHistoryMessage(
       const sanitized = sanitizeChatHistoryContentBlock(content[index], {
         preserveExactToolPayload,
         maxChars: rawText === undefined ? maxChars : remainingText,
+        toolResultMaxChars,
       });
       if (rawText !== undefined) {
         remainingText -= rawText.length + 1;
@@ -554,15 +560,15 @@ export function sanitizeChatHistoryMessage(
     if (entry.role === "assistant" && Array.isArray(entry.content)) {
       const mixedToolContent = projectAssistantMixedToolContent(entry.content, maxChars);
       if (mixedToolContent) {
-        entry.content = mixedToolContent.content;
+        entry.content = mixedToolContent;
         if (entry.phase === "commentary") {
           delete entry.phase;
         }
         changed = true;
       } else {
         const sanitizedPhases = sanitizeAssistantPhasedContentBlocks(entry.content);
-        if (sanitizedPhases.changed) {
-          entry.content = sanitizedPhases.content;
+        if (sanitizedPhases !== entry.content) {
+          entry.content = sanitizedPhases;
           changed = true;
         }
       }
@@ -591,20 +597,17 @@ export function sanitizeChatHistoryMessage(
 }
 
 function hasAssistantMixedToolVisibleText(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
+  const content = readObjectRecord(message)?.content;
   if (!Array.isArray(content)) {
     return false;
   }
   let hasToolHistoryBlock = false;
   let hasText = false;
   for (const block of content) {
-    if (!block || typeof block !== "object") {
+    const entry = readObjectRecord(block);
+    if (!entry) {
       continue;
     }
-    const entry = block as { type?: unknown; text?: unknown };
     if (isToolHistoryBlockType(entry.type)) {
       hasToolHistoryBlock = true;
     }
@@ -620,11 +623,8 @@ function hasAssistantMixedToolVisibleText(message: unknown): boolean {
 }
 
 export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown> & { role?: unknown };
-  if (entry.role !== "assistant") {
+  const entry = readObjectRecord(message);
+  if (entry?.role !== "assistant") {
     return false;
   }
   if (isProjectedForwardedMessage(entry)) {
@@ -643,7 +643,7 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  opts?: { includeCommentaryFallbacks?: boolean },
+  opts?: { includeCommentaryFallbacks?: boolean; toolResultMaxChars?: number },
 ): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -662,7 +662,11 @@ export function sanitizeChatHistoryMessages(
         if (!hasMediaFacts && shouldDropAssistantHistoryMessage(commentary)) {
           continue;
         }
-        const projected = sanitizeChatHistoryMessage(commentary, maxChars);
+        const projected = sanitizeChatHistoryMessage(
+          commentary,
+          maxChars,
+          opts?.toolResultMaxChars,
+        );
         if (hasMediaFacts || !shouldDropAssistantHistoryMessage(projected.message)) {
           next.push(projected.message);
         }
@@ -672,7 +676,7 @@ export function sanitizeChatHistoryMessages(
       changed = true;
       continue;
     }
-    const res = sanitizeChatHistoryMessage(message, maxChars);
+    const res = sanitizeChatHistoryMessage(message, maxChars, opts?.toolResultMaxChars);
     changed ||= res.changed;
     if (res.changed && shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;

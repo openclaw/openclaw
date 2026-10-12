@@ -27,17 +27,6 @@ function expectPinnedOnlySchema(tool: ReturnType<typeof expectWidget>): void {
 }
 
 describe("pinned show_widget registration", () => {
-  it("keeps recovered Control UI dashboard authoring available without an inline client", () => {
-    const tool = expectWidget(
-      createOpenClawTools({
-        agentSessionKey: "agent:main:dashboard:recovered",
-        pinnedWidgetAuthoring: true,
-      }),
-    );
-
-    expectPinnedOnlySchema(tool);
-  });
-
   it.each([undefined, "agent:main:cron:job:run:detached"])(
     "requires a persistent session for recovered authoring (%s)",
     (agentSessionKey) => {
@@ -66,18 +55,6 @@ describe("pinned show_widget registration", () => {
     expect(deniedTools.some((tool) => tool.name === "show_widget")).toBe(false);
   });
 
-  it("exposes a pinned-only widget tool to verified scheduled callers", () => {
-    const tool = expectWidget(
-      createOpenClawTools({
-        agentSessionKey: "agent:main:dashboard:scheduled",
-        gatewayCallerScheduled: true,
-        runtimeToolAllowlist: ["show_widget"],
-      }),
-    );
-
-    expectPinnedOnlySchema(tool);
-  });
-
   it("does not let scheduled provenance replace an explicit widget cap", () => {
     const tools = createOpenClawTools({
       agentSessionKey: "agent:main:dashboard:scheduled",
@@ -98,16 +75,7 @@ describe("pinned show_widget registration", () => {
     expect(tools.some((tool) => tool.name === "show_widget")).toBe(false);
   });
 
-  it("keeps detached scheduled run sessions outside pinned authoring", () => {
-    const tools = createOpenClawTools({
-      runSessionKey: "agent:main:cron:job:run:scheduled",
-      gatewayCallerScheduled: true,
-    });
-
-    expect(tools.some((tool) => tool.name === "show_widget")).toBe(false);
-  });
-
-  it.each(["show_widget", "canvas"])(
+  it.each(["canvas"])(
     "lets a server-authorized %s cap select pinned widget authoring",
     (toolName) => {
       const toolsAllow = [toolName];

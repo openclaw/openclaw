@@ -10,7 +10,7 @@ scenario:
     secondary:
       - automation.heartbeat-scheduling
       - automation.wake-and-cooldown-handling
-      - gateway.task-and-automation-apis
+      - gateway.agent-and-automation-apis
   gatewayConfigPatch:
     logging:
       consoleStyle: json
@@ -60,6 +60,7 @@ scenario:
       natural main-session cron delivery, and transcript mirror diagnostics.
     config:
       requiredProviderMode: live-frontier
+      monitorReadyTimeoutMs: 30000
       conversationId: qa-heartbeat-live-contract
       sessionKey: agent:qa:main
       cases:
@@ -78,12 +79,19 @@ flow:
           args: [{ ref: env }, 120000]
         - call: waitForQaChannelReady
           args: [{ ref: env }, 120000]
-        - call: env.gateway.call
-          saveAs: inventory
-          args: [cron.list, { includeDisabled: true }, { timeoutMs: 30000 }]
-        - set: monitor
+        # Request readiness can precede scheduled-service startup and monitor reconciliation.
+        - set: monitorReadyDeadline
           value:
-            expr: "inventory.jobs.find((job) => job.agentId === 'qa' && job.payload?.kind === 'heartbeat' && job.declarationKey === 'heartbeat:qa')"
+            expr: "Date.now() + config.monitorReadyTimeoutMs"
+        - call: waitForCondition
+          saveAs: monitor
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "env.gateway.call('cron.list', {includeDisabled: true}, {deadlineMs: monitorReadyDeadline}).then((inventory) => inventory.jobs.find((job) => Boolean(job.id) && job.agentId === 'qa' && job.payload?.kind === 'heartbeat' && job.declarationKey === 'heartbeat:qa' && job.enabled === true))"
+            - ref: config.monitorReadyTimeoutMs
+            - 250
         - assert:
             expr: "Boolean(monitor?.id) && monitor.enabled"
             message: Expected the existing config-owned heartbeat monitor.
@@ -195,7 +203,7 @@ flow:
                         expr: "recallTranscript.successfulToolCallCounts.message === 1"
                         message: Recall did not complete exactly one successful message-tool call.
                     - assert:
-                        expr: "Object.keys(recallTranscript.assistantToolCallCounts).every((name) => ['message', 'exec', 'wait', 'tool_search_code', 'tool_search', 'tool_describe', 'tool_call'].includes(name))"
+                        expr: "Object.keys(recallTranscript.assistantToolCallCounts).every((name) => ['message', 'exec', 'wait', 'tool_search', 'tool_describe', 'tool_call'].includes(name))"
                         message:
                           { expr: "JSON.stringify(recallTranscript.assistantToolCallCounts)" }
               - set: recorded

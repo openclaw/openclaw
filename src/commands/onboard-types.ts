@@ -21,10 +21,7 @@ export type AuthChoice = BuiltInAuthChoice | (string & {});
 
 /** Auth choice groups are plugin-owned ids plus the core `custom` bucket. */
 export type AuthChoiceGroupId = "custom" | (string & {});
-export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
-export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
-export type TailscaleMode = "off" | "serve" | "funnel";
 const NODE_MANAGER_CHOICES = ["npm", "pnpm", "bun"] as const;
 export type NodeManagerChoice = (typeof NODE_MANAGER_CHOICES)[number];
 const ONBOARD_FLOWS = ["quickstart", "advanced", "manual", "import"] as const;
@@ -89,12 +86,12 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   customCompatibility?: "openai" | "openai-responses" | "anthropic";
   customImageInput?: boolean;
   gatewayPort?: number;
-  gatewayBind?: GatewayBind;
-  gatewayAuth?: GatewayAuthChoice;
+  gatewayBind?: "loopback" | "lan" | "auto" | "custom" | "tailnet";
+  gatewayAuth?: "token" | "password";
   gatewayToken?: string;
   gatewayTokenRefEnv?: string;
   gatewayPassword?: string;
-  tailscale?: TailscaleMode;
+  tailscale?: "off" | "serve" | "funnel";
   installDaemon?: boolean;
   daemonRuntime?: GatewayDaemonRuntime;
   skipChannels?: boolean;

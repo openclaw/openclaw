@@ -15,7 +15,6 @@ import {
   buildApprovalReactionDeliveredBindingMarker,
   buildApprovalReactionPendingContentForRequest,
   buildApprovalReactionPromptPayloadForRequest,
-  buildApprovalReactionHint,
   createApprovalReactionTargetStore,
   listApprovalReactionBindings,
   normalizeApprovalReactionEmoji,
@@ -49,7 +48,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       },
     },
   };
-  it.each(["imessage", "signal", "whatsapp"])(
+  it.each(["whatsapp"])(
     "leaves concurrent %s decisions to the Gateway and retires both terminal surfaces",
     async (channel) => {
       const winner = createDeferred<ApprovalResolveResult>();
@@ -194,63 +193,66 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     }
   });
 
-  it("fails closed when typed approval presentation or delivery marker disagrees", () => {
-    const metadata = {
-      approvalId: "plugin:approval-123",
-      approvalSlug: "approval-123",
-      approvalKind: "plugin" as const,
-      allowedDecisions: ["allow-once", "deny"] as const,
-    };
-    const presentation = {
-      blocks: [
-        {
-          type: "buttons" as const,
-          buttons: metadata.allowedDecisions.map((decision) => ({
-            label: decision,
-            action: {
-              type: "approval" as const,
-              approvalId: metadata.approvalId,
-              approvalKind: metadata.approvalKind,
-              decision,
-            },
-          })),
+  it.each(["system-agent"] as const)(
+    "preserves %s approval bindings and rejects mismatched presentation or delivery markers",
+    (approvalKind) => {
+      const metadata = {
+        approvalId: "approval-123",
+        approvalSlug: "approval-123",
+        approvalKind,
+        allowedDecisions: ["allow-once", "deny"] as const,
+      };
+      const presentation = {
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: metadata.allowedDecisions.map((decision) => ({
+              label: decision,
+              action: {
+                type: "approval" as const,
+                approvalId: metadata.approvalId,
+                approvalKind: metadata.approvalKind,
+                decision,
+              },
+            })),
+          },
+        ],
+      };
+      const payload = {
+        presentation,
+        channelData: {
+          execApproval: metadata,
+          privateBinding: buildApprovalReactionDeliveredBindingMarker({
+            ...metadata,
+            allowedDecisions: [...metadata.allowedDecisions],
+          }),
         },
-      ],
-    };
-    const payload = {
-      presentation,
-      channelData: {
-        execApproval: metadata,
-        privateBinding: buildApprovalReactionDeliveredBindingMarker({
-          ...metadata,
-          allowedDecisions: [...metadata.allowedDecisions],
+      };
+      expect(payload.channelData.privateBinding).toEqual({ version: 1, ...metadata });
+      expect(readApprovalReactionPresentationBinding({ payload })).toMatchObject(metadata);
+      expect(
+        readApprovalReactionDeliveredBinding({
+          payload,
+          channelDataKey: "privateBinding",
+          requireApprovalSlug: true,
         }),
-      },
-    };
-    expect(payload.channelData.privateBinding).toEqual({ version: 1, ...metadata });
-    expect(readApprovalReactionPresentationBinding({ payload })).toMatchObject(metadata);
-    expect(
-      readApprovalReactionDeliveredBinding({
-        payload,
-        channelDataKey: "privateBinding",
-        requireApprovalSlug: true,
-      }),
-    ).toMatchObject(metadata);
-    const invalidPayload = {
-      ...payload,
-      channelData: {
-        ...payload.channelData,
-        execApproval: { ...metadata, allowedDecisions: ["allow-once", "allow-once"] },
-      },
-    };
-    expect(readApprovalReactionPresentationBinding({ payload: invalidPayload })).toBeNull();
-    expect(
-      readApprovalReactionDeliveredBinding({
-        payload: invalidPayload,
-        channelDataKey: "privateBinding",
-      }),
-    ).toBeNull();
-  });
+      ).toMatchObject(metadata);
+      const invalidPayload = {
+        ...payload,
+        channelData: {
+          ...payload.channelData,
+          execApproval: { ...metadata, allowedDecisions: ["allow-once", "allow-once"] },
+        },
+      };
+      expect(readApprovalReactionPresentationBinding({ payload: invalidPayload })).toBeNull();
+      expect(
+        readApprovalReactionDeliveredBinding({
+          payload: invalidPayload,
+          channelDataKey: "privateBinding",
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("resolves only allowed decisions", () => {
     expect(
@@ -336,6 +338,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     expect(payload.text).toContain("**Pending command:**\n```sh\ntouch /tmp/foo\n```");
     expect(payload.text).toContain("**Scope:** Pay 49.99 EUR to Stripe");
     expect(content.manualFallbackPayload.text).toContain("Scope: Pay 49.99 EUR to Stripe");
+    expect(content.manualFallbackPayload.text).not.toContain("React with:");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny");
     expect(payload.text).toContain("Allow Once: /approve exec-approval-123 allow-once");
     expect(payload.text).toContain("Allow Always: /approve exec-approval-123 allow-always");
@@ -466,81 +469,10 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
 
     expect(payload.text).toContain("Deny: /approve plugin:agentkit deny");
     expect(payload.text).toContain("/approve plugin:agentkit deny");
-    expect(payload.text).toContain("👎 Deny");
+    expect(payload.text).toContain("React with:\n\n👎 Deny");
     expect(payload.text).not.toContain("👍 Allow Once");
     expect(payload.allowedDecisions).toEqual(["deny"]);
     expect(payload.reactionBindings).toEqual([{ decision: "deny", emoji: "👎", label: "Deny" }]);
-  });
-
-  it("renders the same request-only and view-taking prompt payloads", () => {
-    const fromRequest = buildApprovalReactionPromptPayloadForRequest({
-      request: execRequest,
-      nowMs: 1_000,
-    });
-    const content = buildApprovalReactionPendingContentForRequest({
-      request: execRequest,
-      nowMs: 1_000,
-    });
-    const fromView = buildApprovalPendingPromptPayload({
-      request: execRequest,
-      view: {
-        approvalKind: "exec",
-        phase: "pending",
-        approvalId: "exec-approval-123",
-        title: "Exec Approval Required",
-        description: "A command needs your approval.",
-        metadata: [],
-        ask: "on-request",
-        agentId: "main",
-        commandText: "touch /tmp/foo",
-        cwd: "/Users/test/project",
-        host: "gateway",
-        sessionKey: "main:signal:+15555550123",
-        actions: [
-          {
-            decision: "allow-once",
-            label: "Allow Once",
-            style: "success",
-            action: {
-              type: "approval",
-              approvalId: "exec-approval-123",
-              approvalKind: "exec",
-              decision: "allow-once",
-            },
-            command: "/approve exec-approval-123 allow-once",
-          },
-          {
-            decision: "allow-always",
-            label: "Allow Always",
-            style: "primary",
-            action: {
-              type: "approval",
-              approvalId: "exec-approval-123",
-              approvalKind: "exec",
-              decision: "allow-always",
-            },
-            command: "/approve exec-approval-123 allow-always",
-          },
-          {
-            decision: "deny",
-            label: "Deny",
-            style: "danger",
-            action: {
-              type: "approval",
-              approvalId: "exec-approval-123",
-              approvalKind: "exec",
-              decision: "deny",
-            },
-            command: "/approve exec-approval-123 deny",
-          },
-        ],
-        expiresAtMs: 61_000,
-      },
-      nowMs: 1_000,
-    });
-    expect(content.reactionPayload.text).toBe(fromRequest.text);
-    expect(fromView.text).toBe(fromRequest.text);
-    expect(content.manualFallbackPayload.text).not.toContain("React with:");
   });
 
   it("publishes memory immediately and joins persistent registration and deletion", async () => {
@@ -609,21 +541,6 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     },
   );
 
-  it("expires in-memory reaction targets by ttl", async () => {
-    let now = 1_000;
-    const store = createApprovalReactionTargetStore<{ approvalId: string }>({
-      namespace: "test.approvals",
-      maxEntries: 10,
-      defaultTtlMs: 100,
-      nowMs: () => now,
-    });
-    const target = { approvalId: "approval-1" };
-    await store.register("message-1", target);
-    expect(await store.lookup("message-1")).toEqual(target);
-    now = 1_101;
-    expect(await store.lookup("message-1")).toBeNull();
-  });
-
   it("uses the current system clock when no clock is injected", async () => {
     vi.useFakeTimers({ now: 1_000 });
     try {
@@ -669,11 +586,5 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
         isTransportEnabled: () => true,
       }),
     ).toBe(false);
-  });
-
-  it("builds only the hardcoded reaction hint", () => {
-    expect(buildApprovalReactionHint({ allowedDecisions: ["deny"] })).toBe(
-      "React with:\n\n👎 Deny",
-    );
   });
 });

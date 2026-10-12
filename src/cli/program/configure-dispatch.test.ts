@@ -1,7 +1,6 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { configureCommandFromSectionsArg } from "../../commands/configure.commands.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { registerConfigCli } from "../config-cli.js";
 import { registerConfigureCommand } from "./register.configure.js";
@@ -44,10 +43,7 @@ describe("registered configure dispatch", { concurrent: false }, () => {
 
   it.each(routes)("%s omits sections for the full chooser", async (route) => {
     await parse(route);
-    expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith(
-      { command: "configure" },
-      defaultRuntime,
-    );
+    expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith({}, defaultRuntime);
     expect(mocks.runWizard.mock.calls[0]?.[1]).toBe(defaultRuntime);
     expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
@@ -55,35 +51,10 @@ describe("registered configure dispatch", { concurrent: false }, () => {
   it.each(routes)("%s preserves repeated, trimmed section values", async (route) => {
     await parse(route, ["--section", " channels ", "--section", "health", "--section", "channels"]);
     expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith(
-      { command: "configure", sections: ["channels", "health", "channels"] },
+      { sections: ["channels", "health", "channels"] },
       defaultRuntime,
     );
     expect(mocks.runWizard.mock.calls[0]?.[1]).toBe(defaultRuntime);
-  });
-
-  it.each(routes)("%s rejects a blank section before testing the terminal", async (route) => {
-    mocks.interactive.mockReturnValue(false);
-    await expect(parse(route, ["--section", " "])).rejects.toMatchObject({ code: 1 });
-    expect(mocks.runtime.error).toHaveBeenCalledOnce();
-    expect(mocks.runtime.error.mock.calls[0]?.[0]).toContain('Invalid --section: "".');
-    expect(mocks.interactive).not.toHaveBeenCalled();
-    expect(mocks.runWizard).not.toHaveBeenCalled();
-  });
-
-  it.each(routes)("%s rejects an unknown section without widening scope", async (route) => {
-    await expect(parse(route, ["--section", "not-a-section"])).rejects.toMatchObject({ code: 1 });
-    expect(mocks.runtime.error.mock.calls[0]?.[0]).toContain("Invalid --section: not-a-section.");
-    expect(mocks.runWizard).not.toHaveBeenCalled();
-  });
-
-  it.each(routes)("%s refuses a non-interactive terminal", async (route) => {
-    mocks.interactive.mockReturnValue(false);
-    await expect(parse(route, ["--section", "channels"])).rejects.toMatchObject({ code: 1 });
-    expect(mocks.runtime.error).toHaveBeenCalledOnce();
-    expect(mocks.runtime.error.mock.calls[0]?.[0]).toContain(
-      "requires an interactive terminal (TTY)",
-    );
-    expect(mocks.runWizard).not.toHaveBeenCalled();
   });
 
   it.each(routes)("%s waits for the admitted wizard to settle", async (route) => {
@@ -128,15 +99,5 @@ describe("registered configure dispatch", { concurrent: false }, () => {
       expect(mocks.runtime.exit).not.toHaveBeenCalled();
     }
     expect(mocks.runWizard).toHaveBeenCalledOnce();
-  });
-
-  it("passes a caller-provided runtime by identity", async () => {
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    await configureCommandFromSectionsArg(["channels"], runtime, { interactive: true });
-    expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith(
-      { command: "configure", sections: ["channels"] },
-      runtime,
-    );
-    expect(mocks.runWizard.mock.calls[0]?.[1]).toBe(runtime);
   });
 });

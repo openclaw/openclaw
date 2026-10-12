@@ -1,36 +1,6 @@
-/**
- * Auth coverage tests for the SDK migration (#76262 reviewer ask from
- * @BradGroux). Locks in three contract guarantees that the SDK's built-in
- * JWT validation must satisfy:
- *
- *   1. Inbound Bot Framework tokens with `aud=<bot app id>` are accepted.
- *   2. Inbound tokens with `aud=https://api.botframework.com` are rejected,
- *      even when the `appid` claim matches the bot. That audience belongs to
- *      the SMBA/ABS Connector resource (token issued *for* the Connector);
- *      accepting it inbound on the bot would be a confused-deputy that
- *      contradicts the Entra audience-validation guidance.
- *   3. The 2.0.10 SDK bump's v1-issuer support is exercised: Entra tokens
- *      issued by the legacy `https://sts.windows.net/{tenantId}/` endpoint
- *      are accepted alongside the v2 `https://login.microsoftonline.com/...`
- *      endpoint when `allowedTenantIds` is configured.
- *
- * The tests reach into `@microsoft/teams.apps`'s internal middleware/auth
- * subpath to drive `InboundActivityTokenValidator` and `createEntraTokenValidator`
- * directly. Those aren't part of the SDK's public barrel today; if they
- * shift in a future SDK release this file lights up clearly. We chose this
- * over standing up an Express + supertest harness because the contract being
- * tested is purely the validator's accept/reject behavior — the surrounding
- * HTTP plumbing is a separate concern covered by `monitor.lifecycle.test.ts`.
- *
- * The validators fetch signing keys over HTTP from a JWKS endpoint, so the
- * test serves a real JWKS document from an in-process `node:http` server on
- * 127.0.0.1 and points the validators at it via the SDK's own endpoint
- * overrides (`withOverrides(..., { openIdMetadataUrl })` for the service
- * validator, `loginEndpoint` for the Entra validator). This exercises the
- * SDK's real JWKS fetch + signature verification path instead of stubbing it,
- * and keeps the test fully deterministic with no external network access.
- * `jose` (devDep) mints RS256 tokens against the matching private key.
- */
+// Exercise the Teams SDK's real JWT validators against locally signed tokens and JWKS.
+// Internal SDK imports pin audience validation and the v1 Entra issuer regression (#76262).
+// HTTP routing is covered by monitor.lifecycle.test.ts.
 
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";

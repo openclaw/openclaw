@@ -31,10 +31,10 @@ export type AgentWorkspaceAccess = {
   installSkillDependencies?: WorkspaceSkillLifecycle["installSkillDependencies"];
   /** Read native source tiers and execution-host facts without applying Gateway policy. */
   loadSkills?: (request: WorkspaceSkillSourceRequest) => Promise<WorkspaceSkillSources>;
-  /** Keep a host subscription alive until aborted; notify without transferring file contents. */
+  /** Keep the subscription alive until aborted; available certifies verified coverage after loss. */
   watchSkills?: (
     request: Pick<WorkspaceSkillSourceRequest, "sourcePlan" | "executionWorkspaceDir">,
-    onChange: (event: "change" | "unavailable") => void,
+    onChange: (event: "change" | "unavailable" | "available") => void,
     signal: AbortSignal,
   ) => Promise<void>;
   skillResources?: SkillResourceSourceReader;
@@ -118,51 +118,33 @@ export function registerAgentWorkspaceAccess(
   const lifetime = new AbortController();
   const assertCurrent = () => assertBindingCurrent(key, binding);
   // Retained methods must stop working when their service stops or is replaced.
+  const guardCall =
+    <Args extends unknown[], Result>(
+      call: (...args: Args) => Promise<Result>,
+      assertActive = assertCurrent,
+    ) =>
+    async (...args: Args): Promise<Result> => {
+      assertActive();
+      const result = await call(...args);
+      assertActive();
+      return result;
+    };
   const bridge: AgentWorkspaceAccess["bridge"] = {
-    async readFile(params) {
-      assertCurrent();
-      const result = await access.bridge.readFile(params);
-      assertCurrent();
-      return result;
-    },
-    async writeFile(params) {
-      assertCurrent();
-      await access.bridge.writeFile(params);
-      assertCurrent();
-    },
-    async stat(params) {
-      assertCurrent();
-      const result = await access.bridge.stat(params);
-      assertCurrent();
-      return result;
-    },
+    readFile: guardCall((params) => access.bridge.readFile(params)),
+    writeFile: guardCall((params) => access.bridge.writeFile(params)),
+    stat: guardCall((params) => access.bridge.stat(params)),
   };
   const createFileExclusive = access.bridge.createFileExclusive?.bind(access.bridge);
   if (createFileExclusive) {
-    bridge.createFileExclusive = async (params) => {
-      assertCurrent();
-      const result = await createFileExclusive(params);
-      assertCurrent();
-      return result;
-    };
+    bridge.createFileExclusive = guardCall(createFileExclusive);
   }
   const readFileWithSource = access.bridge.readFileWithSource?.bind(access.bridge);
   if (readFileWithSource) {
-    bridge.readFileWithSource = async (params) => {
-      assertCurrent();
-      const result = await readFileWithSource(params);
-      assertCurrent();
-      return result;
-    };
+    bridge.readFileWithSource = guardCall(readFileWithSource);
   }
   const readDirectory = access.bridge.readDirectory?.bind(access.bridge);
   if (readDirectory) {
-    bridge.readDirectory = async (params) => {
-      assertCurrent();
-      const result = await readDirectory(params);
-      assertCurrent();
-      return result;
-    };
+    bridge.readDirectory = guardCall(readDirectory);
   }
   const boundAccess: AgentWorkspaceAccess = { bridge: Object.freeze(bridge) };
   const outboundMedia = access.outboundMedia;
@@ -170,12 +152,7 @@ export function registerAgentWorkspaceAccess(
     const readFile = outboundMedia.readFile.bind(outboundMedia);
     boundAccess.outboundMedia = Object.freeze({
       localRoots: Object.freeze([...outboundMedia.localRoots]),
-      async readFile(filePath: string, maxBytes: number) {
-        assertCurrent();
-        const data = await readFile(filePath, maxBytes);
-        assertCurrent();
-        return data;
-      },
+      readFile: guardCall(readFile),
     });
   }
   const memoryFiles = access.memoryFiles;
@@ -184,14 +161,9 @@ export function registerAgentWorkspaceAccess(
       assertCurrent();
       memoryFiles.assertCurrent();
     };
-    const guardMemoryCall =
-      <Args extends unknown[], Result>(call: (...args: Args) => Promise<Result>) =>
-      async (...args: Args): Promise<Result> => {
-        assertMemoryCurrent();
-        const result = await call(...args);
-        assertMemoryCurrent();
-        return result;
-      };
+    const guardMemoryCall = <Args extends unknown[], Result>(
+      call: (...args: Args) => Promise<Result>,
+    ) => guardCall(call, assertMemoryCurrent);
     const maintenance = memoryFiles.maintenance;
     boundAccess.memoryFiles = Object.freeze<MemoryWorkspaceFiles>({
       assertCurrent: assertMemoryCurrent,
@@ -228,36 +200,11 @@ export function registerAgentWorkspaceAccess(
             }),
           }
         : {}),
-      async listFiles(...params) {
-        assertMemoryCurrent();
-        const result = await memoryFiles.listFiles(...params);
-        assertMemoryCurrent();
-        return result;
-      },
-      async inspectFile(...params) {
-        assertMemoryCurrent();
-        const result = await memoryFiles.inspectFile(...params);
-        assertMemoryCurrent();
-        return result;
-      },
-      async readFile(params) {
-        assertMemoryCurrent();
-        const result = await memoryFiles.readFile(params);
-        assertMemoryCurrent();
-        return result;
-      },
-      async readForIndexing(filePath) {
-        assertMemoryCurrent();
-        const result = await memoryFiles.readForIndexing(filePath);
-        assertMemoryCurrent();
-        return result;
-      },
-      async buildMultimodalChunk(entry) {
-        assertMemoryCurrent();
-        const result = await memoryFiles.buildMultimodalChunk(entry);
-        assertMemoryCurrent();
-        return result;
-      },
+      listFiles: guardMemoryCall((...params) => memoryFiles.listFiles(...params)),
+      inspectFile: guardMemoryCall((...params) => memoryFiles.inspectFile(...params)),
+      readFile: guardMemoryCall((params) => memoryFiles.readFile(params)),
+      readForIndexing: guardMemoryCall((filePath) => memoryFiles.readForIndexing(filePath)),
+      buildMultimodalChunk: guardMemoryCall((entry) => memoryFiles.buildMultimodalChunk(entry)),
       async watch(request, onChange, signal) {
         assertMemoryCurrent();
         const active = AbortSignal.any([signal, lifetime.signal]);
@@ -291,12 +238,7 @@ export function registerAgentWorkspaceAccess(
   }
   const installSkillDependencies = access.installSkillDependencies?.bind(access);
   if (installSkillDependencies) {
-    boundAccess.installSkillDependencies = async (params) => {
-      assertCurrent();
-      const result = await installSkillDependencies(params);
-      assertCurrent();
-      return result;
-    };
+    boundAccess.installSkillDependencies = guardCall(installSkillDependencies);
   }
   const loadSkills = access.loadSkills?.bind(access);
   if (loadSkills) {
@@ -342,25 +284,16 @@ export function registerAgentWorkspaceAccess(
         options.signal?.throwIfAborted();
         return result;
       },
-      async resolveExplicitSkill(selection) {
-        assertCurrent();
-        const result = await skillResources.resolveExplicitSkill(selection);
-        assertCurrent();
-        return result;
-      },
-      async readSkillFiles(skill, options) {
-        assertCurrent();
-        const result = await skillResources.readSkillFiles(skill, options);
-        assertCurrent();
-        return result;
-      },
+      resolveExplicitSkill: guardCall((selection) =>
+        skillResources.resolveExplicitSkill(selection),
+      ),
+      readSkillFiles: guardCall((skill, options) => skillResources.readSkillFiles(skill, options)),
     });
   }
   const applySkillRoot = access.applySkillRoot?.bind(access);
   if (applySkillRoot) {
-    boundAccess.applySkillRoot = async (params) => {
-      assertCurrent();
-      const result = await applySkillRoot({
+    boundAccess.applySkillRoot = guardCall((params) =>
+      applySkillRoot({
         ...params,
         beforeInstall: async (mode) => {
           assertCurrent();
@@ -368,31 +301,21 @@ export function registerAgentWorkspaceAccess(
           assertCurrent();
           return decision;
         },
-      });
-      assertCurrent();
-      return result;
-    };
+      }),
+    );
   }
   const recordSkillSourceInstall = access.recordSkillSourceInstall?.bind(access);
   if (recordSkillSourceInstall) {
-    boundAccess.recordSkillSourceInstall = async (params) => {
-      assertCurrent();
-      await recordSkillSourceInstall(params);
-      assertCurrent();
-    };
+    boundAccess.recordSkillSourceInstall = guardCall(recordSkillSourceInstall);
   }
   const clawHubSkills = access.clawHubSkills;
   if (clawHubSkills) {
     boundAccess.clawHubSkills = Object.freeze({
-      async planClawHubSkillUninstall(params) {
-        assertCurrent();
-        const result = await clawHubSkills.planClawHubSkillUninstall(params);
-        assertCurrent();
-        return result;
-      },
-      async applyClawHubSkillUninstall(plan, options) {
-        assertCurrent();
-        const result = await clawHubSkills.applyClawHubSkillUninstall(plan, {
+      planClawHubSkillUninstall: guardCall((params) =>
+        clawHubSkills.planClawHubSkillUninstall(params),
+      ),
+      applyClawHubSkillUninstall: guardCall((plan, options) =>
+        clawHubSkills.applyClawHubSkillUninstall(plan, {
           ...options,
           beforePersistentApply() {
             assertCurrent();
@@ -402,62 +325,35 @@ export function registerAgentWorkspaceAccess(
             assertCurrent();
             options.beforeRollback?.();
           },
-        });
-        assertCurrent();
-        return result;
-      },
-      async resolveClawHubSkillVerificationTarget(params) {
-        assertCurrent();
-        const result = await clawHubSkills.resolveClawHubSkillVerificationTarget(params);
-        assertCurrent();
-        return result;
-      },
-      async readClawHubSkillsLockfile(params) {
-        assertCurrent();
-        const result = await clawHubSkills.readClawHubSkillsLockfile(params);
-        assertCurrent();
-        return result;
-      },
-      async resolveRequestedUpdateSlug(params) {
-        assertCurrent();
-        const result = await clawHubSkills.resolveRequestedUpdateSlug(params);
-        assertCurrent();
-        return result;
-      },
-      async resolveTrackedUpdateTarget(params) {
-        assertCurrent();
-        const result = await clawHubSkills.resolveTrackedUpdateTarget(params);
-        assertCurrent();
-        return result;
-      },
-      async guardTrackedSkillLocalState(params) {
-        assertCurrent();
-        const result = await clawHubSkills.guardTrackedSkillLocalState(params);
-        assertCurrent();
-        return result;
-      },
-      async preflightSkillOwnerState(params) {
-        assertCurrent();
-        const result = await clawHubSkills.preflightSkillOwnerState(params);
-        assertCurrent();
-        return result;
-      },
-      async assertClawHubSkillInstallState(params) {
-        assertCurrent();
-        await clawHubSkills.assertClawHubSkillInstallState(params);
-        assertCurrent();
-      },
-      async readInstalledClawHubSkillFiles(params) {
-        assertCurrent();
-        const result = await clawHubSkills.readInstalledClawHubSkillFiles(params);
-        assertCurrent();
-        return result;
-      },
-      async recordClawHubSkillInstall(params) {
-        assertCurrent();
-        await clawHubSkills.recordClawHubSkillInstall(params);
-        assertCurrent();
-      },
+        }),
+      ),
+      resolveClawHubSkillVerificationTarget: guardCall((params) =>
+        clawHubSkills.resolveClawHubSkillVerificationTarget(params),
+      ),
+      readClawHubSkillsLockfile: guardCall((params) =>
+        clawHubSkills.readClawHubSkillsLockfile(params),
+      ),
+      resolveRequestedUpdateSlug: guardCall((params) =>
+        clawHubSkills.resolveRequestedUpdateSlug(params),
+      ),
+      resolveTrackedUpdateTarget: guardCall((params) =>
+        clawHubSkills.resolveTrackedUpdateTarget(params),
+      ),
+      guardTrackedSkillLocalState: guardCall((params) =>
+        clawHubSkills.guardTrackedSkillLocalState(params),
+      ),
+      preflightSkillOwnerState: guardCall((params) =>
+        clawHubSkills.preflightSkillOwnerState(params),
+      ),
+      assertClawHubSkillInstallState: guardCall((params) =>
+        clawHubSkills.assertClawHubSkillInstallState(params),
+      ),
+      readInstalledClawHubSkillFiles: guardCall((params) =>
+        clawHubSkills.readInstalledClawHubSkillFiles(params),
+      ),
+      recordClawHubSkillInstall: guardCall((params) =>
+        clawHubSkills.recordClawHubSkillInstall(params),
+      ),
     });
   }
   binding.access = Object.freeze(boundAccess);
@@ -519,54 +415,110 @@ export async function prepareAgentWorkspaceAttachments(params: {
   assertCurrent: () => void;
   /** Final attempt policy; omission retains the remote-adapter-only SDK contract. */
   localExecution?: LocalAttachmentExecutionContext;
+  /** Reject declared attachments that cannot be prepared for execution. */
+  requirePreparation?: boolean;
 }): Promise<string | undefined> {
   if (!params.turn.media?.length && !params.turn.userTurnTranscriptRecorder) {
     return undefined;
   }
   // Local preparation never substitutes for any registered remote workspace owner.
-  if (params.localExecution && bindings.has(path.resolve(params.workspaceDir))) {
+  const workspaceKey = path.resolve(params.workspaceDir);
+  const binding = bindings.get(workspaceKey);
+  const remoteOwned = binding !== undefined;
+  if (params.localExecution && remoteOwned && !params.requirePreparation) {
     return undefined;
   }
-  const access = getAgentWorkspaceAccess(params.workspaceDir, "prepareTurnAttachments");
-  if (!access?.prepareTurnAttachments && !params.localExecution) {
+  const localExecution = remoteOwned ? undefined : params.localExecution;
+  const access = params.requirePreparation
+    ? binding?.access
+    : getAgentWorkspaceAccess(params.workspaceDir, "prepareTurnAttachments");
+  if (!access?.prepareTurnAttachments && !localExecution && !params.requirePreparation) {
     return undefined;
   }
-  const assertCurrent = () => {
-    params.turn.abortSignal?.throwIfAborted();
+  const signal = params.requirePreparation
+    ? AbortSignal.any([
+        AbortSignal.timeout(params.turn.timeoutMs),
+        ...(params.turn.abortSignal ? [params.turn.abortSignal] : []),
+      ])
+    : params.turn.abortSignal;
+  const deadline = performance.now() + params.turn.timeoutMs;
+  const assertTurnCurrent = () => {
+    signal?.throwIfAborted();
     params.assertCurrent();
-    if (getAgentWorkspaceAccess(params.workspaceDir) !== access) {
+  };
+  const assertCurrent = () => {
+    assertTurnCurrent();
+    if (
+      (params.requirePreparation && bindings.get(workspaceKey) !== binding) ||
+      getAgentWorkspaceAccess(params.workspaceDir) !== access
+    ) {
       throw new Error("Workspace access changed during attachment preparation");
     }
   };
-  assertCurrent();
+  // Required preparation must first distinguish text-only turns from deferred files.
+  // Capture the binding above so resolving those facts cannot adopt a replacement.
+  const assertFactsCurrent = params.requirePreparation ? assertTurnCurrent : assertCurrent;
+  assertFactsCurrent();
   const recorder = params.turn.userTurnTranscriptRecorder;
   const message = (await recorder?.resolveMessage()) ?? recorder?.message;
-  assertCurrent();
+  assertFactsCurrent();
   // Deferred originals can differ from both the initial snapshot and runtime media.
   const facts = (message ? readPersistedMediaFacts(message) : undefined) ?? params.turn.media ?? [];
-  if (!facts.some((fact) => fact.path?.trim() || fact.url?.trim())) {
+  const attachments = facts.filter((fact) => fact.path?.trim() || fact.url?.trim());
+  if (!attachments.length) {
     return undefined;
   }
-  let note: string | undefined;
-  if (access?.prepareTurnAttachments) {
-    note = await access.prepareTurnAttachments(
-      {
-        config: params.turn.config,
-        media: facts,
-        timeoutMs: params.turn.timeoutMs,
-        abortSignal: params.turn.abortSignal,
-      },
-      assertCurrent,
-    );
-  } else if (params.localExecution) {
-    const { prepareLocalWorkspaceAttachments } = await import("./workspace-attachments.local.js");
-    assertCurrent();
-    note = await prepareLocalWorkspaceAttachments({
-      media: facts,
-      execution: params.localExecution,
-      assertCurrent,
-    });
-  }
   assertCurrent();
-  return note;
+  if (params.requirePreparation && !access?.prepareTurnAttachments && !localExecution) {
+    throw new Error(
+      "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
+    );
+  }
+  // A batch note can describe only a subset of the inputs. Require a result for
+  // each attachment under the same binding and overall preparation deadline.
+  const batches = params.requirePreparation ? attachments.map((fact) => [fact]) : [facts];
+  const notes = new Set<string>();
+  let noteChars = 0;
+  for (const [index, media] of batches.entries()) {
+    assertCurrent();
+    let note: string | undefined;
+    if (access?.prepareTurnAttachments) {
+      note = await access.prepareTurnAttachments(
+        {
+          config: params.turn.config,
+          media,
+          timeoutMs: params.requirePreparation
+            ? Math.max(0, Math.ceil(deadline - performance.now()))
+            : params.turn.timeoutMs,
+          abortSignal: signal,
+        },
+        assertCurrent,
+      );
+    } else if (localExecution) {
+      const { prepareLocalWorkspaceAttachments } = await import("./workspace-attachments.local.js");
+      assertCurrent();
+      note = await prepareLocalWorkspaceAttachments({
+        media,
+        execution: localExecution,
+        assertCurrent,
+      });
+    }
+    assertCurrent();
+    if (!params.requirePreparation) {
+      return note;
+    }
+    if (!note?.trim()) {
+      throw new Error(
+        `Workspace attachment ${index + 1} could not be prepared; ensure every attachment is available to the registered attachment provider before retrying`,
+      );
+    }
+    if (!notes.has(note)) {
+      noteChars += note.length + (notes.size ? 1 : 0);
+      if (localExecution && noteChars > localExecution.maxChars) {
+        throw new Error("Prepared workspace attachment paths exceed the available context budget");
+      }
+      notes.add(note);
+    }
+  }
+  return [...notes].join("\n");
 }

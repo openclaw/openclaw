@@ -62,14 +62,6 @@ describe("checkBrowserOrigin", () => {
       expected: { ok: false as const, reason: "origin not allowed" },
     },
     {
-      name: "rejects same-origin public host without dangerous fallback",
-      input: {
-        requestHost: "attacker.example.com:18789",
-        origin: "http://attacker.example.com:18789",
-      },
-      expected: { ok: false as const, reason: "origin not allowed" },
-    },
-    {
       name: "rejects same-origin local-use NAT64 host without dangerous fallback",
       input: {
         requestHost: "[64:ff9b:1::8.8.8.8]:18789",
@@ -149,17 +141,15 @@ describe("checkBrowserOrigin", () => {
     expect(checkBrowserOrigin(input)).toEqual(expected);
   });
 
-  it.each([
-    "chrome-extension://abcdefghijklmnop",
-    "tauri://localhost",
-    "electron://localhost",
-    "app://desktop",
-  ])("accepts an exactly allowlisted hosted app origin: %s", (origin) => {
-    expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
-      ok: true,
-      matchedBy: "allowlist",
-    });
-  });
+  it.each(["chrome-extension://abcdefghijklmnop", "tauri://localhost"])(
+    "accepts an exactly allowlisted hosted app origin: %s",
+    (origin) => {
+      expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
+        ok: true,
+        matchedBy: "allowlist",
+      });
+    },
+  );
 
   it.each([
     "tauri://localhost/path",

@@ -1,7 +1,7 @@
-export type PackageDistImport = { importerPath: string; importedPath: string };
+export type PackageDistImport = { importerPath: string; importedPath: string; kind?: "require" };
 
 export function collectPackageDistImportErrors(
-  params: { files: readonly string[] } & (
+  params: { files: readonly string[]; packageJsons?: ReadonlyMap<string, string> } & (
     | {
         readText: (relativePath: string) => string;
         imports?: readonly PackageDistImport[];
@@ -15,5 +15,6 @@ export function collectPackageDistImportErrors(
 
 export function collectPackageDistImports(params: {
   files: readonly string[];
+  packageJsons?: ReadonlyMap<string, string>;
   readText: (relativePath: string) => string;
 }): PackageDistImport[];

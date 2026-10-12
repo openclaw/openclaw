@@ -248,7 +248,7 @@ suite.define(() => {
   it("renders both Agent Tools data loads as skeletons", async () => {
     await withPage(async (page) => {
       const config = {
-        agents: { entries: { main: { default: true, tools: { profile: "full" } } } },
+        agents: { entries: { main: { tools: { profile: "full" } } } },
       };
       const gateway = await installMockGateway(page, {
         heldMethods: ["tools.catalog", "tools.effective"],

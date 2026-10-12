@@ -15,21 +15,10 @@ import type {
   ChannelAccountState as ChannelAccountDisplayState,
 } from "../plugins/types.core.js";
 
-// Internal to this module: callers consume the projections, never the variant
-// shape. Keeping it unexported also avoids colliding with the display-state
-// `ChannelAccountState` in plugins/types.core.ts.
-type ChannelAccountState =
-  | {
-      kind: "disabled";
-      configured: boolean;
-      linked: boolean | undefined;
-      reason: string;
-      failure: string | null;
-    }
-  | { kind: "unconfigured"; reason: string; failure: string | null }
-  | { kind: "unlinked"; reason: string; failure: string | null }
-  | { kind: "running"; linked?: true; connected?: boolean; failure: string | null }
-  | { kind: "stopped"; linked?: true; connected?: boolean; failure: string | null };
+type ChannelAccountState = {
+  snapshot: Pick<ChannelAccountSnapshot, (typeof CHANNEL_ACCOUNT_STATE_FIELDS)[number]>;
+  displayState?: ChannelAccountDisplayState;
+};
 
 type ChannelAccountStateInput = {
   enabled: boolean;
@@ -92,40 +81,46 @@ export function resolveUnavailableChannelAccountSnapshot(
   };
 }
 
-function assertNeverState(state: never): never {
-  throw new Error(`Unhandled channel account state: ${String(state)}`);
-}
-
 export function resolveChannelAccountState(input: ChannelAccountStateInput): ChannelAccountState {
-  const failure = input.runtime?.lastError ?? null;
+  const lastError = input.runtime?.lastError ?? null;
   if (!input.enabled) {
     return {
-      kind: "disabled",
-      configured: input.configured,
-      linked: input.linked,
-      reason: input.disabledReason ?? "disabled",
-      failure,
+      displayState: "disabled",
+      snapshot: {
+        configured: input.configured,
+        ...(typeof input.linked === "boolean" ? { linked: input.linked } : {}),
+        running: false,
+        stateReason: input.disabledReason ?? "disabled",
+        lastError,
+      },
     };
   }
-  if (!input.configured) {
+  if (!input.configured || input.linked === false) {
     return {
-      kind: "unconfigured",
-      reason: input.unconfiguredReason ?? "not configured",
-      failure,
+      displayState: input.configured ? "not linked" : "not configured",
+      snapshot: {
+        configured: input.configured,
+        ...(input.configured ? { linked: false } : {}),
+        running: false,
+        stateReason: input.configured
+          ? (input.unlinkedReason ?? "not linked")
+          : (input.unconfiguredReason ?? "not configured"),
+        lastError,
+      },
     };
-  }
-  if (input.linked === false) {
-    return { kind: "unlinked", reason: input.unlinkedReason ?? "not linked", failure };
   }
   return {
-    kind: input.runtime?.running === true ? "running" : "stopped",
-    linked: input.linked,
-    // Connectivity is tri-state: absent means the transport publishes none at
-    // all (imessage, signal, sms, ...), which is not a reported disconnect.
-    // Defaulting to false makes `evaluateChannelHealth` return "disconnected"
-    // and the health monitor restart every socketless channel per cooldown.
-    connected: input.runtime?.connected,
-    failure,
+    displayState: input.linked ? "linked" : undefined,
+    snapshot: {
+      configured: true,
+      ...(input.linked ? { linked: true } : {}),
+      running: input.runtime?.running === true,
+      // An absent connectivity signal is not a disconnect for socketless transports.
+      ...(typeof input.runtime?.connected === "boolean"
+        ? { connected: input.runtime.connected }
+        : {}),
+      lastError,
+    },
   };
 }
 
@@ -134,45 +129,6 @@ export function resolveChannelAccountLinked(
   fallback?: boolean,
 ): boolean | undefined {
   return state ? (state === "unknown" ? undefined : state === "linked") : fallback;
-}
-
-function projectChannelAccountState(state: ChannelAccountState): {
-  configured: boolean;
-  linked?: boolean;
-  running: boolean;
-  connected?: boolean;
-  stateReason?: string;
-  lastError: string | null;
-} {
-  switch (state.kind) {
-    case "disabled":
-      return {
-        configured: state.configured,
-        ...(typeof state.linked === "boolean" ? { linked: state.linked } : {}),
-        running: false,
-        stateReason: state.reason,
-        lastError: state.failure,
-      };
-    case "unconfigured":
-    case "unlinked":
-      return {
-        configured: state.kind === "unlinked",
-        ...(state.kind === "unlinked" ? { linked: false } : {}),
-        running: false,
-        stateReason: state.reason,
-        lastError: state.failure,
-      };
-    case "running":
-    case "stopped":
-      return {
-        configured: true,
-        ...(state.linked ? { linked: true } : {}),
-        running: state.kind === "running",
-        ...(typeof state.connected === "boolean" ? { connected: state.connected } : {}),
-        lastError: state.failure,
-      };
-  }
-  return assertNeverState(state);
 }
 
 const CHANNEL_ACCOUNT_STATE_FIELDS = [
@@ -191,23 +147,12 @@ export function applyChannelAccountState(
   for (const field of CHANNEL_ACCOUNT_STATE_FIELDS) {
     delete snapshot[field];
   }
-  Object.assign(snapshot, projectChannelAccountState(state));
+  Object.assign(snapshot, state.snapshot);
 }
 
 export function projectChannelAccountDisplayState(
   state: ChannelAccountState,
   fallback?: ChannelAccountDisplayState,
 ): ChannelAccountDisplayState {
-  switch (state.kind) {
-    case "disabled":
-      return "disabled";
-    case "unconfigured":
-      return "not configured";
-    case "unlinked":
-      return "not linked";
-    case "running":
-    case "stopped":
-      return state.linked ? "linked" : (fallback ?? "configured");
-  }
-  return assertNeverState(state);
+  return state.displayState ?? fallback ?? "configured";
 }

@@ -34,6 +34,7 @@ describe("buildCronSuggestions", () => {
     const channels = createChannelCapability({
       snapshot: { client: null, phase: "stopped" },
       subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
     });
     onTestFinished(() => channels.dispose());
     channels.state.channelsSnapshot = {

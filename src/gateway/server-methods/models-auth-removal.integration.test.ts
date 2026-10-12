@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
@@ -164,7 +165,7 @@ describe("models.authLogout with a concurrent registered config set", () => {
           save.resolve();
           await writer;
           const outcome = await logout;
-          expect(outcome).toMatchObject(
+          expect(outcome, inspect(outcome, { depth: 5 })).toMatchObject(
             conflict
               ? {
                   ok: false,

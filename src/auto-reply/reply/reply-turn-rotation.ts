@@ -4,7 +4,6 @@ import {
   isReplyOperationAbortedForRestart,
   lifecycleAdmissionByOperation,
   mergeReplyRunAdmissionSource,
-  observeReplyRunCompletions,
   type ReplyRunAdmissionSource,
 } from "./reply-run-registry.state.js";
 
@@ -22,7 +21,9 @@ export function createReplyTurnRotationEvidence(params: {
   const isCurrent = (source: ReplyRotationSource) =>
     !isReplyOperationAbortedForRestart(source.operation) &&
     (source.fromBarrier ||
-      (source.operation.key === params.sessionKey &&
+      (lifecycleAdmissionByOperation.get(source.operation)?.databaseIdentity ===
+        source.databaseIdentity &&
+        source.operation.key === params.sessionKey &&
         (source.operation === replyRunRegistry.get(params.sessionKey) ||
           source.operation.result !== null)));
   const mergeWaitedRotation = (source: ReplyRotationSource) => {
@@ -44,41 +45,46 @@ export function createReplyTurnRotationEvidence(params: {
       );
     }
   };
+  const recordCompletedOperation = (
+    operation: ReplyOperation,
+    databaseIdentity: OpenClawAgentDatabaseIdentity | undefined,
+  ) => {
+    if (lifecycleAdmissionByOperation.get(operation)?.databaseIdentity !== databaseIdentity) {
+      return;
+    }
+    waitedRotations.set(
+      databaseIdentity,
+      mergeWaitedRotation({
+        operation,
+        sessionId: operation.sessionId,
+        sessionIds: operation.captureOwnedSessionIds(),
+        databaseIdentity,
+        fromBarrier: false,
+      }),
+    );
+  };
 
   return {
     recordBarrierSources(sources: ReplyRunAdmissionSource[] = []) {
       recordSources(sources, true);
     },
     observeAdmission() {
-      const completions = observeReplyRunCompletions(params.sessionKey);
       const initialOperation = replyRunRegistry.get(params.sessionKey);
+      const recordCompletions = () => {
+        if (initialOperation?.result) {
+          recordCompletedOperation(
+            initialOperation,
+            lifecycleAdmissionByOperation.get(initialOperation)?.databaseIdentity,
+          );
+        }
+      };
       return {
-        recordCompletions: () => recordSources(completions.read() ?? [], false),
-        changed: () =>
-          completions.read() !== undefined ||
-          initialOperation !== replyRunRegistry.get(params.sessionKey),
-        dispose: () => {
-          const sources = completions.read();
-          completions.dispose();
-          recordSources(sources ?? [], false);
-        },
+        recordCompletions,
+        changed: () => initialOperation !== replyRunRegistry.get(params.sessionKey),
+        dispose: recordCompletions,
       };
     },
-    recordCompletedOperation(
-      operation: ReplyOperation,
-      databaseIdentity: OpenClawAgentDatabaseIdentity | undefined,
-    ) {
-      waitedRotations.set(
-        databaseIdentity,
-        mergeWaitedRotation({
-          operation,
-          sessionId: operation.sessionId,
-          sessionIds: operation.captureOwnedSessionIds(),
-          databaseIdentity,
-          fromBarrier: false,
-        }),
-      );
-    },
+    recordCompletedOperation,
     takeStorelessRotation(): { sessionId: string; sessionIds: ReadonlySet<string> } | undefined {
       const source = waitedRotations.get(undefined);
       waitedRotations.delete(undefined);

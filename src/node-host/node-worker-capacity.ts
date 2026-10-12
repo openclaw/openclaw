@@ -1,20 +1,16 @@
+import { addAbortListener } from "node:events";
 import os from "node:os";
+import { NODE_WORKER_CAPACITY_MAX } from "../../packages/gateway-protocol/src/worker-capacity.js";
+import { toErrorObject } from "../infra/errors.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
-import {
-  NODE_WORKER_CAPACITY_MAX,
-  type NodeWorkerCapacitySnapshot,
-} from "../infra/node-runner-inventory.js";
-import type { NodeWorkerJournalAuthority } from "./node-worker-journal.types.js";
+import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import {
   NodeWorkerLaunchStore,
   type NodeWorkerLaunchClaim,
   type NodeWorkerLaunchClaimResult,
   type NodeWorkerLaunchReceipt,
 } from "./node-worker-launch-store.js";
-import {
-  inspectNodeWorkerProcessIdentity,
-  type NodeWorkerProcessIdentity,
-} from "./node-worker-process-identity.js";
+import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 
 const DEFAULT_CAPACITY_WAIT_MS = 10_000;
 const CAPACITY_POLL_MS = 100;
@@ -29,12 +25,6 @@ function capacityAbortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
     : new Error("node worker admission aborted");
-}
-
-function resolveDefaultWorkerCapacity(): number {
-  const availableParallelism =
-    typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length;
-  return Math.min(NODE_WORKER_CAPACITY_MAX, Math.max(1, availableParallelism));
 }
 
 export class NodeWorkerCapacityExhaustedError extends Error {
@@ -55,6 +45,7 @@ export class NodeWorkerCapacity {
   private readonly closeAbort = new AbortController();
   private publishedCapacity: NodeWorkerCapacitySnapshot;
   private initialized = false;
+  private reclaimableIdle?: number;
 
   private updates: Promise<void> = Promise.resolve();
 
@@ -62,7 +53,9 @@ export class NodeWorkerCapacity {
     private readonly store: NodeWorkerLaunchStore,
     options: NodeWorkerCapacityOptions = {},
   ) {
-    this.capacity = options.capacity ?? resolveDefaultWorkerCapacity();
+    this.capacity =
+      options.capacity ??
+      Math.min(NODE_WORKER_CAPACITY_MAX, Math.max(1, os.availableParallelism()));
     this.waitMs = options.capacityWaitMs ?? DEFAULT_CAPACITY_WAIT_MS;
     this.onCapacityChanged = options.onCapacityChanged;
     if (
@@ -83,23 +76,6 @@ export class NodeWorkerCapacity {
   ): Promise<void> {
     this.onCapacityChanged?.(this.publishedCapacity);
     for (const receipt of await this.store.listNonterminal()) {
-      if (receipt.state === "pending") {
-        const supervisorState = inspectNodeWorkerProcessIdentity(receipt.supervisor);
-        if (supervisorState === "dead" || supervisorState === "reused") {
-          await this.finish(
-            {
-              launchId: receipt.launchId,
-              planHash: receipt.planHash,
-              supervisor: receipt.supervisor,
-              worker: null,
-              state: "interrupted",
-              errorText: "node host stopped before the worker launch started",
-            },
-            false,
-          );
-        }
-        continue;
-      }
       await recoverRunning(receipt);
     }
     await this.update(async () => {
@@ -117,6 +93,7 @@ export class NodeWorkerCapacity {
     claim: NodeWorkerLaunchClaim,
     supervisor: NodeWorkerProcessIdentity,
     signal?: AbortSignal,
+    reclaimIdle?: () => Promise<boolean>,
   ): Promise<Exclude<NodeWorkerLaunchClaimResult, { action: "at-capacity" }>> {
     const deadlineMs = Date.now() + this.waitMs;
     const assertCurrent = () => {
@@ -138,6 +115,9 @@ export class NodeWorkerCapacity {
       if (result.action !== "at-capacity") {
         return result;
       }
+      if (reclaimIdle && (await this.wait(deadlineMs, signal, reclaimIdle))) {
+        continue;
+      }
       await this.wait(deadlineMs, signal);
     }
   }
@@ -145,10 +125,9 @@ export class NodeWorkerCapacity {
   async finish(
     params: Parameters<NodeWorkerLaunchStore["finish"]>[0],
     notify = true,
-    authority?: NodeWorkerJournalAuthority,
   ): Promise<NodeWorkerLaunchReceipt> {
     return this.update(async () => {
-      const receipt = await this.store.finish(params, authority);
+      const receipt = await this.store.finish(params);
       if (notify && receipt.state !== "pending" && receipt.state !== "running") {
         await this.changed();
       }
@@ -173,6 +152,14 @@ export class NodeWorkerCapacity {
     this.wake();
   }
 
+  setReclaimableIdle(count: number): void {
+    this.reclaimableIdle = count;
+    this.publishCount(this.capacity - this.publishedCapacity.available);
+    if (count > 0) {
+      this.wake();
+    }
+  }
+
   private update<T>(operation: () => Promise<T>): Promise<T> {
     const pending = this.updates.then(operation);
     this.updates = pending.then(
@@ -184,10 +171,22 @@ export class NodeWorkerCapacity {
 
   private publishCount(nonterminalCount: number, force = false): void {
     const available = Math.max(0, this.capacity - nonterminalCount);
-    if (!force && this.publishedCapacity.available === available) {
+    const reclaimableIdle =
+      this.reclaimableIdle === undefined
+        ? undefined
+        : Math.min(this.reclaimableIdle, this.capacity - available);
+    if (
+      !force &&
+      this.publishedCapacity.available === available &&
+      this.publishedCapacity.reclaimableIdle === reclaimableIdle
+    ) {
       return;
     }
-    this.publishedCapacity = Object.freeze({ total: this.capacity, available });
+    this.publishedCapacity = Object.freeze({
+      total: this.capacity,
+      available,
+      ...(reclaimableIdle === undefined ? {} : { reclaimableIdle }),
+    });
     this.onCapacityChanged?.(this.publishedCapacity);
   }
 
@@ -217,7 +216,11 @@ export class NodeWorkerCapacity {
     }
   }
 
-  private async wait(deadlineMs: number, signal?: AbortSignal): Promise<void> {
+  private async wait(
+    deadlineMs: number,
+    signal?: AbortSignal,
+    reclaimIdle?: () => Promise<boolean>,
+  ): Promise<boolean> {
     const remainingMs = deadlineMs - Date.now();
     if (remainingMs <= 0) {
       throw new NodeWorkerCapacityExhaustedError(this.waitMs);
@@ -228,25 +231,44 @@ export class NodeWorkerCapacity {
     if (this.closeAbort.signal.aborted) {
       throw new Error("node worker supervisor is closed");
     }
-    await new Promise<void>((resolve, reject) => {
-      const finish = (operation: () => void) => {
+    const waiting = signal
+      ? AbortSignal.any([signal, this.closeAbort.signal])
+      : this.closeAbort.signal;
+    return new Promise<boolean>((resolve, reject) => {
+      const wake = (complete = () => resolve(false)) => {
         clearTimeout(pollTimer);
         this.waiters.delete(wake);
-        signal?.removeEventListener("abort", onAbort);
-        this.closeAbort.signal.removeEventListener("abort", onClose);
-        operation();
+        listener[Symbol.dispose]();
+        if (waiting.aborted) {
+          reject(
+            this.closeAbort.signal.aborted
+              ? new Error("node worker supervisor is closed")
+              : capacityAbortReason(waiting),
+          );
+        } else if (reclaimIdle && Date.now() >= deadlineMs) {
+          reject(new NodeWorkerCapacityExhaustedError(this.waitMs));
+        } else {
+          complete();
+        }
       };
-      const wake = () => finish(resolve);
-      const onAbort = () =>
-        finish(() =>
-          reject(signal ? capacityAbortReason(signal) : new Error("node worker admission aborted")),
-        );
-      const onClose = () => finish(() => reject(new Error("node worker supervisor is closed")));
-      const pollTimer = setTimeout(wake, Math.min(CAPACITY_POLL_MS, remainingMs));
+      const pollTimer = setTimeout(
+        () => wake(),
+        reclaimIdle ? remainingMs : Math.min(CAPACITY_POLL_MS, remainingMs),
+      );
       pollTimer.unref?.();
-      this.waiters.add(wake);
-      signal?.addEventListener("abort", onAbort, { once: true });
-      this.closeAbort.signal.addEventListener("abort", onClose, { once: true });
+      const listener = addAbortListener(waiting, () => wake());
+      if (reclaimIdle) {
+        // Bound admission's observation; the supervisor retains physical cleanup custody.
+        void Promise.resolve()
+          .then(() => (waiting.aborted ? false : reclaimIdle()))
+          .then(
+            (reclaimed) => wake(() => resolve(reclaimed)),
+            (error: unknown) =>
+              wake(() => reject(toErrorObject(error, "node worker idle reclamation failed"))),
+          );
+      } else {
+        this.waiters.add(wake);
+      }
     });
   }
 }

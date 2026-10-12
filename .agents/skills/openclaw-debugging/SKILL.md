@@ -1,37 +1,35 @@
 ---
 name: openclaw-debugging
-description: Debug OpenClaw model, provider, tool-surface, code-mode, streaming, and live/Crabbox behavior by choosing the right logs, probes, and proof path before changing code, including fetching stored sessions, transcripts, and attachments as evidence.
+description: Debug OpenClaw model/provider/tool-surface/code-mode/streaming and live/Crabbox behavior; choose logs, probes, proof path before code changes; fetch stored sessions, transcripts, attachments as evidence.
 ---
 
 # OpenClaw Debugging
 
-Use this skill when OpenClaw behavior differs between local tests, live models,
-providers, code mode, Tool Search, Crabbox, or CI, and the next move should be a
-debug signal rather than a guess.
+Behavior differs between local tests, live models, providers, code mode, Tool
+Search, Crabbox, CI: get debug signal before guessing.
 
 ## Read First
 
-- `docs/logging.md` for log files, `openclaw logs`, and targeted debug flags.
-- `docs/reference/test.md` for local test commands.
-- `docs/tools/code-mode.md` for code-mode exec/wait and tool catalog rules.
-- Use `$openclaw-testing` for choosing test lanes.
-- Use `$crabbox` for broad, Docker, package, Linux, live-key, or CI-parity proof.
+- `docs/logging.md`: log files, `openclaw logs`, targeted debug flags.
+- `docs/reference/test.md`: local test commands.
+- `docs/tools/code-mode.md`: code-mode exec/wait + tool catalog rules.
+- `$openclaw-testing`: test-lane choice.
+- `$crabbox`: broad, Docker, package, Linux, live-key, CI-parity proof.
 
 ## Default Loop
 
-1. State the suspected boundary: config, tool construction, provider payload,
-   fetch, stream/SSE, transcript replay, worker/runtime, package/dist, or CI.
-2. Add or enable the narrowest signal that proves that boundary.
-3. Reproduce with the same provider/model/config. Do not randomly switch models
-   unless the model itself is the variable being tested.
+1. State suspected boundary: config, tool construction, provider payload, fetch,
+   stream/SSE, transcript replay, worker/runtime, package/dist, CI.
+2. Add/enable narrowest signal proving boundary.
+3. Reproduce with same provider/model/config. Never randomly switch models
+   unless model itself = tested variable.
 4. Compare configured state with actual run activation.
-5. Patch the root cause.
-6. Rerun the exact failing probe, then broaden only if the contract requires it.
+5. Patch root cause.
+6. Rerun exact failing probe; broaden only if contract requires.
 
 ## Model Transport Logs
 
-Use targeted env flags instead of global debug when the model request shape or
-stream timing matters:
+Model request shape/stream timing: targeted env flags over global debug:
 
 ```bash
 OPENCLAW_DEBUG_MODEL_TRANSPORT=1 openclaw gateway
@@ -42,16 +40,16 @@ OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted OPENCLAW_DEBUG_SSE=peek openclaw gate
 Useful flags:
 
 - `OPENCLAW_DEBUG_MODEL_TRANSPORT=1`: request start, fetch response, SDK
-  headers, first SSE event, stream done, and transport errors at `info`.
+  headers, first SSE event, stream done, transport errors at `info`.
 - `OPENCLAW_DEBUG_MODEL_PAYLOAD=summary`: bounded payload summary.
 - `OPENCLAW_DEBUG_MODEL_PAYLOAD=tools`: all model-facing tool names.
 - `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted`: capped, redacted JSON payload.
-  Use only while debugging; prompts/message text may still appear.
-- `OPENCLAW_DEBUG_SSE=events`: first-event and stream-completion timing.
+  Only while debugging; prompts/message text may still appear.
+- `OPENCLAW_DEBUG_SSE=events`: first-event + stream-completion timing.
 - `OPENCLAW_DEBUG_SSE=peek`: first five redacted SSE events.
 - `OPENCLAW_DEBUG_CODE_MODE=1`: code-mode tool-surface diagnostics.
 
-Watch logs with:
+Watch logs:
 
 ```bash
 openclaw logs --follow
@@ -59,30 +57,27 @@ openclaw logs --follow
 
 ## Common Boundaries
 
-- **Config vs activation:** config can be enabled while the run disables tools,
-  is raw, has an empty allowlist, or lacks model tool support. Check the actual
-  visible tools before enforcing provider payload invariants.
-- **Tool surface:** inspect final model-visible tool names, not only the tool
-  registry or config. Code mode means exactly `exec` and `wait` only after it
-  actually activates.
-- **Provider payload:** log fields, model id, service tier, reasoning, input
-  size, metadata keys, prompt-cache key presence, and tool names before SDK
-  call.
+- **Config vs activation:** enabled config can coexist with disabled run tools,
+  raw run, empty allowlist, missing model tool support. Check actual visible
+  tools before enforcing provider payload invariants.
+- **Tool surface:** inspect final model-visible tool names, not only registry/
+  config. Code mode = exactly `exec` + `wait` only after actual activation.
+- **Provider payload:** before SDK call, log fields, model id, service tier,
+  reasoning, input size, metadata keys, prompt-cache key presence, tool names.
 - **Fetch vs SSE:** fetch response proves HTTP headers arrived; first SSE event
-  proves provider body progress. A gap here is a stream/body/provider issue, not
+  proves provider body progress. Gap here = stream/body/provider issue, not
   tool execution.
-- **Worker/dist:** run `pnpm build` when touching workers, dynamic imports,
-  package exports, lazy runtime boundaries, or published paths.
-- **Live keys:** use the configured secret workflow for missing provider keys
-  before saying live proof is blocked. Env checks are presence-only; never print
-  secrets.
+- **Worker/dist:** touching workers, dynamic imports, package exports, lazy
+  runtime boundaries, published paths → `pnpm build`.
+- **Live keys:** missing provider keys → configured secret workflow before
+  declaring live proof blocked. Env checks presence-only; never print secrets.
 
 ## Fetching Sessions and Transcripts
 
-Use these paths when a bug report references a chat session and you need the
-actual transcript, sender attribution, or attachments as evidence.
+Chat-session bug report: fetch actual transcript, sender attribution,
+attachments as evidence.
 
-CLI first (needs a configured install; safe against a live gateway):
+CLI first (needs configured install; safe against live gateway):
 
 ```bash
 openclaw sessions list --agent <agentId> --json
@@ -90,40 +85,36 @@ openclaw sessions tail
 openclaw sessions export-trajectory
 ```
 
-Docs: `docs/reference/database-schemas.md` for the store layout,
-https://docs.openclaw.ai/cli/sessions for the CLI.
+Docs: store layout `docs/reference/database-schemas.md`;
+CLI https://docs.openclaw.ai/cli/sessions.
 
-Raw store (when the CLI is unavailable, e.g. inspecting a remote host over
-SSH, or you need event-level detail):
+Raw store: CLI unavailable (e.g. remote host over SSH) or event-level detail needed:
 
 - Per-agent data plane: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
   Canonical schema: `src/state/openclaw-agent-schema.sql`.
-- Hosted/systemd installs keep state under the service user's home (e.g.
-  `/home/openclaw/.openclaw/...`), not root's — root may carry a separate
-  stray install with different agents. If the expected agent dir is missing,
-  locate the real DB: `find / -maxdepth 6 -name openclaw-agent.sqlite`.
-- Web chat URLs end in a session-id fragment: `/chat/<agentId>/<slug>-<hex>`.
-  Resolve it in `session_nodes`: `session_key LIKE '%<hex>%'` →
-  `current_session_id`, `display_name`. Key shape is
+- Hosted/systemd state: service user's home (e.g. `/home/openclaw/.openclaw/...`),
+  not root's. Root may have separate stray install with different agents.
+  Expected agent dir missing: locate real DB with
+  `find / -maxdepth 6 -name openclaw-agent.sqlite`.
+- Web chat URL session-id fragment: `/chat/<agentId>/<slug>-<hex>`.
+  Resolve in `session_nodes`: `session_key LIKE '%<hex>%'` →
+  `current_session_id`, `display_name`. Key shape:
   `agent:<agentId>:<surface>:<uuid>`; subagent sessions use surface `subagent`.
 - Transcript: `transcript_events` (`session_id`, `seq`, `event_json`).
-  `event_json.message` has `role` (`user`/`assistant`/`toolResult`) and
-  `content` (string, or parts of type `text`/`toolCall`/`image`).
+  `event_json.message`: `role` (`user`/`assistant`/`toolResult`) +
+  `content` (string or parts of type `text`/`toolCall`/`image`).
 - Sender provenance: real user messages carry `message.__openclaw`
-  (`senderId`, `senderName`, `senderIsOwner`); runtime-synthesized inputs do
-  not. Use this to separate operator-authored text from injected prompts.
-- Full-text search across transcripts: `session_transcript_fts`.
-- Attachments: `media://inbound/<file>` URLs map to
-  `<state-dir>/media/inbound/<file>`.
-- User-attached images are not `image` content parts. They ride the message
-  envelope: `message.__openclaw.media[]` entries with `url`
-  (`media://inbound/<file>`), `contentType`, `kind`, `fileName`. A parts-only
-  extractor misses every image — grep raw `event_json` for `media://`. On a
-  remote host, scp the files locally (one remote path per scp argument) and
-  read them there.
+  (`senderId`, `senderName`, `senderIsOwner`); runtime-synthesized inputs do not.
+  Distinguish operator-authored text from injected prompts with this.
+- Full-text transcript search: `session_transcript_fts`.
+- Attachments: `media://inbound/<file>` URLs → `<state-dir>/media/inbound/<file>`.
+- User-attached images ≠ `image` content parts. Message envelope carries
+  `message.__openclaw.media[]` entries: `url` (`media://inbound/<file>`),
+  `contentType`, `kind`, `fileName`. Parts-only extractor misses every image;
+  grep raw `event_json` for `media://`. Remote host: scp files locally
+  (one remote path per scp argument); read there.
 
-Hosts without a `sqlite3` binary still have Node: `node:sqlite` needs no
-dependencies.
+Hosts without `sqlite3` binary still have Node: `node:sqlite` needs no dependencies.
 
 ```bash
 node -e 'const {DatabaseSync}=require("node:sqlite");
@@ -133,9 +124,9 @@ console.log(JSON.stringify(db.prepare(
 ).all(process.argv[2])))' <db-path> <session-id>
 ```
 
-Always open live stores `readOnly: true`; never write a running gateway's
-state (see Validation rules in the root `AGENTS.md`). For realistic-data
-work, copy the DB into a dev state dir first.
+- Always open live stores `readOnly: true`; never write running gateway's state
+  (root `AGENTS.md` Validation rules).
+- Realistic-data work: copy DB into dev state dir first.
 
 ## Code Pointers
 
@@ -156,13 +147,12 @@ work, copy the DB into a dev state dir first.
 ## Proof Choice
 
 - Single helper/payload bug: local targeted Vitest.
-- Docs/logging-only: `pnpm check:docs` and `git diff --check`.
-- Worker/dist/lazy import/package surface: targeted tests plus `pnpm build`.
-- Live provider/model behavior: same provider/model with debug flags and a real
-  key if available.
+- Docs/logging-only: `pnpm check:docs` + `git diff --check`.
+- Worker/dist/lazy import/package surface: targeted tests + `pnpm build`.
+- Live provider/model behavior: same provider/model, debug flags, real key if available.
 - Docker/package/Linux/CI-parity: current dedicated Linux worker when capable;
   otherwise `$crabbox`.
-- CI failure: exact SHA, relevant job only, logs only after failure/completion.
+- CI failure: exact SHA, relevant job only; logs only after failure/completion.
 
 ## Output Habit
 
@@ -170,6 +160,6 @@ Report:
 
 - boundary tested
 - exact command/env shape, redacted
-- observed signal, such as tool names or first SSE event timing
+- observed signal, e.g. tool names or first SSE event timing
 - fix location
-- narrow proof and any remaining risk
+- narrow proof + remaining risk

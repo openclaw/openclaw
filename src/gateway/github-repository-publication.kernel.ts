@@ -1,16 +1,6 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  iterateSqliteQuerySync,
-} from "../infra/kysely-sync.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
-
-const table = "github_repository_publication_requests";
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+import type { WorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 
 export function repositoryGitHubPublicationDigest(row: RepositoryGitHubPublicationRow): string {
   return createHash("sha256")
@@ -67,7 +57,7 @@ export type RepositoryGitHubPublicationPendingQuery = {
   agentId: string;
 };
 
-function projectRepositoryGitHubPublicationStatus(row: RepositoryGitHubPublicationRow) {
+export function projectRepositoryGitHubPublicationStatus(row: RepositoryGitHubPublicationRow) {
   return {
     request_id: row.request_id,
     owner_profile_id: row.owner_profile_id,
@@ -104,7 +94,7 @@ export type RepositoryGitHubPublicationStatusRow = ReturnType<
   typeof projectRepositoryGitHubPublicationStatus
 >;
 
-type RepositoryGitHubPublicationFilter = {
+export type RepositoryGitHubPublicationFilter = {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
@@ -115,72 +105,18 @@ type RepositoryGitHubPublicationFilter = {
   unreported?: boolean;
 };
 
-function selectRepositoryGitHubPublications(
-  db: DatabaseSync,
-  filter: RepositoryGitHubPublicationFilter,
-) {
-  let selection = query(db).selectFrom(table).selectAll();
-  if (filter.sessionId !== undefined) {
-    selection = selection.where("session_id", "=", filter.sessionId);
-  }
-  if (filter.sessionKey !== undefined) {
-    selection = selection.where("session_key", "=", filter.sessionKey);
-  }
-  if (filter.agentId !== undefined) {
-    selection = selection.where("agent_id", "=", filter.agentId);
-  }
-  if (filter.workspaceId !== undefined) {
-    selection = selection.where("workspace_id", "=", filter.workspaceId);
-  }
-  if (filter.ownerProfileId !== undefined) {
-    selection = selection.where(
-      "owner_profile_id",
-      filter.ownerProfileId === null ? "is" : "=",
-      filter.ownerProfileId,
-    );
-  }
-  if (filter.idempotencyKey !== undefined) {
-    selection = selection.where("idempotency_key", "=", filter.idempotencyKey);
-  }
-  if (filter.pending !== undefined) {
-    selection = selection.where(
-      "status",
-      "in",
-      filter.pending ? ["requested", "publishing", "needs_confirmation"] : ["published", "failed"],
-    );
-  }
-  if (filter.unreported) {
-    selection = selection.where("reported_at_ms", "is", null);
-  }
-  return selection.orderBy("updated_at_ms").orderBy("request_id");
-}
-
-export function listRepositoryGitHubPublicationsInDatabase(
-  db: DatabaseSync,
-  filter: RepositoryGitHubPublicationFilter,
-): RepositoryGitHubPublicationRow[] {
-  if (!tableExists(db, table)) {
-    return [];
-  }
-  return executeSqliteQuerySync(db, selectRepositoryGitHubPublications(db, filter)).rows.map(
-    checkRepositoryGitHubPublication,
+export function matchesRepositoryGitHubPublicationClaim(
+  row: RepositoryGitHubPublicationRow,
+  claim: WorkerSessionTurnClaim,
+): boolean {
+  return (
+    row.environment_id !== null &&
+    row.owner_epoch !== null &&
+    row.session_id === claim.sessionId &&
+    row.claim_id === claim.claimId &&
+    row.run_id === claim.runId &&
+    row.placement_generation === claim.placementGeneration &&
+    row.environment_id === (claim.owner.environmentId ?? null) &&
+    row.owner_epoch === (claim.owner.ownerEpoch ?? null)
   );
-}
-
-export function readPendingRepositoryGitHubPublicationInDatabase(
-  db: DatabaseSync,
-  input: RepositoryGitHubPublicationPendingQuery,
-): RepositoryGitHubPublicationStatusRow | undefined {
-  if (!tableExists(db, table)) {
-    return undefined;
-  }
-  let latest: RepositoryGitHubPublicationRow | undefined;
-  // Older corrupt receipts must still fail the read; only the selected status crosses threads.
-  for (const row of iterateSqliteQuerySync(
-    db,
-    selectRepositoryGitHubPublications(db, { ...input, pending: true }),
-  )) {
-    latest = checkRepositoryGitHubPublication(row);
-  }
-  return latest && projectRepositoryGitHubPublicationStatus(latest);
 }

@@ -211,7 +211,6 @@ Read methods:
 - `wiki.search`
 - `wiki.get`
 - `wiki.obsidian.status`
-- `wiki.obsidian.search`
 
 Write methods:
 
@@ -222,6 +221,7 @@ Write methods:
 - `wiki.bridge.import`
 - `wiki.unsafeLocal.import`
 - `wiki.apply`
+- `wiki.obsidian.search`
 - `wiki.obsidian.open`
 - `wiki.obsidian.command`
 - `wiki.obsidian.daily`
@@ -236,6 +236,7 @@ unknown ids fail in multi-agent setups.
 - Agent scope is incompatible with `unsafe-local` and official Obsidian CLI actions.
 - Wiki pages are compiled artifacts, not the ultimate source of truth. Keep provenance attached to raw sources, memory artifacts, and daily notes.
 - The compiled snapshot in shared SQLite plugin state is the stable machine-facing view of the wiki.
+- Upgrades support state written by July 2026 or newer releases. Doctor no longer imports the older `.openclaw-wiki/source-sync.json` or `import-runs/<runId>.json` formats. Canonical SQLite state stays authoritative, and retired JSON and import snapshots remain untouched. If Doctor cannot find canonical state, it reports how to restore a supported backup or safely set aside the retired file; an empty source-sync store cannot be distinguished from unmigrated state.
 - After editing or restoring vault files, compile again before expecting tools or prompts to use that source state. Lifecycle refresh rejects SQLite snapshots newer than a restored vault, and causal publication chaining rejects compilers started before the restore, without polling or watching files.
 - Rollback quarantine clears immediately for an in-process compile. After a separate compiler process publishes, refresh the plugin lifecycle so the daemon can validate that durable publication.
 - Pre-publication-epoch cache rows are rebuildable misses, not migrated state; the next compile replaces them.

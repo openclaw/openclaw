@@ -1,16 +1,24 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { captureAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolExecutionBudget,
+  captureAgentToolSourceExecutionGuard,
+} from "../agents/agent-tool-source-execution-guard.js";
 import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth.js";
 import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getBoundLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getInstallationTarget } from "./installation-target-context.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -81,13 +89,21 @@ beforeEach(() => {
 
 describe("post-failure repair execution", () => {
   it.each([
-    { localOverride: false, cleanupFails: false },
-    { localOverride: true, cleanupFails: false },
-    { localOverride: false, cleanupFails: true },
+    { localOverride: true, cleanupFails: false, borrowedOwner: true },
+    { localOverride: false, cleanupFails: true, borrowedOwner: false },
   ])(
-    "uses shared OAuth with a durable credential owner (local override: $localOverride, cleanup failure: $cleanupFails)",
-    async ({ localOverride, cleanupFails }) => {
+    "uses shared OAuth with a durable credential owner (local override: $localOverride, cleanup failure: $cleanupFails, borrowed owner: $borrowedOwner)",
+    async ({ localOverride, cleanupFails, borrowedOwner }) => {
       await withOpenClawTestState({ layout: "home" }, async (state) => {
+        const host = borrowedOwner ? new LegacyPluginSdkResourceHost() : undefined;
+        if (host) {
+          const scheduler = createTestGatewayScheduler();
+          host.bindScheduler(scheduler);
+          onTestFinished(async () => {
+            await scheduler.stop();
+            await host.close();
+          });
+        }
         const agentDir = state.statePath("agents", "owner", "agent");
         const auth = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
         const profileId = "fixture:subscription";
@@ -122,6 +138,9 @@ describe("post-failure repair execution", () => {
         const target = { ...state, installRoot: state.workspaceDir };
         let retainedTool: (() => void) | undefined;
         mocks.run.mockImplementation(async (input: RunEmbeddedAgentParams) => {
+          if (host) {
+            expect(getBoundLegacyPluginSdkResourceHost()).toBe(host);
+          }
           expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
           expect(getInstallationTarget()).toMatchObject({
             stateDir: state.stateDir,
@@ -135,6 +154,7 @@ describe("post-failure repair execution", () => {
             workspaceDir: target.installRoot,
             cwd: target.installRoot,
             codeModeOverride: false,
+            cleanupBundleMcpOnRunEnd: true,
           });
           expect(input.sessionManager?.getSessionTarget()).toBeUndefined();
           const selected = auth.loadAuthProfileStoreForRuntime(input.agentDir, {
@@ -155,29 +175,31 @@ describe("post-failure repair execution", () => {
         if (cleanupFails) {
           mocks.cleanup.mockRejectedValue(new Error("Synthetic process cleanup failure"));
         }
-        const run = cleanup.run(() =>
-          withUpdateRepairEnvironment(target, () =>
-            runUpdateRepairTurn({
-              target,
-              route: {
-                runner: "embedded",
-                provider: "fixture",
-                model: "repair",
-                modelLabel: "fixture/repair",
-                agentId: "owner",
-                agentDir,
-                authProfileId: profileId,
-                runConfig: config,
-                sourceConfig: config,
-              },
-              modelFallbacks: ["fixture/backup", "fixture/denied"],
-              prompt: "Repair the failed update.",
-              timeoutMs: 10_000,
-              maxToolCalls: 1,
-              signal: new AbortController().signal,
-            }),
-          ),
-        );
+        const execute = () =>
+          cleanup.run(() =>
+            withUpdateRepairEnvironment(target, () =>
+              runUpdateRepairTurn({
+                target,
+                route: {
+                  runner: "embedded",
+                  provider: "fixture",
+                  model: "repair",
+                  modelLabel: "fixture/repair",
+                  agentId: "owner",
+                  agentDir,
+                  authProfileId: profileId,
+                  runConfig: config,
+                  sourceConfig: config,
+                },
+                modelFallbacks: ["fixture/backup", "fixture/denied"],
+                prompt: "Repair the failed update.",
+                timeoutMs: 10_000,
+                maxToolCalls: 1,
+                signal: new AbortController().signal,
+              }),
+            ),
+          );
+        const run = host ? host.run(execute) : execute();
         if (cleanupFails) {
           await expect(run).rejects.toThrow("Synthetic process cleanup failure");
           expect(cleanup.outcome).toBe("uncertain");
@@ -196,59 +218,90 @@ describe("post-failure repair execution", () => {
         });
         expect(mocks.cleanup).toHaveBeenCalledOnce();
         expect(() => retainedTool?.()).toThrow();
+        if (host) {
+          const scheduler = host.scheduler;
+          expect(scheduler.signal.aborted).toBe(false);
+          await scheduler.stop();
+          await expect(host.run(execute)).rejects.toMatchObject({ name: "AbortError" });
+          expect(mocks.run).toHaveBeenCalledOnce();
+        }
       });
     },
   );
 
-  it("preserves both process and database cleanup failures and refuses clean completion", async () => {
-    await withOpenClawTestState({ layout: "home" }, async (state) => {
-      const config: OpenClawConfig = { plugins: { enabled: false } };
-      const processFailure = new Error("Synthetic process cleanup failure");
-      const databaseFailure = new Error("Synthetic database cleanup failure");
-      const close = vi.fn().mockRejectedValueOnce(databaseFailure).mockResolvedValue(undefined);
-      let resources: ReturnType<typeof getOpenClawDatabaseMaintenanceScope>;
-      mocks.run.mockImplementation(async () => {
-        resources = getOpenClawDatabaseMaintenanceScope();
-        expect(resources).toBeDefined();
-        resources!.own({}, "agent-resources", close);
-        return { meta: { durationMs: 1 } };
-      });
-      mocks.cleanup.mockRejectedValueOnce(processFailure);
-      const cleanup = createAgentCleanupScope();
-      try {
-        await expect(
-          cleanup.run(() =>
-            runUpdateRepairTurn({
-              target: { ...state, installRoot: state.workspaceDir },
-              route: {
-                runner: "embedded",
-                provider: "fixture",
-                model: "repair",
-                modelLabel: "fixture/repair",
-                agentId: "owner",
-                agentDir: state.agentDir("owner"),
-                runConfig: config,
-                sourceConfig: config,
+  it.each(["process", "sdk"] as const)(
+    "preserves both %s and database cleanup failures and refuses clean completion",
+    async (owner) => {
+      await withOpenClawTestState({ layout: "home" }, async (state) => {
+        const config: OpenClawConfig = { plugins: { enabled: false } };
+        const processFailure = new Error("Synthetic process cleanup failure");
+        const databaseFailure = new Error("Synthetic database cleanup failure");
+        const close = vi.fn().mockRejectedValueOnce(databaseFailure).mockResolvedValue(undefined);
+        let resources: ReturnType<typeof getOpenClawDatabaseMaintenanceScope>;
+        mocks.run.mockImplementation(async () => {
+          resources = getOpenClawDatabaseMaintenanceScope();
+          expect(resources).toBeDefined();
+          resources!.own({}, "agent-resources", close);
+          if (owner === "sdk") {
+            const host = getBoundLegacyPluginSdkResourceHost();
+            expect(host).toBeDefined();
+            host!.adopt(
+              {},
+              {
+                release: async () => {
+                  throw processFailure;
+                },
               },
-              modelFallbacks: [],
-              prompt: "Repair.",
-              timeoutMs: 10000,
-              maxToolCalls: 1,
-              signal: new AbortController().signal,
-            }),
-          ),
-        ).rejects.toMatchObject({
-          message: "Repair turn and database resource cleanup failed.",
-          errors: [processFailure, databaseFailure],
+            );
+          }
+          return { meta: { durationMs: 1 } };
         });
-        expect(cleanup.outcome).toBe("uncertain");
-        expect(close).toHaveBeenCalledOnce();
-      } finally {
-        // The fixture owns the synthetic refusal and must retire it after the assertion.
-        await resources?.close();
-      }
-    });
-  });
+        if (owner === "process") {
+          mocks.cleanup.mockRejectedValueOnce(processFailure);
+        }
+        const cleanup = createAgentCleanupScope();
+        try {
+          await expect(
+            cleanup.run(() =>
+              runUpdateRepairTurn({
+                target: { ...state, installRoot: state.workspaceDir },
+                route: {
+                  runner: "embedded",
+                  provider: "fixture",
+                  model: "repair",
+                  modelLabel: "fixture/repair",
+                  agentId: "owner",
+                  agentDir: state.agentDir("owner"),
+                  runConfig: config,
+                  sourceConfig: config,
+                },
+                modelFallbacks: [],
+                prompt: "Repair.",
+                timeoutMs: 10000,
+                maxToolCalls: 1,
+                signal: new AbortController().signal,
+              }),
+            ),
+          ).rejects.toMatchObject({
+            message:
+              owner === "process"
+                ? "Repair turn and database resource cleanup failed."
+                : "Repair SDK and database resource cleanup failed.",
+            errors: [
+              owner === "process" ? processFailure : { errors: [processFailure] },
+              databaseFailure,
+            ],
+          });
+          expect(cleanup.outcome).toBe("uncertain");
+          expect(close).toHaveBeenCalledOnce();
+        } finally {
+          // The fixture owns the synthetic refusal and must retire it after the assertion.
+          close.mockReset().mockResolvedValue(undefined);
+          await resources?.close();
+        }
+      });
+    },
+  );
 
   it("refuses revoked repair authority before starting the runner", async () => {
     await withOpenClawTestState({ layout: "home" }, async (state) => {
@@ -282,6 +335,52 @@ describe("post-failure repair execution", () => {
       });
       expect(mocks.run).not.toHaveBeenCalled();
       expect(mocks.entry).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps full authority at tool effect guards when preparation uses live checks", async () => {
+    await withOpenClawTestState({ layout: "home" }, async (state) => {
+      const config: OpenClawConfig = { plugins: { enabled: false } };
+      let current = true;
+      let allowed = false;
+      let refusal: unknown;
+      mocks.run.mockImplementation(async () => {
+        captureAgentToolExecutionBudget()?.();
+        const beforeEffect = captureAgentToolSourceExecutionGuard();
+        beforeEffect();
+        allowed = true;
+        // Revocation during a tool's own awaits must stop its final write or spawn.
+        current = false;
+        try {
+          beforeEffect();
+        } catch (error) {
+          refusal = error;
+        }
+        return { payloads: [{ text: "Stopped." }], meta: { durationMs: 1 } };
+      });
+      const result = await runUpdateRepairTurn({
+        target: { ...state, installRoot: state.workspaceDir },
+        route: {
+          runner: "embedded",
+          provider: "fixture",
+          model: "repair",
+          modelLabel: "fixture/repair",
+          agentId: "owner",
+          agentDir: state.statePath("agents", "owner", "agent"),
+          runConfig: config,
+          sourceConfig: config,
+        },
+        modelFallbacks: [],
+        prompt: "Repair.",
+        timeoutMs: 10_000,
+        maxToolCalls: 1,
+        signal: new AbortController().signal,
+        isCurrent: () => current,
+        isLive: () => true,
+      });
+      expect(allowed).toBe(true);
+      expect(refusal).toMatchObject({ message: "Agent tool execution scope is no longer active" });
+      expect(result).toMatchObject({ status: "completed", toolCalls: 1 });
     });
   });
 });

@@ -10,10 +10,20 @@ title: "Setup CLI"
 
 # `openclaw setup`
 
+Interactive setup offers optional memory embedding provider/model setup with a
+synthetic readiness check. Skip it without changing existing memory settings, or
+configure it later with `openclaw configure --section memory`. This step does not
+download local models or rebuild indexes. Baseline and non-interactive setup do
+not prompt for embeddings. See [Configure](/cli/configure#memory-section).
+
 `openclaw setup` is the system-agent entry point. On a configured system, bare
 `openclaw setup` opens an interactive OpenClaw chat. On a fresh system, it
 falls through to guided onboarding. Use `-m`/`--message` for one request or
 `--baseline` to initialize config/workspace folders without the wizard.
+
+Baseline setup (`--baseline`) requires the local Gateway to be stopped and holds
+exclusive ownership while creating agent state. Stop the Gateway through its
+service owner, wait for it to exit, then rerun the command.
 
 Routing order:
 
@@ -126,10 +136,20 @@ mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use
 
 `openclaw setup --baseline` preserves the older baseline-only behavior: it
 creates the config, workspace, and session directories, then exits without
-running onboarding. It accepts `--workspace` and harmless output controls, but
+running onboarding. It accepts `--workspace`, `--skip-bootstrap`, and harmless output controls, but
 rejects explicit onboarding, Gateway, auth, reset, or daemon options instead of
 silently ignoring them. If an existing config is invalid, baseline setup preserves
 it and asks you to run `openclaw doctor --fix` to apply supported repairs before retrying.
+
+Use `openclaw setup --baseline --skip-bootstrap` to create the directories without
+generating workspace bootstrap files. This persists `agents.defaults.skipBootstrap: true`
+as a local config override, preserves existing workspace files and included config files,
+and remains enabled on later baseline runs that omit the flag.
+If the `skipBootstrap` value itself comes from an `$include`, edit that included
+file directly instead of replacing its pointer through baseline setup.
+When also changing `--workspace`, update an included per-agent workspace or an
+exact workspace-file include first; baseline setup rejects that combined change
+before writing either config or workspace files.
 
 ## Examples
 

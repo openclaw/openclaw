@@ -61,7 +61,7 @@ export function createMergeGitFixtureFactory(directory: string, gitEnv: NodeJS.P
   const base = seed.commit(seed.tree("before\n"), []);
   seed.git(["update-ref", "refs/heads/main", base]);
   const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
-  let prepared: ReturnType<typeof createSourceFixture> | undefined;
+  const preparedSources = new Map<string, ReturnType<typeof createSourceFixture>>();
 
   function createSourceFixture(
     fixtureRoot: string,
@@ -136,15 +136,8 @@ export function createMergeGitFixtureFactory(directory: string, gitEnv: NodeJS.P
     promisor = false,
     sourceAuthor?: { name: string; email: string },
   ) => {
-    // Attribution, multi-commit and filtered-clone cases still construct their own source history.
-    if (
-      sourceMessage !== undefined ||
-      sourceAuthor !== undefined ||
-      promisor ||
-      sourceVersions.length !== 1 ||
-      sourceVersions[0]?.[0] !== "after\n" ||
-      sourceVersions[0]?.[1] !== undefined
-    ) {
+    // Attribution and filtered-clone cases still construct their own source history.
+    if (sourceMessage !== undefined || sourceAuthor !== undefined || promisor) {
       return createSourceFixture(
         fixtureRoot,
         sourceMessage,
@@ -153,10 +146,13 @@ export function createMergeGitFixtureFactory(directory: string, gitEnv: NodeJS.P
         sourceAuthor,
       );
     }
+    const sourceKey = JSON.stringify(sourceVersions);
+    let prepared = preparedSources.get(sourceKey);
     if (!prepared) {
-      const preparedRoot = join(root, "prepared");
+      const preparedRoot = join(root, `prepared-${preparedSources.size}`);
       mkdirSync(preparedRoot);
-      prepared = createSourceFixture(preparedRoot);
+      prepared = createSourceFixture(preparedRoot, undefined, sourceVersions);
+      preparedSources.set(sourceKey, prepared);
     }
     const fixtureRepo = join(fixtureRoot, "repo");
     const fixtureRemote = join(fixtureRoot, "remote.git");

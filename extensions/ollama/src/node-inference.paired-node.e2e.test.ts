@@ -74,7 +74,7 @@ describe("Ollama paired-node Gateway inference", () => {
           },
           agents: {
             defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
-            entries: { main: { default: true, tools: { allow: ["node_inference"] } } },
+            entries: { main: { tools: { allow: ["node_inference"] } } },
           },
           models: {
             providers: {

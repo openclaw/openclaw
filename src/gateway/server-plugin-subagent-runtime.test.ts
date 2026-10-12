@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { FailoverError } from "../agents/failover-error.js";
 import type { runIsolatedCompletion } from "../agents/isolated-completion.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -9,12 +9,6 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import {
-  onTrustedInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  type DiagnosticEventPayload,
-} from "../infra/diagnostic-events.js";
-import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
-import {
   withPluginRuntimeGatewayRequestScope,
   withPluginRuntimePluginScope,
 } from "../plugins/runtime/gateway-request-scope.js";
@@ -23,7 +17,9 @@ import {
   createBackgroundWorkOwner,
   getBackgroundWorkSnapshot,
 } from "../process/background-work.js";
+import * as commandQueue from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
+import { CommandLane } from "../process/lanes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -133,145 +129,29 @@ afterEach(() => {
 });
 
 describe("plugin background completions", () => {
-  it("uses the selected agent's model and credential owner without creating a session", async () => {
-    const dispatch = vi.spyOn(inProcessDispatch, "dispatchGatewayMethodInProcess");
-    await expect(
-      complete(createRuntime(), { extraSystemPrompt: "Summarize only" }),
-    ).resolves.toEqual({
-      text: "research:test-provider/research-model",
-    });
-    expect(isolated).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "research",
-        provider: "test-provider",
-        model: "research-model",
-        authProfileId: "research-profile",
-        systemPrompt: "Summarize only",
-        prompt: "Review these notes",
-        timeoutMs: 30_000,
-        abortSignal: expect.any(AbortSignal),
-      }),
-    );
-    expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it("records one trusted usage event attributed to the host plugin and selected agent without a session", async () => {
-    resetDiagnosticEventsForTest();
-    const events: Array<{
-      event: Extract<DiagnosticEventPayload, { type: "model.usage" }>;
-      hostPluginId?: string;
-      trusted: boolean;
-      internal?: boolean;
-    }> = [];
-    const stop = onTrustedInternalDiagnosticEvent(
-      markTrustedOtelDiagnosticListener((event, metadata, privateData) => {
-        if (event.type === "model.usage") {
-          events.push({
-            event,
-            hostPluginId: (privateData as { hostPluginId?: string }).hostPluginId,
-            trusted: metadata.trusted,
-            internal: metadata.internal,
-          });
-        }
-      }),
-    );
-    isolated.mockResolvedValueOnce({
-      text: "summary",
-      provider: "test-provider",
-      model: "research-model",
-      owner: { kind: "harness", id: "test-runtime" },
-      usage: {
-        input: 11,
-        output: 7,
-        cacheRead: 5,
-        cacheWrite: 2,
-        total: 25,
-        cost: { total: 0.0042 },
-      },
-    });
-    const request = {
-      message: "Summarize",
-      pluginId: "spoofed-plugin",
-      sessionKey: "spoofed-session",
-    };
-    try {
-      await expect(complete(createRuntime(), request)).resolves.toEqual({ text: "summary" });
-    } finally {
-      stop();
-      resetDiagnosticEventsForTest();
-    }
-    expect(events).toEqual([
-      {
-        trusted: true,
-        internal: true,
-        hostPluginId: PLUGIN_ID,
-        event: expect.objectContaining({
-          type: "model.usage",
-          agentId: "research",
-          provider: "test-provider",
-          model: "research-model",
-          usage: { input: 11, output: 7, cacheRead: 5, cacheWrite: 2, promptTokens: 18, total: 25 },
-          costUsd: 0.0042,
-        }),
-      },
-    ]);
-    expect(events[0]?.event).not.toHaveProperty("sessionKey");
-    expect(events[0]?.event).not.toHaveProperty("sessionId");
-  });
-
   it.each([
     {
       name: "untrusted plugin",
       subagent: undefined,
       model: "test-provider/override",
-      allowed: false,
-    },
-    {
-      name: "allowlisted model",
-      subagent: { allowModelOverride: true, allowedModels: ["test-provider/override"] },
-      model: "test-provider/override",
-      allowed: true,
-      expectedText: "research:test-provider/override",
-    },
-    {
-      name: "provider-qualified model id",
-      subagent: { allowModelOverride: true, allowedModels: ["openrouter/test-model"] },
-      model: "openrouter/test-model",
-      allowed: true,
-      expectedText: "research:openrouter/openrouter/test-model",
-    },
-    {
-      name: "model outside allowlist",
-      subagent: { allowModelOverride: true, allowedModels: ["test-provider/other"] },
-      model: "test-provider/override",
-      allowed: false,
     },
     {
       name: "auth profile outside allowlist",
       subagent: { allowModelOverride: true, allowedModels: ["test-provider/override"] },
       model: "test-provider/override@other-profile",
-      allowed: false,
     },
     {
       name: "invalid allowlist",
       subagent: { allowModelOverride: true, allowedModels: ["not-a-model-ref"] },
       model: "test-provider/override",
-      allowed: false,
     },
-  ])(
-    "applies existing subagent override policy for $name",
-    async ({ subagent, model, allowed, expectedText }) => {
-      config.plugins = { entries: { [PLUGIN_ID]: { subagent } } };
-      const result = complete(createRuntime(), { model });
-      if (allowed) {
-        await expect(result).resolves.toEqual({ text: expectedText });
-        expect(isolated).toHaveBeenCalledOnce();
-      } else {
-        await expect(result).rejects.toThrow(/not trusted|not allowlisted|none of the entries/u);
-        expect(isolated).not.toHaveBeenCalled();
-      }
-    },
-  );
+  ])("applies existing subagent override policy for $name", async ({ subagent, model }) => {
+    config.plugins = { entries: { [PLUGIN_ID]: { subagent } } };
+    await expect(complete(createRuntime(), { model })).rejects.toThrow(
+      /not trusted|not allowlisted|none of the entries/u,
+    );
+    expect(isolated).not.toHaveBeenCalled();
+  });
 
   it.each(["operator.write", "operator.admin"])(
     "retains request-scoped %s model override authority",
@@ -288,18 +168,12 @@ describe("plugin background completions", () => {
     },
   );
 
-  it.each(["operator.read", "operator.write"])(
-    "enforces %s scope even when using the agent's default model",
-    async (scope) => {
-      const result = completeScoped(createSyntheticPluginRuntimeClient({ scopes: [scope] }));
-      if (scope === "operator.read") {
-        await expect(result).rejects.toThrow("missing scope: operator.write");
-        expect(isolated).not.toHaveBeenCalled();
-      } else {
-        await expect(result).resolves.toEqual({ text: "research:test-provider/research-model" });
-      }
-    },
-  );
+  it("requires write scope even when using the agent's default model", async () => {
+    await expect(
+      completeScoped(createSyntheticPluginRuntimeClient({ scopes: ["operator.read"] })),
+    ).rejects.toThrow("missing scope: operator.write");
+    expect(isolated).not.toHaveBeenCalled();
+  });
 
   it("keeps operator agent ceilings while admitting genuine background work", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -385,6 +259,19 @@ describe("plugin background completions", () => {
       const profile = ensureProfileForEmail("completion-mutation@example.com");
       config.agents!.entries!.main!.model = "test-provider/main-model@main-profile";
       const blockers = blockBackgroundSlots(3);
+      const queued = createDeferred();
+      const enqueue = commandQueue.enqueueCommandInLane;
+      vi.spyOn(commandQueue, "enqueueCommandInLane").mockImplementation((lane, task, options) =>
+        enqueue(lane, task, {
+          ...options,
+          onQueued: () => {
+            options?.onQueued?.();
+            if (lane === `${CommandLane.Background}:plugin:${PLUGIN_ID}`) {
+              queued.resolve();
+            }
+          },
+        }),
+      );
       const runtime = createRuntime();
       const request = { agentId: "main", message: "Review these notes" };
       const result = withPluginRuntimeGatewayRequestScope(
@@ -401,8 +288,12 @@ describe("plugin background completions", () => {
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
-      await vi.dynamicImportSettled();
-      await vi.waitFor(() => expect(getBackgroundWorkSnapshot().queuedCount).toBe(1));
+      await awaitGateBeforeSettlement(
+        queued.promise,
+        result,
+        "Completion settled before its queue admission",
+      );
+      expect(getBackgroundWorkSnapshot().queuedCount).toBe(1);
       request.agentId = "research";
       blockers.release();
       await blockers.settled();

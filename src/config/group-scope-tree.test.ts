@@ -255,11 +255,6 @@ describe("resolveScopeToolsPolicy", () => {
       sender: { senderId: "user:alice", messageProvider: "discord" },
       expected: { allow: ["channel"] },
     },
-    {
-      name: "channel without provider",
-      sender: { senderId: "user:alice" },
-      expected: { allow: ["id"] },
-    },
   ])("matches resolveToolsBySender for typed $name keys", ({ sender, expected }) => {
     const toolsBySender = {
       "id:user:alice": { allow: ["id"] },

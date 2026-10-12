@@ -20,11 +20,13 @@ export function renderGatewayStatus(props: GatewayStatusProps) {
   if (!kind) {
     return nothing;
   }
-  const label = kind ? t(`connection.${kind}`) : null;
-  const content = html`
-    ${kind ? html`<span class="gateway-status__state"><span class="gateway-status__icon" aria-hidden="true">${kind === "suspending" || kind === "suspended" ? icons.pause : kind === "offline" ? icons.alertTriangle : icons.refresh}</span><span class="gateway-status__label">${label}</span></span>` : nothing}
-  `;
-  const className = `gateway-status${kind ? ` gateway-status--${kind}` : ""}`;
+  const label = t(`connection.${kind}`);
+  const content = html`<span class="gateway-status__state"
+    ><span class="gateway-status__icon" aria-hidden="true"
+      >${kind === "suspending" || kind === "suspended" ? icons.pause : kind === "offline" ? icons.alertTriangle : icons.refresh}</span
+    ><span class="gateway-status__label">${label}</span></span
+  >`;
+  const className = `gateway-status gateway-status--${kind}`;
   const retry = props.onRetry && canRetryGatewayStatus(kind);
   const status = retry
     ? html`<button

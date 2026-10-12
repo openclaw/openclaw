@@ -12,13 +12,13 @@ import {
   runDetachedWebhookWork,
   sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import type { dispatchA2aInbound } from "./inbound.js";
 import {
   A2aProtocolError,
   A2aRpcRequestSchema,
   A2aSendMessageParamsSchema,
   A2aTaskRequestParamsSchema,
   extractA2aMessageText,
-  isA2aContextId,
   resolveA2aRpcMethod,
 } from "./protocol.js";
 import type { A2aTaskStore } from "./task-store.js";
@@ -38,13 +38,10 @@ type A2aRpcResponse =
   | { jsonrpc: "2.0"; id: A2aRpcIdentifier; result: unknown }
   | { jsonrpc: "2.0"; id: A2aRpcIdentifier; error: { code: number; message: string } };
 
-type A2aInboundDispatch = {
-  taskId: string;
-  contextId: string;
-  messageId: string;
-  peerName: string;
-  text: string;
-};
+type A2aInboundDispatch = Pick<
+  Parameters<typeof dispatchA2aInbound>[0],
+  "taskId" | "contextId" | "messageId" | "peerName" | "text"
+>;
 
 type A2aHttpHandlerParams = {
   config: OpenClawConfig;
@@ -227,10 +224,6 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
           throw new A2aProtocolError(-32602, "Message must contain at least one usable text part");
         }
         const contextId = message.contextId ?? `ctx-${randomUUID()}`;
-        if (!isA2aContextId(contextId)) {
-          throw new A2aProtocolError(-32602, "Invalid message contextId");
-        }
-
         const task = params.taskStore.create(contextId, peerName);
         params.taskStore.start(task.id);
         // Reserved synchronously while this request is still admitted: a
@@ -343,6 +336,7 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
       return true;
     }
 
+    let result: A2aRpcResponse | A2aRpcResponse[] | undefined;
     if (Array.isArray(payload)) {
       if (payload.length === 0) {
         writeJsonResponse(response, 200, createRpcError(null, -32600, "Invalid JSON-RPC request"));
@@ -362,16 +356,10 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
       const responses = (
         await Promise.all(payload.map((entry) => processRpcRequest(entry, peerName)))
       ).filter((entry): entry is A2aRpcResponse => entry !== undefined);
-      if (responses.length > 0) {
-        writeRpcResponse(response, responses);
-      } else {
-        response.statusCode = 200;
-        response.end();
-      }
-      return true;
+      result = responses.length > 0 ? responses : undefined;
+    } else {
+      result = await processRpcRequest(payload, peerName);
     }
-
-    const result = await processRpcRequest(payload, peerName);
     if (result) {
       writeRpcResponse(response, result);
     } else {

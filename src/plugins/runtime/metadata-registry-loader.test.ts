@@ -1,13 +1,12 @@
 // Metadata registry loader tests cover metadata-only plugin registry assembly.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../../test/helpers/mock-logger.js";
 import type { PluginLoadOptions } from "../loader.js";
+import { loadPluginMetadataRegistrySnapshot } from "./metadata-registry-loader.js";
 
 const loadConfigMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
-
-let loadPluginMetadataRegistrySnapshot: typeof import("./metadata-registry-loader.js").loadPluginMetadataRegistrySnapshot;
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => loadConfigMock(),
@@ -50,10 +49,6 @@ function getOnlyLoadOpenClawPluginsOptions(): PluginLoadOptions {
 }
 
 describe("loadPluginMetadataRegistrySnapshot", () => {
-  beforeAll(async () => {
-    ({ loadPluginMetadataRegistrySnapshot } = await import("./metadata-registry-loader.js"));
-  });
-
   beforeEach(() => {
     loadConfigMock.mockReset();
     applyPluginAutoEnableMock.mockReset();

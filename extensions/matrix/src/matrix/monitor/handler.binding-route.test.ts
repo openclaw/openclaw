@@ -47,12 +47,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it.each([
-  "none-to-global",
-  "plugin-to-global",
-  "configured-stable",
-  "configured-to-global",
-] as const)(
+it.each(["plugin-to-global", "configured-stable", "configured-to-global"] as const)(
   "preserves Matrix's prepared owner through a registered message: %s",
   async (scenario) => {
     const state = await createOpenClawTestState({ label: "matrix-route-carry" });

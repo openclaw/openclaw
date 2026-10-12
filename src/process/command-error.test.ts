@@ -90,7 +90,7 @@ it("sanitizes terminal controls without flattening logical lines", () => {
       killed: false,
       termination: "exit",
       stdout: "recovery",
-      stderr: "\u001b[31mstale\rfinal\tfield\u0007\u007f\u0085\nnext\u001b[0m",
+      stderr: " \t\u001b[31mstale\r\tfinal\tfield\u0007\u007f\u0085\nnext\u001b[0m\t \n",
     },
     { timeoutMs: 120_000 },
   );
@@ -126,9 +126,12 @@ it("keeps independent recent stream tails within the existing error budget", () 
 });
 
 it.each([
-  { stdout: "stdout recovery", stderr: "", present: "stdout recovery" },
   { stdout: "", stderr: "stderr recovery", present: "stderr recovery" },
-  { stdout: "stdout recovery", stderr: "\u001b[31m\u001b[0m\r\n", present: "stdout recovery" },
+  {
+    stdout: "stdout recovery",
+    stderr: "\u001b[31m\u001b[0m\u0007\u007f\u0085\r\n",
+    present: "stdout recovery",
+  },
 ])("keeps single visible output %#: $present", ({ stdout, stderr, present }) => {
   const error = createCommandError(
     "setup",
@@ -166,25 +169,6 @@ it.each([23, null])("keeps buffered error exit metadata %#", (code) => {
 
 it.each([0, 1])("keeps zero and tiny output caps surrogate-safe %#", (maxChars) => {
   expect(formatCommandOutput("🦞", maxChars)).toBe("…\n");
-});
-
-it.each([
-  { stderr: " \tstale\r\tfinal\tfield\t \n", expected: "stderr: final\\tfield\nstdout: recovery" },
-  { stderr: "\u0007\u007f\u0085", expected: "recovery" },
-])("keeps trim and control-only normalization %#", ({ stderr, expected }) => {
-  const error = createCommandError(
-    "setup",
-    {
-      ...failure,
-      code: 23,
-      killed: false,
-      termination: "exit",
-      stderr,
-      stdout: "recovery",
-    },
-    { timeoutMs: 3_000 },
-  );
-  expect(error.message).toBe(`setup failed (exit code 23):\n${expected}`);
 });
 
 it("retains a short already-omitted tail alongside the other stream", () => {

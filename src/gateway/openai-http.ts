@@ -1,49 +1,21 @@
-// Gateway OpenAI-compatible chat completions endpoint.
-// Translates OpenAI chat requests to OpenClaw agent runs and SSE/JSON responses.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
-import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { z } from "zod";
-import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
-import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import {
-  DEFAULT_INPUT_IMAGE_MAX_BYTES,
-  DEFAULT_INPUT_IMAGE_MIMES,
-  DEFAULT_INPUT_MAX_REDIRECTS,
-  DEFAULT_INPUT_TIMEOUT_MS,
-  extractImageContentFromSource,
-  normalizeMimeList,
-  type InputImageLimits,
-  type InputImageSource,
-} from "../media/input-files.js";
-import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
-import {
-  mergeAssistantText,
-  mergePendingAssistantText,
-  resolveAssistantResultText,
-  resolveAssistantTextCompletion,
-  resolveAssistantTextInput,
-  resolveAssistantTextStreamDelta,
-  type AssistantTextSnapshot,
-} from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
@@ -51,47 +23,36 @@ import {
   IMAGE_ONLY_USER_MESSAGE,
   renderConversationToolCall,
 } from "./agent-prompt.js";
-import {
-  parseGatewayJsonRequest,
-  retainGatewayHttpResponseWork,
-  sendInvalidRequest,
-  sendJson,
-  sendMissingScopeForbidden,
-  sendUnauthorized,
-  setSseHeaders,
-  watchClientDisconnect,
-  writeDone,
-} from "./http-common.js";
-import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
+import { sendInvalidRequest, sendJson, sendUnauthorized, setSseHeaders } from "./http-common.js";
 import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
+import { rejectDisabledGatewayUpload } from "./http-upload-policy.js";
 import {
-  authorizeOpenAiCompatibleHttpModelOverride,
   authorizeOpenAiCompatibleHttpSession,
-  isAgentSelectionRequiredError,
-  isGatewaySessionKeyOverrideError,
-  isInvalidGatewayModelError,
-  isUnknownGatewayAgentError,
+  isGatewayRequestContextError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveSharedSecretHttpOperatorScopes,
-  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
-import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
 import {
-  readOpenAiHttpRunTerminal,
+  validateOpenAiSamplingParams,
+  resolveOpenAiStreamParams,
+  resolveResponseFormat,
+  resolveStopSequences,
+} from "./openai-compat-errors.js";
+import {
   runOpenAiCompatibleAgentCommand,
   type OpenAiCompatibleHttpOptions,
 } from "./openai-compatible-agent-run.js";
 import {
-  applyToolChoice,
-  isToolChoiceConstraintSatisfied,
-  resolveChatToolChoice,
-  resolveUnsatisfiedToolChoiceMessage,
-  type ToolChoiceConstraint,
-} from "./openai-tool-choice.js";
+  prepareOpenAiCompatibleHttpRequest,
+  sendOpenAiCompatibleJsonResponse,
+  startOpenAiCompatibleStream,
+} from "./openai-compatible-http.js";
+import { resolveOpenAiChatCompletionsLimits } from "./openai-compatible-input-limits.js";
+import { extractImageUrls, resolveImagesForRequest } from "./openai-http-images.js";
+import { applyToolChoice, resolveChatToolChoice } from "./openai-tool-choice.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { areGatewayUploadsEnabled, GATEWAY_UPLOADS_DISABLED_MESSAGE } from "./upload-policy.js";
 
 const OpenAiChatCompletionRequestSchema = z.object({
   model: z.string().optional(),
@@ -113,36 +74,6 @@ const OpenAiChatCompletionRequestSchema = z.object({
 });
 
 type OpenAiChatCompletionRequest = z.infer<typeof OpenAiChatCompletionRequestSchema>;
-
-const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
-const DEFAULT_OPENAI_MAX_IMAGE_PARTS = 8;
-const DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
-
-type ResolvedOpenAiChatCompletionsLimits = {
-  maxBodyBytes: number;
-  maxImageParts: number;
-  maxTotalImageBytes: number;
-  images: InputImageLimits;
-};
-
-function resolveOpenAiChatCompletionsLimits(
-  config: GatewayHttpChatCompletionsConfig | undefined,
-): ResolvedOpenAiChatCompletionsLimits {
-  const imageConfig = config?.images;
-  return {
-    maxBodyBytes: DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
-    maxImageParts: DEFAULT_OPENAI_MAX_IMAGE_PARTS,
-    maxTotalImageBytes: DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
-    images: {
-      allowUrl: imageConfig?.allowUrl ?? false,
-      urlAllowlist: normalizeInputHostnameAllowlist(imageConfig?.urlAllowlist),
-      allowedMimes: normalizeMimeList(imageConfig?.allowedMimes, DEFAULT_INPUT_IMAGE_MIMES),
-      maxBytes: imageConfig?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,
-      maxRedirects: imageConfig?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
-      timeoutMs: imageConfig?.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS,
-    },
-  };
-}
 
 function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -308,65 +239,10 @@ function extractAssistantToolCalls(value: unknown): ConversationToolCall[] {
   return calls;
 }
 
-function resolveImageUrlPart(part: unknown): string | undefined {
-  const imageUrl = asOptionalObjectRecord(part)?.image_url;
-  return normalizeOptionalString(
-    typeof imageUrl === "string" ? imageUrl : asOptionalObjectRecord(imageUrl)?.url,
-  );
-}
-
-type ExtractedImageUrls = { kind: "valid"; urls: string[] } | { kind: "invalid" };
-
-function extractImageUrls(content: unknown): ExtractedImageUrls {
-  const urls: string[] = [];
-  if (!Array.isArray(content)) {
-    return { kind: "valid", urls };
-  }
-  for (const part of content) {
-    if (asOptionalObjectRecord(part)?.type !== "image_url") {
-      continue;
-    }
-    const url = resolveImageUrlPart(part);
-    if (!url) {
-      return { kind: "invalid" };
-    }
-    urls.push(url);
-  }
-  return { kind: "valid", urls };
-}
-
 type ActiveTurnContext = {
   activeUserMessageIndex: number;
-  imageUrls: ExtractedImageUrls;
+  imageUrls: ReturnType<typeof extractImageUrls>;
 };
-
-function parseImageUrlToSource(url: string): InputImageSource {
-  const dataUriMatch = /^data:([^,]*?),(.*)$/is.exec(url);
-  if (dataUriMatch) {
-    const metadata = normalizeOptionalString(dataUriMatch[1]) ?? "";
-    const data = dataUriMatch[2] ?? "";
-    const metadataParts = metadata
-      .split(";")
-      .map((part) => normalizeOptionalString(part) ?? "")
-      .filter(Boolean);
-    const isBase64 = metadataParts.some(
-      (part) => normalizeLowercaseStringOrEmpty(part) === "base64",
-    );
-    if (!isBase64) {
-      throw new Error("image_url data URI must be base64 encoded");
-    }
-    if (!(normalizeOptionalString(data) ?? "")) {
-      throw new Error("image_url data URI is missing payload data");
-    }
-    const mediaTypeRaw = metadataParts.find((part) => part.includes("/"));
-    return {
-      type: "base64",
-      mediaType: mediaTypeRaw,
-      data,
-    };
-  }
-  return { type: "url", url };
-}
 
 function resolveActiveTurnContext(messages: unknown[] = []): ActiveTurnContext {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -379,7 +255,7 @@ function resolveActiveTurnContext(messages: unknown[] = []): ActiveTurnContext {
     if (normalizedRole !== "user" && normalizedRole !== "tool") {
       continue;
     }
-    const imageUrls: ExtractedImageUrls =
+    const imageUrls: ActiveTurnContext["imageUrls"] =
       normalizedRole === "user" ? extractImageUrls(msg.content) : { kind: "valid", urls: [] };
     return {
       activeUserMessageIndex: normalizedRole === "user" ? i : -1,
@@ -390,50 +266,6 @@ function resolveActiveTurnContext(messages: unknown[] = []): ActiveTurnContext {
     activeUserMessageIndex: -1,
     imageUrls: { kind: "valid", urls: [] },
   };
-}
-
-async function resolveImagesForRequest(
-  activeTurnContext: Pick<ActiveTurnContext, "imageUrls">,
-  limits: ResolvedOpenAiChatCompletionsLimits,
-  signal: AbortSignal,
-  assertCurrent: () => void,
-): Promise<ImageContent[]> {
-  signal.throwIfAborted();
-  if (activeTurnContext.imageUrls.kind === "invalid") {
-    throw new Error("image_url part is missing a valid URL");
-  }
-  const urls = activeTurnContext.imageUrls.urls;
-  if (urls.length === 0) {
-    return [];
-  }
-  if (urls.length > limits.maxImageParts) {
-    throw new Error(`Too many image_url parts (${urls.length}; limit ${limits.maxImageParts})`);
-  }
-
-  const images: ImageContent[] = [];
-  let totalBytes = 0;
-  for (const url of urls) {
-    assertCurrent();
-    const source = parseImageUrlToSource(url);
-    if (source.type === "base64") {
-      const sourceBytes = estimateBase64DecodedBytes(source.data);
-      if (totalBytes + sourceBytes > limits.maxTotalImageBytes) {
-        throw new Error(
-          `Total image payload too large (${totalBytes + sourceBytes}; limit ${limits.maxTotalImageBytes})`,
-        );
-      }
-    }
-
-    const image = await extractImageContentFromSource(source, limits.images, signal);
-    totalBytes += estimateBase64DecodedBytes(image.data);
-    if (totalBytes > limits.maxTotalImageBytes) {
-      throw new Error(
-        `Total image payload too large (${totalBytes}; limit ${limits.maxTotalImageBytes})`,
-      );
-    }
-    images.push(image);
-  }
-  return images;
 }
 
 function buildAgentPrompt(
@@ -533,81 +365,39 @@ function resolveChatCompletionUsage(result: unknown): OpenAiChatCompletionsUsage
   return toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
 }
 
-function resolveResponseFormat(value: unknown): Record<string, unknown> | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("response_format must be an object");
-  }
-  const obj = value as Record<string, unknown>;
-  const type = obj.type;
-  if (type !== "text" && type !== "json_object" && type !== "json_schema") {
-    throw new Error("response_format.type must be text, json_object, or json_schema");
-  }
-  return obj;
-}
-
-function resolveStopSequences(value: OpenAiChatCompletionRequest["stop"]): string[] | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  const list = typeof value === "string" ? [value] : value;
-  // OpenAI Chat Completions accepts at most 4 stop sequences.
-  if (list.length > 4) {
-    throw new Error("stop supports at most 4 sequences");
-  }
-  if (list.some((item) => item.length === 0)) {
-    throw new Error("stop entries must be non-empty strings");
-  }
-  return list.length > 0 ? list : undefined;
-}
-
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: OpenAiCompatibleHttpOptions<GatewayHttpChatCompletionsConfig>,
 ): Promise<boolean> {
   const limits = resolveOpenAiChatCompletionsLimits(opts.config);
-  const handled = await handleGatewayPostJsonEndpoint(req, res, {
+  const handled = await prepareOpenAiCompatibleHttpRequest(req, res, {
     ...opts,
     pathname: "/v1/chat/completions",
-    requiredOperatorMethod: "chat.send",
-    // Compat HTTP uses a different scope model from generic HTTP helpers:
-    // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes: opts.maxBodyBytes ?? limits.maxBodyBytes,
+    schema: OpenAiChatCompletionRequestSchema,
   });
-  if (handled === false) {
-    return false;
-  }
   if (!handled) {
-    return true;
+    return handled !== false;
   }
-  const abortController = new AbortController();
-  // The signal owns preparation; SSE installs presentation cleanup below.
-  let onDisconnect = () => {};
-  watchClientDisconnect(req, res, abortController, () => onDisconnect());
-  const modelOverrideAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
-  if (!modelOverrideAuth.allowed) {
-    sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
-    return true;
-  }
-  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
-  const payload = parseGatewayJsonRequest(res, handled.body, OpenAiChatCompletionRequestSchema);
-  if (!payload) {
+  const { payload, abortController, senderIsOwner } = handled;
+  const hasMedia = (payload.messages ?? []).some((message) => {
+    const content = asOptionalObjectRecord(message)?.content;
+    return (
+      Array.isArray(content) &&
+      content.some((part) => {
+        const type = asOptionalObjectRecord(part)?.type;
+        return type === "image_url" || type === "file";
+      })
+    );
+  });
+  if (rejectDisabledGatewayUpload(res, hasMedia)) {
     return true;
   }
   const stream = payload.stream === true;
   const streamIncludeUsage = stream && payload.stream_options?.include_usage === true;
   const model = payload.model ?? "openclaw";
   const user = payload.user;
-  const maxTokens = payload.max_completion_tokens ?? payload.max_tokens ?? undefined;
-  const temperature = payload.temperature ?? undefined;
-  const topP = payload.top_p ?? undefined;
-  const frequencyPenalty = payload.frequency_penalty ?? undefined;
-  const presencePenalty = payload.presence_penalty ?? undefined;
-  const seed = payload.seed ?? undefined;
   let responseFormat: Record<string, unknown> | undefined;
   try {
     responseFormat = resolveResponseFormat(payload.response_format);
@@ -633,26 +423,16 @@ export async function handleOpenAiHttpRequest(
     sendInvalidRequest(res, samplingError);
     return true;
   }
-  const streamParams =
-    maxTokens !== undefined ||
-    temperature !== undefined ||
-    topP !== undefined ||
-    responseFormat !== undefined ||
-    frequencyPenalty !== undefined ||
-    presencePenalty !== undefined ||
-    seed !== undefined ||
-    stop !== undefined
-      ? {
-          ...(maxTokens !== undefined ? { maxTokens } : {}),
-          ...(temperature !== undefined ? { temperature } : {}),
-          ...(topP !== undefined ? { topP } : {}),
-          ...(responseFormat !== undefined ? { responseFormat } : {}),
-          ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
-          ...(presencePenalty !== undefined ? { presencePenalty } : {}),
-          ...(seed !== undefined ? { seed } : {}),
-          ...(stop !== undefined ? { stop } : {}),
-        }
-      : undefined;
+  const streamParams = resolveOpenAiStreamParams({
+    maxTokens: payload.max_completion_tokens ?? payload.max_tokens ?? undefined,
+    temperature: payload.temperature ?? undefined,
+    topP: payload.top_p ?? undefined,
+    responseFormat,
+    frequencyPenalty: payload.frequency_penalty ?? undefined,
+    presencePenalty: payload.presence_penalty ?? undefined,
+    seed: payload.seed ?? undefined,
+    stop,
+  });
 
   let agentId: string;
   let sessionKey: string;
@@ -663,16 +443,9 @@ export async function handleOpenAiHttpRequest(
       model,
       user,
       sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: true,
     }));
   } catch (err) {
-    if (
-      isAgentSelectionRequiredError(err) ||
-      isUnknownGatewayAgentError(err) ||
-      isInvalidGatewayModelError(err) ||
-      isGatewaySessionKeyOverrideError(err)
-    ) {
+    if (isGatewayRequestContextError(err)) {
       sendInvalidRequest(res, err.message);
       return true;
     }
@@ -712,18 +485,10 @@ export async function handleOpenAiHttpRequest(
   }
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
   const prompt = buildAgentPrompt(payload.messages, activeTurnContext);
-  let resolvedClientTools: ClientToolDefinition[];
-  let toolChoicePrompt: string | undefined;
-  let toolChoiceConstraint: ToolChoiceConstraint | undefined;
+  let toolChoice: ReturnType<typeof applyToolChoice>;
   try {
     const parsedClientTools = extractClientToolsFromChatRequest(payload.tools);
-    const toolChoiceResult = applyToolChoice(
-      parsedClientTools,
-      resolveChatToolChoice(payload.tool_choice),
-    );
-    resolvedClientTools = toolChoiceResult.tools;
-    toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
-    toolChoiceConstraint = toolChoiceResult.constraint;
+    toolChoice = applyToolChoice(parsedClientTools, resolveChatToolChoice(payload.tool_choice));
   } catch (err) {
     sendInvalidRequest(res, `Invalid tools/tool_choice: ${formatErrorMessage(err).trim()}`);
     return true;
@@ -731,8 +496,16 @@ export async function handleOpenAiHttpRequest(
   let images: ImageContent[];
   try {
     assertGatewayHttpRequestCurrent(handled.requestAuth);
-    images = await resolveImagesForRequest(activeTurnContext, limits, abortController.signal, () =>
-      assertGatewayHttpRequestCurrent(handled.requestAuth),
+    images = await resolveImagesForRequest(
+      activeTurnContext,
+      limits,
+      abortController.signal,
+      () => {
+        assertGatewayHttpRequestCurrent(handled.requestAuth);
+        if (hasMedia && !areGatewayUploadsEnabled(getRuntimeConfig())) {
+          throw new Error(GATEWAY_UPLOADS_DISABLED_MESSAGE);
+        }
+      },
     );
   } catch (err) {
     if (abortController.signal.aborted) {
@@ -742,11 +515,18 @@ export async function handleOpenAiHttpRequest(
       sendUnauthorized(res);
       return true;
     }
+    if (rejectDisabledGatewayUpload(res, hasMedia)) {
+      return true;
+    }
     logWarn(`openai-compat: invalid image_url content: ${String(err)}`);
     sendInvalidRequest(res, "Invalid image_url content in `messages`.");
     return true;
   }
 
+  // Preparation can yield across a runtime policy publication, including the last image.
+  if (rejectDisabledGatewayUpload(res, hasMedia)) {
+    return true;
+  }
   if (!prompt.message && images.length === 0) {
     sendInvalidRequest(res, "Missing user message in `messages`.");
     return true;
@@ -755,7 +535,7 @@ export async function handleOpenAiHttpRequest(
   const runId = `chatcmpl_${randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   const streamIdentity = { runId, model, created };
-  const mergedExtraSystemPrompt = [prompt.extraSystemPrompt, toolChoicePrompt]
+  const mergedExtraSystemPrompt = [prompt.extraSystemPrompt, toolChoice.extraSystemPrompt]
     .filter((part): part is string => Boolean(part))
     .join("\n\n");
   const runAgentCommand = () =>
@@ -763,7 +543,7 @@ export async function handleOpenAiHttpRequest(
       message: prompt.message,
       extraSystemPrompt: mergedExtraSystemPrompt,
       images,
-      clientTools: resolvedClientTools,
+      clientTools: toolChoice.tools,
       modelOverride,
       sessionKey,
       runId,
@@ -773,339 +553,93 @@ export async function handleOpenAiHttpRequest(
       operatorScopes: handled.operatorScopes,
       abortSignal: abortController.signal,
       hasCurrentClientAuthority: handled.requestAuth.hasCurrentClientAuthority,
+      hasClientUploads: hasMedia,
       streamParams,
       resolveGatewayContext: opts.resolveGatewayContext,
     });
 
   if (!stream) {
-    try {
-      const result = await runAgentCommand();
+    return sendOpenAiCompatibleJsonResponse({
+      res,
+      signal: abortController.signal,
+      constraint: toolChoice.constraint,
+      run: runAgentCommand,
+      failureLabel: "openai-compat: chat completion failed",
+      complete: ({ result, stopReason, toolCalls, text, toolChoiceError }) => {
+        const usage = resolveChatCompletionUsage(result);
 
-      if (abortController.signal.aborted) {
-        return true;
-      }
-
-      const { runFailed, stopReason, pendingToolCalls } = readOpenAiHttpRunTerminal(result);
-      if (runFailed) {
-        throw new Error("agent run failed");
-      }
-      const usage = resolveChatCompletionUsage(result);
-
-      // `tool_choice` is an HTTP client-tool contract. The provider may still
-      // ignore the prompt, so enforce after the run using structured pending
-      // client tool calls instead of accepting prose that only says it called.
-      if (
-        toolChoiceConstraint &&
-        !isToolChoiceConstraintSatisfied({
-          constraint: toolChoiceConstraint,
-          pendingToolCalls,
-        })
-      ) {
-        sendJson(res, 502, {
-          error: {
-            message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
-            type: "api_error",
-          },
-        });
-        return true;
-      }
-
-      const toolCalls =
-        stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
-      const content =
-        resolveAssistantResultText(result) || (toolCalls ? "" : "No response from OpenClaw.");
-      sendJson(res, 200, {
-        id: runId,
-        object: "chat.completion",
-        created,
-        model,
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content,
-              ...(toolCalls
-                ? {
-                    tool_calls: toolCalls.map((call) => ({
-                      id: call.id,
-                      type: "function",
-                      function: { name: call.name, arguments: call.arguments },
-                    })),
-                  }
-                : {}),
+        if (toolChoiceError) {
+          sendJson(res, 502, {
+            error: {
+              message: toolChoiceError,
+              type: "api_error",
             },
-            finish_reason: toolCalls ? "tool_calls" : stopReason === "length" ? "length" : "stop",
-          },
-        ],
-        usage,
-      });
-    } catch (err) {
-      if (abortController.signal.aborted) {
-        return true;
-      }
-      logWarn(`openai-compat: chat completion failed: ${String(err)}`);
-      if (isClientToolNameConflictError(err)) {
-        sendInvalidRequest(res, "invalid tool configuration");
-        return true;
-      }
-      const mapped = resolveOpenAiCompatError(err);
-      if (mapped) {
-        sendJson(res, mapped.status, { error: mapped.error });
-        return true;
-      }
-      sendJson(res, 500, {
-        error: { message: "internal error", type: "api_error" },
-      });
-    }
-    return true;
+          });
+          return;
+        }
+
+        const content = text || (toolCalls ? "" : "No response from OpenClaw.");
+        sendJson(res, 200, {
+          id: runId,
+          object: "chat.completion",
+          created,
+          model,
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content,
+                ...(toolCalls
+                  ? {
+                      tool_calls: toolCalls.map((call) => ({
+                        id: call.id,
+                        type: "function",
+                        function: { name: call.name, arguments: call.arguments },
+                      })),
+                    }
+                  : {}),
+              },
+              finish_reason: toolCalls ? "tool_calls" : stopReason === "length" ? "length" : "stop",
+            },
+          ],
+          usage,
+        });
+      },
+    });
   }
 
   setSseHeaders(res);
-
-  let assistantText: AssistantTextSnapshot = { text: "" };
-  let streamedAssistantText = assistantText;
-  let pendingAssistantText: AssistantTextSnapshot | undefined;
-  let finalResultText: string | undefined;
-  let finalFinishReason: "stop" | "length" = "stop";
-  let finalToolCalls: ReturnType<typeof readOpenAiHttpRunTerminal>["pendingToolCalls"];
-  let finalUsage: OpenAiChatCompletionsUsage | undefined;
-  let finalizeScheduled = false;
-  let resultResolved = false;
-  let closed = false;
-  let observedTerminalLifecycle = false;
-  let terminalStreamError: { message: string; type: string; code?: string } | undefined;
-  let terminalLifecyclePhase: "end" | "error" = "end";
-
-  const requestFinalize = () => {
-    if (closed || finalizeScheduled) {
-      return;
-    }
-    if (!resultResolved) {
-      return;
-    }
-    if (streamIncludeUsage && !finalUsage) {
-      return;
-    }
-    // Agent text_end flushes run in a microtask. Keep the stream subscribed
-    // until those same-turn deltas arrive, then emit exactly one terminal frame.
-    finalizeScheduled = true;
-    queueMicrotask(() => {
-      if (closed) {
-        return;
+  writeChatCompletionChoice(res, streamIdentity, { role: "assistant" });
+  handled.onDisconnect = startOpenAiCompatibleStream({
+    protocol: "chat",
+    res,
+    runId,
+    signal: abortController.signal,
+    constraint: toolChoice.constraint,
+    run: runAgentCommand,
+    writeDelta: (content) => writeChatCompletionChoice(res, streamIdentity, { content }),
+    complete: ({ result, delta, toolCalls, stopReason }) => {
+      if (delta) {
+        writeChatCompletionChoice(res, streamIdentity, { content: delta });
       }
-      if (terminalStreamError) {
-        finishStreamWithError(terminalStreamError);
-        return;
+      if (toolCalls) {
+        writeAssistantToolCallsIncrementalChunks(res, { ...streamIdentity, toolCalls });
       }
-      const text = resolveAssistantTextCompletion({
-        assistantText,
-        pending: pendingAssistantText,
-        resultText: finalResultText,
-        streamedText: streamedAssistantText.text,
-        fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
-      });
-      if (!text.startsWith(streamedAssistantText.text)) {
-        finishStreamWithError({
-          message: "Assistant output cannot be represented as an append-only response stream.",
-          type: "api_error",
-        });
-        return;
-      }
-      const content = text.slice(streamedAssistantText.text.length);
-      if (content) {
-        writeChatCompletionChoice(res, streamIdentity, { content });
-      }
-      if (finalToolCalls) {
-        writeAssistantToolCallsIncrementalChunks(res, {
-          ...streamIdentity,
-          toolCalls: finalToolCalls,
-        });
-      }
-      closed = true;
-      unsubscribe();
       writeChatCompletionChoice(
         res,
         streamIdentity,
         {},
-        finalToolCalls ? "tool_calls" : finalFinishReason,
+        toolCalls ? "tool_calls" : stopReason === "length" ? "length" : "stop",
       );
-      if (streamIncludeUsage && finalUsage) {
-        writeChatCompletionChunk(res, streamIdentity, { choices: [], usage: finalUsage });
+      if (streamIncludeUsage) {
+        writeChatCompletionChunk(res, streamIdentity, {
+          choices: [],
+          usage: resolveChatCompletionUsage(result),
+        });
       }
-      writeDone(res);
-      res.end();
-    });
-  };
-
-  const unsubscribe = onAgentEventForRun(runId, (evt) => {
-    if (closed) {
-      return;
-    }
-
-    if (evt.stream === "assistant") {
-      const input = resolveAssistantTextInput(evt.data);
-      if (!input) {
-        return;
-      }
-      // Once a provisional replacement begins, even its terminal text echo
-      // stays held until the run result selects the authoritative output.
-      if (input.replaceable || pendingAssistantText) {
-        pendingAssistantText = mergePendingAssistantText(
-          pendingAssistantText ?? assistantText,
-          input,
-        );
-        return;
-      }
-
-      const previous = assistantText;
-      const merged = mergeAssistantText(previous, input, "append-only");
-      assistantText = merged;
-      // Hold prose until the run proves the requested client-tool call exists.
-      if (toolChoiceConstraint) {
-        return;
-      }
-      // SSE cannot retract bytes already delivered, even for an item correction.
-      const content = resolveAssistantTextStreamDelta(previous, merged, streamedAssistantText);
-      if (content === undefined) {
-        terminalStreamError ??= {
-          message: "Assistant output cannot be represented as an append-only response stream.",
-          type: "api_error",
-        };
-        return;
-      }
-      streamedAssistantText = assistantText;
-      if (!content) {
-        return;
-      }
-      writeChatCompletionChoice(res, streamIdentity, { content });
-      return;
-    }
-
-    if (evt.stream === "lifecycle") {
-      const phase = evt.data?.phase;
-      if (phase === "start") {
-        observedTerminalLifecycle = false;
-      }
-      if (phase === "end" || phase === "error") {
-        observedTerminalLifecycle = true;
-        if (phase === "error" && terminalLifecyclePhase !== "error") {
-          terminalStreamError ??= {
-            message: normalizeOptionalString(evt.data?.error) ?? "Agent run failed",
-            type: "api_error",
-          };
-        }
-        requestFinalize();
-      }
-    }
+    },
+    fail: (error) => writeSse(res, { error }),
   });
-
-  const finishStreamWithError = (error: { message: string; type: string; code?: string }) => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    unsubscribe();
-    writeSse(res, { error });
-    writeDone(res);
-    res.end();
-  };
-
-  // Agent cleanup and deferred SSE delivery have independent lifetimes;
-  // shutdown must wait until both have settled, whichever finishes last.
-  const releaseAgentRootWork = retainGatewayRootWorkAdmissionContinuation();
-  const releaseStreamRootWork = retainGatewayHttpResponseWork(res);
-
-  onDisconnect = () => {
-    closed = true;
-    unsubscribe();
-    releaseStreamRootWork();
-  };
-
-  writeChatCompletionChoice(res, streamIdentity, { role: "assistant" });
-
-  void (async () => {
-    try {
-      const result = await runAgentCommand();
-      resultResolved = true;
-
-      if (closed) {
-        return;
-      }
-
-      const { runFailed, stopReason, pendingToolCalls } = readOpenAiHttpRunTerminal(result);
-      if (runFailed) {
-        terminalLifecyclePhase = "error";
-        finishStreamWithError({ message: "internal error", type: "api_error" });
-        return;
-      }
-
-      if (terminalStreamError) {
-        finishStreamWithError(terminalStreamError);
-        return;
-      }
-
-      finalUsage = resolveChatCompletionUsage(result);
-
-      // Streaming enforces the same post-run client-tool contract as the
-      // non-streaming path; buffered assistant prose is only flushed when the
-      // matching structured call is present.
-      if (
-        toolChoiceConstraint &&
-        !isToolChoiceConstraintSatisfied({
-          constraint: toolChoiceConstraint,
-          pendingToolCalls,
-        })
-      ) {
-        finishStreamWithError({
-          message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
-          type: "api_error",
-        });
-        return;
-      }
-
-      finalResultText = resolveAssistantResultText(result);
-      finalFinishReason = stopReason === "length" ? "length" : "stop";
-      finalToolCalls =
-        stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
-      requestFinalize();
-    } catch (err) {
-      resultResolved = true;
-      if (closed || abortController.signal.aborted) {
-        return;
-      }
-      terminalLifecyclePhase = "error";
-      logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
-      if (isClientToolNameConflictError(err)) {
-        finishStreamWithError({
-          message: "invalid tool configuration",
-          type: "invalid_request_error",
-        });
-        return;
-      }
-      const mapped = resolveOpenAiCompatError(err);
-      if (mapped) {
-        finishStreamWithError(mapped.error);
-        return;
-      }
-      if (terminalStreamError) {
-        finishStreamWithError(terminalStreamError);
-        return;
-      }
-      finishStreamWithError({ message: "internal error", type: "api_error" });
-    } finally {
-      releaseAgentRootWork?.();
-      // The provider owns observed terminals; a second end would erase a failed session.
-      if (!observedTerminalLifecycle && (terminalLifecyclePhase === "error" || !closed)) {
-        emitAgentEvent({
-          runId,
-          stream: "lifecycle",
-          data: { phase: terminalLifecyclePhase },
-        });
-      }
-    }
-  })();
-
   return true;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

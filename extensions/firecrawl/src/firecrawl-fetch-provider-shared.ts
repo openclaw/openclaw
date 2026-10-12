@@ -1,4 +1,3 @@
-// Firecrawl provider module implements model/runtime integration.
 import type { WebFetchProviderPlugin } from "openclaw/plugin-sdk/provider-web-fetch-contract";
 
 function ensureRecord(target: Record<string, unknown>, key: string): Record<string, unknown> {

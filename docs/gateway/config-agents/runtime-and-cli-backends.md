@@ -50,7 +50,7 @@ Runtime policy decides which harness executes a model run. It lives on providers
 | Alias               | Model                           |
 | ------------------- | ------------------------------- |
 | `opus`              | `anthropic/claude-opus-5-5`     |
-| `sonnet`            | `anthropic/claude-sonnet-5`     |
+| `sonnet`            | `anthropic/claude-sonnet-5-5`   |
 | `gpt`               | `openai/gpt-5.4`                |
 | `gpt-mini`          | `openai/gpt-5.4-mini`           |
 | `gpt-nano`          | `openai/gpt-5.4-nano`           |

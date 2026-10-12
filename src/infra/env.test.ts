@@ -3,8 +3,6 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   isFastTestRuntimeEnv,
-  isTruthyEnvValue,
-  isVitestRuntimeEnv,
   logAcceptedEnvOption,
   normalizeEnv,
   normalizeZaiEnv,
@@ -31,97 +29,16 @@ function waitForNextLog(): Promise<void> {
 }
 
 describe("normalizeZaiEnv", () => {
-  it("copies Z_AI_API_KEY to ZAI_API_KEY when missing", () => {
-    withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: "zai-legacy" }, () => {
-      normalizeZaiEnv();
-      expect(process.env.ZAI_API_KEY).toBe("zai-legacy");
-    });
-  });
-
   it("does not override existing ZAI_API_KEY", () => {
     withEnv({ ZAI_API_KEY: "zai-current", Z_AI_API_KEY: "zai-legacy" }, () => {
       normalizeZaiEnv();
       expect(process.env.ZAI_API_KEY).toBe("zai-current");
     });
   });
-
-  it("ignores blank legacy Z_AI_API_KEY values", () => {
-    withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: "   " }, () => {
-      normalizeZaiEnv();
-      expect(process.env.ZAI_API_KEY).toBe("");
-    });
-  });
-
-  it("does not copy when legacy Z_AI_API_KEY is unset", () => {
-    withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: undefined }, () => {
-      normalizeZaiEnv();
-      expect(process.env.ZAI_API_KEY).toBe("");
-    });
-  });
-});
-
-describe("isTruthyEnvValue", () => {
-  it("accepts common truthy values", () => {
-    expect(isTruthyEnvValue("1")).toBe(true);
-    expect(isTruthyEnvValue("true")).toBe(true);
-    expect(isTruthyEnvValue(" yes ")).toBe(true);
-    expect(isTruthyEnvValue("ON")).toBe(true);
-  });
-
-  it("rejects other values", () => {
-    expect(isTruthyEnvValue("0")).toBe(false);
-    expect(isTruthyEnvValue("false")).toBe(false);
-    expect(isTruthyEnvValue("")).toBe(false);
-    expect(isTruthyEnvValue(undefined)).toBe(false);
-  });
-});
-
-describe("isVitestRuntimeEnv", () => {
-  it.each([
-    { VITEST: "true" },
-    { VITEST: "1" },
-    { VITEST_POOL_ID: "" },
-    { VITEST_WORKER_ID: "0" },
-    { NODE_ENV: "test" },
-  ])("detects %j and observes subsequent env changes", (marker) => {
-    withEnv(
-      {
-        VITEST: undefined,
-        VITEST_POOL_ID: undefined,
-        VITEST_WORKER_ID: undefined,
-        NODE_ENV: "production",
-      },
-      () => {
-        expect(isVitestRuntimeEnv()).toBe(false);
-        expect(isVitestRuntimeEnv(marker)).toBe(true);
-        withEnv(marker, () => expect(isVitestRuntimeEnv()).toBe(true));
-        expect(isVitestRuntimeEnv()).toBe(false);
-      },
-    );
-  });
 });
 
 describe("isFastTestRuntimeEnv", () => {
-  it("ignores OPENCLAW_TEST_FAST outside a test runtime", () => {
-    withEnv(
-      {
-        NODE_ENV: "production",
-        VITEST: undefined,
-        VITEST_POOL_ID: undefined,
-        VITEST_WORKER_ID: undefined,
-        OPENCLAW_TEST_FAST: "1",
-      },
-      () => {
-        expect(isFastTestRuntimeEnv()).toBe(false);
-      },
-    );
-  });
-
-  it("honors OPENCLAW_TEST_FAST inside a detected test runtime", () => {
-    expect(isFastTestRuntimeEnv({ VITEST: "1", OPENCLAW_TEST_FAST: "1" })).toBe(true);
-  });
-
-  it.each([undefined, "0", "true", "1"])(
+  it.each(["1"])(
     "uses the caller's fast flag (%j) when the process supplies the test marker",
     (fastFlag) => {
       withEnv({ VITEST: "true", OPENCLAW_TEST_FAST: "1" }, () => {

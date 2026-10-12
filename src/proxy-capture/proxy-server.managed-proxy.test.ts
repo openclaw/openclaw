@@ -5,10 +5,9 @@ import { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import type { DebugProxySettings } from "./env.js";
 import { startDebugProxyServer } from "./proxy-server.js";
-import { closeDebugProxyCaptureStore } from "./store.sqlite.js";
 
 vi.mock("./ca.js", () => ({
   ensureDebugProxyCa: async () => ({ certPath: "test", keyPath: "test" }),
@@ -18,8 +17,7 @@ let testRoot: string | undefined;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 async function cleanupTestDirs(): Promise<void> {
-  closeDebugProxyCaptureStore();
-  closeOpenClawStateDatabaseForTest();
+  await closeOpenClawStateDatabaseAsync();
   if (originalStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {

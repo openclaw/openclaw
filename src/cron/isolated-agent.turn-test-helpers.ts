@@ -17,12 +17,12 @@ export { withTempHome };
 
 export function makeDeps(): CliDeps {
   return {
-    sendMessageSlack: vi.fn(),
-    sendMessageWhatsApp: vi.fn(),
-    sendMessageTelegram: vi.fn(),
-    sendMessageDiscord: vi.fn(),
-    sendMessageSignal: vi.fn(),
-    sendMessageIMessage: vi.fn(),
+    slack: vi.fn(),
+    whatsapp: vi.fn(),
+    telegram: vi.fn(),
+    discord: vi.fn(),
+    signal: vi.fn(),
+    imessage: vi.fn(),
   };
 }
 
@@ -54,7 +54,6 @@ export const DEFAULT_AGENT_TURN_PAYLOAD: CronJob["payload"] = {
   kind: "agentTurn",
   message: DEFAULT_MESSAGE,
 };
-export const GMAIL_MODEL = "openrouter/meta-llama/llama-3.3-70b:free";
 
 type RunCronTurnOptions = {
   cfgOverrides?: Parameters<typeof makeCfg>[2];
@@ -75,8 +74,7 @@ export async function runCronTurn(home: string, options: RunCronTurnOptions = {}
       "agent:main:main": {
         sessionId: "main-session",
         updatedAt: Date.now(),
-        lastProvider: "webchat",
-        lastTo: "",
+        delivery: { kind: "internal" },
       },
       ...options.storeEntries,
     }));
@@ -89,6 +87,7 @@ export async function runCronTurn(home: string, options: RunCronTurnOptions = {}
 
   const jobPayload = options.jobPayload ?? DEFAULT_AGENT_TURN_PAYLOAD;
   const res = await runCronIsolatedAgentTurn({
+    deliveryAttemptFence: null,
     cfg: makeCfg(home, storePath, options.cfgOverrides),
     deps,
     job: {

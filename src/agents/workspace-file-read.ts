@@ -1,4 +1,3 @@
-/** Boundary-safe workspace reads and the source identity of the bytes returned. */
 import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import path from "node:path";
@@ -7,6 +6,7 @@ import { openRootFile } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { retryAsync } from "../infra/retry.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
+import type { WorkspaceBootstrapFile } from "./workspace-bootstrap-policy.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
@@ -26,9 +26,6 @@ type WorkspaceFileSourceIdentity = readonly [
 // Loader-owned records retain the pinned-open identity through final session filtering.
 const workspaceFileSourceIdentities = new WeakMap<object, WorkspaceFileSourceIdentity>();
 
-/**
- * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime/ctime identity.
- */
 type WorkspaceGuardedReadResult =
   | { ok: true; content: string; sourceIdentity: WorkspaceFileSourceIdentity }
   | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
@@ -39,31 +36,37 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
-export function setWorkspaceFileSourceIdentity(
-  file: object,
-  sourceIdentity: WorkspaceFileSourceIdentity,
-): void {
-  workspaceFileSourceIdentities.set(file, sourceIdentity);
-}
-
-function getWorkspaceFileSourceIdentity(file: object): WorkspaceFileSourceIdentity | undefined {
-  return workspaceFileSourceIdentities.get(file);
+export function createLoadedWorkspaceBootstrapFile(
+  name: WorkspaceBootstrapFile["name"],
+  filePath: string,
+  loaded: Extract<WorkspaceGuardedReadResult, { ok: true }>,
+  personalUser?: true,
+): WorkspaceBootstrapFile {
+  const file: WorkspaceBootstrapFile = {
+    name,
+    path: filePath,
+    content: loaded.content,
+    missing: false,
+    ...(personalUser ? { personalUser } : {}),
+  };
+  workspaceFileSourceIdentities.set(file, loaded.sourceIdentity);
+  return file;
 }
 
 /** Remote source recorded by the successful read, unavailable on hook-created copies. */
 export function getWorkspaceFileSourceRelativePath(file: object): string | undefined {
-  return getWorkspaceFileSourceIdentity(file)?.[3];
+  return workspaceFileSourceIdentities.get(file)?.[3];
 }
 
 export function workspaceFileSourceIdentitiesMatch(left: object, right: object): boolean {
-  const leftIdentity = getWorkspaceFileSourceIdentity(left);
-  const rightIdentity = getWorkspaceFileSourceIdentity(right);
+  const leftIdentity = workspaceFileSourceIdentities.get(left);
+  const rightIdentity = workspaceFileSourceIdentities.get(right);
   return leftIdentity?.[2] === rightIdentity?.[2];
 }
 
 export function workspaceFilesShareSourceIdentity(left: object, right: object): boolean {
-  const leftIdentity = getWorkspaceFileSourceIdentity(left);
-  const rightIdentity = getWorkspaceFileSourceIdentity(right);
+  const leftIdentity = workspaceFileSourceIdentities.get(left);
+  const rightIdentity = workspaceFileSourceIdentities.get(right);
   if (!leftIdentity || !rightIdentity) {
     return false;
   }
@@ -154,14 +157,9 @@ export async function readWorkspaceFileWithGuards(params: {
         const sourceIdentity = [opened.path, opened.stat, identity] as const;
         const cached =
           params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
-        if (cached !== undefined) {
-          syncFs.closeSync(opened.fd);
-          return { ok: true, content: cached, sourceIdentity };
-        }
-
         try {
-          const content = await readWorkspaceBootstrapFile(opened.fd);
-          if (params.useCache !== false) {
+          const content = cached ?? (await readWorkspaceBootstrapFile(opened.fd));
+          if (cached === undefined && params.useCache !== false) {
             writeWorkspaceFileCache({ filePath: opened.path, content, identity });
           }
           return { ok: true, content, sourceIdentity };

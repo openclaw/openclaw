@@ -168,7 +168,9 @@ suite.define(() => {
       }
 
       await page.keyboard.press("Escape");
-      await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+      await page
+        .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
+        .click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       const newSessionPage = page.locator("openclaw-new-session-page");
       await newSessionPage.waitFor();

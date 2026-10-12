@@ -1,4 +1,3 @@
-// Memory core host runtime exports bridge memory host runtime-core APIs into the SDK.
 export { SILENT_REPLY_TOKEN } from "../../packages/memory-host-sdk/src/runtime-core.js";
 export { resolveRememberAcrossConversations } from "../../packages/memory-host-sdk/src/host/config-utils.js";
 export { resolveEffectiveCompactionReserveTokens } from "../agents/agent-compaction-constants.js";
@@ -33,9 +32,12 @@ export type { MemoryCitationsMode } from "../config/types.memory.js";
 
 export type {
   MemoryCorpusSearchResult,
+  MemoryFlushFilePlanDraft,
   MemoryFlushPlan,
+  MemoryFlushToolsPlan,
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
+  MemoryProviderFlushPlanResolver,
 } from "../plugins/memory-state.js";
 export {
   listMemoryArtifactProvenance,

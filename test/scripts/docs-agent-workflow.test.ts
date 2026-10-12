@@ -20,12 +20,16 @@ const parentSha = "b".repeat(40);
 const previousSha = "c".repeat(40);
 const currentRun = {
   id: 123,
+  run_attempt: 1,
   created_at: "2026-08-28T23:00:00Z",
   status: "in_progress",
   conclusion: null,
   head_sha: mainSha,
 };
-type WorkflowRun = Omit<typeof currentRun, "conclusion"> & { conclusion: string | null };
+type WorkflowRun = Omit<typeof currentRun, "conclusion"> & {
+  conclusion: string | null;
+  writer?: "denied" | "gated";
+};
 
 function runGate(runs: WorkflowRun[], options: { event?: string; workflowHeadSha?: string } = {}) {
   const workflow = parse(readFileSync(".github/workflows/docs-agent.yml", "utf8")) as {
@@ -53,7 +57,12 @@ case "$*" in
   'cat-file -e ${previousSha}^{commit}'|'cat-file -e ${parentSha}^{commit}') ;;
   *) printf 'Unexpected git call: %s\\n' "$*" >&2; exit 1 ;;
 esac`,
-    gh: `printf '%s\\n' "$DOCS_AGENT_RUNS_FIXTURE"`,
+    gh: `case "$*" in
+  *'/attempts/'*) printf '%s\\n' "$DOCS_AGENT_JOBS_FIXTURE" | jq -c --arg endpoint "$*" '
+    . as $jobs | ($endpoint | capture("runs/(?<id>[0-9]+)/attempts/(?<attempt>[0-9]+)/jobs")) as $key
+    | $jobs[($key.id + ":" + $key.attempt)] // error("Unexpected jobs request")' ;;
+  *) printf '%s\\n' "$DOCS_AGENT_RUNS_FIXTURE" ;;
+esac`,
     date: `printf '%s\\n' '2026-08-28T22:30:00Z'`,
   };
   for (const [name, script] of Object.entries(commands)) {
@@ -75,6 +84,31 @@ esac`,
       EVENT_NAME: options.event ?? "workflow_run",
       WORKFLOW_HEAD_SHA: options.workflowHeadSha ?? mainSha,
       DOCS_AGENT_RUNS_FIXTURE: JSON.stringify({ workflow_runs: runs }),
+      DOCS_AGENT_JOBS_FIXTURE: JSON.stringify(
+        Object.fromEntries(
+          runs.map((run) => [
+            `${run.id}:${run.run_attempt}`,
+            [
+              {
+                jobs: [
+                  {
+                    name: "update-docs",
+                    status: run.status,
+                    conclusion: run.writer === "denied" ? "skipped" : run.conclusion,
+                    steps: [
+                      {
+                        name: "Run Codex docs agent",
+                        status: run.status,
+                        conclusion: run.writer ? "skipped" : run.conclusion,
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          ]),
+        ),
+      ),
     },
   });
   expect(result.status, result.stderr || result.error?.message).toBe(0);
@@ -196,20 +230,6 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
     },
   );
 
-  it("retains both corrected REST selectors and the one-hour review ordering", () => {
-    const source = readFileSync(".github/workflows/docs-agent.yml", "utf8");
-    expect(source.match(/select\(\.id != \$current_run_id\)/gu)).toHaveLength(2);
-    expect(
-      source.match(/select\(\.conclusion != "cancelled" and \.conclusion != "skipped"\)/gu),
-    ).toHaveLength(2);
-    expect(source).not.toContain(".database_id");
-    expect(source).toContain("date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ");
-    expect(source).toContain("select(.created_at >= $one_hour_ago)");
-    expect(source).toContain('| [.id, .status, (.conclusion // ""), .created_at, .head_sha]');
-    expect(source).toContain("select(. != $remote_main)");
-    expect(source).toContain('\' "$runs_json" | head -n 1');
-  });
-
   it("does not let the current REST run throttle itself", () => {
     const result = runGate([currentRun]);
     expect(result.output).toBe(admittedOutput(parentSha));
@@ -217,6 +237,7 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
   });
 
   it.each([
+    ["queued", "queued", null],
     ["in progress", "in_progress", null],
     ["completed", "completed", "success"],
     ["failed", "completed", "failure"],
@@ -231,46 +252,56 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
     expect(result.stdout).not.toContain("123\t");
   });
 
-  it("excludes the current id from the review base even with an older run snapshot", () => {
-    const result = runGate([
-      { ...currentRun, created_at: "2026-08-28T21:00:00Z", head_sha: parentSha },
-      {
-        ...currentRun,
-        id: 122,
-        created_at: "2026-08-28T20:00:00Z",
-        status: "completed",
-        conclusion: "success",
-        head_sha: previousSha,
-      },
-    ]);
-    expect(result.output).toBe(admittedOutput(previousSha));
+  const completedRun = (changes: Partial<WorkflowRun>): WorkflowRun => ({
+    ...currentRun,
+    id: 122,
+    status: "completed",
+    conclusion: "success",
+    head_sha: parentSha,
+    ...changes,
   });
-
+  const reviewedRun = completedRun({
+    id: 121,
+    created_at: "2026-08-28T21:00:00Z",
+    head_sha: previousSha,
+  });
+  const writers: NonNullable<WorkflowRun["writer"]>[] = ["denied", "gated"];
   it.each([
-    ["skipped", currentRun.created_at],
-    ["cancelled", currentRun.created_at],
-    ["cancelled", "2026-08-28T22:29:59Z"],
-  ])("ignores %s history from %s for cadence and review base", (conclusion, createdAt) => {
-    const result = runGate([
-      currentRun,
-      {
-        ...currentRun,
-        id: 122,
-        created_at: createdAt,
-        status: "completed",
-        conclusion,
-        head_sha: parentSha,
-      },
-      {
-        ...currentRun,
-        id: 121,
-        created_at: "2026-08-28T22:29:58Z",
-        status: "completed",
-        conclusion: "success",
-        head_sha: previousSha,
-      },
-    ]);
-    expect(result.output).toBe(admittedOutput(previousSha));
+    {
+      name: "the current id with an older REST snapshot",
+      runs: [
+        { ...currentRun, created_at: "2026-08-28T21:00:00Z", head_sha: parentSha },
+        completedRun({ created_at: "2026-08-28T20:00:00Z", head_sha: previousSha }),
+      ],
+    },
+    ...[
+      ["skipped", currentRun.created_at],
+      ["cancelled", currentRun.created_at],
+      ["cancelled", "2026-08-28T22:29:59Z"],
+    ].map(([conclusion, created_at]) => ({
+      name: `${conclusion} history from ${created_at}`,
+      runs: [
+        currentRun,
+        completedRun({ conclusion, created_at }),
+        { ...reviewedRun, created_at: "2026-08-28T22:29:58Z" },
+      ],
+    })),
+    ...writers.flatMap((writer) =>
+      [currentRun.created_at, "2026-08-28T22:29:59Z"].map((created_at) => ({
+        name: `${writer} hourly attempt from ${created_at}`,
+        runs: [currentRun, completedRun({ run_attempt: 2, created_at, writer }), reviewedRun],
+      })),
+    ),
+    {
+      name: "an unsuccessful agent attempt",
+      runs: [
+        currentRun,
+        completedRun({ created_at: "2026-08-28T22:29:59Z", conclusion: "failure" }),
+        reviewedRun,
+      ],
+    },
+  ])("does not let $name throttle admission or advance the review base", ({ runs }) => {
+    expect(runGate(runs).output).toBe(admittedOutput(previousSha));
   });
 
   it("still rejects superseded CI", () => {
@@ -294,8 +325,8 @@ describe("Docs Agent full-CI admission", () => {
   const source = {
     id: 456,
     run_attempt: 2,
-    event: "workflow_dispatch",
-    display_title: "CI hourly-main-123-1",
+    event: "schedule",
+    display_title: "CI",
     path: ".github/workflows/ci.yml",
     head_branch: "main",
     head_sha: mainSha,
@@ -314,19 +345,18 @@ describe("Docs Agent full-CI admission", () => {
   const evaluate = (value: string, context: Parameters<typeof evaluateWorkflowExpression>[1]) =>
     evaluateWorkflowExpression(value.startsWith("${{") ? value : "${{ " + value + " }}", context);
 
-  async function admit(
-    options: {
-      event?: Partial<typeof source>;
-      observedRun?: Partial<typeof source>;
-      latestRun?: Partial<typeof source>;
-      currentMain?: string;
-      jobs?: (typeof confirmedGate)[];
-      ciOnPush?: string;
-      manual?: boolean;
-      actor?: string;
-      apiFails?: boolean;
-    } = {},
-  ) {
+  type AdmissionOptions = {
+    event?: Partial<typeof source>;
+    observedRun?: Partial<typeof source>;
+    latestRun?: Partial<typeof source>;
+    currentMain?: string;
+    jobs?: (typeof confirmedGate)[];
+    ciOnPush?: string;
+    manual?: boolean;
+    actor?: string;
+    apiFails?: boolean;
+  };
+  async function admit(options: AdmissionOptions = {}) {
     const event = { ...source, ...options.event };
     const run = { ...event, ...options.observedRun };
     const outputs: Record<string, string> = { allowed: "false" };
@@ -380,16 +410,47 @@ describe("Docs Agent full-CI admission", () => {
     return { allowed, getWorkflowRun, getBranch, paginate, listJobsForWorkflowRunAttempt };
   }
 
-  it("admits a successful exact-attempt hourly child, including its Actions bot actor", async () => {
-    const result = await admit();
-    expect(result.allowed).toBe(true);
-    expect(result.paginate).toHaveBeenCalledExactlyOnceWith(result.listJobsForWorkflowRunAttempt, {
-      owner: "openclaw",
-      repo: "openclaw",
-      run_id: 456,
-      attempt_number: 2,
-      per_page: 100,
-    });
+  const admissionCases: { name: string; options: AdmissionOptions; allowed: boolean }[] = [
+    { name: "a successful exact-attempt scheduled run", options: {}, allowed: true },
+    {
+      name: "an opted-in full main push",
+      options: { ciOnPush: "true", event: { event: "push", actor: { login: "maintainer" } } },
+      allowed: true,
+    },
+    {
+      name: "explicit non-bot Docs Agent manual admission",
+      options: { manual: true, actor: "maintainer" },
+      allowed: true,
+    },
+    { name: "bot Docs Agent manual admission", options: { manual: true }, allowed: false },
+  ];
+  it.each(admissionCases)("applies admission policy to $name", async ({ options, allowed }) => {
+    const result = await admit(options);
+    expect(result.allowed).toBe(allowed);
+    if (options.manual) {
+      expect(result.getWorkflowRun).not.toHaveBeenCalled();
+    } else {
+      expect(result.paginate).toHaveBeenCalledExactlyOnceWith(
+        result.listJobsForWorkflowRunAttempt,
+        {
+          owner: "openclaw",
+          repo: "openclaw",
+          run_id: 456,
+          attempt_number: 2,
+          per_page: 100,
+        },
+      );
+    }
+  });
+
+  it.each([
+    { event: "workflow_dispatch", display_title: "CI hourly-main-123-1" },
+    { event: "workflow_dispatch", display_title: "CI release validation" },
+    { event: "pull_request" },
+  ])("rejects unrelated CI completion without reading evidence: %j", async (event) => {
+    const result = await admit({ event });
+    expect(result.allowed).toBe(false);
+    expect(result.getWorkflowRun).not.toHaveBeenCalled();
   });
 
   it("does not allocate verification or write concurrency for default security-only push completions", async () => {
@@ -404,78 +465,48 @@ describe("Docs Agent full-CI admission", () => {
     expect(writer.concurrency).toEqual({ group: "docs-agent-main", "cancel-in-progress": false });
   });
 
-  it.each(["skipped", "failure"])(
-    "rejects a %s aggregate even if the push opt-in changed before completion",
-    async (conclusion) => {
-      const result = await admit({
-        ciOnPush: "true",
-        event: { event: "push", actor: { login: "maintainer" } },
-        jobs: [{ ...confirmedGate, conclusion }],
-      });
-      expect(result.allowed).toBe(false);
+  const rejectedEvidence: AdmissionOptions[] = [
+    ...["skipped", "failure"].map((conclusion) => ({
+      ciOnPush: "true",
+      event: { event: "push", actor: { login: "maintainer" } },
+      jobs: [{ ...confirmedGate, conclusion }],
+    })),
+    ...[
+      { id: 999 },
+      { head_sha: previousSha },
+      { run_attempt: 3 },
+      { path: ".github/workflows/other.yml" },
+      { head_branch: "topic" },
+      { repository: { full_name: "fork/openclaw" } },
+      { head_repository: { full_name: "fork/openclaw" } },
+      { status: "in_progress" },
+      { conclusion: "failure" },
+      { conclusion: "cancelled" },
+    ].map((observedRun) => ({ observedRun })),
+    ...[
+      [],
+      [confirmedGate, confirmedGate],
+      [{ ...confirmedGate, head_sha: previousSha }],
+      [{ ...confirmedGate, steps: [] }],
+      [
+        {
+          ...confirmedGate,
+          steps: [{ name: "Confirm validated workflow revision", conclusion: "skipped" }],
+        },
+      ],
+    ].map((jobs) => ({ jobs })),
+    { latestRun: { run_attempt: 3, status: "in_progress" } },
+    { currentMain: previousSha },
+  ];
+  it.each(rejectedEvidence)(
+    "rejects incomplete, stale, or foreign full-CI evidence %j",
+    async (options) => {
+      expect((await admit(options)).allowed).toBe(false);
     },
   );
 
-  it("retains successful opted-in full main pushes", async () => {
-    expect(
-      (await admit({ ciOnPush: "true", event: { event: "push", actor: { login: "maintainer" } } }))
-        .allowed,
-    ).toBe(true);
-  });
-
-  it.each([
-    { id: 999 },
-    { head_sha: previousSha },
-    { run_attempt: 3 },
-    { path: ".github/workflows/other.yml" },
-    { head_branch: "topic" },
-    { repository: { full_name: "fork/openclaw" } },
-    { head_repository: { full_name: "fork/openclaw" } },
-    { status: "in_progress" },
-    { conclusion: "failure" },
-  ])("rejects stale or foreign observed run metadata %j", async (observedRun) => {
-    expect((await admit({ observedRun })).allowed).toBe(false);
-  });
-
-  it.each([
-    [],
-    [confirmedGate, confirmedGate],
-    [{ ...confirmedGate, head_sha: previousSha }],
-    [{ ...confirmedGate, steps: [] }],
-    [
-      {
-        ...confirmedGate,
-        steps: [{ name: "Confirm validated workflow revision", conclusion: "skipped" }],
-      },
-    ],
-  ])("rejects missing, duplicate, or unconfirmed full-CI evidence %j", async (...jobs) => {
-    expect((await admit({ jobs })).allowed).toBe(false);
-  });
-
-  it("rejects superseded main and propagates unavailable API evidence", async () => {
-    expect((await admit({ currentMain: previousSha })).allowed).toBe(false);
+  it("propagates unavailable API evidence", async () => {
     await expect(admit({ apiFails: true })).rejects.toThrow("GitHub unavailable");
-  });
-
-  it("rejects a new run attempt that starts during verification", async () => {
-    expect((await admit({ latestRun: { run_attempt: 3, status: "in_progress" } })).allowed).toBe(
-      false,
-    );
-  });
-
-  it("does not admit unrelated manual CI or PR completion", async () => {
-    for (const event of [{ display_title: "CI release validation" }, { event: "pull_request" }]) {
-      const result = await admit({ event });
-      expect(result.allowed).toBe(false);
-      expect(result.getWorkflowRun).not.toHaveBeenCalled();
-    }
-  });
-
-  it("preserves explicit non-bot Docs Agent manual admission", async () => {
-    const result = await admit({ manual: true, actor: "maintainer" });
-    expect(result.allowed).toBe(true);
-    expect(result.getWorkflowRun).not.toHaveBeenCalled();
-    expect((await admit({ manual: true })).allowed).toBe(false);
   });
 
   it("confirms only a successful CI aggregate for the validated workflow revision", () => {
@@ -487,7 +518,7 @@ describe("Docs Agent full-CI admission", () => {
       eventName: "workflow_dispatch" as const,
       runAttempt: 1,
       sha: mainSha,
-      preflightOutputs: { checkout_revision: mainSha },
+      preflightOutputs: { checkout_revision: mainSha, validation_tier: "full" },
       includeAndroid: true,
     };
     expect(evaluate(producer.if, context)).toBe(true);
@@ -497,11 +528,22 @@ describe("Docs Agent full-CI admission", () => {
       { releaseGate: true },
       { releaseScope: "npm-beta" },
       { includeAndroid: false },
-      { preflightOutputs: { checkout_revision: previousSha } },
+      { preflightOutputs: { checkout_revision: previousSha, validation_tier: "full" } },
+      { preflightOutputs: { checkout_revision: mainSha, validation_tier: "main" } },
     ]) {
       expect(evaluate(producer.if, { ...context, ...change })).toBe(false);
     }
     expect(evaluate(producer.if, { ...context, eventName: "push" })).toBe(true);
     expect(evaluate(producer.if, { ...context, eventName: "pull_request" })).toBe(true);
+    expect(
+      evaluate(producer.if, {
+        ...context,
+        eventName: "schedule",
+        preflightOutputs: { checkout_revision: mainSha, validation_tier: "main" },
+      }),
+    ).toBe(false);
+    for (const outcome of [{ failed: true }, { cancelled: true }]) {
+      expect(evaluate(producer.if, { ...context, eventName: "schedule", ...outcome })).toBe(false);
+    }
   });
 });

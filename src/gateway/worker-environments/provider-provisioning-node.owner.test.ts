@@ -62,6 +62,7 @@ function createHeldInstaller(boundary: "attachment read" | "discovery" | "instal
   }
   const install = vi.fn(
     createGatewayNodeWorkerBundleInstaller({
+      log: { info: vi.fn(), warn: vi.fn() },
       gatewayNamespace: "gateway-owner-test",
       getTransport: () => transport,
       transfer,

@@ -1,10 +1,13 @@
+import type { DatabaseSync } from "node:sqlite";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
+import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+} from "../state/worker-operation-registry.js";
+import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import { transcriptSessionExportKey } from "./store-artifacts.js";
 import { TranscriptSessionConflictError, TranscriptsSummaryChangedError } from "./store-errors.js";
@@ -15,112 +18,126 @@ import {
   writeMeetingTranscriptSummaryInDatabase,
 } from "./store-sqlite-write.js";
 import { appendMeetingTranscriptUtterance } from "./store-sqlite.js";
-import type { TranscriptWriteCommand, TranscriptWriteOperations } from "./store-worker-contract.js";
 
-const operationLabels: Record<TranscriptWriteCommand["type"], string> = {
-  "transcripts.append": "meeting-transcripts.utterance.append",
-  "transcripts.writeSummary": "meeting-transcripts.summary.write",
-  "transcripts.writeSession": "meeting-transcripts.session.write",
-  "transcripts.markPendingExports": "meeting-transcripts.export.pending",
-  "transcripts.recordExportManifest": "meeting-transcripts.export.record",
+type SessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
+type ExportInput = {
+  session: SessionIdentity;
+  lease?: OpenClawStateLeaseIdentity;
+  readOnly?: boolean;
 };
 
-export function isTranscriptWriteCommand(command: {
-  type: string;
-}): command is TranscriptWriteCommand {
-  return Object.hasOwn(operationLabels, command.type);
-}
-
-export function executeTranscriptWrite(
-  command: TranscriptWriteCommand,
-  target: { database: OpenClawStateDatabase; path: string },
-): TranscriptWriteOperations[keyof TranscriptWriteOperations]["output"] {
-  const options = {
-    ...target,
-    env: getSqliteWorkerStateContext().environment,
-    readOnly: command.input.readOnly,
-  };
+function writeTranscript(
+  input: { readOnly?: boolean },
+  { open, stateOptions }: WorkerOperationContext,
+  operationLabel: string,
+  write: (db: DatabaseSync) => void,
+  exportInput?: ExportInput,
+) {
+  const options = { database: open(), ...stateOptions(), readOnly: input.readOnly };
   ensureMeetingTranscriptsSchema(options);
-  try {
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const lease =
-          command.type === "transcripts.markPendingExports" ||
-          command.type === "transcripts.recordExportManifest"
-            ? command.input.lease
-            : undefined;
-        const assertLease = () => {
-          if (!lease) {
-            return;
-          }
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const assertWrite = (stage: "transaction" | "commit") => {
+        if (exportInput?.lease) {
+          const { lease, session } = exportInput;
           if (
             lease.scope !== "meeting-transcript.export" ||
-            lease.key !== transcriptSessionExportKey(command.input.session)
+            lease.key !== transcriptSessionExportKey(session)
           ) {
             throw new Error("Transcript export lease does not match its session");
           }
           assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
-        };
-        if (lease) {
-          assertLease();
         } else {
-          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+          requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
         }
-        switch (command.type) {
-          case "transcripts.append":
-            appendMeetingTranscriptUtterance({ ...command.input, database: db });
-            break;
-          case "transcripts.writeSummary": {
-            const { session, summaryValues, guard } = command.input;
-            writeMeetingTranscriptSummaryInDatabase(db, session, summaryValues, guard);
-            break;
-          }
-          case "transcripts.writeSession":
-            writeMeetingTranscriptSessionInDatabase(db, command.input);
-            break;
-          case "transcripts.markPendingExports":
-            markMeetingTranscriptPendingExportsInDatabase(
-              db,
-              command.input.session,
-              command.input.fileNames,
-            );
-            break;
-          case "transcripts.recordExportManifest":
-            updateMeetingTranscriptExportManifestInDatabase(
-              db,
-              command.input.session,
-              command.input.exportedHashes,
-              new Set(command.input.removedExports),
-            );
-            break;
-        }
-        if (lease) {
-          assertLease();
-        } else {
-          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        }
-      },
-      options,
-      { operationLabel: operationLabels[command.type] },
-    );
-    return command.type === "transcripts.writeSummary" ||
-      command.type === "transcripts.writeSession"
-      ? { ok: true }
-      : undefined;
-  } catch (error) {
-    if (
-      (command.type === "transcripts.writeSummary" ||
-        command.type === "transcripts.writeSession") &&
-      error instanceof TranscriptsSummaryChangedError
-    ) {
-      return { ok: false, reason: "changed" };
-    }
-    if (
-      command.type === "transcripts.writeSession" &&
-      error instanceof TranscriptSessionConflictError
-    ) {
-      return { ok: false, reason: "conflict" };
-    }
-    throw error;
-  }
+      };
+      assertWrite("transaction");
+      write(db);
+      assertWrite("commit");
+    },
+    options,
+    { operationLabel },
+  );
 }
+
+export const transcriptWriteOperations = {
+  "transcripts.append": (
+    input: Omit<Parameters<typeof appendMeetingTranscriptUtterance>[0], "database"> & {
+      readOnly?: boolean;
+    },
+    context,
+  ) =>
+    writeTranscript(input, context, "meeting-transcripts.utterance.append", (db) =>
+      appendMeetingTranscriptUtterance({ ...input, database: db }),
+    ),
+  "transcripts.writeSummary": (
+    input: {
+      session: SessionIdentity;
+      summaryValues: Parameters<typeof writeMeetingTranscriptSummaryInDatabase>[2];
+      guard?: Parameters<typeof writeMeetingTranscriptSummaryInDatabase>[3];
+      readOnly?: boolean;
+    },
+    context,
+  ) => {
+    try {
+      writeTranscript(input, context, "meeting-transcripts.summary.write", (db) =>
+        writeMeetingTranscriptSummaryInDatabase(
+          db,
+          input.session,
+          input.summaryValues,
+          input.guard,
+        ),
+      );
+      return { ok: true } as const;
+    } catch (error) {
+      if (error instanceof TranscriptsSummaryChangedError) {
+        return { ok: false, reason: "changed" } as const;
+      }
+      throw error;
+    }
+  },
+  "transcripts.writeSession": (
+    input: Parameters<typeof writeMeetingTranscriptSessionInDatabase>[1] & { readOnly?: boolean },
+    context,
+  ) => {
+    try {
+      writeTranscript(input, context, "meeting-transcripts.session.write", (db) =>
+        writeMeetingTranscriptSessionInDatabase(db, input),
+      );
+      return { ok: true } as const;
+    } catch (error) {
+      if (error instanceof TranscriptsSummaryChangedError) {
+        return { ok: false, reason: "changed" } as const;
+      }
+      if (error instanceof TranscriptSessionConflictError) {
+        return { ok: false, reason: "conflict" } as const;
+      }
+      throw error;
+    }
+  },
+  "transcripts.markPendingExports": (input: ExportInput & { fileNames: string[] }, context) =>
+    writeTranscript(
+      input,
+      context,
+      "meeting-transcripts.export.pending",
+      (db) => markMeetingTranscriptPendingExportsInDatabase(db, input.session, input.fileNames),
+      input,
+    ),
+  "transcripts.recordExportManifest": (
+    input: ExportInput & { exportedHashes: Record<string, string>; removedExports: string[] },
+    context,
+  ) =>
+    writeTranscript(
+      input,
+      context,
+      "meeting-transcripts.export.record",
+      (db) =>
+        updateMeetingTranscriptExportManifestInDatabase(
+          db,
+          input.session,
+          input.exportedHashes,
+          new Set(input.removedExports),
+        ),
+      input,
+    ),
+} satisfies WorkerOperationHandlers;

@@ -1,4 +1,3 @@
-/** Renders and parses systemd unit snippets for managed gateway services. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { escape as escapeGlob } from "minimatch";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
@@ -113,7 +112,7 @@ function assertNoSystemdLineBreaks(value: string, label: string): void {
 
 function systemdEscapeArg(value: string): string {
   assertNoSystemdLineBreaks(value, "Systemd unit values");
-  if (!/[\s"\\]/.test(value)) {
+  if (!/[\s"'\\]/.test(value)) {
     return value;
   }
   // systemd ExecStart/Environment parsing consumes one backslash before the next
@@ -202,7 +201,7 @@ export function buildSystemdUnit({
 }
 
 export function parseSystemdExecStart(value: string): string[] {
-  return splitArgsPreservingQuotes(value, { escapeMode: "backslash" });
+  return splitSystemdEnvironmentWords(value);
 }
 
 export function splitSystemdEnvironmentWords(value: string): string[] {
@@ -222,6 +221,32 @@ export function parseSystemdEnvAssignments(raw: string): Array<{ key: string; va
       ? []
       : [{ key: assignment.slice(0, separator).trim(), value: assignment.slice(separator + 1) }];
   });
+}
+
+/** Read declared inline Service metadata; files and specifier expansion belong to effective inspection. */
+export function parseSystemdInlineEnvironment(content: string): Record<string, string> {
+  let environment: Record<string, string> = {};
+  let section = "";
+  for (const rawLine of splitSystemdLogicalLines(content)) {
+    const line = rawLine.trim();
+    const separator = line.indexOf("=");
+    if (line.startsWith("[")) {
+      section = line;
+    } else if (
+      section === "[Service]" &&
+      separator > 0 &&
+      line.slice(0, separator).trim() === "Environment"
+    ) {
+      const value = line.slice(separator + 1);
+      if (!value.trim()) {
+        environment = {};
+      }
+      for (const assignment of parseSystemdEnvAssignments(value)) {
+        environment[assignment.key] = assignment.value;
+      }
+    }
+  }
+  return environment;
 }
 
 export function splitSystemdLogicalLines(content: string): string[] {

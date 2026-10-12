@@ -107,6 +107,25 @@ describe("registerSlackHttpHandler", () => {
     expect(handler).toHaveBeenCalledWith(req, res);
   });
 
+  it("keeps a replacement route alive when its previous registration is disposed again", async () => {
+    const path = "/slack/events/replaced";
+    const handler = vi.fn();
+    const unregisterPrevious = registerSlackHttpHandler({ path, handler });
+    unregisters.push(unregisterPrevious);
+    unregisterPrevious();
+    const unregisterCurrent = registerSlackHttpHandler({ path, handler });
+    unregisters.push(unregisterCurrent);
+
+    unregisterPrevious();
+    const req = { url: path } as IncomingMessage;
+    const res = {} as ServerResponse;
+    expect(await handleSlackHttpRequest(req, res)).toBe(true);
+    expect(handler).toHaveBeenCalledExactlyOnceWith(req, res);
+
+    unregisterCurrent();
+    expect(await handleSlackHttpRequest(req, res)).toBe(false);
+  });
+
   it("recreates the shared registry if the global slot is corrupted", async () => {
     const globalStore = globalThis as Record<PropertyKey, unknown>;
     globalStore[Symbol.for("openclaw.slack.httpRoutes.v1")] = {};

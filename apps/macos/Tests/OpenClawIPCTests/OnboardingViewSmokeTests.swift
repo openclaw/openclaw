@@ -112,23 +112,36 @@ struct OnboardingViewSmokeTests {
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
             let manager = GatewayProcessManager.shared
             let previousStatus = manager.status
+            let previousOwnership = manager.gatewayOwnership
+            let previousRetainedCLI = manager.retainedServiceCLI
+            let previousResume = AppDefaults.standard.object(forKey: GatewayLaunchAgentManager.resumeCommandKey)
+            let previousHosting = AppDefaults.standard.object(forKey: GatewayHosting.defaultsKey)
+            manager.retainedServiceCLI = nil
             defer {
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                manager.retainedServiceCLI = previousRetainedCLI
+                AppDefaults.standard.set(previousResume, forKey: GatewayLaunchAgentManager.resumeCommandKey)
+                AppDefaults.standard.set(previousHosting, forKey: GatewayHosting.defaultsKey)
                 manager.setTestingStatus(previousStatus)
+                manager.gatewayOwnership = previousOwnership
             }
-            let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: root, profile: AppProfile(environment: [:]))
+            let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: root, profile: .current)
             let managedAttachment = scenario.hasSuffix("managed-attachment")
             if managedAttachment || ["external-service", "unreadable"].contains(scenario) {
                 try FileManager.default.createDirectory(
                     at: plist.deletingLastPathComponent(),
                     withIntermediateDirectories: true)
-                let executable = managedAttachment
-                    ? CLIInstaller.managedExecutableLocation()
-                    : "/opt/openclaw/bin/openclaw"
+                let managedNode = AppProfile.current.stateDirectoryURL().appendingPathComponent("tools/node")
+                let command = managedAttachment
+                    ? [
+                        managedNode.appendingPathComponent("bin/node").path,
+                        managedNode.appendingPathComponent("lib/node_modules/openclaw/openclaw.mjs").path,
+                    ]
+                    : ["/opt/openclaw/bin/openclaw"]
                 let data = scenario == "unreadable" ? Data("not a plist".utf8) : try PropertyListSerialization.data(
-                    fromPropertyList: ["ProgramArguments": [executable, "gateway"]], format: .xml, options: 0)
+                    fromPropertyList: ["ProgramArguments": command + ["gateway"]], format: .xml, options: 0)
                 try data.write(to: plist)
             }
             manager.setTestingStatus(scenario.contains("attachment") ? .attachedExisting(details: nil) : .stopped)
@@ -207,11 +220,9 @@ struct OnboardingViewSmokeTests {
         #expect(OnboardingController.windowStyleMask.contains(.resizable))
 
         let baseline = OnboardingView.contentHeight(
-            for: OnboardingView.windowHeight,
-            usesCompactHero: false)
+            for: OnboardingView.windowHeight)
         let taller = OnboardingView.contentHeight(
-            for: OnboardingView.windowHeight + 200,
-            usesCompactHero: false)
+            for: OnboardingView.windowHeight + 200)
 
         #expect(taller - baseline == 200)
     }
@@ -226,10 +237,9 @@ struct OnboardingViewSmokeTests {
     }
 
     @Test func `short onboarding window keeps a usable scrollable page`() {
-        let short = OnboardingView.contentHeight(for: 626, usesCompactHero: false)
+        let short = OnboardingView.contentHeight(for: 626)
         let preferred = OnboardingView.contentHeight(
-            for: OnboardingView.windowHeight,
-            usesCompactHero: false)
+            for: OnboardingView.windowHeight)
 
         #expect(short == 409)
         #expect(short < preferred)

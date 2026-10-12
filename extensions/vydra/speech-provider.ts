@@ -1,10 +1,5 @@
-// Vydra provider module implements model/runtime integration.
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import type {
-  SpeechProviderConfig,
-  SpeechProviderOverrides,
-  SpeechProviderPlugin,
-} from "openclaw/plugin-sdk/speech-core";
+import type { SpeechProviderConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
 import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider";
 import {
   asOptionalRecord,
@@ -17,13 +12,6 @@ import {
   normalizeVydraBaseUrl,
 } from "./defaults.js";
 
-type VydraSpeechConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  model: string;
-  voiceId: string;
-};
-
 const VYDRA_SPEECH_VOICES = [
   {
     id: DEFAULT_VYDRA_VOICE_ID,
@@ -31,7 +19,7 @@ const VYDRA_SPEECH_VOICES = [
   },
 ] as const;
 
-function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>): VydraSpeechConfig {
+function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw = asOptionalRecord(providers?.vydra) ?? asOptionalRecord(rawConfig.vydra);
   return {
@@ -53,26 +41,13 @@ function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>): VydraSp
   };
 }
 
-function readVydraSpeechConfig(config: SpeechProviderConfig): VydraSpeechConfig {
+function readVydraSpeechConfig(config: SpeechProviderConfig) {
   const normalized = normalizeVydraSpeechConfig({});
   return {
     apiKey: normalizeOptionalString(config.apiKey) ?? normalized.apiKey,
     baseUrl: normalizeVydraBaseUrl(normalizeOptionalString(config.baseUrl) ?? normalized.baseUrl),
     model: normalizeOptionalString(config.model) ?? normalized.model,
     voiceId: normalizeOptionalString(config.voiceId) ?? normalized.voiceId,
-  };
-}
-
-function readVydraOverrides(overrides: SpeechProviderOverrides | undefined): {
-  model?: string;
-  voiceId?: string;
-} {
-  if (!overrides) {
-    return {};
-  }
-  return {
-    model: normalizeOptionalString(overrides.model),
-    voiceId: normalizeOptionalString(overrides.voiceId),
   };
 }
 
@@ -94,7 +69,7 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
     synthesize: async (req) => {
       const { downloadVydraAsset, extractVydraResultUrls } = await import("./shared.js");
       const config = readVydraSpeechConfig(req.providerConfig);
-      const overrides = readVydraOverrides(req.providerOverrides);
+      const overrides = req.providerOverrides;
       const apiKey = resolveSpeechProviderApiKey(config.apiKey, process.env.VYDRA_API_KEY);
       if (!apiKey) {
         throw new Error("Vydra API key missing");
@@ -124,11 +99,11 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
         });
 
       const { response, release } = await postJsonRequest({
-        url: `${baseUrl}/models/${overrides.model ?? config.model}`,
+        url: `${baseUrl}/models/${normalizeOptionalString(overrides?.model) ?? config.model}`,
         headers,
         body: {
           text: req.text,
-          voice_id: overrides.voiceId ?? config.voiceId,
+          voice_id: normalizeOptionalString(overrides?.voiceId) ?? config.voiceId,
         },
         timeoutMs: req.timeoutMs,
         fetchFn,

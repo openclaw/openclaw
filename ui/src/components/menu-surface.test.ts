@@ -19,22 +19,6 @@ afterEach(async () => {
 });
 
 describe("promoteToPopoverTopLayer", () => {
-  it("shows the element as a manual popover when the API is available", () => {
-    const element = document.createElement("div");
-    const showPopover = vi.fn();
-    element.showPopover = showPopover;
-    promoteToPopoverTopLayer(element);
-    expect(element.getAttribute("popover")).toBe("manual");
-    expect(showPopover).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to in-flow rendering when the API is unavailable", () => {
-    // jsdom elements have no showPopover.
-    const element = document.createElement("div");
-    promoteToPopoverTopLayer(element);
-    expect(element.hasAttribute("popover")).toBe(false);
-  });
-
   it("falls back to in-flow rendering when showPopover throws", () => {
     const element = document.createElement("div");
     element.showPopover = vi.fn(() => {
@@ -63,6 +47,7 @@ describe("openclaw-menu-surface", () => {
 
   it("keeps children rendered in-flow when the popover API is unavailable", () => {
     const surface = document.createElement("openclaw-menu-surface");
+    Object.defineProperty(surface, "showPopover", { value: undefined });
     const menu = document.createElement("div");
     menu.className = "menu";
     surface.append(menu);

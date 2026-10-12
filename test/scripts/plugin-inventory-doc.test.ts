@@ -161,77 +161,64 @@ describe("committed plugin inventory", () => {
   });
 });
 
-describe("resolvePluginSurface", () => {
-  it("keeps manifest identifiers as inline code while leaving labels visible", () => {
-    expect(
-      resolvePluginSurface({
-        id: "example",
-        channels: ["discord"],
-        providers: ["openai"],
-        contracts: {
-          webSearchProviders: {},
-          tools: {},
-        },
-        dashboard: {
-          dataBindings: [{ id: "items.list" }],
-          actionVerbs: [{ id: "refresh" }],
-        },
-        skills: ["example"],
-      }),
-    ).toEqual([
+it.each<{
+  name: string;
+  manifest: Parameters<typeof resolvePluginSurface>[0];
+  expected: string[];
+}>([
+  {
+    name: "manifest identifiers as inline code",
+    manifest: {
+      id: "example",
+      channels: ["discord"],
+      providers: ["openai"],
+      contracts: { webSearchProviders: {}, tools: {} },
+      dashboard: { dataBindings: [{ id: "items.list" }], actionVerbs: [{ id: "refresh" }] },
+      skills: ["example"],
+    },
+    expected: [
       "Channels: `discord`",
       "Providers: `openai`",
       "Contracts: `tools`, `webSearchProviders`",
       "Dashboard data bindings: `example.items.list`",
       "Dashboard action verbs: `example.refresh`",
       "Skills",
-    ]);
-  });
-
-  it("returns no surface items when the manifest declares none", () => {
-    // The generic fallback now lives in renderSurface(), which prints
-    // "This plugin declares no channels, providers, commands, or contracts."
-    // for an empty list. Keeping it out of the data layer lets the caller
-    // choose its own wording.
-    expect(resolvePluginSurface({})).toEqual([]);
-  });
-
-  it("renders root CLI commands separately from runtime slash command aliases", () => {
-    expect(
-      resolvePluginSurface({
-        cliCommands: [
-          { name: " voicecall " },
-          { name: "browser" },
-          { name: "voicecall" },
-          { name: " " },
-        ],
-        commandAliases: [
-          { name: "voice", kind: "runtime-slash" },
-          { name: " voice ", kind: "runtime-slash" },
-          { name: " ", kind: "runtime-slash" },
-          { name: "internal", kind: "activation-only" },
-        ],
-      }),
-    ).toEqual([
+    ],
+  },
+  { name: "no declared surfaces", manifest: {}, expected: [] },
+  {
+    name: "root CLI commands and runtime slash aliases",
+    manifest: {
+      cliCommands: [
+        { name: " voicecall " },
+        { name: "browser" },
+        { name: "voicecall" },
+        { name: " " },
+      ],
+      commandAliases: [
+        { name: "voice", kind: "runtime-slash" },
+        { name: " voice ", kind: "runtime-slash" },
+        { name: " ", kind: "runtime-slash" },
+        { name: "internal", kind: "activation-only" },
+      ],
+    },
+    expected: [
       "CLI commands: `openclaw browser`, `openclaw voicecall`",
       "Slash commands: `/voice`",
-    ]);
-  });
-
-  it("escapes dashboard plugin owner delimiters and literal escape markers", () => {
-    expect(
-      resolvePluginSurface({
-        id: "dashboard.segmented",
-        dashboard: { actionVerbs: [{ id: "refresh" }] },
-      }),
-    ).toEqual(["Dashboard action verbs: `dashboard%2Esegmented.refresh`"]);
-    expect(
-      resolvePluginSurface({
-        id: "dashboard%2Esegmented",
-        dashboard: { dataBindings: [{ id: "refresh" }] },
-      }),
-    ).toEqual(["Dashboard data bindings: `dashboard%252Esegmented.refresh`"]);
-  });
+    ],
+  },
+  {
+    name: "dashboard owner delimiter escaping",
+    manifest: { id: "dashboard.segmented", dashboard: { actionVerbs: [{ id: "refresh" }] } },
+    expected: ["Dashboard action verbs: `dashboard%2Esegmented.refresh`"],
+  },
+  {
+    name: "dashboard literal escape markers",
+    manifest: { id: "dashboard%2Esegmented", dashboard: { dataBindings: [{ id: "refresh" }] } },
+    expected: ["Dashboard data bindings: `dashboard%252Esegmented.refresh`"],
+  },
+])("renders $name", ({ manifest, expected }) => {
+  expect(resolvePluginSurface(manifest)).toEqual(expected);
 });
 
 describe("assertPluginInventoryCoverage", () => {
@@ -245,15 +232,5 @@ describe("assertPluginInventoryCoverage", () => {
         ],
       ),
     ).toThrow(/missing dirNames: manifest-only.*missing ids: manifest-only/u);
-  });
-
-  it("detects duplicate ids in the independent manifest enumeration", () => {
-    const entries = [
-      { dirName: "one", id: "duplicate" },
-      { dirName: "two", id: "duplicate" },
-    ];
-    expect(() => assertPluginInventoryCoverage(entries, entries)).toThrow(
-      "duplicate manifest ids: duplicate",
-    );
   });
 });

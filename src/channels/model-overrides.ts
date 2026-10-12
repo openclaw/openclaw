@@ -1,12 +1,8 @@
-/**
- * Channel-scoped model override resolver.
- *
- * Matches conversation ids, parent sessions, and wildcard config entries to model overrides.
- */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { ChannelModelByChannelConfig } from "../config/types.channels.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   parseRawSessionConversationRef,
@@ -26,15 +22,12 @@ import {
   resolveSessionConversationRef,
 } from "./plugins/session-conversation.js";
 
-/** Resolved model override for a channel conversation plus the config key that matched. */
 type ChannelModelOverride = {
   channel: string;
   model: string;
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
-
-type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
 
 type ChannelModelOverrideParams = {
   cfg: OpenClawConfig;
@@ -86,11 +79,10 @@ function buildChannelCandidates(
     bundledFallback: parentOverrideFallbacks.length === 0,
   });
   const groupConversationKind =
-    normalizeChatType(params.groupChatType ?? undefined) === "channel"
+    normalizeChatType(params.groupChatType ?? undefined) === "channel" ||
+    sessionConversation?.kind === "channel"
       ? "channel"
-      : sessionConversation?.kind === "channel"
-        ? "channel"
-        : "group";
+      : "group";
   const groupConversation = resolveSessionConversation({
     channel: normalizedChannel ?? "",
     kind: groupConversationKind,
@@ -131,7 +123,6 @@ function buildGenericParentOverrideCandidates(sessionKey: string | null | undefi
   return buildChannelKeyCandidates(threadId ? baseSessionKey : raw.rawId);
 }
 
-/** Expand prefixed peer IDs by also trying the raw form after the channel prefix. */
 function expandPeerIds(
   ids: (string | null | undefined)[],
   channel: string,
@@ -149,7 +140,6 @@ function expandPeerIds(
   return expanded;
 }
 
-/** Resolves a channel-scoped model override from direct, parent, and wildcard config entries. */
 export function resolveChannelModelOverride(
   params: ChannelModelOverrideParams,
 ): ChannelModelOverride | null {
@@ -157,9 +147,7 @@ export function resolveChannelModelOverride(
   if (!channel) {
     return null;
   }
-  const modelByChannel = params.cfg.channels?.modelByChannel as
-    | ChannelModelByChannelConfig
-    | undefined;
+  const modelByChannel = params.cfg.channels?.modelByChannel;
   if (!modelByChannel) {
     return null;
   }

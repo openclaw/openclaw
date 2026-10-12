@@ -19,24 +19,6 @@ beforeEach(async () => {
 });
 
 describe("file.stat", () => {
-  it.each(["file", "directory"] as const)(
-    "reads %s metadata without fetching content",
-    async (type) => {
-      const target = type === "file" ? file : directory;
-      const stats = await fs.stat(target, { bigint: true });
-      const result = await handleFileStat({ path: target });
-      expect(result).toMatchObject({
-        ok: true,
-        path: target,
-        type,
-        size: Number(stats.size),
-        mtimeMs: Number(stats.mtimeNs) / 1_000_000,
-        binding: { kind: "existing", device: String(stats.dev), inode: String(stats.ino) },
-      });
-      expect(result).not.toHaveProperty("base64");
-    },
-  );
-
   it("distinguishes missing paths from invalid input", async () => {
     expect(await handleFileStat({ path: path.join(directory, "missing") })).toMatchObject({
       ok: false,
@@ -80,31 +62,48 @@ describe("file.stat", () => {
     ).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
   });
 
-  it("uses the existing read grant and does not require access to the parent directory", async () => {
-    const { ctx, invokeNode } = createCtx({
-      command: "file.stat",
-      params: { path: file, followSymlinks: true, preflightOnly: true },
-      pluginConfig: { nodes: { "node-1": { allowReadPaths: [file], ask: "off" } } },
-    });
-    invokeNode.mockImplementation(async ({ params } = {}) => ({
-      ok: true,
-      payload: await handleFileStat(params as Parameters<typeof handleFileStat>[0]),
-    }));
-    expect(await createFileTransferNodeInvokePolicy().handle(ctx)).toMatchObject({
-      ok: true,
-      payload: { ok: true, path: file, type: "file" },
-    });
-    expect(invokeNode).toHaveBeenCalledTimes(2);
-    expect(invokeNode.mock.calls[1]?.[0]?.params).toMatchObject({
-      path: file,
-      followSymlinks: false,
-      expectedCanonicalPath: file,
-      expectedBinding: { kind: "existing" },
-    });
-    invokeNode.mockClear();
-    expect(
-      await createFileTransferNodeInvokePolicy().handle({ ...ctx, params: { path: directory } }),
-    ).toMatchObject({ ok: false });
-    expect(invokeNode).not.toHaveBeenCalled();
-  });
+  it.each(["file", "directory"] as const)(
+    "reads %s metadata with its grant but denies its parent",
+    async (type) => {
+      const target = type === "file" ? file : directory;
+      const stats = await fs.stat(target, { bigint: true });
+      const { ctx, invokeNode } = createCtx({
+        command: "file.stat",
+        params: { path: target, followSymlinks: true, preflightOnly: true },
+        pluginConfig: { nodes: { "node-1": { allowReadPaths: [target], ask: "off" } } },
+      });
+      invokeNode.mockImplementation(async ({ params } = {}) => ({
+        ok: true,
+        payload: await handleFileStat(params as Parameters<typeof handleFileStat>[0]),
+      }));
+      const result = await createFileTransferNodeInvokePolicy().handle(ctx);
+      expect(result).toMatchObject({
+        ok: true,
+        payload: {
+          ok: true,
+          path: target,
+          type,
+          size: Number(stats.size),
+          mtimeMs: Number(stats.mtimeNs) / 1_000_000,
+          binding: { kind: "existing", device: String(stats.dev), inode: String(stats.ino) },
+        },
+      });
+      expect(result).not.toHaveProperty("payload.base64");
+      expect(invokeNode).toHaveBeenCalledTimes(2);
+      expect(invokeNode.mock.calls[1]?.[0]?.params).toMatchObject({
+        path: target,
+        followSymlinks: false,
+        expectedCanonicalPath: target,
+        expectedBinding: { kind: "existing" },
+      });
+      invokeNode.mockClear();
+      expect(
+        await createFileTransferNodeInvokePolicy().handle({
+          ...ctx,
+          params: { path: path.dirname(target) },
+        }),
+      ).toMatchObject({ ok: false });
+      expect(invokeNode).not.toHaveBeenCalled();
+    },
+  );
 });

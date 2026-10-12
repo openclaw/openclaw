@@ -15,6 +15,8 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 const DEV_UPDATE_AVAILABLE = {
   channel: "dev",
   commitsBehind: 246,
@@ -61,12 +63,16 @@ suite.define(() => {
   it.each(["light", "dark"] as const)(
     "narrates a dev-channel update through to its recorded success (%s)",
     async (colorScheme) => {
-      const artifactDir = createControlUiE2eArtifactDir(`update-lifecycle-${colorScheme}`);
+      const artifactDir = captureUiProofEnabled
+        ? createControlUiE2eArtifactDir(`update-lifecycle-${colorScheme}`)
+        : undefined;
       await suite.withPage(
         {
           colorScheme,
           locale: "en-US",
-          recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
+          recordVideo: artifactDir
+            ? { dir: artifactDir, size: { height: 720, width: 1280 } }
+            : undefined,
           serviceWorkers: "block",
           viewport: { height: 720, width: 1280 },
         },
@@ -95,9 +101,12 @@ suite.define(() => {
             .locator("openclaw-modal-dialog")
             .getByRole("button", { name: "Update and restart", exact: true })
             .waitFor();
-          // The modal fades in; capture it settled so the proof is readable.
-          await page.waitForTimeout(500);
-          await page.screenshot({ path: path.join(artifactDir, "1-confirm-dialog.png") });
+          if (artifactDir) {
+            await page.screenshot({
+              path: path.join(artifactDir, "1-confirm-dialog.png"),
+              animations: "disabled",
+            });
+          }
           await page
             .locator("openclaw-modal-dialog")
             .getByRole("button", { name: "Update and restart", exact: true })
@@ -111,7 +120,9 @@ suite.define(() => {
             .getByText("Installing the update on the Gateway.", { exact: true })
             .waitFor();
           expect(await gateway.getRequests("update.run")).toHaveLength(1);
-          await page.screenshot({ path: path.join(artifactDir, "2-installing.png") });
+          if (artifactDir) {
+            await page.screenshot({ path: path.join(artifactDir, "2-installing.png") });
+          }
 
           run = {
             ...run,
@@ -136,7 +147,9 @@ suite.define(() => {
           await gateway.setOnline(false);
           await dialog.getByText("Gateway restarting…", { exact: true }).waitFor();
           expect(await dialog.count()).toBe(1);
-          await page.screenshot({ path: path.join(artifactDir, "3-restarting.png") });
+          if (artifactDir) {
+            await page.screenshot({ path: path.join(artifactDir, "3-restarting.png") });
+          }
 
           // Git installs can keep their package version while changing revision.
           // The replacement Gateway's record must remain visible until dismissal.
@@ -162,10 +175,14 @@ suite.define(() => {
             (await gateway.waitForRequest("update.runs.get", { after: reads })).params,
           ).toEqual({ runId: run.runId });
           await dialog
-            .getByText("✅ OpenClaw updated to 9f3c21a0 (from 11111111).", { exact: true })
+            .getByText("✅ OpenClaw updated to 2026.8.1 (9f3c21a0) (from 2026.8.1 (11111111)).", {
+              exact: true,
+            })
             .first()
             .waitFor();
-          await page.screenshot({ path: path.join(artifactDir, "4-success-report.png") });
+          if (artifactDir) {
+            await page.screenshot({ path: path.join(artifactDir, "4-success-report.png") });
+          }
           expect(await gateway.getRequests("update.run")).toHaveLength(1);
           await dialog.getByRole("button", { name: "Close", exact: true }).click();
           await dialog.waitFor({ state: "detached" });
@@ -178,12 +195,16 @@ suite.define(() => {
   it.each(["light", "dark"] as const)(
     "names the recorded cause when the install fails (%s)",
     async (colorScheme) => {
-      const artifactDir = createControlUiE2eArtifactDir(`update-failure-cause-${colorScheme}`);
+      const artifactDir = captureUiProofEnabled
+        ? createControlUiE2eArtifactDir(`update-failure-cause-${colorScheme}`)
+        : undefined;
       await suite.withPage(
         {
           colorScheme,
           locale: "en-US",
-          recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
+          recordVideo: artifactDir
+            ? { dir: artifactDir, size: { height: 720, width: 1280 } }
+            : undefined,
           serviceWorkers: "block",
           viewport: { height: 720, width: 1280 },
         },
@@ -247,8 +268,12 @@ suite.define(() => {
             "Run openclaw triage to diagnose and repair the failed update.",
           );
           expect(await gateway.getRequests("update.run")).toHaveLength(1);
-          await page.waitForTimeout(300);
-          await page.screenshot({ path: path.join(artifactDir, "5-failure-in-dialog.png") });
+          if (artifactDir) {
+            await page.screenshot({
+              path: path.join(artifactDir, "5-failure-in-dialog.png"),
+              animations: "disabled",
+            });
+          }
           expect(pageErrors).toEqual([]);
         },
       );

@@ -142,15 +142,11 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
     }
 
     private func updateCallbacks(_ update: (inout WatchConnectivityTransportCallbacks) -> Void) {
-        self.callbacksLock.lock()
-        defer { self.callbacksLock.unlock() }
-        update(&self.callbacks)
+        self.callbacksLock.withLock { update(&self.callbacks) }
     }
 
     private func callbacksSnapshot() -> WatchConnectivityTransportCallbacks {
-        self.callbacksLock.lock()
-        defer { self.callbacksLock.unlock() }
-        return self.callbacks
+        self.callbacksLock.withLock { self.callbacks }
     }
 
     private func requireReadySession() throws -> WCSession {

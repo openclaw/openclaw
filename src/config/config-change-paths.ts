@@ -1,4 +1,3 @@
-// Reports config paths whose values differ between two snapshots.
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "../utils.js";
 

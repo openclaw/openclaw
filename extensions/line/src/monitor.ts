@@ -25,7 +25,7 @@ import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
 import { prepareLineReplyPayload } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import { showLoadingAnimation } from "./send.js";
-import type { LineChannelData, ResolvedLineAccount } from "./types.js";
+import type { LineChannelData } from "./types.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 import { LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
 import { resolveLineWebhookPath } from "./webhook-utils.js";
@@ -43,12 +43,6 @@ interface MonitorLineProviderOptions {
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }
 
-interface LineProviderMonitor {
-  account: ResolvedLineAccount;
-  handleWebhook: ReturnType<typeof createLineBot>["handleWebhook"];
-  stop: () => Promise<void>;
-}
-
 const lineWebhookInFlightLimiter = createWebhookInFlightLimiter();
 
 type LineWebhookTarget = {
@@ -59,29 +53,13 @@ type LineWebhookTarget = {
   runtime: RuntimeEnv;
 };
 
-async function registerLineWebhookTarget(
-  params: Parameters<typeof registerWebhookTargetWithPluginRoute<LineWebhookTarget>>[0],
-  bot: ReturnType<typeof createLineBot>,
-) {
-  try {
-    return registerWebhookTargetWithPluginRoute(params);
-  } catch (error) {
-    await Promise.allSettled([bot.stop()]);
-    throw error;
-  }
-}
-
 const lineWebhookTargets = new Map<string, LineWebhookTarget[]>();
 
 function startLineLoadingKeepalive(params: {
   cfg: OpenClawConfig;
   userId: string;
   accountId?: string;
-  intervalMs?: number;
-  loadingSeconds?: number;
 }): () => void {
-  const intervalMs = params.intervalMs ?? 18_000;
-  const loadingSeconds = params.loadingSeconds ?? 20;
   let stopped = false;
 
   const trigger = () => {
@@ -91,12 +69,12 @@ function startLineLoadingKeepalive(params: {
     void showLoadingAnimation(params.userId, {
       cfg: params.cfg,
       accountId: params.accountId,
-      loadingSeconds,
+      loadingSeconds: 20,
     }).catch(() => {});
   };
 
   trigger();
-  const timer = setInterval(trigger, intervalMs);
+  const timer = setInterval(trigger, 18_000);
 
   return () => {
     if (stopped) {
@@ -107,9 +85,7 @@ function startLineLoadingKeepalive(params: {
   };
 }
 
-export async function monitorLineProvider(
-  opts: MonitorLineProviderOptions,
-): Promise<LineProviderMonitor> {
+export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
   const {
     channelAccessToken,
     channelSecret,
@@ -133,17 +109,11 @@ export async function monitorLineProvider(
   }
 
   const bot = createLineBot({
-    channelAccessToken: token,
-    channelSecret: secret,
     accountId,
     runtime,
     buildContext,
     config,
     onMessage: async (ctx, deliveryControl) => {
-      if (!ctx) {
-        return;
-      }
-
       const { ctxPayload, replyToken, route } = ctx;
       // Admission already resolved the config live for this event; the turn and
       // its delivery run on that same one so the two can never disagree.
@@ -309,49 +279,52 @@ export async function monitorLineProvider(
     getTargets: () => lineWebhookTargets.get(webhookRouteKey) ?? [],
     runtime,
   });
-  const registrationParams: Parameters<
-    typeof registerWebhookTargetWithPluginRoute<LineWebhookTarget>
-  >[0] = {
-    targetsByPath: lineWebhookTargets,
-    target: {
-      accountId: resolvedAccountId,
-      bot,
-      channelSecret: secret,
-      path: normalizedPath,
-      runtime,
-    },
-    route: {
-      auth: "plugin",
-      pluginId: "line",
-      source: "line-webhook",
-      accountId: resolvedAccountId,
-      log: (msg) => logVerbose(msg),
-      throwOnFailure: true,
-      handler: async (req, res) => {
-        if (req.method !== "POST") {
-          await handleWebhook(req, res);
-          return;
-        }
-
-        const requestLifecycle = beginWebhookRequestPipelineOrReject({
-          req,
-          res,
-          inFlightLimiter: lineWebhookInFlightLimiter,
-          inFlightKey: `line:${webhookRouteKey}`,
-        });
-        if (!requestLifecycle.ok) {
-          return;
-        }
-
-        try {
-          await handleWebhook(req, res);
-        } finally {
-          requestLifecycle.release();
-        }
+  let unregisterHttp: () => void;
+  try {
+    ({ unregister: unregisterHttp } = registerWebhookTargetWithPluginRoute({
+      targetsByPath: lineWebhookTargets,
+      target: {
+        accountId: resolvedAccountId,
+        bot,
+        channelSecret: secret,
+        path: normalizedPath,
+        runtime,
       },
-    },
-  };
-  const { unregister: unregisterHttp } = await registerLineWebhookTarget(registrationParams, bot);
+      route: {
+        auth: "plugin",
+        pluginId: "line",
+        source: "line-webhook",
+        accountId: resolvedAccountId,
+        log: (msg) => logVerbose(msg),
+        throwOnFailure: true,
+        handler: async (req, res) => {
+          if (req.method !== "POST") {
+            await handleWebhook(req, res);
+            return;
+          }
+
+          const requestLifecycle = beginWebhookRequestPipelineOrReject({
+            req,
+            res,
+            inFlightLimiter: lineWebhookInFlightLimiter,
+            inFlightKey: `line:${webhookRouteKey}`,
+          });
+          if (!requestLifecycle.ok) {
+            return;
+          }
+
+          try {
+            await handleWebhook(req, res);
+          } finally {
+            requestLifecycle.release();
+          }
+        },
+      },
+    }));
+  } catch (error) {
+    await Promise.allSettled([bot.stop()]);
+    throw error;
+  }
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
   statusSink?.(channelReadyPatch());

@@ -18,6 +18,7 @@ import {
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -112,15 +113,42 @@ suite.define(() => {
         sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       const capture = (stage: string) =>
         page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
+      const selectResearchAgent = async () => {
+        await sidebar.getByRole("button", { name: /Switch agent/ }).click();
+        await sidebar
+          .locator("wa-dropdown.sidebar-agent-menu")
+          .getByRole("menuitem", { name: "Research", exact: true })
+          .click();
+      };
+      let researchHistory: { url: string; connections: number } | null = null;
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, original.key));
         await rowFor(original.key).waitFor({ state: "visible" });
+        if (operation === "rename" && filter === "All") {
+          // A submitted sidebar rename owns its modal until the response settles.
+          // Prepare real same-document history so browser navigation can change
+          // agents during that request without clicking through the modal.
+          const originalUrl = page.url();
+          const connections = (await gateway.getRequests("connect")).length;
+          await selectResearchAgent();
+          const researchPath = new URL(
+            controlUiSessionUrl(suite.server.baseUrl, researchRows[0]!.key),
+          ).pathname;
+          // Save the settled route after its loader consumes the navigation hints.
+          await page.waitForURL(
+            (url) =>
+              (url.pathname === researchPath || url.pathname.startsWith(`${researchPath}/`)) &&
+              url.search === "",
+          );
+          await rowFor(researchRows[1]!.key).waitFor({ state: "visible" });
+          researchHistory = { url: page.url(), connections };
+          await page.goBack();
+          await page.waitForURL(originalUrl);
+          await rowFor(original.key).waitFor({ state: "visible" });
+        }
         if (filter === "All") {
-          await sidebar.getByRole("button", { name: "Filter & sort" }).click();
-          await page
-            .locator(".sidebar-session-sort-menu")
-            .getByRole("menuitemradio", { name: filter, exact: true })
-            .click();
+          await chooseSidebarMenuOption(page, "Status", filter);
+          await closeSidebarMenu(page);
           await gateway.waitForRequest("sessions.list", {
             match: { agentId: "main", archived: "all" },
           });
@@ -132,7 +160,9 @@ suite.define(() => {
             await rowFor(original.key).click({ button: "right" });
             await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
           } else {
-            await page.locator(".chat-pane__session-title-button").click();
+            await page
+              .getByRole("button", { name: "Rename session Original name", exact: true })
+              .click();
           }
           const input = page.locator(
             filter === "All"
@@ -169,11 +199,13 @@ suite.define(() => {
             })),
           });
         }
-        await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-        await sidebar
-          .locator("wa-dropdown.sidebar-agent-menu")
-          .getByRole("menuitemradio", { name: "Research", exact: true })
-          .click();
+        if (researchHistory) {
+          await page.goForward();
+          await page.waitForURL(researchHistory.url);
+          expect(await gateway.getRequests("connect")).toHaveLength(researchHistory.connections);
+        } else {
+          await selectResearchAgent();
+        }
         await rowFor(researchRows[1]!.key).waitFor({ state: "visible" });
         await sidebar
           .getByRole("button", { name: "Load more sessions", exact: true })
@@ -197,6 +229,12 @@ suite.define(() => {
           match: { agentId: "main", includeGlobal: true },
         });
         await gateway.resolveDeferred("sessions.list");
+        if (researchHistory) {
+          await page
+            .locator('openclaw-modal-dialog[label="Rename session"]')
+            .waitFor({ state: "hidden" });
+          expect(await gateway.getRequests("connect")).toHaveLength(researchHistory.connections);
+        }
         if (operation === "batch archive") {
           await expect
             .poll(() => page.locator(".app-toast").textContent())
@@ -246,7 +284,7 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
           .locator("wa-dropdown.sidebar-agent-menu")
-          .getByRole("menuitemradio", { name: "Main", exact: true })
+          .getByRole("menuitem", { name: "Main", exact: true })
           .click();
         if (operation === "rename") {
           await expect.poll(() => rowFor(original.key).textContent()).toContain("Renamed original");
@@ -269,7 +307,7 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
           .locator("wa-dropdown.sidebar-agent-menu")
-          .getByRole("menuitemradio", { name: "Research", exact: true })
+          .getByRole("menuitem", { name: "Research", exact: true })
           .click();
         const returnedList = await gateway.waitForRequest("sessions.list", {
           match: researchMatch,

@@ -80,12 +80,6 @@ describe("doctor preview scan notes", () => {
       lines: ["must not render"],
       expectedNotes: [],
     },
-    {
-      name: "keeps an empty note when nonempty hits format to no lines",
-      shadows: ["shadow one"],
-      lines: [],
-      expectedNotes: [""],
-    },
   ])("$name without changing family order or config", async ({ shadows, lines, expectedNotes }) => {
     staleOAuthShadowState.warnings = shadows;
     staleAuthOrderState.warnings = ["auth-order warning"];

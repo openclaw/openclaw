@@ -108,7 +108,7 @@ export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
             guildInfo,
             channelConfig,
             channelMatchMeta: `guild=${data.id} channel=${channel.id}`,
-          }).allowed;
+          });
         if (roomAllowed) {
           targetChannel = channel;
           break;

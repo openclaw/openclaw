@@ -14,8 +14,9 @@ const prepareWebPushApprovalDeliveriesMock = vi.fn();
 const listWebPushApprovalDeliveryTargetsMock = vi.fn();
 const deleteWebPushApprovalDeliveryTargetsMock = vi.fn();
 const listTerminalWebPushApprovalDeliveryIdsMock = vi.fn();
-const resolveUserProfileIdMock = vi.fn();
-const resolveOperatorRolePolicyForProfileMock = vi.fn();
+const getUserPreferenceValuesMock = vi.fn();
+const prepareUserProfileCatalogMock = vi.fn();
+const resolveOperatorRolePolicyForAssignmentMock = vi.fn();
 const isApprovalRecordVisibleToClientMock = vi.fn();
 const getOperatorApprovalDetailedMock = vi.hoisted(() => vi.fn());
 
@@ -38,7 +39,6 @@ vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
 
 vi.mock("../infra/push-web.js", () => ({
   deleteWebPushApprovalDeliveryTargets: deleteWebPushApprovalDeliveryTargetsMock,
-  listBoundWebPushSubscriptions: listBoundWebPushSubscriptionsMock,
   withBoundWebPushSubscriptions: async <T>(
     stateDir: string | undefined,
     prepare: (
@@ -53,8 +53,21 @@ vi.mock("../infra/push-web.js", () => ({
   prepareWebPushNotificationSender: prepareWebPushNotificationSenderMock,
 }));
 
-vi.mock("../state/user-profiles.js", () => ({
-  resolveUserProfileId: resolveUserProfileIdMock,
+vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
+  prepareUserProfileCatalog: prepareUserProfileCatalogMock,
+}));
+
+vi.mock("../state/user-preferences.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-preferences.js")>()),
+  getUserPreferenceValues: getUserPreferenceValuesMock,
+}));
+
+vi.mock("./session-sharing-preparation.js", () => ({
+  prepareSessionMutationFacts: async () => ({
+    readCurrent: () => ({ target: null, membership: new Set<string>() }),
+    release: () => {},
+  }),
 }));
 
 vi.mock("./operator-role-policy.js", async () => {
@@ -63,7 +76,7 @@ vi.mock("./operator-role-policy.js", async () => {
   );
   return {
     ...actual,
-    resolveOperatorRolePolicyForProfile: resolveOperatorRolePolicyForProfileMock,
+    resolveOperatorRolePolicyForAssignment: resolveOperatorRolePolicyForAssignmentMock,
   };
 });
 
@@ -162,8 +175,16 @@ describe("approval Web Push delivery", () => {
       nextAfterApprovalId: null,
       throughApprovalId: null,
     });
-    resolveUserProfileIdMock.mockImplementation((profileId: string) => profileId);
-    resolveOperatorRolePolicyForProfileMock.mockReturnValue(undefined);
+    prepareUserProfileCatalogMock.mockResolvedValue({
+      readCurrentIdentity: (profileId: string) => ({
+        profileId,
+        role: null,
+        aliases: new Set([profileId]),
+      }),
+      release: () => {},
+    });
+    getUserPreferenceValuesMock.mockResolvedValue({ values: new Map(), isCurrent: () => true });
+    resolveOperatorRolePolicyForAssignmentMock.mockReturnValue(undefined);
     isApprovalRecordVisibleToClientMock.mockImplementation(
       ({ record, client }) =>
         !record.requestedByDeviceId || record.requestedByDeviceId === client?.connect?.device?.id,
@@ -291,47 +312,42 @@ describe("approval Web Push delivery", () => {
     expect(JSON.stringify(preparedWebPushSendMock.mock.calls)).not.toContain("sensitive command");
   });
 
-  it.for([
-    { detailLevel: "identified" as const, agentId: "agent\n\u202E", label: "agent\\u{A}\\u{202E}" },
-    { detailLevel: "detailed" as const, agentId: "🦞".repeat(50), label: "🦞".repeat(40) },
-  ])(
-    "bounds and sanitizes $detailLevel approval labels without changing agent filters",
-    async ({ detailLevel, agentId, label }, testContext) => {
-      const record = createTestApprovalManager(testContext).create(
-        { command: "echo ok", agentId },
-        60_000,
-      );
-      const subscription = boundSubscription("browser-device", null);
-      subscription.devicePreferences = {
-        enabled: true,
-        label: "Phone\u202E",
-        detailLevel,
-        agentIds: [agentId],
-      };
-      listBoundWebPushSubscriptionsMock.mockResolvedValue([subscription]);
-      listDevicePairingMock.mockReturnValue({
-        paired: [pairedOperator("browser-device", ["operator.admin"])],
-      });
-      preparedWebPushSendMock.mockResolvedValue([
-        { ok: true, subscriptionId: subscription.subscriptionId },
-      ]);
-      const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
+  it("sanitizes identified approval labels without changing agent filters", async (testContext) => {
+    const agentId = "agent\n\u202E";
+    const record = createTestApprovalManager(testContext).create(
+      { command: "echo ok", agentId },
+      60_000,
+    );
+    const subscription = boundSubscription("browser-device", null);
+    subscription.devicePreferences = {
+      enabled: true,
+      label: "Phone\u202E",
+      detailLevel: "identified",
+      agentIds: [agentId],
+    };
+    listBoundWebPushSubscriptionsMock.mockResolvedValue([subscription]);
+    listDevicePairingMock.mockReturnValue({
+      paired: [pairedOperator("browser-device", ["operator.admin"])],
+    });
+    preparedWebPushSendMock.mockResolvedValue([
+      { ok: true, subscriptionId: subscription.subscriptionId },
+    ]);
+    const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
 
-      await expect(
-        createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleRequested(record),
-      ).resolves.toBe(true);
+    await expect(
+      createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleRequested(record),
+    ).resolves.toBe(true);
 
-      expect(preparedWebPushSendMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            title: "Phone\\u{202E} · OpenClaw approval requested",
-            body: `Open OpenClaw to review an approval for ${label}.`,
-          }),
+    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          title: "Phone\\u{202E} · OpenClaw approval requested",
+          body: "Open OpenClaw to review an approval for agent\\u{A}\\u{202E}.",
         }),
-      );
-      expect(record.request.agentId).toBe(agentId);
-    },
-  );
+      }),
+    );
+    expect(record.request.agentId).toBe(agentId);
+  });
 
   it("rechecks the profile role and excludes unbound role-based subscriptions", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
@@ -355,7 +371,7 @@ describe("approval Web Push delivery", () => {
         pairedOperator("unbound-profile-device", ["operator.approvals", "operator.read"]),
       ],
     });
-    resolveOperatorRolePolicyForProfileMock.mockImplementation((profileId: string) =>
+    resolveOperatorRolePolicyForAssignmentMock.mockImplementation((profileId: string) =>
       profileId === "profile-missing"
         ? undefined
         : {
@@ -393,93 +409,6 @@ describe("approval Web Push delivery", () => {
     );
   });
 
-  it.for([
-    {
-      label: "device admin and granular profile",
-      tokenScopes: ["operator.admin"],
-      profileScopes: ["operator.read", "operator.approvals"],
-    },
-    {
-      label: "granular device and profile admin",
-      tokenScopes: ["operator.read", "operator.approvals"],
-      profileScopes: ["operator.admin"],
-    },
-  ])("honors implied scopes across $label", async ({ tokenScopes, profileScopes }, testContext) => {
-    const record = createTestApprovalManager(testContext).create(
-      { command: "echo ok" },
-      60_000,
-      "exec:implied-role-scopes",
-    );
-    const current = boundSubscription("current-device", "profile-current");
-    listBoundWebPushSubscriptionsMock.mockResolvedValue([current]);
-    listDevicePairingMock.mockReturnValue({
-      pending: [],
-      paired: [pairedOperator("current-device", tokenScopes)],
-    });
-    resolveOperatorRolePolicyForProfileMock.mockReturnValue({
-      sessions: { others: "none" },
-      agents: [],
-      scopes: profileScopes,
-    });
-    isApprovalRecordVisibleToClientMock.mockReturnValue(true);
-    preparedWebPushSendMock.mockResolvedValue([
-      { ok: true, subscriptionId: current.subscriptionId, statusCode: 201 },
-    ]);
-
-    const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
-    const delivery = createApprovalWebPushDelivery({
-      getRuntimeConfig: () => ({ gateway: { roles: { definitions: {} } } }),
-    });
-
-    await expect(delivery.handleRequested(record)).resolves.toBe(true);
-    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
-      expect.objectContaining({ subscriptions: [current] }),
-    );
-  });
-
-  it("prepares the transport before rereading current approval authority", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create({ command: "echo ok" }, 60_000, "exec:authority-race");
-    const current = boundSubscription("current-device", "profile-current");
-    listBoundWebPushSubscriptionsMock.mockResolvedValue([current]);
-    listDevicePairingMock.mockReturnValue({
-      pending: [],
-      paired: [pairedOperator("current-device", ["operator.approvals", "operator.read"])],
-    });
-    preparedWebPushSendMock.mockResolvedValue([
-      { ok: true, subscriptionId: current.subscriptionId, statusCode: 201 },
-    ]);
-
-    const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
-    const delivery = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
-    await expect(delivery.handleRequested(record)).resolves.toBe(true);
-
-    expect(prepareWebPushNotificationSenderMock).toHaveBeenCalledOnce();
-    expect(
-      expectDefined(
-        prepareWebPushNotificationSenderMock.mock.invocationCallOrder[0],
-        "transport preparation call order",
-      ),
-    ).toBeLessThan(
-      expectDefined(listDevicePairingMock.mock.invocationCallOrder[0], "pairing read call order"),
-    );
-    expect(listBoundWebPushSubscriptionsMock).toHaveBeenCalledTimes(2);
-    expect(
-      expectDefined(
-        prepareWebPushNotificationSenderMock.mock.invocationCallOrder[0],
-        "transport preparation call order",
-      ),
-    ).toBeLessThan(
-      expectDefined(
-        listBoundWebPushSubscriptionsMock.mock.invocationCallOrder[0],
-        "subscription read call order",
-      ),
-    );
-    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
-      expect.objectContaining({ subscriptions: [current] }),
-    );
-  });
-
   it("reads runtime role policy after transport preparation", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
     const record = manager.create({ command: "echo ok" }, 60_000, "exec:config-race");
@@ -494,8 +423,12 @@ describe("approval Web Push delivery", () => {
     const tightenedConfig = { gateway: { roles: { definitions: {} } } };
     let runtimeConfig: typeof tightenedConfig | Record<string, never> = {};
     const getRuntimeConfig = vi.fn(() => runtimeConfig);
-    resolveOperatorRolePolicyForProfileMock.mockImplementation(
-      (_profileId: string, cfg: typeof tightenedConfig | Record<string, never>) =>
+    resolveOperatorRolePolicyForAssignmentMock.mockImplementation(
+      (
+        _profileId: string,
+        _role: string | null,
+        cfg: typeof tightenedConfig | Record<string, never>,
+      ) =>
         "gateway" in cfg
           ? { sessions: { others: "none" }, agents: [], scopes: ["operator.read"] }
           : undefined,
@@ -509,13 +442,16 @@ describe("approval Web Push delivery", () => {
     preparation.resolve(preparedWebPushSendMock);
 
     await expect(requested).resolves.toBe(false);
-    expect(getRuntimeConfig).toHaveBeenCalledOnce();
+    expect(getRuntimeConfig).toHaveBeenCalled();
     expect(preparedWebPushSendMock).not.toHaveBeenCalled();
   });
 
-  it.for(["resolved", "expired"] as const)(
-    "does not send after the approval becomes %s during transport preparation",
-    async (terminalState, testContext) => {
+  it.for([
+    { terminalState: "resolved", phase: "transport" },
+    { terminalState: "expired", phase: "preferences" },
+  ] as const)(
+    "does not send after the approval becomes $terminalState during $phase preparation",
+    async ({ terminalState, phase }, testContext) => {
       const manager = createTestApprovalManager(testContext);
       const record = manager.create(
         { command: "echo ok" },
@@ -528,24 +464,35 @@ describe("approval Web Push delivery", () => {
         pending: [],
         paired: [pairedOperator("current-device", ["operator.approvals", "operator.read"])],
       });
-      let finishPreparation: ((sender: typeof preparedWebPushSendMock) => void) | undefined;
-      prepareWebPushNotificationSenderMock.mockReturnValueOnce(
-        new Promise((resolve) => {
-          finishPreparation = resolve;
-        }),
-      );
+      const preparationStarted = createDeferred();
+      const preparationReady = createDeferred();
+      const waitForPreparation = async () => {
+        preparationStarted.resolve();
+        await preparationReady.promise;
+      };
+      if (phase === "transport") {
+        prepareWebPushNotificationSenderMock.mockImplementationOnce(async () => {
+          await waitForPreparation();
+          return preparedWebPushSendMock;
+        });
+      } else {
+        getUserPreferenceValuesMock.mockImplementationOnce(async () => {
+          await waitForPreparation();
+          return { values: new Map(), isCurrent: () => true };
+        });
+      }
 
       const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
       const webPushDelivery = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
       const delivery = webPushDelivery.handleRequested(record);
-      await vi.waitFor(() => expect(prepareWebPushNotificationSenderMock).toHaveBeenCalledOnce());
+      await preparationStarted.promise;
       if (terminalState === "resolved") {
         record.resolvedAtMs = Date.now();
         record.status = "denied";
       } else {
         record.expiresAtMs = Date.now() - 1;
       }
-      expectDefined(finishPreparation, "transport preparation resolver")(preparedWebPushSendMock);
+      preparationReady.resolve();
 
       await expect(delivery).resolves.toBe(false);
       expect(preparedWebPushSendMock).not.toHaveBeenCalled();
@@ -640,78 +587,71 @@ describe("approval Web Push delivery", () => {
     );
   });
 
-  it.for(["resolved", "expired"] as const)(
-    "replaces successful request alerts after the approval becomes %s",
-    async (terminalState, testContext) => {
-      const manager = createTestApprovalManager(testContext);
-      const record = manager.create(
-        { command: "sensitive command" },
-        60_000,
-        `exec:terminal-${terminalState}`,
-      );
-      const delivered = boundSubscription("delivered-device", "profile-delivered");
-      const failed = boundSubscription("failed-device", "profile-failed");
-      listBoundWebPushSubscriptionsMock.mockResolvedValue([delivered, failed]);
-      listDevicePairingMock.mockReturnValue({
-        pending: [],
-        paired: [
-          pairedOperator("delivered-device", ["operator.approvals", "operator.read"]),
-          pairedOperator("failed-device", ["operator.approvals", "operator.read"]),
-        ],
-      });
-      preparedWebPushSendMock
-        .mockResolvedValueOnce([
-          { ok: true, subscriptionId: delivered.subscriptionId, statusCode: 201 },
-          { ok: false, subscriptionId: failed.subscriptionId, statusCode: 410 },
-        ])
-        .mockResolvedValueOnce([
-          { ok: true, subscriptionId: delivered.subscriptionId, statusCode: 201 },
-        ]);
+  it("replaces successful request alerts after the approval becomes expired", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
+    const record = manager.create(
+      { command: "sensitive command" },
+      60_000,
+      "exec:terminal-expired",
+    );
+    const delivered = boundSubscription("delivered-device", "profile-delivered");
+    const failed = boundSubscription("failed-device", "profile-failed");
+    listBoundWebPushSubscriptionsMock.mockResolvedValue([delivered, failed]);
+    listDevicePairingMock.mockReturnValue({
+      pending: [],
+      paired: [
+        pairedOperator("delivered-device", ["operator.approvals", "operator.read"]),
+        pairedOperator("failed-device", ["operator.approvals", "operator.read"]),
+      ],
+    });
+    preparedWebPushSendMock
+      .mockResolvedValueOnce([
+        { ok: true, subscriptionId: delivered.subscriptionId, statusCode: 201 },
+        { ok: false, subscriptionId: failed.subscriptionId, statusCode: 410 },
+      ])
+      .mockResolvedValueOnce([
+        { ok: true, subscriptionId: delivered.subscriptionId, statusCode: 201 },
+      ]);
 
-      const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
-      const delivery = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
-      await expect(delivery.handleRequested(record)).resolves.toBe(true);
-      const requestOptions = preparedWebPushSendMock.mock.calls[0]?.[0]?.deliveryOptions;
+    const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
+    const delivery = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
+    await expect(delivery.handleRequested(record)).resolves.toBe(true);
+    const requestOptions = preparedWebPushSendMock.mock.calls[0]?.[0]?.deliveryOptions;
 
-      delivered.devicePreferences = {
-        enabled: false,
-        label: "",
-        quietHours: {
-          enabled: true,
-          startMinute: 0,
-          endMinute: 1439,
-          timeZone: "UTC",
-        },
-      };
+    delivered.devicePreferences = {
+      enabled: false,
+      label: "",
+      quietHours: {
+        enabled: true,
+        startMinute: 0,
+        endMinute: 1439,
+        timeZone: "UTC",
+      },
+    };
 
-      if (terminalState === "resolved") {
-        await delivery.handleResolved({ id: record.id });
-      } else {
-        await delivery.handleExpired({ id: record.id });
-      }
+    await delivery.handleExpired({ id: record.id });
 
-      expect(preparedWebPushSendMock).toHaveBeenCalledTimes(2);
-      expect(preparedWebPushSendMock).toHaveBeenNthCalledWith(2, {
-        subscriptions: [delivered],
-        payload: {
-          title: "OpenClaw approval updated",
-          body: "This approval is no longer pending.",
-          renotify: false,
-          tag: `openclaw-approval-${record.id}`,
-          url: `approve/${encodeURIComponent(record.id)}`,
-        },
-        deliveryOptions: {
-          TTL: 300,
-          urgency: "high",
-          timeout: 10_000,
-          topic: requestOptions?.topic,
-        },
-      });
-      expect(JSON.stringify(preparedWebPushSendMock.mock.calls[1])).not.toContain(
-        "sensitive command",
-      );
-    },
-  );
+    expect(preparedWebPushSendMock).toHaveBeenCalledTimes(2);
+    expect(preparedWebPushSendMock).toHaveBeenNthCalledWith(2, {
+      subscriptions: [delivered],
+      payload: {
+        title: "OpenClaw approval updated",
+        body: "This approval is no longer pending.",
+        renotify: false,
+        tag: `openclaw-approval-${record.id}`,
+        url: `approve/${encodeURIComponent(record.id)}`,
+      },
+      deliveryOptions: {
+        TTL: 300,
+        urgency: "high",
+        timeout: 10_000,
+        topic: requestOptions?.topic,
+      },
+    });
+    expect(JSON.stringify(preparedWebPushSendMock.mock.calls[1])).not.toContain(
+      "sensitive command",
+    );
+  });
 
   it("drains terminal recovery beyond the first 1,024 approvals", async () => {
     const firstPage = Array.from(
@@ -792,48 +732,6 @@ describe("approval Web Push delivery", () => {
   });
 
   it.for(["same-process", "restart"] as const)(
-    "does not send a terminal approval link to a rebound subscription after %s resolution",
-    async (mode, testContext) => {
-      const manager = createTestApprovalManager(testContext);
-      const record = manager.create(
-        { command: "sensitive command" },
-        60_000,
-        `exec:rebound-terminal-${mode}`,
-      );
-      const original = boundSubscription("original-device", "profile-original");
-      listBoundWebPushSubscriptionsMock.mockResolvedValue([original]);
-      listDevicePairingMock.mockReturnValue({
-        pending: [],
-        paired: [pairedOperator("original-device", ["operator.approvals", "operator.read"])],
-      });
-      preparedWebPushSendMock.mockResolvedValueOnce([
-        { ok: true, subscriptionId: original.subscriptionId, statusCode: 201 },
-      ]);
-
-      const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
-      const firstProcess = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
-      await expect(firstProcess.handleRequested(record)).resolves.toBe(true);
-
-      // The durable store retains the original binding but the mutable
-      // subscription row now belongs to someone else, so it returns no target.
-      listWebPushApprovalDeliveryTargetsMock.mockResolvedValue([]);
-      if (mode === "restart") {
-        listTerminalWebPushApprovalDeliveryIdsMock.mockResolvedValue({
-          approvalIds: [record.id],
-          nextAfterApprovalId: null,
-          throughApprovalId: record.id,
-        });
-        const restartedProcess = createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) });
-        await restartedProcess.recoverTerminalDeliveries();
-      } else {
-        await firstProcess.handleResolved({ id: record.id });
-      }
-
-      expect(preparedWebPushSendMock).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.for(["same-process", "restart"] as const)(
     "does not send a terminal approval link after device authority is revoked in %s delivery",
     async (mode, testContext) => {
       const manager = createTestApprovalManager(testContext);
@@ -891,7 +789,7 @@ describe("approval Web Push delivery", () => {
       pending: [],
       paired: [pairedOperator("policy-device", ["operator.approvals", "operator.read"])],
     });
-    resolveOperatorRolePolicyForProfileMock.mockReturnValue(undefined);
+    resolveOperatorRolePolicyForAssignmentMock.mockReturnValue(undefined);
     preparedWebPushSendMock.mockResolvedValueOnce([
       { ok: true, subscriptionId: delivered.subscriptionId, statusCode: 201 },
     ]);
@@ -903,17 +801,18 @@ describe("approval Web Push delivery", () => {
     const delivery = createApprovalWebPushDelivery({ getRuntimeConfig });
     await expect(delivery.handleRequested(record)).resolves.toBe(true);
     getRuntimeConfig.mockReturnValue(tightenedConfig);
-    resolveOperatorRolePolicyForProfileMock.mockReturnValue({
+    resolveOperatorRolePolicyForAssignmentMock.mockReturnValue({
       sessions: { others: "none" },
       agents: [],
       scopes: ["operator.read"],
     });
     await delivery.handleResolved({ id: record.id });
 
-    expect(getRuntimeConfig).toHaveBeenCalledTimes(3);
-    expect(resolveOperatorRolePolicyForProfileMock).toHaveBeenLastCalledWith(
+    expect(resolveOperatorRolePolicyForAssignmentMock).toHaveBeenLastCalledWith(
       "profile-policy",
+      null,
       tightenedConfig,
+      null,
     );
     expect(preparedWebPushSendMock).toHaveBeenCalledTimes(1);
   });

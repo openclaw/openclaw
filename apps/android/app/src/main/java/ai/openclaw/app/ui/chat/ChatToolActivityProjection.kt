@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatToolActivity
+import ai.openclaw.app.chat.unwrapToolCallForDisplay
 
 /** A presentation-only bridge: history remains the owner of output and reconnect recovery. */
 internal class LiveToolActivityBridge {
@@ -75,7 +76,7 @@ internal fun projectToolActivity(
     // A row folded under Worked belongs there, not in a duplicate live disclosure.
     val visible = groups[scope]
     val folded = matches.size == 1 && visible?.toolKeys?.contains(key) != true
-    val alert = call.isError == true || call.activity?.status in setOf("blocked", "failed")
+    val alert = if (call.activity != null) call.activity.status in setOf("blocked", "failed") else call.isError == true
     if (folded && !alert) return@forEach
     val hiddenOwner = if (folded) durable.singleOrNull { it.disclosureKey == scope && key in it.toolKeys } else null
     val group =
@@ -86,27 +87,26 @@ internal fun projectToolActivity(
     var index = group.toolKeys.indexOf(key)
     val tools = group.tools.toMutableList()
     val toolKeys = group.toolKeys.toMutableList()
+    val displayCall = unwrapToolCallForDisplay(call.name, call.args)
     if (index < 0) {
-      tools.add(hiddenOwner?.let { it.tools[it.toolKeys.indexOf(key)] } ?: ChatToolActivity(call.toolCallId, call.name, null, null, call.isError == true, call.args, call.activity, true))
+      tools.add(hiddenOwner?.let { it.tools[it.toolKeys.indexOf(key)] } ?: ChatToolActivity(call.toolCallId, displayCall.name, null, null, call.isError == true, displayCall.args, call.activity, true))
       toolKeys.add(key)
       index = tools.lastIndex
     }
-    run {
-      val tool = tools[index]
-      tools[index] =
-        tool.copy(
-          arguments = tool.arguments ?: call.args,
-          isError = tool.isError || call.isError == true,
-          activity =
-            if (call.activity?.status in setOf("blocked", "failed")) {
-              call.activity
-            } else if (tool.activityPrepared) {
-              tool.activity
-            } else {
-              call.activity ?: tool.activity
-            },
-        )
-    }
+    val tool = tools[index]
+    tools[index] =
+      tool.copy(
+        arguments = tool.arguments ?: displayCall.args,
+        isError = tool.isError || call.isError == true,
+        activity =
+          if (call.activity?.status in setOf("blocked", "failed", "skipped")) {
+            call.activity
+          } else if (tool.activityPrepared) {
+            tool.activity
+          } else {
+            call.activity ?: tool.activity
+          },
+      )
     groups[scope] = group.copy(tools = tools, toolKeys = toolKeys, liveTools = group.liveTools + (key to if (key in group.settledToolKeys) call.copy(isComplete = true) else call))
   }
   groups.replaceAll { _, group ->

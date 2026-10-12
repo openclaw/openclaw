@@ -1,29 +1,30 @@
 /** Manual cron wake helper for queueing system events into sessions. */
+import { isSubagentSessionKey, normalizeOptionalAgentId } from "../../routing/session-key.js";
+import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import {
-  isSubagentSessionKey,
-  normalizeOptionalAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
-import { resolveCronDeliverySessionKey } from "../session-target.js";
-import type { CronNotificationJob } from "./notification-intents.js";
+  resolveCronNotificationQueueOwner,
+  type CronNotificationJob,
+  type CronNotificationRouting,
+} from "./notification-intents.js";
 import type { CronServiceState } from "./state.js";
 
 /** Keeps safety notices with their creator and limits failure routes to explicit origins. */
-export function enqueueCronNotification(
+export async function enqueueCronNotification(
   state: CronServiceState,
   job: CronNotificationJob,
   text: string,
   kind: "auto-disabled" | "failure-alert",
-): void {
-  const sessionKey = kind === "failure-alert" ? resolveCronDeliverySessionKey(job) : job.sessionKey;
-  const agentId =
-    normalizeOptionalAgentId(job.agentId) ??
-    normalizeOptionalAgentId(parseAgentSessionKey(sessionKey)?.agentId) ??
-    normalizeOptionalAgentId(state.deps.resolveDefaultAgentId?.()) ??
-    normalizeOptionalAgentId(state.deps.defaultAgentId);
+  routing: CronNotificationRouting,
+): Promise<void> {
+  const owner = resolveCronNotificationQueueOwner(job, kind);
+  const { sessionKey } = owner;
+  const agentId = owner.agentId ?? normalizeOptionalAgentId(routing.defaultAgentId);
+  if (!agentId) {
+    throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+  }
   const deliveryContext =
     sessionKey || (kind === "auto-disabled" && agentId)
-      ? state.deps.resolveOriginDeliveryContext?.({ agentId, sessionKey })
+      ? await state.deps.resolveOriginDeliveryContext?.({ agentId, sessionKey })
       : undefined;
   state.deps.enqueueSystemEvent(text, {
     agentId,
@@ -43,7 +44,7 @@ export function enqueueCronNotification(
 }
 
 /** Enqueues a manual cron wake event and optionally pokes the targeted heartbeat loop. */
-export function wake(
+export async function wake(
   state: CronServiceState,
   opts: {
     mode: "now" | "next-heartbeat";
@@ -64,6 +65,7 @@ export function wake(
      * ("always routes to default agent").
      */
     agentId?: string;
+    commitGuard?: () => void;
   },
 ) {
   const text = opts.text.trim();
@@ -82,7 +84,7 @@ export function wake(
   // resolve the current system-agent owner and session atomically.
   const originDeliveryContext =
     sessionKey || agentId
-      ? state.deps.resolveOriginDeliveryContext?.({ sessionKey, agentId })
+      ? await state.deps.resolveOriginDeliveryContext?.({ sessionKey, agentId })
       : undefined;
   const enqueueOpts =
     sessionKey || agentId
@@ -92,6 +94,7 @@ export function wake(
           ...(originDeliveryContext ? { deliveryContext: originDeliveryContext } : {}),
         }
       : undefined;
+  opts.commitGuard?.();
   state.deps.enqueueSystemEvent(text, enqueueOpts);
   if (opts.mode === "now" || sessionKey) {
     // Scheduled heartbeats only inspect the agent's main session, so a targeted

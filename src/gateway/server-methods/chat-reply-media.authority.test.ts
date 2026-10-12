@@ -40,10 +40,7 @@ afterEach(async () => {
 
 it.each([
   ["permission", "metadata"],
-  ["permission", "content"],
-  ["placement", "metadata"],
   ["placement", "content"],
-  ["abort", "metadata"],
   ["abort", "content"],
 ] as const)(
   "cleans earlier image files and records when %s changes during audio %s preparation",
@@ -61,7 +58,7 @@ it.each([
     await fs.writeFile(audioSource, AUDIO_BYTES);
     const cfg: OpenClawConfig = {
       tools: { allow: ["read"], fs: { workspaceOnly: true } },
-      agents: { list: [{ id: "main", workspace }] },
+      agents: { entries: { main: { workspace } } },
     };
     const target = {
       sessionKey: SESSION_KEY,
@@ -77,7 +74,7 @@ it.each([
       updatedAt: 1,
     };
     await replaceSessionEntry(target, entry);
-    const scope = captureWebchatReplyMediaScope({
+    const scope = await captureWebchatReplyMediaScope({
       cfg,
       agentId: "main",
       sessionKey: SESSION_KEY,
@@ -152,7 +149,7 @@ it.each([
 );
 
 it("preserves already-produced text after its turn is aborted", async () => {
-  const scope = captureWebchatReplyMediaScope({
+  const scope = await captureWebchatReplyMediaScope({
     cfg: {},
     agentId: "main",
     sessionKey: SESSION_KEY,

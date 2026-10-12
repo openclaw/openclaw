@@ -28,7 +28,7 @@ export async function recoverInstalledLaunchAgent<
   if (process.platform !== "darwin") {
     return null;
   }
-  const env = params.env ?? (process.env as Record<string, string | undefined>);
+  const env = params.env ?? process.env;
   // Check host-wide ownership even when no user plist exists. Otherwise start
   // and restart would report "not installed" for a gateway already supervised
   // by a same-label system LaunchDaemon.

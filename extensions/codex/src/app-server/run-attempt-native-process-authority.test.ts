@@ -1,10 +1,13 @@
+import { once } from "node:events";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { invokeNativeHookRelay } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { consumeCodexAppServerLiveThread, hasCodexAppServerLiveThread } from "./client-runtime.js";
 import {
   createCodexTestHostCapabilities,
   setCodexTestToolFactory,
@@ -35,7 +38,11 @@ import {
   releaseCodexSandboxExecServerEnvironment,
 } from "./sandbox-exec-server.js";
 import { createSandboxContext, openSocket, rpc } from "./sandbox-exec-server.test-helpers.js";
-import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import type { CodexAppServerBindingStore } from "./session-binding.js";
+import {
+  readCodexAppServerBinding,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 import {
   appendSqliteHistoryMessage,
   attachSqliteSessionTarget,
@@ -78,20 +85,60 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
   const sessionFile = path.join(tempDir, "native-owner-session.jsonl");
   const workspaceDir = path.join(tempDir, "workspace");
   const threadId = "qualification-shared-thread";
+  const sessionScope = {
+    agentId: "main",
+    sessionKey: "agent:main:session-1",
+    storePath: path.join(tempDir, "native-owner-sessions.json"),
+  };
+  await upsertSessionEntry({
+    ...sessionScope,
+    entry: { sessionId: "session-1", updatedAt: 1 },
+  });
   const terminals = new Map<string, Terminal>();
   const terminated: Actor[] = [];
   const activeRuns: Array<{ controller: AbortController; run: Promise<unknown> }> = [];
   const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
   const backgroundCleanupFailed = createDeferred<void>();
+  const settlementFailure = options.failSettlement
+    ? new Error("fixture backend settlement failed")
+    : undefined;
+  const isExpectedSettlementFailure = (error: unknown): boolean =>
+    settlementFailure !== undefined &&
+    (error === settlementFailure ||
+      (error instanceof AggregateError &&
+        error.errors.length > 0 &&
+        error.errors.every(isExpectedSettlementFailure)));
   const turns: string[] = [];
+  let attemptSequence = 0;
   let socket: WebSocket | undefined;
   let registeredUrl: string | undefined;
   let retainedEnvironment: Awaited<ReturnType<typeof ensureCodexSandboxExecServerEnvironment>>;
+  let bindingLeaseGate:
+    | {
+        entered: ReturnType<typeof createDeferred<void>>;
+        release: ReturnType<typeof createDeferred<void>>;
+      }
+    | undefined;
+  const withLease: CodexAppServerBindingStore["withLease"] = async (identity, run, leaseOptions) =>
+    await testCodexAppServerBindingStore.withLease(
+      identity,
+      async () => {
+        const gate = bindingLeaseGate;
+        if (gate) {
+          bindingLeaseGate = undefined;
+          gate.entered.resolve();
+          await gate.release.promise;
+        }
+        return await run();
+      },
+      leaseOptions,
+    );
+  const bindingStore = { ...testCodexAppServerBindingStore, withLease };
   const sandbox = createSandboxContext({
-    ...(options.failSettlement
+    ...(settlementFailure
       ? {
           finalizeExec: async () => {
-            throw new Error("fixture backend settlement failed");
+            throw settlementFailure;
           },
         }
       : {}),
@@ -112,65 +159,90 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     agentWorkspaceDir: workspaceDir,
     runtimeId: `native-terminal-${path.basename(tempDir)}`,
   });
-  const harness = createStartedThreadHarness(async (method, raw) => {
-    const input = raw as Record<string, unknown>;
-    if (method === "environment/add") {
-      const url = String(input.execServerUrl);
-      if (registeredUrl !== url || socket?.readyState !== 1) {
-        socket = await openSocket(url);
-        registeredUrl = url;
+  const harness = createStartedThreadHarness(
+    async (method, raw) => {
+      const input = raw as Record<string, unknown>;
+      if (method === "environment/add") {
+        const url = String(input.execServerUrl);
+        if (registeredUrl !== url || socket?.readyState !== 1) {
+          socket = await openSocket(url);
+          registeredUrl = url;
+        }
+        return {};
       }
-      return {};
-    }
-    if (method === "thread/start" || method === "thread/resume") {
-      if (method === "thread/resume") {
+      if (method === "thread/start" || method === "thread/resume") {
+        if (method === "thread/resume") {
+          expect(input.threadId).toBe(threadId);
+        }
+        return threadStartResult(threadId, { cwd: "/workspace" });
+      }
+      if (method === "thread/read") {
+        const requestedThreadId = typeof input.threadId === "string" ? input.threadId : threadId;
+        return { thread: { ...threadStartResult(requestedThreadId).thread, turns: [] } };
+      }
+      if (method === "turn/start") {
         expect(input.threadId).toBe(threadId);
+        expect(input.environments).toEqual([
+          { environmentId: expect.stringMatching(/^openclaw-sandbox-/), cwd: "/workspace" },
+        ]);
+        const turnId = `qualification-turn-${turns.length + 1}`;
+        turns.push(turnId);
+        return turnStartResult(turnId);
       }
-      return threadStartResult(threadId, { cwd: "/workspace" });
-    }
-    if (method === "thread/read") {
-      const requestedThreadId = typeof input.threadId === "string" ? input.threadId : threadId;
-      return { thread: { ...threadStartResult(requestedThreadId).thread, turns: [] } };
-    }
-    if (method === "turn/start") {
-      expect(input.threadId).toBe(threadId);
-      expect(input.environments).toEqual([
-        { environmentId: expect.stringMatching(/^openclaw-sandbox-/), cwd: "/workspace" },
-      ]);
-      const turnId = `qualification-turn-${turns.length + 1}`;
-      turns.push(turnId);
-      return turnStartResult(turnId);
-    }
-    if (method === "thread/backgroundTerminals/list") {
-      expect(input.threadId).toBe(threadId);
-      const data = [...terminals.values()]
-        .filter((terminal) => terminal.alive)
-        .map(({ itemId, processId, command, cwd }) => ({ itemId, processId, command, cwd }));
-      return { data: input.limit ? data.slice(0, Number(input.limit)) : data, nextCursor: null };
-    }
-    if (method === "thread/backgroundTerminals/terminate") {
-      expect(input.threadId).toBe(threadId);
-      const terminal = terminals.get(String(input.processId));
-      if (!terminal || !terminal.alive || !socket) {
-        return { terminated: false };
+      if (method === "turn/interrupt") {
+        expect(input.threadId).toBe(threadId);
+        expect(input.turnId).toBe(turns.at(-1));
+        // Codex acknowledges the interrupt before publishing its matching terminal.
+        void nextTurn().then(() =>
+          harness.notify({
+            method: "turn/completed",
+            params: {
+              threadId,
+              turn: { id: String(input.turnId), status: "interrupted", items: [] },
+            },
+          }),
+        );
+        return {};
       }
-      await rpc(socket, "process/terminate", { processId: terminal.processId });
-      await terminal.closed;
-      terminated.push(terminal.actor);
-      return { terminated: true };
-    }
-    return undefined;
-  });
+      if (method === "thread/backgroundTerminals/list") {
+        expect(input.threadId).toBe(threadId);
+        const data = [...terminals.values()]
+          .filter((terminal) => terminal.alive)
+          .map(({ itemId, processId, command, cwd }) => ({ itemId, processId, command, cwd }));
+        return { data: input.limit ? data.slice(0, Number(input.limit)) : data, nextCursor: null };
+      }
+      if (method === "thread/backgroundTerminals/terminate") {
+        expect(input.threadId).toBe(threadId);
+        const terminal = terminals.get(String(input.processId));
+        if (!terminal || !terminal.alive || !socket) {
+          return { terminated: false };
+        }
+        await rpc(socket, "process/terminate", { processId: terminal.processId });
+        await terminal.closed;
+        terminated.push(terminal.actor);
+        return { terminated: true };
+      }
+      return undefined;
+    },
+    { persistedThreads: [threadId] },
+  );
 
-  const begin = async (actor: Actor, nativeChild?: { threadId: string; turnId: string }) => {
+  const begin = async (
+    actor: Actor,
+    nativeChild?: { threadId: string; turnId: string },
+    replay?: Pick<Terminal, "itemId" | "processId">,
+  ) => {
     const controller = new AbortController();
     const source = new AbortController();
     let completed = false;
     const admitted = createDeferred<void>();
+    const attemptId = ++attemptSequence;
+    const itemId = replay?.itemId ?? `${actor}-command-${attemptId}`;
     const params = createParams(sessionFile, workspaceDir, {
-      runId: `${actor}-run-${turns.length + 1}`,
+      runId: `${actor}-run-${attemptId}`,
       prompt: `${actor} qualification turn`,
     });
+    params.sessionTarget = { ...sessionScope, sessionId: params.sessionId };
     params.hostCapabilities = createSourceBoundHostCapabilities(source.signal);
     params.senderId = actor;
     params.onAgentEvent = (event) => {
@@ -192,6 +264,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     setCodexTestToolFactory(params, () => []);
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },
+      bindingStore,
     });
     activeRuns.push({ controller, run });
     await Promise.race([
@@ -247,7 +320,8 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       throw new Error("Expected the real local sandbox exec-server owner");
     }
     const previousChildren = new Set(server.children);
-    const processId = actor === "maintainer" ? "1001" : "2001";
+    const processId =
+      replay?.processId ?? String((actor === "maintainer" ? 1000 : 2000) + attemptId);
     const relay = await invokeNativeHookRelay({
       provider: "codex",
       relayId: buildCodexNativeHookRelayId({
@@ -261,14 +335,14 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
         ...(nativeChild ? { agent_id: nativeChild.threadId } : {}),
         turn_id: commandTurnId,
         tool_name: "exec_command",
-        tool_use_id: `${actor}-command`,
+        tool_use_id: itemId,
         tool_input: { command: "qualification-task-owned-process" },
       },
     });
     expect(relay.exitCode).toBe(0);
     await rpc(socket, "process/start", {
       processId,
-      metadata: { threadId: commandThreadId, toolCallId: `${actor}-command` },
+      metadata: { threadId: commandThreadId, toolCallId: itemId },
       argv: ["qualification-task-owned-process"],
       cwd: "file:///workspace",
       env: {},
@@ -282,7 +356,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     }
     const terminal: Terminal = {
       actor,
-      itemId: `${actor}-command`,
+      itemId,
       processId,
       command: "qualification-task-owned-process",
       cwd: "/workspace",
@@ -291,6 +365,15 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       settled: child.settled,
     };
     terminals.set(processId, terminal);
+    const commandItem = {
+      id: terminal.itemId,
+      type: "commandExecution" as const,
+      command: terminal.command,
+      cwd: "/workspace",
+      processId,
+      commandActions: [],
+      aggregatedOutput: "",
+    };
     void child.closed.then(async () => {
       terminal.alive = false;
       await harness.notify({
@@ -299,14 +382,8 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
           threadId: commandThreadId,
           turnId: commandTurnId,
           item: {
-            id: terminal.itemId,
-            type: "commandExecution",
-            command: terminal.command,
-            cwd: "/workspace",
-            processId,
+            ...commandItem,
             status: "completed",
-            commandActions: [],
-            aggregatedOutput: "",
             exitCode: 0,
             durationMs: 1,
           },
@@ -319,14 +396,8 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
         threadId: commandThreadId,
         turnId: commandTurnId,
         item: {
-          id: terminal.itemId,
-          type: "commandExecution",
-          command: terminal.command,
-          cwd: "/workspace",
-          processId,
+          ...commandItem,
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: "",
           exitCode: null,
           durationMs: null,
         },
@@ -382,6 +453,25 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     harness,
     sessionFile,
     threadId,
+    armRetentionLeaseWait: () => {
+      const gate = { entered: createDeferred<void>(), release: createDeferred<void>() };
+      bindingLeaseGate = gate;
+      return gate;
+    },
+    rotateSessionLineage: async () => {
+      await patchSessionEntry({
+        ...sessionScope,
+        update: () => ({ previousSessionId: "session-predecessor-replaced" }),
+      });
+    },
+    settleBackgroundProcess: async (terminal: Terminal) => {
+      if (!socket) {
+        throw new Error("Native process fixture socket is unavailable");
+      }
+      await rpc(socket, "process/terminate", { processId: terminal.processId });
+      await terminal.closed;
+      await terminal.settled;
+    },
     retainSecondConsumer: async () => {
       // Same production lease operation used by a concurrent /btw turn or another
       // permitted session sharing this sandbox runtime; no fabricated process inventory.
@@ -392,20 +482,43 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       });
     },
     dispose: async () => {
-      try {
-        for (const { controller } of activeRuns) {
-          controller.abort(new Error("fixture cleanup"));
+      const errors: unknown[] = [];
+      for (const cleanup of [
+        async () => {
+          for (const { controller } of activeRuns) {
+            controller.abort(new Error("fixture cleanup"));
+          }
+          await Promise.allSettled(activeRuns.map(({ run }) => run));
+        },
+        async () => {
+          if (retainedEnvironment) {
+            const environment = retainedEnvironment;
+            retainedEnvironment = undefined;
+            await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
+          }
+        },
+        () => sandboxExecServerRegistry.closeAll(),
+        async () => {
+          if (socket && socket.readyState !== socket.CLOSED) {
+            const closed = once(socket, "close");
+            socket.terminate();
+            await closed;
+          }
+        },
+        () => harness.close(),
+        () => vi.useRealTimers(),
+      ]) {
+        try {
+          await Promise.resolve(cleanup());
+        } catch (error) {
+          // Only this fixture's induced backend failure may recur during disposal.
+          if (!isExpectedSettlementFailure(error)) {
+            errors.push(error);
+          }
         }
-        await Promise.allSettled(activeRuns.map(({ run }) => run));
-        if (retainedEnvironment) {
-          await releaseCodexSandboxExecServerEnvironment(sandbox, retainedEnvironment);
-          retainedEnvironment = undefined;
-        }
-        await sandboxExecServerRegistry.closeAll();
-        socket?.terminate();
-        harness.close();
-      } finally {
-        vi.useRealTimers();
+      }
+      if (errors.length > 0) {
+        throw new AggregateError(errors, "Native process fixture cleanup failed");
       }
     },
   };
@@ -455,7 +568,9 @@ describe("native background process source authority", () => {
         }),
       );
       expect(guest.terminal.alive).toBe(false);
-      await expect(f.begin("guest")).rejects.toThrow("unsettled native command identity");
+      await expect(f.begin("guest", undefined, guest.terminal)).rejects.toThrow(
+        "unsettled native command identity",
+      );
     } finally {
       await f.dispose();
     }
@@ -541,6 +656,85 @@ describe("native background process source authority", () => {
       await f.dispose();
     }
   });
+  it.each(["active", "settled", "peer", "peer replacement"] as const)(
+    "rechecks %s background custody at subscription retention",
+    async (custody) => {
+      const f = await fixture();
+      try {
+        const peer = custody.startsWith("peer") ? await f.begin("guest") : undefined;
+        if (peer) {
+          await f.retainSecondConsumer();
+          await peer.complete();
+        }
+        const owner = await f.begin("maintainer");
+        const lease = f.armRetentionLeaseWait();
+        const completion = owner.complete();
+        await lease.entered.promise;
+        await f.rotateSessionLineage();
+        if (custody !== "active") {
+          await f.settleBackgroundProcess(owner.terminal);
+          expect(owner.terminal.alive).toBe(false);
+        } else {
+          expect(owner.terminal.alive).toBe(true);
+        }
+        lease.release.resolve();
+        if (custody === "active") {
+          expect(readAttemptTerminal(await completion).aborted).toBe(false);
+        } else {
+          await expect(completion).rejects.toMatchObject({
+            name: "AgentHarnessSessionSupersededError",
+          });
+        }
+        expect(hasCodexAppServerLiveThread(f.harness.client, f.threadId)).toBe(
+          custody !== "settled",
+        );
+        if (peer) {
+          await expect(
+            consumeCodexAppServerLiveThread(f.harness.client, f.threadId),
+          ).resolves.toBeUndefined();
+          expect(peer.terminal.alive).toBe(true);
+          expect(f.harness.client.getCloseError()).toBeUndefined();
+          expect(
+            f.harness.requests.filter(({ method }) => method === "thread/unsubscribe"),
+          ).toEqual([]);
+          const inventory = await f.harness.client.request("thread/backgroundTerminals/list", {
+            threadId: f.threadId,
+          });
+          expect(inventory.data).toEqual([
+            expect.objectContaining({ processId: peer.terminal.processId }),
+          ]);
+          if (custody === "peer replacement") {
+            // A cleanup-only physical claim is still protected native work. A
+            // new source must not change its configuration before peer settlement.
+            await expect(f.begin("maintainer")).rejects.toMatchObject({
+              name: "CodexAdoptedThreadActiveError",
+            });
+            expect(peer.terminal.alive).toBe(true);
+            expect(
+              f.harness.requests.filter(({ method }) => method === "thread/unsubscribe"),
+            ).toEqual([]);
+            await f.settleBackgroundProcess(peer.terminal);
+            await f.harness.waitForMethod("thread/unsubscribe");
+            const successor = await f.begin("maintainer");
+            expect(successor.terminal.alive).toBe(true);
+            expect(
+              f.harness.requests.filter(({ method }) => method === "thread/unsubscribe"),
+            ).toHaveLength(1);
+            expect(readAttemptTerminal(await successor.complete()).aborted).toBe(false);
+          } else {
+            await f.settleBackgroundProcess(peer.terminal);
+            await f.harness.waitForMethod("thread/unsubscribe");
+            expect(peer.terminal.alive).toBe(false);
+            expect(
+              f.harness.requests.filter(({ method }) => method === "thread/unsubscribe"),
+            ).toHaveLength(1);
+          }
+        }
+      } finally {
+        await f.dispose();
+      }
+    },
+  );
   it("revokes completed guest work while a later maintainer foreground stays live", async () => {
     const f = await fixture();
     try {
@@ -561,129 +755,119 @@ describe("native background process source authority", () => {
 });
 
 describe("managed-only Codex sandbox compatibility", () => {
-  it.each(["fresh", "native catalog upgrade"] as const)(
-    "executes the advertised sandbox alias under managed-only policy (%s)",
-    async (mode) => {
-      const f = createSandboxPolicyRun();
-      const options = {
-        pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },
-      };
-      const savedText = "Keep this saved conversation across the native catalog change.";
-      let priorMessages: Array<Record<string, unknown>> = [];
-      const createPolicyHarness = (managedOnly: boolean, threadId: string) => {
-        const started = createDeferred<void>();
-        const harness = createStartedThreadHarness(async (method) => {
-          if (method === "configRequirements/read") {
-            f.preparation.push(managedOnly ? "managed" : "allowed");
-            return { requirements: { allowManagedHooksOnly: managedOnly } };
-          }
-          if (method === "thread/start") {
-            return threadStartResult(threadId, { cwd: f.params.workspaceDir });
-          }
-          if (method === "thread/read") {
-            return {
-              thread: {
-                ...threadStartResult("native-original").thread,
-                status: { type: "notLoaded" },
-                turns: [],
-              },
-            };
-          }
-          if (method === "turn/start") {
-            started.resolve();
-          }
-          return undefined;
-        });
-        vi.spyOn(harness.client, "getInstanceId").mockReturnValue(`${threadId}-client`);
-        return { ...harness, started: started.promise };
-      };
-      let harness = createPolicyHarness(mode === "fresh", "native-original");
-      let run: ReturnType<typeof runCodexAppServerAttempt> | undefined;
-      try {
-        if (mode === "native catalog upgrade") {
-          await attachSqliteSessionTarget(
-            f.params,
-            path.join(tempDir, "managed-history.sqlite"),
-            f.params.sessionId,
-          );
-          await appendSqliteHistoryMessage(f.params, userMessage(savedText, 1));
-          priorMessages = await readTranscriptMessagesByIdentity(f.params);
-          run = runCodexAppServerAttempt(f.params, options);
-          await Promise.race([harness.started, run]);
-          await nextTurn();
-          expect(
-            harness.requests.find(({ method }) => method === "thread/start")?.params,
-          ).toMatchObject({
-            config: { "features.code_mode": true },
-            environments: [expect.objectContaining({ environmentId: expect.any(String) })],
-          });
-          await harness.completeTurn({ threadId: "native-original", turnId: "turn-1" });
-          expect(readAttemptTerminal(await run).aborted).toBe(false);
-          expect((await readCodexAppServerBinding(f.params.sessionFile))?.threadId).toBe(
-            "native-original",
-          );
-          harness.close();
-          harness = createPolicyHarness(true, "managed-fallback");
-          f.params.runId = "managed-policy-upgrade";
-          f.preparation.length = 0;
+  it("executes the advertised sandbox alias after a managed-only native catalog upgrade", async () => {
+    // Keep worker preparation outside the policy fixture's logical attempt budget.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const f = createSandboxPolicyRun();
+    const options = {
+      pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },
+    };
+    const savedText = "Keep this saved conversation across the native catalog change.";
+    const createPolicyHarness = (managedOnly: boolean, threadId: string) => {
+      const started = createDeferred<void>();
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "configRequirements/read") {
+          f.preparation.push(managedOnly ? "managed" : "allowed");
+          return { requirements: { allowManagedHooksOnly: managedOnly } };
         }
-        run = runCodexAppServerAttempt(f.params, options);
-        await Promise.race([harness.started, run]);
-        await nextTurn();
-        const start = harness.requests.find(({ method }) => method === "thread/start")
-          ?.params as CodexThreadStartParams;
-        const turn = harness.requests.find(({ method }) => method === "turn/start")
-          ?.params as CodexTurnStartParams;
-        expect(start).toMatchObject({
-          environments: [],
-          config: { "features.code_mode": false, "features.code_mode_only": false },
-        });
-        expect(turn.environments).toEqual([]);
-        expect(f.preparation.indexOf("managed")).toBeGreaterThanOrEqual(0);
-        expect(f.preparation.indexOf("managed")).toBeLessThan(f.preparation.indexOf("tools"));
-        const alias = flattenCodexDynamicToolFunctions(start.dynamicTools ?? undefined).find(
-          (tool) => tool.name === "sandbox_exec",
-        );
-        expect(alias).toBeDefined();
-        const response = await harness.handleServerRequest({
-          id: "managed-exec",
-          method: "item/tool/call",
-          params: {
-            threadId: turn.threadId,
-            turnId: "turn-1",
-            callId: "managed-exec",
-            namespace: null,
-            tool: alias!.name,
-            arguments: {},
-          },
-        });
-        expect(response).toMatchObject({
-          success: true,
-          contentItems: [{ type: "inputText", text: "exec done" }],
-        });
-        expect(f.exec.execute).toHaveBeenCalledOnce();
-        if (mode === "native catalog upgrade") {
-          expect(JSON.stringify(turn.input)).toContain(savedText);
-          expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(false);
+        if (method === "thread/start") {
+          return threadStartResult(threadId, { cwd: f.params.workspaceDir });
         }
-        await harness.completeTurn({ threadId: turn.threadId, turnId: "turn-1" });
-        expect(readAttemptTerminal(await run).aborted).toBe(false);
-        expect((await readCodexAppServerBinding(f.params.sessionFile))?.threadId).toBe(
-          turn.threadId,
-        );
-        if (mode === "native catalog upgrade") {
-          expect(turn.threadId).toBe("managed-fallback");
-          expect(await readTranscriptMessagesByIdentity(f.params)).toEqual(
-            expect.arrayContaining(priorMessages),
-          );
+        if (method === "thread/read") {
+          return {
+            thread: {
+              ...threadStartResult("native-original").thread,
+              status: { type: "notLoaded" },
+              turns: [],
+            },
+          };
         }
-      } finally {
-        f.controller.abort(new Error("managed policy fixture cleanup"));
-        await Promise.allSettled([run]);
-        harness.close();
-      }
-    },
-  );
+        if (method === "turn/start") {
+          started.resolve();
+        }
+        return undefined;
+      });
+      vi.spyOn(harness.client, "getInstanceId").mockReturnValue(`${threadId}-client`);
+      return { ...harness, started: started.promise };
+    };
+    let harness = createPolicyHarness(false, "native-original");
+    let run: ReturnType<typeof runCodexAppServerAttempt> | undefined;
+    try {
+      await attachSqliteSessionTarget(
+        f.params,
+        path.join(tempDir, "managed-history.sqlite"),
+        f.params.sessionId,
+      );
+      await appendSqliteHistoryMessage(f.params, userMessage(savedText, 1));
+      const priorMessages = await readTranscriptMessagesByIdentity(f.params);
+      run = runCodexAppServerAttempt(f.params, options);
+      await Promise.race([harness.started, run]);
+      await nextTurn();
+      expect(
+        harness.requests.find(({ method }) => method === "thread/start")?.params,
+      ).toMatchObject({
+        config: { "features.code_mode": true },
+        environments: [expect.objectContaining({ environmentId: expect.any(String) })],
+      });
+      await harness.completeTurn({ threadId: "native-original", turnId: "turn-1" });
+      expect(readAttemptTerminal(await run).aborted).toBe(false);
+      expect((await readCodexAppServerBinding(f.params.sessionFile))?.threadId).toBe(
+        "native-original",
+      );
+      harness.close();
+      harness = createPolicyHarness(true, "managed-fallback");
+      f.params.runId = "managed-policy-upgrade";
+      f.preparation.length = 0;
+      run = runCodexAppServerAttempt(f.params, options);
+      await Promise.race([harness.started, run]);
+      await nextTurn();
+      const start = harness.requests.find(({ method }) => method === "thread/start")
+        ?.params as CodexThreadStartParams;
+      const turn = harness.requests.find(({ method }) => method === "turn/start")
+        ?.params as CodexTurnStartParams;
+      expect(start).toMatchObject({
+        environments: [],
+        config: { "features.code_mode": false, "features.code_mode_only": false },
+      });
+      expect(turn.environments).toEqual([]);
+      expect(f.preparation.indexOf("managed")).toBeGreaterThanOrEqual(0);
+      expect(f.preparation.indexOf("managed")).toBeLessThan(f.preparation.indexOf("tools"));
+      const alias = flattenCodexDynamicToolFunctions(start.dynamicTools ?? undefined).find(
+        (tool) => tool.name === "sandbox_exec",
+      );
+      expect(alias).toBeDefined();
+      const response = await harness.handleServerRequest({
+        id: "managed-exec",
+        method: "item/tool/call",
+        params: {
+          threadId: turn.threadId,
+          turnId: "turn-1",
+          callId: "managed-exec",
+          namespace: null,
+          tool: alias!.name,
+          arguments: {},
+        },
+      });
+      expect(response).toMatchObject({
+        success: true,
+        contentItems: [{ type: "inputText", text: "exec done" }],
+      });
+      expect(f.exec.execute).toHaveBeenCalledOnce();
+      expect(JSON.stringify(turn.input)).toContain(savedText);
+      expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(false);
+      await harness.completeTurn({ threadId: turn.threadId, turnId: "turn-1" });
+      expect(readAttemptTerminal(await run).aborted).toBe(false);
+      expect((await readCodexAppServerBinding(f.params.sessionFile))?.threadId).toBe(turn.threadId);
+      expect(turn.threadId).toBe("managed-fallback");
+      expect(await readTranscriptMessagesByIdentity(f.params)).toEqual(
+        expect.arrayContaining(priorMessages),
+      );
+    } finally {
+      f.controller.abort(new Error("managed policy fixture cleanup"));
+      await Promise.allSettled([run]);
+      harness.close();
+    }
+  });
 
   it.each(["same client", "replacement client"] as const)(
     "revalidates managed hook policy at actual startup (%s)",

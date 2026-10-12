@@ -31,9 +31,22 @@ export function resolveNativePackageProjectRoot(
   },
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
-  return target.manager === "pnpm"
-    ? resolvePnpmGlobalDirFromGlobalRoot(target.globalRoot)
-    : target.manager === "bun"
-      ? (resolveBunGlobalInstallOwner(target.packageRoot, env)?.globalProjectRoot ?? null)
-      : null;
+  if (target.manager === "pnpm") {
+    return resolvePnpmGlobalDirFromGlobalRoot(target.globalRoot);
+  }
+  if (target.manager !== "bun") {
+    return null;
+  }
+  const owner = resolveBunGlobalInstallOwner(target.packageRoot, env);
+  if (owner) {
+    return owner.globalProjectRoot;
+  }
+  // The selected Bun root can come from bunfig.toml rather than caller env.
+  // Its node_modules belongs to the complete enclosing project.
+  const modules = target.globalRoot?.trim();
+  if (!modules) {
+    return null;
+  }
+  const normalized = path.resolve(modules);
+  return path.basename(normalized) === "node_modules" ? path.dirname(normalized) : null;
 }

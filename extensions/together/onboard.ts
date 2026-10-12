@@ -1,4 +1,3 @@
-// Together setup module handles plugin onboarding behavior.
 import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   createModelCatalogPresetAppliers,

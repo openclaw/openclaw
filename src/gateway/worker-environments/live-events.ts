@@ -37,9 +37,13 @@ import {
 } from "./live-event-window.js";
 import {
   captureWorkerTurnFinishing,
+  captureWorkerReplyMedia,
   type WorkerTurnTranscriptSource,
 } from "./placement-turn-claim-events.js";
-import { captureWorkerTurnLiveEventOwner } from "./worker-turn-run-owner.js";
+import {
+  captureWorkerTurnLiveEventOwner,
+  type WorkerTurnLiveEventOwner,
+} from "./worker-turn-run-owner.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
 const DEFAULT_MAX_PENDING_BYTES = 512 * 1024;
@@ -67,18 +71,6 @@ function invalidEvent(): WorkerLiveEventFailure {
 
 function capacityExceeded(): WorkerLiveEventFailure {
   return { ok: false, details: { reason: "capacity-exceeded" } };
-}
-
-function isCancelledFinishing(
-  request: WorkerLiveEventParams,
-  owner: PendingLiveEvent["runOwner"],
-): boolean {
-  return (
-    owner?.isCancelled() === true &&
-    request.event.kind === "lifecycle" &&
-    request.event.payload.phase === "finishing" &&
-    request.event.payload.aborted === true
-  );
 }
 
 export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOptions = {}) {
@@ -125,7 +117,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       source: WorkerTurnTranscriptSource;
       readAckedSeq: () => number;
     },
-  ): WorkerLiveEventApplicationResult | LiveEventWindow => {
+  ): WorkerLiveEventFailure | LiveEventWindow => {
     let window = windows.get(sessionId);
     if (
       window &&
@@ -322,14 +314,14 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     return claimed;
   };
 
-  const publish = (
+  const publish = async (
     window: LiveEventWindow,
     publication: WorkerLiveEventPublication,
     allowBufferedTerminalCapacity: boolean,
-  ): WorkerLiveEventFailure | undefined => {
-    const { request, recordApplied, runOwner, source } = publication;
+  ): Promise<WorkerLiveEventFailure | undefined> => {
+    const { request, recordApplied, runOwner, source, prepareReplyMedia } = publication;
     if (runOwner?.isCancelled()) {
-      if (!isCancelledFinishing(request, runOwner)) {
+      if (!runOwner.isCancelledFinishing(request)) {
         return invalidEvent();
       }
       // Cancellation retires live publication before the worker finishes.
@@ -358,6 +350,18 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       stream: request.event.kind,
       data: prepareWorkerLiveEventData(request.event),
     };
+    if (
+      request.event.kind === "assistant" &&
+      request.event.payload.mediaUrls?.length &&
+      prepareReplyMedia
+    ) {
+      const payload = await prepareReplyMedia(request.event.payload);
+      event.data = { ...event.data, ...payload };
+      if (payload.text !== request.event.payload.text) {
+        event.data.replace = true;
+        event.data.delta = payload.text ?? "";
+      }
+    }
     let activity;
     if (request.event.kind === "tool") {
       const tool = request.event.payload;
@@ -412,44 +416,39 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       return invalidEvent();
     }
     const write = recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
-    if (write) {
-      window.trajectoryWrites.add(write);
-      void write.then(() => window.trajectoryWrites.delete(write));
-    }
+    window.trajectoryWrites.add(write);
+    void write.then(() => window.trajectoryWrites.delete(write));
     recordApplied?.(request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };
 
-  const drain = (
+  const drain = async (
     window: LiveEventWindow,
     first: WorkerLiveEventPublication,
     firstPending?: PendingLiveEvent,
-  ): WorkerLiveEventApplicationResult => {
-    let publication: WorkerLiveEventPublication = firstPending ?? first;
+  ): Promise<WorkerLiveEventApplicationResult> => {
     let buffered = firstPending;
     let publishedPrefix = false;
     while (true) {
+      const publication = buffered ?? first;
       const { request } = publication;
-      const failed = publish(window, publication, buffered !== undefined);
+      const failed = await publish(window, publication, buffered !== undefined);
+      if (failed?.details.reason === "capacity-exceeded" && buffered) {
+        // Keep the ordered tail retryable while the active prefix claim drains.
+        // Later gaps still hit windowSize/maxPendingBytes and force normal resync.
+        return { ok: true, result: { ackedSeq: window.ackedSeq } };
+      }
+      if (buffered && window.pending.delete(request.seq)) {
+        window.pendingBytes -= buffered.sizeBytes;
+      }
       if (failed) {
-        if (failed.details.reason === "capacity-exceeded" && buffered) {
-          // Keep the ordered tail retryable while the active prefix claim drains.
-          // Later gaps still hit windowSize/maxPendingBytes and force normal resync.
-          return { ok: true, result: { ackedSeq: window.ackedSeq } };
-        }
-        if (buffered && window.pending.delete(request.seq)) {
-          window.pendingBytes -= buffered.sizeBytes;
-        }
         if (failed.details.reason === "capacity-exceeded" && !publishedPrefix) {
           // A fresh head cannot advance. Reset its cursor and release every claim.
           clearWindow(window);
           return failed;
         }
         return publishedPrefix ? { ok: true, result: { ackedSeq: window.ackedSeq } } : failed;
-      }
-      if (buffered && window.pending.delete(request.seq)) {
-        window.pendingBytes -= buffered.sizeBytes;
       }
       window.ackedSeq = request.seq;
       publishedPrefix = true;
@@ -461,37 +460,41 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
           window.terminalRuns.delete(runId);
         }
       }
-      const next = window.pending.get(window.ackedSeq + 1);
-      if (!next) {
+      buffered = window.pending.get(window.ackedSeq + 1);
+      if (!buffered) {
         break;
       }
-      publication = next;
-      buffered = next;
     }
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
 
-  const applyToWindow = (
+  const applyToWindow = async (
     window: LiveEventWindow,
     params: {
       identity: WorkerConnectionIdentity;
       request: WorkerLiveEventParams;
       source: WorkerTurnTranscriptSource;
     },
-  ): WorkerLiveEventApplicationResult => {
+    runOwner: WorkerTurnLiveEventOwner | undefined,
+  ): Promise<WorkerLiveEventApplicationResult> => {
     if (params.request.seq <= window.ackedSeq) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
     }
     if (params.request.lastAckedSeq > window.ackedSeq) {
       return resyncWindow(window);
     }
-    const runOwner = captureWorkerTurnLiveEventOwner(params.identity);
     const recordFinishing = captureWorkerTurnFinishing(params.identity, params.request);
     const recordApplied: PendingLiveEvent["recordApplied"] = (event) => {
       runOwner?.record(event);
       recordFinishing?.();
     };
-    const publication = { request: params.request, recordApplied, runOwner, source: params.source };
+    const publication = {
+      request: params.request,
+      recordApplied,
+      runOwner,
+      source: params.source,
+      prepareReplyMedia: captureWorkerReplyMedia(params.identity),
+    };
     const { seq } = params.request;
     const expectedSeq = window.ackedSeq + 1;
     if (seq > window.ackedSeq + windowSize) {
@@ -537,20 +540,19 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if ("ok" in window) {
       return window;
     }
+    const runOwner = captureWorkerTurnLiveEventOwner(params.identity);
     window.activeApplications += 1;
     try {
       let result: WorkerLiveEventApplicationResult;
       try {
-        result = applyToWindow(window, params);
+        result = await applyToWindow(window, params, runOwner);
       } finally {
         // Snapshot this accepted prefix, including duplicate ACKs, even if a later
         // callback throws. Later requests own their own writes.
         await Promise.all(window.trajectoryWrites);
       }
       if (result.ok) {
-        if (
-          !isCancelledFinishing(params.request, captureWorkerTurnLiveEventOwner(params.identity))
-        ) {
+        if (!runOwner?.isCancelledFinishing(params.request)) {
           try {
             params.source.receiptAuthority();
           } catch {

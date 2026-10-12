@@ -81,7 +81,6 @@ describe("chat.abort native transcript settlement", () => {
         hasNativeText,
         nativeFirst: false,
         superseded: false,
-        warningDeliveryFails: false,
       })),
     ),
     {
@@ -89,18 +88,16 @@ describe("chat.abort native transcript settlement", () => {
       hasNativeText: true,
       nativeFirst: true,
       superseded: false,
-      warningDeliveryFails: false,
     },
-    ...[false, true].map((warningDeliveryFails) => ({
+    {
       owner: "agent" as const,
       hasNativeText: false,
       nativeFirst: false,
       superseded: true,
-      warningDeliveryFails,
-    })),
+    },
   ])(
-    "settles Stop history ($owner, native text=$hasNativeText, native first=$nativeFirst, superseded=$superseded, warning delivery fails=$warningDeliveryFails)",
-    async ({ owner, hasNativeText, nativeFirst, superseded, warningDeliveryFails }) => {
+    "settles Stop history ($owner, native text=$hasNativeText, native first=$nativeFirst, superseded=$superseded)",
+    async ({ owner, hasNativeText, nativeFirst, superseded }) => {
       await withOpenClawTestState({ label: "chat-abort-codex" }, async () => {
         const target = await fixture.createTarget();
         session.target = target;
@@ -121,7 +118,8 @@ describe("chat.abort native transcript settlement", () => {
           trackExecution: <T>(run: () => T | Promise<T>) => execution.track(run),
         };
         const context = createChatAbortContext(dispatchContext);
-        if (warningDeliveryFails) {
+        // Failed warning delivery must release the superseded producer too.
+        if (superseded) {
           vi.mocked(context.broadcast).mockImplementation((event, payload) => {
             if (event === "chat" && isRecord(payload) && payload.state === "error") {
               throw new Error("Synthetic warning transport failure");
@@ -185,7 +183,6 @@ describe("chat.abort native transcript settlement", () => {
               cleanupAbortController: registration.cleanup,
               io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
               context: dispatchContext,
-              taskTrackingMode: "none",
             });
         let deliverySettled = false;
         void completion?.then(() => {
@@ -238,11 +235,9 @@ describe("chat.abort native transcript settlement", () => {
               expect.anything(),
             );
             expect(loadSessionEntry(target)?.activeWriterRunId).toBe("run-successor");
-            if (warningDeliveryFails) {
-              expect(context.logGateway.warn).toHaveBeenCalledWith(
-                expect.stringContaining("persistence warning delivery failed"),
-              );
-            }
+            expect(context.logGateway.warn).toHaveBeenCalledWith(
+              expect.stringContaining("persistence warning delivery failed"),
+            );
             return;
           }
           expect(messages).toHaveLength(1);

@@ -149,7 +149,7 @@ it("dispatches a newly discovered model and preserves an admitted turn when disc
           heartbeat: { every: "0m" },
           modelPolicy: { allow: [`${provider}/*`] },
         },
-        list: [{ id: "main", workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
       },
       tools: { profile: "minimal" },
       plugins: {
@@ -290,7 +290,8 @@ it("dispatches a newly discovered model and preserves an admitted turn when disc
         { timeoutMs: 35_000 },
       );
       expect(unavailable).toMatchObject({ status: "error" });
-      expect(unavailable.error).toContain("The selected model is unavailable from the provider");
+      expect(unavailable.error).toContain("This model was not found");
+      expect(unavailable.error).toContain("Choose another model");
       expect(requests).toHaveLength(2);
     } finally {
       releaseInference.resolve();

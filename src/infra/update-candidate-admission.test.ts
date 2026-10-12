@@ -44,6 +44,11 @@ function admit(): UpdateAdmissionVerdict {
   };
 }
 
+function verdictJson(fields: Record<string, unknown> = {}, facts: Record<string, unknown> = {}) {
+  const verdict = admit();
+  return JSON.stringify({ ...verdict, ...fields, facts: { ...verdict.facts, ...facts } });
+}
+
 async function setMarker(marker: unknown): Promise<void> {
   await fs.writeFile(
     path.join(root, "package.json"),
@@ -131,145 +136,147 @@ afterEach(() => {
 });
 
 describe("runUpdateCandidateAdmission", () => {
-  it.each([undefined, null, false, "1", 2])(
-    "keeps unsupported marker %s passive",
-    async (marker) => {
-      await setMarker(marker);
-      expect(await run()).toMatchObject({
-        owner: "installed",
-        fallbackReason: "unsupported-target",
-        warning: { code: "update-admission-unsupported-target" },
-      });
+  it.each(["unsupported", "forced"] as const)(
+    "keeps %s candidate admission passive",
+    async (mode) => {
+      await setMarker(mode === "unsupported" ? "1" : 1);
+      const result = await run({ admission: mode === "forced" ? "installed" : undefined });
+      if (mode === "forced") {
+        expect(result).toEqual({ owner: "installed", fallbackReason: "forced-installed" });
+      } else {
+        expect(result).toMatchObject({
+          owner: "installed",
+          fallbackReason: "unsupported-target",
+          warning: { code: "update-admission-unsupported-target" },
+        });
+      }
       expect(mocks.spawn).not.toHaveBeenCalled();
     },
   );
 
-  it("honors forced installed admission through the option", async () => {
-    expect(await run({ admission: "installed" })).toEqual({
-      owner: "installed",
-      fallbackReason: "forced-installed",
-    });
-    expect(mocks.spawn).not.toHaveBeenCalled();
-  });
+  it.each(["known-version", "unknown-version", "artifact"] as const)(
+    "launches the selected runner with private %s context and isolated runtime identity",
+    async (target) => {
+      if (target === "unknown-version") {
+        context.target.version = null;
+      } else if (target === "artifact") {
+        const artifactUrl = new URL("https://registry.example/package.tgz");
+        artifactUrl.username = "fixture-user";
+        artifactUrl.password = "fixture-password";
+        artifactUrl.searchParams.set("token", "fixture-token");
+        context.target.source = "artifact";
+        context.target.spec = artifactUrl.href;
+        context.target.tag = context.target.spec;
+      }
+      const env = {
+        HOME: path.join(root, "home"),
+        OPENCLAW_HOME: path.join(root, "openclaw-home"),
+        OPENCLAW_STATE_DIR: path.join(root, "live-state"),
+        OPENCLAW_CONFIG_PATH: path.join(root, "live-config.json"),
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_RUN_ID: "inherited-run",
+        OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: "inherited-result",
+        OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+        OPENCLAW_UPDATE_EXECUTOR_GRANT: "inherited-grant",
+        OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META: "inherited-sentinel",
+        OPENCLAW_GATEWAY_SERVICE_PID: "789",
+        OPENCLAW_SYSTEMD_UNIT: "live.service",
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.1",
+        openclaw_compatibility_host_version: "2026.9.2",
+        OPENCLAW_DEV_SOURCE_ROOT: path.join(root, "old-source"),
+        openclaw_dev_source_root: path.join(root, "old-source-alias"),
+        OPENCLAW_VERSION: "2026.9.3",
+        openclaw_version: "2026.9.4",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "old-plugins"),
+        openclaw_bundled_plugins_dir: path.join(root, "old-plugins-alias"),
+        NODE_COMPILE_CACHE: path.join(root, "live-cache"),
+        node_compile_cache: path.join(root, "live-cache-alias"),
+        NODE_DISABLE_COMPILE_CACHE: "0",
+        node_disable_compile_cache: "0",
+        OPENCLAW_NO_RESPAWN: "0",
+        openclaw_no_respawn: "0",
+        PROVIDER_API_KEY: "synthetic-provider-key",
+      };
+      const result = await run({ env, nodeRunner: "/selected/node" });
+      expect(result).toEqual({ owner: "candidate", verdict: admit() });
+      if (target === "artifact") {
+        const serialized = JSON.stringify(observedContext);
+        expect(serialized).not.toContain("fixture-password");
+        expect(serialized).not.toContain("fixture-token");
+        expect(serialized).toContain("registry.example/package.tgz");
+      } else {
+        expect(observedContext).toEqual(context);
+      }
+      if (process.platform !== "win32") {
+        expect(observedModes).toEqual({ file: 0o600, directory: 0o700 });
+      }
+      expect(mocks.spawn).toHaveBeenCalledWith(
+        "/selected/node",
+        [path.join(root, "dist", "index.js"), "update", "admit", "--context", contextPath],
+        expect.objectContaining({
+          cwd: root,
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        }),
+      );
+      expect(childEnv).toEqual({
+        HOME: env.HOME,
+        OPENCLAW_HOME: env.OPENCLAW_HOME,
+        OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR,
+        OPENCLAW_CONFIG_PATH: env.OPENCLAW_CONFIG_PATH,
+        OPENCLAW_PROFILE: "work",
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        OPENCLAW_DEV_SOURCE_ROOT: root,
+        ...(context.target.version === null ? {} : { OPENCLAW_VERSION: context.target.version }),
+        OPENCLAW_NO_RESPAWN: "1",
+        PROVIDER_API_KEY: "synthetic-provider-key",
+      });
+      expect(env.OPENCLAW_UPDATE_RUN_ID).toBe("inherited-run");
+      expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(path.join(root, "old-source"));
+      expect(env.NODE_COMPILE_CACHE).toBe(path.join(root, "live-cache"));
+      await expect(fs.access(path.dirname(contextPath))).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
-  it("launches the selected runner with the live selectors and a private context, then removes it", async () => {
-    const env = {
-      HOME: path.join(root, "home"),
-      OPENCLAW_HOME: path.join(root, "openclaw-home"),
-      OPENCLAW_STATE_DIR: path.join(root, "live-state"),
-      OPENCLAW_CONFIG_PATH: path.join(root, "live-config.json"),
-      OPENCLAW_PROFILE: "work",
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      OPENCLAW_UPDATE_RUN_ID: "inherited-run",
-      OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-      OPENCLAW_UPDATE_POST_CORE: "1",
-      OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: "inherited-result",
-      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "1",
-      OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
-      OPENCLAW_UPDATE_EXECUTOR_GRANT: "inherited-grant",
-      OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META: "inherited-sentinel",
-      OPENCLAW_GATEWAY_SERVICE_PID: "789",
-      OPENCLAW_SYSTEMD_UNIT: "live.service",
-      OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.1",
-      openclaw_compatibility_host_version: "2026.9.2",
-      OPENCLAW_DEV_SOURCE_ROOT: path.join(root, "old-source"),
-      openclaw_dev_source_root: path.join(root, "old-source-alias"),
-      OPENCLAW_VERSION: "2026.9.3",
-      openclaw_version: "2026.9.4",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "old-plugins"),
-      openclaw_bundled_plugins_dir: path.join(root, "old-plugins-alias"),
-      NODE_COMPILE_CACHE: path.join(root, "live-cache"),
-      node_compile_cache: path.join(root, "live-cache-alias"),
-      NODE_DISABLE_COMPILE_CACHE: "0",
-      node_disable_compile_cache: "0",
-      OPENCLAW_NO_RESPAWN: "0",
-      openclaw_no_respawn: "0",
-      PROVIDER_API_KEY: "synthetic-provider-key",
-    };
-    const result = await run({ env, nodeRunner: "/selected/node" });
-    expect(result).toEqual({ owner: "candidate", verdict: admit() });
-    expect(observedContext).toEqual(context);
-    if (process.platform !== "win32") {
-      expect(observedModes).toEqual({ file: 0o600, directory: 0o700 });
-    }
-    expect(mocks.spawn).toHaveBeenCalledWith(
-      "/selected/node",
-      [path.join(root, "dist", "index.js"), "update", "admit", "--context", contextPath],
-      expect.objectContaining({ cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }),
-    );
-    expect(childEnv).toEqual({
-      HOME: env.HOME,
-      OPENCLAW_HOME: env.OPENCLAW_HOME,
-      OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR,
-      OPENCLAW_CONFIG_PATH: env.OPENCLAW_CONFIG_PATH,
-      OPENCLAW_PROFILE: "work",
-      NODE_DISABLE_COMPILE_CACHE: "1",
-      OPENCLAW_DEV_SOURCE_ROOT: root,
-      OPENCLAW_VERSION: context.target.version,
-      OPENCLAW_NO_RESPAWN: "1",
-      PROVIDER_API_KEY: "synthetic-provider-key",
-    });
-    expect(env.OPENCLAW_UPDATE_RUN_ID).toBe("inherited-run");
-    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(path.join(root, "old-source"));
-    expect(env.NODE_COMPILE_CACHE).toBe(path.join(root, "live-cache"));
-    await expect(fs.access(path.dirname(contextPath))).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("clears inherited version identity when the staged version is unknown", async () => {
-    context.target.version = null;
-    const result = await run({
-      env: { OPENCLAW_VERSION: "2026.9.3", openclaw_version: "2026.9.4" },
-    });
-    expect(result.owner).toBe("candidate");
-    expect(childEnv.OPENCLAW_VERSION).toBeUndefined();
-    expect(childEnv.openclaw_version).toBeUndefined();
-    expect(childEnv.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
-    expect(childEnv.NODE_DISABLE_COMPILE_CACHE).toBe("1");
-  });
-
-  it("returns every candidate refusal and its next action without taking update authority", async () => {
-    const verdict: UpdateAdmissionVerdict = {
-      ...admit(),
-      verdict: "refuse",
-      reasons: [
-        {
-          code: "invalid-config",
-          message: "The config is invalid.",
-          nextAction: "Repair the config.",
-        },
-        { code: "database-schema-preflight", message: "The target cannot read this database." },
-      ],
-      facts: { ...admit().facts, checks: [{ name: "config", status: "refuse" }] },
-    };
-    fixture = { code: 3, stdout: JSON.stringify(verdict) };
-    expect(await run()).toEqual({ owner: "candidate", verdict });
-    await expect(fs.access(contextPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it.each(["admit", "refuse"] as const)(
-    "bounds warning diagnostics without changing the candidate's %s decision",
-    async (verdict) => {
-      const message = "diagnostic ".repeat(500);
+  it.each([false, true])(
+    "preserves candidate refusals and bounds diagnostics (oversized=%s)",
+    async (oversized) => {
+      const message = oversized ? "diagnostic ".repeat(500) : "The config is invalid.";
       const reply: UpdateAdmissionVerdict = {
         ...admit(),
-        verdict,
-        reasons:
-          verdict === "refuse" ? [{ code: "invalid-config", message, nextAction: message }] : [],
-        warnings: [
-          { code: "x".repeat(81), message },
-          ...Array.from({ length: 40 }, (_, index) => ({ code: `warning-${index}`, message })),
+        verdict: "refuse",
+        reasons: [
+          {
+            code: "invalid-config",
+            message,
+            nextAction: oversized ? message : "Repair the config.",
+          },
+          { code: "database-schema-preflight", message: "The target cannot read this database." },
         ],
+        warnings: oversized
+          ? [
+              { code: "x".repeat(81), message },
+              ...Array.from({ length: 40 }, (_, index) => ({ code: `warning-${index}`, message })),
+            ]
+          : admit().warnings,
         facts: {
           ...admit().facts,
-          checks: [
-            { name: "config", status: verdict === "refuse" ? "refuse" : "warn", detail: message },
-          ],
+          checks: [{ name: "config", status: "refuse", ...(oversized ? { detail: message } : {}) }],
         },
       };
-      fixture = { code: verdict === "refuse" ? 3 : 0, stdout: JSON.stringify(reply) };
+      fixture = { code: 3, stdout: JSON.stringify(reply) };
       const result = await run();
+      await expect(fs.access(contextPath)).rejects.toMatchObject({ code: "ENOENT" });
+      if (!oversized) {
+        expect(result).toEqual({ owner: "candidate", verdict: reply });
+        return;
+      }
       expect(result.owner).toBe("candidate");
-      expect(result.verdict?.verdict).toBe(verdict);
+      expect(result.verdict?.verdict).toBe("refuse");
       expect(result.verdict?.reasons.map((reason) => reason.code)).toEqual(
         reply.reasons.map((reason) => reason.code),
       );
@@ -282,135 +289,103 @@ describe("runUpdateCandidateAdmission", () => {
       ).toBe(true);
       expect(result.verdict?.facts.checks[0]).toMatchObject({
         name: "config",
-        status: verdict === "refuse" ? "refuse" : "warn",
+        status: "refuse",
       });
       expect(result.verdict?.facts.checks[0]?.detail?.length).toBeLessThanOrEqual(
         UPDATE_RUN_TEXT_LIMIT,
       );
       for (const reason of result.verdict?.reasons ?? []) {
         expect(reason.message.length).toBeLessThanOrEqual(UPDATE_RUN_TEXT_LIMIT);
-        expect(reason.nextAction?.length).toBeLessThanOrEqual(UPDATE_RUN_TEXT_LIMIT);
       }
+      expect(result.verdict?.reasons[0]?.nextAction?.length).toBeLessThanOrEqual(
+        UPDATE_RUN_TEXT_LIMIT,
+      );
     },
   );
 
   it.each([
-    { name: "internal error", code: 2, stdout: JSON.stringify(admit()), reason: "exit-2" },
-    { name: "crash", code: null, stdout: "", reason: "crash" },
-    { name: "malformed JSON", code: 0, stdout: "not a verdict", reason: "malformed-json" },
-    { name: "multiple documents", code: 0, stdout: "{}\n{}", reason: "malformed-json" },
-    {
-      name: "protocol mismatch",
-      code: 0,
-      stdout: JSON.stringify({ ...admit(), protocol: 2 }),
-      reason: "protocol-mismatch",
-    },
-    {
-      name: "wrong shape",
-      code: 0,
-      stdout: JSON.stringify({ protocol: 1, verdict: "admit" }),
-      reason: "invalid-verdict",
-    },
-    { name: "wrong exit", code: 3, stdout: JSON.stringify(admit()), reason: "invalid-verdict" },
-    {
-      name: "empty refusal",
-      code: 3,
-      stdout: JSON.stringify({ ...admit(), verdict: "refuse" }),
-      reason: "invalid-verdict",
-    },
-    {
-      name: "duplicate check",
-      code: 0,
-      stdout: JSON.stringify({
-        ...admit(),
-        facts: { ...admit().facts, checks: [...admit().facts.checks, ...admit().facts.checks] },
-      }),
-      reason: "invalid-verdict",
-    },
-    {
-      name: "oversized output",
-      code: 0,
-      stdout: "x".repeat(1024 * 1024 + 1),
-      reason: "output-limit",
-    },
-    {
-      name: "too many reasons",
-      code: 3,
-      stdout: JSON.stringify({
-        ...admit(),
+    ["internal error", 2, verdictJson(), "exit-2"],
+    ["crash", null, "", "crash"],
+    ["malformed JSON", 0, "not a verdict", "malformed-json"],
+    ["protocol mismatch", 0, verdictJson({ protocol: 2 }), "protocol-mismatch"],
+    ["wrong shape", 0, JSON.stringify({ protocol: 1, verdict: "admit" }), "invalid-verdict"],
+    ["wrong exit", 3, verdictJson(), "invalid-verdict"],
+    ["empty refusal", 3, verdictJson({ verdict: "refuse" }), "invalid-verdict"],
+    [
+      "duplicate check",
+      0,
+      verdictJson({}, { checks: [...admit().facts.checks, ...admit().facts.checks] }),
+      "invalid-verdict",
+    ],
+    ["oversized output", 0, "x".repeat(1024 * 1024 + 1), "output-limit"],
+    [
+      "too many reasons",
+      3,
+      verdictJson({
         verdict: "refuse",
         reasons: Array.from({ length: 33 }, () => ({
           code: "invalid-config",
           message: "Invalid config.",
         })),
       }),
-      reason: "invalid-verdict",
-    },
-    {
-      name: "too many checks",
-      code: 0,
-      stdout: JSON.stringify({
-        ...admit(),
-        facts: {
-          ...admit().facts,
+      "invalid-verdict",
+    ],
+    [
+      "too many checks",
+      0,
+      verdictJson(
+        {},
+        {
           checks: Array.from({ length: 33 }, (_, index) => ({
             name: `check-${index}`,
             status: "ok",
           })),
         },
-      }),
-      reason: "invalid-verdict",
-    },
-    {
-      name: "oversized reason identity",
-      code: 3,
-      stdout: JSON.stringify({
-        ...admit(),
+      ),
+      "invalid-verdict",
+    ],
+    [
+      "oversized reason identity",
+      3,
+      verdictJson({
         verdict: "refuse",
         reasons: [{ code: "x".repeat(81), message: "Invalid config." }],
       }),
-      reason: "invalid-verdict",
-    },
-    {
-      name: "oversized multibyte check identity",
-      code: 0,
-      stdout: JSON.stringify({
-        ...admit(),
-        facts: { ...admit().facts, checks: [{ name: "é".repeat(65), status: "ok" }] },
-      }),
-      reason: "invalid-verdict",
-    },
-    {
-      name: "oversized candidate version",
-      code: 0,
-      stdout: JSON.stringify({
-        ...admit(),
-        facts: { ...admit().facts, candidateVersion: "v".repeat(129) },
-      }),
-      reason: "invalid-verdict",
-    },
-    {
-      name: "irreducible history metadata",
-      code: 0,
-      stdout: JSON.stringify({
-        ...admit(),
-        facts: {
-          ...admit().facts,
+      "invalid-verdict",
+    ],
+    [
+      "oversized multibyte check identity",
+      0,
+      verdictJson({}, { checks: [{ name: "é".repeat(65), status: "ok" }] }),
+      "invalid-verdict",
+    ],
+    [
+      "oversized candidate version",
+      0,
+      verdictJson({}, { candidateVersion: "v".repeat(129) }),
+      "invalid-verdict",
+    ],
+    [
+      "irreducible history metadata",
+      0,
+      verdictJson(
+        {},
+        {
           checks: Array.from({ length: 8 }, (_, index) => ({
             name: `${index}${"c".repeat(127)}`,
             status: "ok",
           })),
         },
-      }),
-      reason: "invalid-verdict",
-    },
-  ])(
-    "falls back after $name and retains only the first redacted stderr diagnostic",
-    async ({ code, stdout, reason }) => {
+      ),
+      "invalid-verdict",
+    ],
+  ] as const)(
+    "falls back after %s and retains the last redacted stderr diagnostic",
+    async (_name, code, stdout, reason) => {
       fixture = {
         code,
         stdout,
-        stderr: "cannot inspect token=synthetic-secret\nsecond diagnostic\n",
+        stderr: "earlier diagnostic\ncannot inspect token=synthetic-secret\n",
       };
       const result = await run({ env: { API_TOKEN: "synthetic-secret" } });
       expect(result).toMatchObject({
@@ -420,27 +395,11 @@ describe("runUpdateCandidateAdmission", () => {
       });
       expect(result.warning?.message).toContain("cannot inspect");
       expect(result.warning?.message).not.toContain("synthetic-secret");
-      expect(result.warning?.message).not.toContain("second diagnostic");
+      expect(result.warning?.message).not.toContain("earlier diagnostic");
       expect(result.verdict).toBeUndefined();
       await expect(fs.access(contextPath)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
-
-  it("keeps artifact URL credentials out of the private context", async () => {
-    context.target.source = "artifact";
-    // Assemble the credentialed URL at runtime so no credential-shaped literal lives in source.
-    const artifactUrl = new URL("https://registry.example/package.tgz");
-    artifactUrl.username = "fixture-user";
-    artifactUrl.password = "fixture-password";
-    artifactUrl.searchParams.set("token", "fixture-token");
-    context.target.spec = artifactUrl.href;
-    context.target.tag = context.target.spec;
-    expect((await run()).owner).toBe("candidate");
-    const serialized = JSON.stringify(observedContext);
-    expect(serialized).not.toContain("fixture-password");
-    expect(serialized).not.toContain("fixture-token");
-    expect(serialized).toContain("registry.example/package.tgz");
-  });
 
   it("bounds admission and terminates its process tree before context cleanup", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });

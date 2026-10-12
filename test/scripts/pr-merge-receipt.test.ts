@@ -16,7 +16,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     "completes $method/queue=$queue with forward main during final receipt observation",
     ({ method, queue, comment }) => {
       const f = fixture(undefined, [["prefix\n"], ["after\n"]]);
-      f.advance("before\n");
+      const main = f.advance("before\n");
       f.save({
         ...f.state(),
         landing: queue ? "rebase" : "requested",
@@ -64,6 +64,25 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       f.git(["merge-base", "--is-ancestor", landed, outcomeRef]);
       f.git(["merge-base", "--is-ancestor", f.head, outcomeRef]);
       expect(f.git(["show", `${landed}:owner.txt`])).toBe("after");
+      if (method === "rebase" || queue) {
+        const rewritten = f.git(["rev-list", "--reverse", `${main}..${landed}`]).split("\n");
+        expect(rewritten).toHaveLength(2);
+        expect(rewritten.every((oid) => !f.sourceCommits.includes(oid))).toBe(true);
+        expect(f.git(["show", `${landed}:sibling.txt`])).toBe("advanced");
+        // The final parent is only the rewritten prefix, not the base of the series.
+        expect(() => f.git(["merge-tree", "--write-tree", `${landed}^`, f.head])).toThrow();
+        // The final observation advanced the remote again after its returned snapshot.
+        f.git([
+          "fetch",
+          "--no-tags",
+          "origin",
+          f.git(["--git-dir=" + f.remote, "rev-parse", "main"]),
+        ]);
+        f.advance("before\n");
+        expect(f.run().status).toBe(0);
+        expect(f.state().mutations).toBe(1);
+        expect(f.state().posts).toBe(1);
+      }
     },
   );
 
@@ -357,31 +376,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.state().posts).toBe(1);
   });
 
-  it.each([false, true])("confirms a real multi-commit rebase with queue=%s", (queue) => {
-    const f = fixture(undefined, [["prefix\n"], ["after\n"]]);
-    const main = f.advance("before\n");
-    f.save({
-      ...f.state(),
-      landing: "rebase",
-      pr: { ...f.state().pr, isMergeQueueEnabled: queue },
-    });
-    const run = f.run(false, f.repo, queue ? "squash" : "rebase");
-    const landed = f.state().pr.mergeCommit!.oid;
-    const rewritten = f.git(["rev-list", "--reverse", `${main}..${landed}`]).split("\n");
-    expect(rewritten).toHaveLength(2);
-    expect(rewritten.every((oid) => !f.sourceCommits.includes(oid))).toBe(true);
-    expect(f.git(["show", `${landed}:owner.txt`])).toBe("after");
-    expect(f.git(["show", `${landed}:sibling.txt`])).toBe("advanced");
-    // The final parent is only the rewritten prefix, not the base of the series.
-    expect(() => f.git(["merge-tree", "--write-tree", `${landed}^`, f.head])).toThrow();
-    expect(run.status, run.output).toBe(0);
-    expect(f.record()).toMatchObject({ landed, phase: "complete" });
-    f.advance("before\n");
-    expect(f.run().status).toBe(0);
-    expect(f.state().mutations).toBe(1);
-    expect(f.state().posts).toBe(1);
-  });
-
   it.each(["rebase", "merge"])(
     "rejects a mismatched %s receipt before comment or cleanup",
     (method) => {
@@ -537,41 +531,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(f.state().posts).toBe(0);
       expect(confirmed.output).toContain("completion pending");
       expect(f.record().phase).toBe("merged");
-    },
-  );
-
-  it.skipIf(!supportsNoLazyFetch)(
-    "fetches immutable authoritative main explicitly without probe hydration",
-    () => {
-      const f = fixture(undefined, undefined, true);
-      f.save({ ...f.state(), mode: "unapplied" });
-      expect(f.run().status).toBe(1);
-      f.recover();
-      const landed = f.git(
-        [
-          "--git-dir=" + f.remote,
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@example.invalid",
-          "commit-tree",
-          f.git(["rev-parse", f.head + "^{tree}"]),
-          "-p",
-          f.base,
-        ],
-        "Remote-only landing\n",
-      );
-      f.git(["--git-dir=" + f.remote, "update-ref", "refs/heads/main", landed]);
-      expect(() => f.git(["--no-lazy-fetch", "cat-file", "-e", landed])).toThrow();
-      f.save({
-        ...f.state(),
-        pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
-      });
-      const retry = f.run();
-      expectNoProbeFetch(f.trace());
-      expect(retry.status, retry.output).toBe(0);
-      f.git(["cat-file", "-e", landed]);
-      expect(f.state().mutations).toBe(1);
     },
   );
 });

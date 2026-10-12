@@ -16,6 +16,7 @@ describe("AppSidebar catalog reconnect", () => {
         .mockResolvedValue(catalogPage([]));
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       const hello = {
+        auth: { role: "operator", scopes: ["operator.read"] },
         features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
       } as ApplicationGatewaySnapshot["hello"];
       gateway.publish({ hello });

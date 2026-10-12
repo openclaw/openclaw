@@ -15,6 +15,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
@@ -338,6 +339,7 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
   const placements = createWorkerSessionPlacementStore({ database, now: () => 3_000 });
   tunnelManager = createWorkerTunnelManager({ runner });
   const environmentService = createWorkerEnvironmentService({
+    scheduler: createTestGatewayScheduler(),
     store: environmentStore,
     getConfig: () => ({
       cloudWorkers: {
@@ -387,14 +389,10 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
       clearEnvironment: () => {},
       rotateCredential: () => true,
     },
-    executeInference: async () => ({
-      type: "error",
-      reason: "cancelled",
-      message: "cancelled by boundary fixture",
-    }),
   });
   workerService = environmentService;
   const dispatch = createWorkerPlacementDispatchService({
+    initialPlacements: await placements.listAsync(),
     placements,
     environments: {
       ...environmentService,
@@ -425,7 +423,7 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     resolveMoveDestination: async () => undefined,
     runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
     runReclaimBarrier: async ({ begin, reclaim }) =>
-      await reclaim({ kind: "local", path: localWorkspace }, begin()),
+      await reclaim({ kind: "local", path: localWorkspace }, await begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     ...createWorkerWorkspaceRecoveryFixture({
       resolveWorkspace: async () => ({ kind: "local", path: localWorkspace }),
@@ -468,14 +466,14 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     {
       context: {
         workerSessionPlacementService: {
-          getMany: (sessionIds: readonly string[]) => placements.getMany(sessionIds),
-          retireSessionPlacement: (
-            retirement: Parameters<typeof placements.retireSessionPlacement>[0],
+          ...placements,
+          retireSessionPlacementAsync: async (
+            retirement: Parameters<typeof placements.retireSessionPlacementAsync>[0],
           ) => {
             expect(loadSessionEntry(SESSION_KEY).entry).toBeUndefined();
             expect(placements.get(SESSION_ID)?.state).toBe("reclaimed");
             events.push("placement:retire");
-            placements.retireSessionPlacement(retirement);
+            await placements.retireSessionPlacementAsync(retirement);
           },
         },
       },

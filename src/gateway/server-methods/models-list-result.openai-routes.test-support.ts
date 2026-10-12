@@ -1,5 +1,7 @@
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,10 +12,7 @@ import {
   type PreparedGatewayModelCatalogSnapshot,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-} from "./models-list-result.js";
+import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export const WITHOUT_OPENAI_ENV_AUTH = {
@@ -53,6 +52,7 @@ type ListModelsParams = {
     "pendingProviders" | "providerOutcomes" | "refreshFailed"
   >;
   preparedAuthModes?: PreparedAgentCredentialModes;
+  preparedAuthStore?: AuthProfileStore;
   metadataSnapshot?: PluginMetadataSnapshot;
   pluginRegistry?: PluginRegistry;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
@@ -98,12 +98,14 @@ export function createModelsListTestContext(params: ListModelsParams) {
       pluginRegistry: params.pluginRegistry,
       isCurrent: () => true,
       authModes: params.preparedAuthModes ?? {},
-      authStore: loadAuthProfileStoreWithoutExternalProfiles(
-        params.agentDir ?? "/tmp/models-list-openai-agent",
-        {
-          allowKeychainPrompt: false,
-        },
-      ),
+      authStore:
+        params.preparedAuthStore ??
+        loadAuthProfileStoreWithoutExternalProfiles(
+          params.agentDir ?? "/tmp/models-list-openai-agent",
+          {
+            allowKeychainPrompt: false,
+          },
+        ),
       metadataSnapshot: params.metadataSnapshot ?? chatMetadataSnapshot,
       entries,
       routeVariants: entries,
@@ -159,7 +161,7 @@ export async function listModels(params: ListModelsParams) {
             config,
             snapshot: { entries: params.catalog, routeVariants: params.catalog },
           },
-          catalogProjector: createGatewayAgentModelCatalogProjector({
+          catalogProjector: createModelCatalogDecisions({
             cfg: config,
             agentId,
             snapshot: { entries: params.catalog, routeVariants: params.catalog },

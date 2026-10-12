@@ -59,7 +59,7 @@ export async function createBotHandlerWithOptions(options: {
   const runtimeError = options.runtimeError ?? vi.fn();
   const runtimeLog = options.runtimeLog ?? vi.fn();
   const effectiveProxyFetch = options.proxyFetch ?? (undiciFetchSpyRef as unknown as typeof fetch);
-  createTelegramBotRef({
+  await createTelegramBotRef({
     token: "tok",
     // Production always constructs the bot from getMe(), so inbound handlers may
     // resolve the bot user id from botInfo when a test ctx carries only a username.
@@ -76,9 +76,9 @@ export async function createBotHandlerWithOptions(options: {
       },
     } as Parameters<typeof createTelegramBotRef>[0]["runtime"],
   });
-  const handler = onSpyRef.mock.calls.find((call) => call[0] === "message")?.[1] as (
-    ctx: Record<string, unknown>,
-  ) => Promise<void>;
+  const handler = onSpyRef.mock.calls.find(([filter]) =>
+    Array.isArray(filter) ? filter.includes("message") : filter === "message",
+  )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
   expect(handler).toBeDefined();
   return { handler, replySpy: replySpyRef, runtimeError };
 }

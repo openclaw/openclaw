@@ -8,15 +8,13 @@ import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
-type MaybeCreateDynamicAgentResult = {
-  created: boolean;
-  updatedCfg: OpenClawConfig;
-  agentId?: string;
-};
-
 type DynamicAgentMutationResult = {
   created: boolean;
   agentId?: string;
+};
+
+type MaybeCreateDynamicAgentResult = DynamicAgentMutationResult & {
+  updatedCfg: OpenClawConfig;
 };
 
 class DynamicAgentMutationSkipped extends Error {
@@ -44,9 +42,7 @@ function resolveDynamicAgentConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): DynamicAgentCreationConfig | undefined {
-  return resolveFeishuAccount({ cfg, accountId }).config.dynamicAgentCreation as
-    | DynamicAgentCreationConfig
-    | undefined;
+  return resolveFeishuAccount({ cfg, accountId }).config.dynamicAgentCreation;
 }
 
 function isAtDynamicAgentLimit(
@@ -56,8 +52,8 @@ function isAtDynamicAgentLimit(
   if (dynamicCfg.maxAgents === undefined) {
     return false;
   }
-  const feishuAgentCount = (cfg.agents?.list ?? []).filter((agent) =>
-    agent.id.startsWith("feishu-"),
+  const feishuAgentCount = Object.keys(cfg.agents?.entries ?? {}).filter((id) =>
+    id.startsWith("feishu-"),
   ).length;
   return feishuAgentCount >= dynamicCfg.maxAgents;
 }
@@ -108,7 +104,7 @@ export async function maybeCreateDynamicAgent(params: {
     return { created: false, updatedCfg: currentCfg };
   }
   const agentId = resolveDynamicAgentId(accountId, senderOpenId);
-  const currentAgentExists = (currentCfg.agents?.list ?? []).some((agent) => agent.id === agentId);
+  const currentAgentExists = Object.hasOwn(currentCfg.agents?.entries ?? {}, agentId);
   // Legacy unscoped agents are indistinguishable from valid default-account state.
   // Keep maxAgents as a hard cap instead of auto-rebinding or deleting ambiguous user data.
   if (!currentAgentExists && isAtDynamicAgentLimit(currentCfg, currentDynamicCfg)) {
@@ -140,7 +136,7 @@ export async function maybeCreateDynamicAgent(params: {
         ) {
           throw new DynamicAgentMutationSkipped(draft);
         }
-        const agentExists = (draft.agents?.list ?? []).some((agent) => agent.id === agentId);
+        const agentExists = Object.hasOwn(draft.agents?.entries ?? {}, agentId);
         if (!agentExists && isAtDynamicAgentLimit(draft, dynamicCfg)) {
           log(
             `feishu: maxAgents limit (${dynamicCfg.maxAgents}) reached, not creating agent for ${senderOpenId}`,
@@ -169,7 +165,7 @@ export async function maybeCreateDynamicAgent(params: {
           await fs.promises.mkdir(agentDir, { recursive: true });
           draft.agents = {
             ...draft.agents,
-            list: [...(draft.agents?.list ?? []), { id: agentId, workspace, agentDir }],
+            entries: { ...draft.agents?.entries, [agentId]: { workspace, agentDir } },
           };
         } else {
           log(`feishu: agent "${agentId}" exists, adding missing binding for ${senderOpenId}`);
@@ -207,9 +203,6 @@ export async function maybeCreateDynamicAgent(params: {
   };
 }
 
-/**
- * Resolve a path that may start with ~ to the user's home directory.
- */
 function resolveUserPath(p: string): string {
   if (p.startsWith("~/")) {
     return path.join(os.homedir(), p.slice(2));

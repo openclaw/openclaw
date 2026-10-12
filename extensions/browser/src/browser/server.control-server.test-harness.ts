@@ -1,4 +1,4 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { RequestListener } from "node:http";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 /**
  * Shared Browser control-server test harness with mocked Chrome, CDP,
@@ -6,9 +6,11 @@ import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
  */
 import { afterEach, beforeEach, vi } from "vitest";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
+// Keep static: compiled-worker preparation belongs at collection, not in a hook or test deadline.
+import * as browserServer from "../server.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
-import { getFreePort } from "./test-port.js";
+import { reserveBrowserTestListener } from "./test-port.js";
 
 type HarnessState = {
   testPort: number;
@@ -50,6 +52,25 @@ const state: HarnessState = {
   prevGatewayToken: undefined,
   prevGatewayPassword: undefined,
 };
+let listenerReservation: Awaited<ReturnType<typeof reserveBrowserTestListener>> | undefined;
+
+vi.mock("./http-listen.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./http-listen.js")>();
+  return {
+    ...actual,
+    listenBrowserHttpServer: async (app: RequestListener, port: number, host: string) => {
+      if (port !== state.testPort) {
+        return await actual.listenBrowserHttpServer(app, port, host);
+      }
+      if (!listenerReservation || listenerReservation.port !== port || host !== "127.0.0.1") {
+        throw new Error("Browser control server has no matching reserved listener");
+      }
+      const server = listenerReservation.attach(app);
+      listenerReservation = undefined;
+      return server;
+    },
+  };
+});
 
 /** Returns mutable Browser control-server harness state. */
 export function getBrowserControlServerTestState(): HarnessState {
@@ -199,7 +220,6 @@ const pwMocks = vi.hoisted(() => {
     closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     closePlaywrightBrowserConnection,
     hasCachedPlaywrightBrowserConnection: vi.fn((_cdpUrl: string) => false),
-    retirePlaywrightBrowserConnection: vi.fn(() => false),
     retirePlaywrightBrowserConnectionExact: vi.fn((opts: { cdpUrl: string }) => ({
       retired: false,
       close: async () => await closePlaywrightBrowserConnection(opts),
@@ -537,7 +557,6 @@ vi.mock("./chrome.js", () => ({
       exe: { kind: "chrome", path: "/fake/chrome" },
       userDataDir: chromeUserDataDir.dir,
       cdpPort: profile.cdpPort,
-      startedAt: Date.now(),
       proc,
     };
   }),
@@ -586,15 +605,13 @@ vi.mock("./screenshot.js", () => ({
   })),
 }));
 
-const loadBrowserServerModule = createLazyRuntimeModule(() => import("../server.js"));
-
 /** Starts the Browser control server from the mocked config module. */
 export async function startBrowserControlServerFromConfig() {
-  return await (await loadBrowserServerModule()).startBrowserControlServerFromConfig();
+  return await browserServer.startBrowserControlServerFromConfig();
 }
 
 async function stopBrowserControlServer(): Promise<void> {
-  await (await loadBrowserServerModule()).stopBrowserControlServer();
+  await browserServer.stopBrowserControlServer();
 }
 
 /** Creates a minimal Response-like object for mocked fetch handlers. */
@@ -631,7 +648,12 @@ export async function resetBrowserControlServerTestContext(): Promise<void> {
   mockClearAll(cdpMocks);
   mockClearAll(chromeMcpMocks);
 
-  state.testPort = await getFreePort();
+  await listenerReservation?.close();
+  listenerReservation = undefined;
+  const { listenBrowserHttpServer } =
+    await vi.importActual<typeof import("./http-listen.js")>("./http-listen.js");
+  listenerReservation = await reserveBrowserTestListener(listenBrowserHttpServer);
+  state.testPort = listenerReservation.port;
   state.cdpBaseUrl = `http://127.0.0.1:${defaultBrowserCdpPortForState(state.testPort)}`;
   state.cfgProfiles = defaultProfilesForState(state.testPort);
   state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
@@ -666,7 +688,12 @@ export async function cleanupBrowserControlServerTestContext(): Promise<void> {
   vi.restoreAllMocks();
   restoreGatewayPortEnv(state.prevGatewayPort);
   restoreGatewayAuthEnv(state.prevGatewayToken, state.prevGatewayPassword);
-  await stopBrowserControlServer();
+  try {
+    await stopBrowserControlServer();
+  } finally {
+    await listenerReservation?.close();
+    listenerReservation = undefined;
+  }
 }
 
 /** Installs beforeEach/afterEach hooks for Browser control-server tests. */

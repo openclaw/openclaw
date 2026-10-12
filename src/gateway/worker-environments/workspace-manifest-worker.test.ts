@@ -12,11 +12,11 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import {
+  captureWorkspaceManifest,
   captureWorkspaceSnapshot,
   parseWorkspaceManifestPair,
 } from "./workspace-manifest-worker.js";
 import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.test-support.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const adapterUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.manifestWorker);
@@ -132,7 +132,7 @@ it("captures eligible files outside the Gateway thread and returns the canonical
   const memo = new Map<string, string>();
   const metrics = { contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 };
   const capture = () =>
-    withWorkspaceHashMemo(memo, () => readActualWorkspaceManifest(selection), metrics);
+    withWorkspaceHashMemo(memo, () => captureWorkspaceManifest(selection), metrics);
   const first = await capture();
   expect(first.manifest.entries).toEqual([
     {
@@ -154,7 +154,7 @@ it("captures eligible files outside the Gateway thread and returns the canonical
   expect(snapshot.manifestRef).toBe(
     `sha256:${createHash("sha256").update(snapshot.rawManifest).digest("hex")}`,
   );
-  const empty = await readActualWorkspaceManifest({
+  const empty = await captureWorkspaceManifest({
     ...selection,
     includePaths: new Set<string>(),
   });

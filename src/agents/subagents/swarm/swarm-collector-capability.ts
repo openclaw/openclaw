@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import {
   bindAgentToolAvailability,
   getAgentToolAvailabilityBinding,
@@ -52,17 +53,20 @@ function collectorSchema(
   return { ...schema, properties: { ...properties, ...fields } };
 }
 
-function collectorFieldsFromSchema(schema: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(schema) || !isRecord(schema.properties)) {
-    return undefined;
-  }
-  const properties = schema.properties;
-  const fields = Object.fromEntries(
+function selectCollectorFields(properties: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
     COLLECTOR_FIELDS.filter((field) => field in properties).map((field) => [
       field,
       properties[field],
     ]),
   );
+}
+
+function collectorFieldsFromSchema(schema: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(schema) || !isRecord(schema.properties)) {
+    return undefined;
+  }
+  const fields = selectCollectorFields(schema.properties);
   return Object.keys(fields).length > 0 ? fields : undefined;
 }
 
@@ -71,12 +75,7 @@ export function bindCollectorSpawnTool<T extends AnyAgentTool>(
   properties: Record<string, unknown>,
   signal?: AbortSignal,
 ): T {
-  const fields = Object.fromEntries(
-    COLLECTOR_FIELDS.filter((field) => field in properties).map((field) => [
-      field,
-      properties[field],
-    ]),
-  );
+  const fields = selectCollectorFields(properties);
   const capability: SpawnCapability = { nativeReader: undefined, signal };
   const binding: AgentToolAvailabilityBinding = {
     prepare(current, callableTools) {
@@ -173,26 +172,25 @@ export function captureCollectorSpawnGuard(
 ): () => void {
   const owner = getAgentToolAvailabilityBinding(tool);
   const capability = owner && spawnCapabilities.get(owner);
-  const joined = joinedSpawns.getStore();
-  if (joined && joined.owner === owner && joined.toolCallId === toolCallId) {
+  const current = joinedSpawns.getStore();
+  const joined =
+    current && current.owner === owner && current.toolCallId === toolCallId ? current : undefined;
+  if (joined) {
     assertJoinedSpawn(joined);
     if (joined.claimed) {
       throw new ToolInputError("Joined collector spawn was already claimed.");
     }
     joined.claimed = true;
-    return () => {
-      assertActive();
-      capability?.signal?.throwIfAborted();
-      assertJoinedSpawn(joined);
-    };
   }
-  return () => {
-    assertActive();
+  return composeSessionSourceAssertion([assertActive], (assertSource) => {
+    assertSource();
     capability?.signal?.throwIfAborted();
-    if (!capability?.nativeReader) {
+    if (joined) {
+      assertJoinedSpawn(joined);
+    } else if (!capability?.nativeReader) {
       throw new ToolInputError(
         "Collector results are unavailable in this tool surface. Omit collect, outputSchema, and groupId to start an ordinary announcing child.",
       );
     }
-  };
+  });
 }

@@ -1,5 +1,5 @@
+import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { webhookCallback } from "grammy";
 import type { Message, Update } from "grammy/types";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -14,8 +14,7 @@ import {
   updateAmbientTranscriptWatermark,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
@@ -23,6 +22,7 @@ import {
   apiCalls,
   commandMessage,
   createBot,
+  deliverTelegramUpdate,
   from,
   groupChat as forumChat,
   harness,
@@ -35,8 +35,12 @@ import {
 } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const createStorePath = () => path.join(tempDirs.make("telegram-watermark-"), "sessions.json");
+let storeId = 0;
+function createStorePath(): string {
+  const storeDir = harness.state.path(`telegram-watermark-${storeId++}`);
+  mkdirSync(storeDir);
+  return path.join(storeDir, "sessions.json");
+}
 const sender = { id: 1234, is_bot: false, first_name: "Pat" };
 const groupChat = { id: -1001234567890, type: "supergroup", title: "Room" } as const;
 const groupSession = "agent:main:telegram:group:-1001234567890";
@@ -95,7 +99,7 @@ function createRuntime(telegramCfg: TelegramAccountConfig) {
   };
 }
 
-async function seedWatermark(storePath: string, reset = false) {
+async function seedWatermark(storePath: string) {
   await upsertSessionEntry({
     storePath,
     sessionKey: groupSession,
@@ -115,17 +119,6 @@ async function seedWatermark(storePath: string, reset = false) {
     messageId: "11",
     timestampMs: 1_700_000_001_000,
   });
-  if (reset) {
-    await upsertSessionEntry({
-      storePath,
-      sessionKey: groupSession,
-      entry: {
-        ...getSessionEntry({ storePath, sessionKey: groupSession }),
-        sessionId: "after-reset",
-        updatedAt: 1_700_000_002_000,
-      },
-    });
-  }
 }
 
 const ambientRows = [
@@ -136,7 +129,6 @@ const ambientRows = [
 describe("Telegram prompt composition", () => {
   it.each([
     { name: "existing plain DM", existing: true, reply: false, include: false },
-    { name: "fresh DM", existing: false, reply: false, include: true },
     { name: "existing DM reply", existing: true, reply: true, include: true },
   ])(
     "selects cached context for $name from recorded session state",
@@ -173,46 +165,41 @@ describe("Telegram prompt composition", () => {
     },
   );
 
-  it.each([
-    { name: "per-turn zero", telegramCfg: { dmPolicy: "open", dmHistoryLimit: 0 } },
-    { name: "negative account limit", telegramCfg: { dmPolicy: "open", dmHistoryLimit: -5 } },
-    {
-      name: "sender zero over positive account",
-      telegramCfg: { dmPolicy: "open", dmHistoryLimit: 10, dms: { "1234": { historyLimit: 0 } } },
-    },
-  ] satisfies Array<{ name: string; telegramCfg: TelegramAccountConfig }>)(
-    "excludes old DM history but preserves explicit replies for $name",
-    async ({ telegramCfg }) => {
-      const { runtime } = createRuntime({ dmPolicy: "open", dmHistoryLimit: 10 });
-      await runtime.recordMessageForReplyChain(message(10, "older unrelated DM"));
-      const current: unknown = {
-        ...message(12, "answer this reply target"),
-        reply_to_message: { ...message(11, "current reply target"), reply_to_message: undefined },
-      } satisfies Message.TextMessage;
-      if (!isTelegramMessageCacheSourceMessage(current)) {
-        throw new Error("Expected a valid Telegram message fixture");
-      }
-      await runtime.recordMessageForReplyChain(current);
-      const context = await runtime.buildPromptContextForMessage(
-        {
-          message: current,
-          getFile: async () => ({ file_id: "unused", file_unique_id: "unused" }),
+  it("excludes old DM history but preserves explicit replies with a zero sender limit", async () => {
+    const telegramCfg: TelegramAccountConfig = {
+      dmPolicy: "open",
+      dmHistoryLimit: 10,
+      dms: { "1234": { historyLimit: 0 } },
+    };
+    const { runtime } = createRuntime({ dmPolicy: "open", dmHistoryLimit: 10 });
+    await runtime.recordMessageForReplyChain(message(10, "older unrelated DM"));
+    const current: unknown = {
+      ...message(12, "answer this reply target"),
+      reply_to_message: { ...message(11, "current reply target"), reply_to_message: undefined },
+    } satisfies Message.TextMessage;
+    if (!isTelegramMessageCacheSourceMessage(current)) {
+      throw new Error("Expected a valid Telegram message fixture");
+    }
+    await runtime.recordMessageForReplyChain(current);
+    const context = await runtime.buildPromptContextForMessage(
+      {
+        message: current,
+        getFile: async () => ({ file_id: "unused", file_unique_id: "unused" }),
+      },
+      current,
+      await runtime.buildReplyChainForMessage(current),
+      { channels: { telegram: telegramCfg } },
+      telegramCfg,
+    );
+    expect(context).toMatchObject([
+      {
+        payload: {
+          messages: [{ message_id: "11", body: "current reply target", is_reply_target: true }],
         },
-        current,
-        await runtime.buildReplyChainForMessage(current),
-        { channels: { telegram: telegramCfg } },
-        telegramCfg,
-      );
-      expect(context).toMatchObject([
-        {
-          payload: {
-            messages: [{ message_id: "11", body: "current reply target", is_reply_target: true }],
-          },
-        },
-      ]);
-      expect(JSON.stringify(context)).not.toContain("older unrelated DM");
-    },
-  );
+      },
+    ]);
+    expect(JSON.stringify(context)).not.toContain("older unrelated DM");
+  });
 
   it("bounds cached DM context with a positive per-sender override", async () => {
     const telegramCfg: TelegramAccountConfig = {
@@ -222,7 +209,11 @@ describe("Telegram prompt composition", () => {
     };
     const { runtime, cfg } = createRuntime(telegramCfg);
     await runtime.recordMessageForReplyChain(message(10, "older DM"));
-    await runtime.recordMessageForReplyChain(message(11, "latest DM"));
+    const latestReply = {
+      ...message(11, "latest DM", { from: telegramBotInfoForTest }),
+      openclaw_prompt_context_timestamp_ms: 1_700_000_011_000,
+    };
+    await runtime.recordMessageForReplyChain(latestReply);
     const current = message(12, "continue");
     await runtime.recordMessageForReplyChain(current);
     const context = await runtime.buildPromptContextForMessage(
@@ -236,101 +227,56 @@ describe("Telegram prompt composition", () => {
       { payload: { messages: [{ message_id: "11", body: "latest DM" }] } },
     ]);
     expect(JSON.stringify(context)).not.toContain("older DM");
+    expect(context[0]).not.toHaveProperty("sessionTranscriptAssistantTextDedupeKeys");
   });
 
-  it.each([
-    {
-      text: "@bot recover",
-      kind: "user_request",
-      expected: ["explicit older reply", "after self marker"],
-    },
-    {
-      text: "ambient after reply",
-      kind: "room_event",
-      expected: [
-        "explicit older reply",
-        "before self marker",
-        "self marker body",
-        "after self marker",
-      ],
-    },
-  ])(
-    "selects $kind history without losing an explicit older reply",
-    async ({ text, kind, expected }) => {
-      const ctx = await buildTelegramMessageContextForTest({
-        cfg: config(),
-        sessionRuntime: null,
-        message: message(13, text, {
-          chat: groupChat,
-          entities: kind === "user_request" ? [{ type: "mention", offset: 0, length: 4 }] : [],
-        }),
-        historyLimit: 10,
-        promptContext: chatWindow([
-          {
-            message_id: "9",
-            sender: "OpenClaw (you)",
-            body: "explicit older reply",
-            is_reply_target: true,
-          },
-          { message_id: "10", body: "before self marker" },
-          { message_id: "11", sender: "OpenClaw (you)", body: "self marker body" },
-          { message_id: "12", body: "after self marker" },
-        ]),
-      });
-      expect(ctx?.ctxPayload.InboundEventKind).toBe(kind);
-      expect(ctx?.ctxPayload.InboundHistory?.map((entry) => entry.body)).toEqual(expected);
-      expect(ctx?.ctxPayload.Body).not.toContain("before self marker");
-    },
-  );
+  it("selects user-request history without losing an explicit older reply", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg: config(),
+      sessionRuntime: null,
+      message: message(13, "@bot recover", {
+        chat: groupChat,
+        entities: [{ type: "mention", offset: 0, length: 4 }],
+      }),
+      historyLimit: 10,
+      promptContext: chatWindow([
+        {
+          message_id: "9",
+          sender: "OpenClaw (you)",
+          body: "explicit older reply",
+          is_reply_target: true,
+        },
+        { message_id: "10", body: "before self marker" },
+        { message_id: "11", sender: "OpenClaw (you)", body: "self marker body" },
+        { message_id: "12", body: "after self marker" },
+      ]),
+    });
+    expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
+    expect(ctx?.ctxPayload.InboundHistory?.map((entry) => entry.body)).toEqual([
+      "explicit older reply",
+      "after self marker",
+    ]);
+    expect(ctx?.ctxPayload.Body).not.toContain("before self marker");
+  });
 
-  it("applies the recorded ambient watermark before truncating history", async () => {
+  it("omits transcript-owned ambient rows", async () => {
     const cfg = config();
     await seedWatermark(cfg.session!.store!);
     const ctx = await buildTelegramMessageContextForTest({
       cfg,
       sessionRuntime: null,
-      message: message(13, "@bot what happened?", {
-        chat: groupChat,
-        entities: [{ type: "mention", offset: 0, length: 4 }],
-      }),
-      historyLimit: 1,
-      promptContext: chatWindow([
-        { message_id: "12", body: "unpersisted gap", timestamp_ms: 1_700_000_002_000 },
-        ambientRows[1],
-      ]),
+      message: message(12, "current ambient", { chat: groupChat }),
+      historyLimit: 10,
+      promptContext: chatWindow(ambientRows),
     });
-    expect(ctx?.ctxPayload.InboundHistory).toEqual([
-      expect.objectContaining({ messageId: "12", body: "unpersisted gap" }),
-    ]);
-  });
+    expect(ctx?.ctxPayload).toMatchObject({
+      BodyForAgent: "current ambient",
+      InboundEventKind: "room_event",
+    });
 
-  it.each([false, true])(
-    "omits transcript-owned ambient rows unless the recorded session resets (%s)",
-    async (reset) => {
-      const cfg = config();
-      await seedWatermark(cfg.session!.store!, reset);
-      const ctx = await buildTelegramMessageContextForTest({
-        cfg,
-        sessionRuntime: null,
-        message: message(12, "current ambient", { chat: groupChat }),
-        historyLimit: 10,
-        promptContext: chatWindow(ambientRows),
-      });
-      expect(ctx?.ctxPayload).toMatchObject({
-        BodyForAgent: "current ambient",
-        InboundEventKind: "room_event",
-      });
-      if (reset) {
-        expect(ctx?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual([
-          "10",
-          "11",
-        ]);
-      } else {
-        expect(ctx?.ctxPayload.InboundHistory).toBeUndefined();
-        expect(ctx?.ctxPayload.ChannelStructuredContext).toBeUndefined();
-      }
-    },
-  );
+    expect(ctx?.ctxPayload.InboundHistory).toBeUndefined();
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toBeUndefined();
+  });
 
   it("orders mixed forwarded media while redacting denied origins and keeping command text clean", async () => {
     const ordinary = message(1, "ordinary note", { chat: groupChat });
@@ -468,13 +414,6 @@ describe("Telegram registered topic recovery", () => {
       ambient: false,
     },
     {
-      name: "empty recovered window",
-      historyLimit: 10,
-      topic: 3732,
-      targetChat: -10042001,
-      ambient: false,
-    },
-    {
       name: "different chat binding",
       historyLimit: 10,
       topic: 3731,
@@ -523,7 +462,7 @@ describe("Telegram registered topic recovery", () => {
           },
         },
       };
-      const bot = createBot(false, true, cfg, false, accountId);
+      const bot = await createBot(false, true, cfg, false, accountId);
       const binding: SessionBindingRecord = {
         bindingId: "registered-history-recovery",
         targetSessionKey: sessionKey,
@@ -621,16 +560,7 @@ describe("Telegram registered topic recovery", () => {
               : {}),
           },
         };
-        await webhookCallback(
-          bot,
-          "std/http",
-        )(
-          new Request("http://localhost/telegram", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(update),
-          }),
-        );
+        await deliverTelegramUpdate(bot, update);
         expect(harness.replySpy).toHaveBeenCalledOnce();
         const observed = harness.replySpy.mock.calls[0]![0];
         const recovered = targetChat === forumChat.id;

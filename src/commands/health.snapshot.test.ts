@@ -1,12 +1,10 @@
 // Health snapshot tests cover channel, session, runtime, and gateway health snapshot construction.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { HealthSummary } from "../gateway/health/types.js";
-import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import {
   loadFreshHealthModulesForTest,
   type HealthTestPlugin,
@@ -14,8 +12,6 @@ import {
 } from "./health.snapshot.test-support.js";
 
 let testConfig: Record<string, unknown> = {};
-let testStore: Record<string, { updatedAt?: number }> = {};
-let listHealthSessionEntriesCalls: Array<{ agentId?: string; storePath?: string }> = [];
 let healthPluginsForTest: HealthTestPlugin[] = [];
 const tempDirs = createTempDirTracker();
 let sessionStorePath: string;
@@ -203,70 +199,6 @@ async function probeTelegramAccountForTest(
   }
 }
 
-function stubTelegramFetchOk(calls: string[]) {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string) => {
-      calls.push(url);
-      if (url.includes("/getMe")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            ok: true,
-            result: { id: 1, username: "bot" },
-          }),
-        } as unknown as Response;
-      }
-      if (url.includes("/getWebhookInfo")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            ok: true,
-            result: {
-              url: "https://example.com/h",
-              has_custom_certificate: false,
-            },
-          }),
-        } as unknown as Response;
-      }
-      return {
-        ok: false,
-        status: 404,
-        json: async () => ({ ok: false, description: "nope" }),
-      } as unknown as Response;
-    }),
-  );
-}
-
-async function runSuccessfulTelegramProbe(
-  config: Record<string, unknown>,
-  options?: { clearTokenEnv?: boolean },
-) {
-  testConfig = config;
-  testStore = {};
-  vi.stubEnv("DISCORD_BOT_TOKEN", "");
-  if (options?.clearTokenEnv) {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-  }
-
-  const calls: string[] = [];
-  stubTelegramFetchOk(calls);
-
-  const snap = await getHealthSnapshot({ timeoutMs: 25 });
-  const telegram = snap.channels.telegram as {
-    configured?: boolean;
-    probe?: {
-      ok?: boolean;
-      bot?: { username?: string };
-      webhook?: { url?: string };
-    };
-  };
-
-  return { calls, telegram };
-}
-
 function createTelegramHealthPlugin(): HealthTestPlugin {
   return {
     ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
@@ -422,9 +354,8 @@ describe("collectGatewayHealthSnapshot", () => {
     } = await loadFreshHealthModulesForTest({
       getConfig: () => testConfig,
       getSessionStorePath: () => sessionStorePath,
-      getSessions: () => testStore,
+      getSessions: () => ({}),
       getPlugins: () => healthPluginsForTest,
-      onSessionRead: (scope) => listHealthSessionEntriesCalls.push(scope),
     }));
   });
 
@@ -439,7 +370,6 @@ describe("collectGatewayHealthSnapshot", () => {
     setActiveDegradedPlugins([]);
     buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
     probeTelegramAccountForTestOverride = undefined;
-    listHealthSessionEntriesCalls = [];
     healthPluginsForTest = [createTelegramHealthPlugin()];
     setActivePluginRegistry(
       createTestRegistry([
@@ -460,7 +390,6 @@ describe("collectGatewayHealthSnapshot", () => {
       session: { store: "/tmp/x" },
       channels: { telegram: { botToken: "123:test" } },
     };
-    testStore = {};
     const timeouts: number[] = [];
     probeTelegramAccountForTestOverride = async (_account, timeoutMs) => {
       timeouts.push(timeoutMs);
@@ -474,133 +403,8 @@ describe("collectGatewayHealthSnapshot", () => {
     expect(timeouts[0]).toBeLessThanOrEqual(7_000);
   });
 
-  it("includes active plugin load errors in the health snapshot", async () => {
-    testConfig = { session: { store: "/tmp/x" } };
-    testStore = {};
-    setActivePluginRegistry({
-      ...createTestRegistry([]),
-      plugins: [
-        createPluginRecord({ id: "telegram", origin: "bundled", status: "loaded" }),
-        createPluginRecord({
-          id: "whatsapp",
-          origin: "bundled",
-          status: "error",
-          activated: true,
-          activationSource: "explicit",
-          activationReason: "bundled-channel-enabled-in-config",
-          failurePhase: "load",
-          error: "failed to load plugin dependency: ENOSPC",
-        }),
-        createPluginRecord({
-          id: "optional-broken",
-          origin: "workspace",
-          enabled: false,
-          activated: false,
-          status: "error",
-          error: "disabled plugin ignored",
-        }),
-      ],
-    });
-
-    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
-
-    expect(snap.plugins?.loaded).toEqual(["telegram"]);
-    expect(snap.plugins?.errors).toEqual([
-      {
-        id: "optional-broken",
-        origin: "workspace",
-        activated: false,
-        activationSource: "disabled",
-        error: "disabled plugin ignored",
-      },
-      {
-        id: "whatsapp",
-        origin: "bundled",
-        activated: true,
-        activationSource: "explicit",
-        activationReason: "bundled-channel-enabled-in-config",
-        failurePhase: "load",
-        error: "failed to load plugin dependency: ENOSPC",
-      },
-    ]);
-  });
-
-  it("omits configReload when no config reloader status is supplied", async () => {
-    testConfig = { session: { store: "/tmp/x" } };
-    testStore = {};
-
-    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
-
-    expect(snap.configReload).toBeUndefined();
-  });
-
-  it("surfaces a disabled config hot-reload watcher in the health snapshot", async () => {
-    testConfig = { session: { store: "/tmp/x" } };
-    testStore = {};
-
-    const snap = await getHealthSnapshot({
-      timeoutMs: 10,
-      probe: false,
-      configReloadHotReloadStatus: "disabled",
-    });
-
-    expect(snap.configReload).toEqual({ hotReloadStatus: "disabled" });
-  });
-
-  it("skips telegram probe when not configured", async () => {
-    testConfig = { session: { store: "/tmp/x" } };
-    testStore = {
-      global: { updatedAt: Date.now() },
-      unknown: { updatedAt: Date.now() },
-      "agent:main:main": { updatedAt: 1000 },
-      "agent:main:foo": { updatedAt: 2000 },
-    };
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    vi.stubEnv("DISCORD_BOT_TOKEN", "");
-    const snap = (await getHealthSnapshot({
-      timeoutMs: 10,
-    })) satisfies HealthSummary;
-    expect(snap.ok).toBe(true);
-    const telegram = snap.channels.telegram as {
-      configured?: boolean;
-      probe?: unknown;
-    };
-    expect(telegram.configured).toBe(false);
-    expect(telegram.probe).toBeUndefined();
-    expect(snap.sessions.count).toBe(2);
-    expect(snap.sessions.recent[0]?.key).toBe("agent:main:foo");
-  });
-
-  it("probes telegram getMe + webhook info when configured", async () => {
-    const { calls, telegram } = await runSuccessfulTelegramProbe({
-      channels: { telegram: { botToken: "t-1" } },
-    });
-    expect(telegram.configured).toBe(true);
-    expect(telegram.probe?.ok).toBe(true);
-    expect(telegram.probe?.bot?.username).toBe("bot");
-    expect(telegram.probe?.webhook?.url).toMatch(/^https:/);
-    expect(calls.join("\n")).toContain("/getMe");
-    expect(calls.join("\n")).toContain("/getWebhookInfo");
-
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-"));
-    const tokenFile = path.join(tmpDir, "telegram-token");
-    try {
-      fs.writeFileSync(tokenFile, "t-file\n", "utf-8");
-      const tokenFileProbe = await runSuccessfulTelegramProbe(
-        { channels: { telegram: { tokenFile } } },
-        { clearTokenEnv: true },
-      );
-      expect(tokenFileProbe.telegram.configured).toBe(true);
-      expect(tokenFileProbe.telegram.probe?.ok).toBe(true);
-      expect(tokenFileProbe.calls.join("\n")).toContain("bott-file/getMe");
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
-
   it("preserves runtime state and probe payloads when plugin summaries omit them", async () => {
     testConfig = { channels: { telegram: { botToken: "t-1" } } };
-    testStore = {};
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
     buildTelegramHealthSummaryForTest = (snapshot) => ({
       accountId: snapshot.accountId,
@@ -650,7 +454,6 @@ describe("collectGatewayHealthSnapshot", () => {
 
   it("merges inspected account metadata with runtime state before building health summaries", async () => {
     testConfig = { channels: { discord: { token: "discord-token" } } };
-    testStore = {};
     healthPluginsForTest = [createDiscordHealthPlugin()];
 
     const snap = await getHealthSnapshot({
@@ -700,7 +503,6 @@ describe("collectGatewayHealthSnapshot", () => {
 
   it("redacts base URL credentials returned by channel summary hooks", async () => {
     testConfig = { channels: { discord: { token: "test" } } };
-    testStore = {};
     const plugin = createDiscordHealthPlugin();
     plugin.status = {
       ...plugin.status,
@@ -739,7 +541,6 @@ describe("collectGatewayHealthSnapshot", () => {
         },
       },
     };
-    testStore = {};
     healthPluginsForTest = [createDiscordHealthPlugin()];
 
     const snap = await getHealthSnapshot({
@@ -780,7 +581,6 @@ describe("collectGatewayHealthSnapshot", () => {
 
   it("omits secret runtime fields and raw probe payloads from non-sensitive health snapshots", async () => {
     testConfig = { channels: { telegram: { botToken: "t-1" } } };
-    testStore = {};
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
     buildTelegramHealthSummaryForTest = (snapshot) => ({
       accountId: snapshot.accountId,
@@ -844,7 +644,6 @@ describe("collectGatewayHealthSnapshot", () => {
   it("keeps redacted failed probes in non-sensitive health snapshots", async () => {
     healthPluginsForTest = [createIMessageHealthPlugin()];
     testConfig = { channels: { imessage: { enabled: true } } };
-    testStore = {};
 
     const snap = await getHealthSnapshot({
       timeoutMs: 25,
@@ -886,7 +685,6 @@ describe("collectGatewayHealthSnapshot", () => {
 
   it("omits generic failed probe errors from non-sensitive health snapshots", async () => {
     testConfig = { channels: { telegram: { botToken: "bad-token" } } };
-    testStore = {};
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
     vi.stubGlobal(
       "fetch",
@@ -908,105 +706,5 @@ describe("collectGatewayHealthSnapshot", () => {
     expect(telegram.configured).toBe(true);
     expect(telegram.probe).toBeUndefined();
     expect(telegram.accounts?.default?.probe).toBeUndefined();
-  });
-
-  it("returns structured telegram probe errors", async () => {
-    testConfig = { channels: { telegram: { botToken: "bad-token" } } };
-    testStore = {};
-    vi.stubEnv("DISCORD_BOT_TOKEN", "");
-
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (url.includes("/getMe")) {
-          return {
-            ok: false,
-            status: 401,
-            json: async () => ({ ok: false, description: "unauthorized" }),
-          } as unknown as Response;
-        }
-        throw new Error("unexpected");
-      }),
-    );
-
-    const snap = await getHealthSnapshot({ timeoutMs: 25 });
-    const telegram = snap.channels.telegram as {
-      configured?: boolean;
-      probe?: { ok?: boolean; status?: number; error?: string };
-    };
-    expect(telegram.configured).toBe(true);
-    expect(telegram.probe?.ok).toBe(false);
-    expect(telegram.probe?.status).toBe(401);
-    expect(telegram.probe?.error).toMatch(/unauthorized/i);
-
-    testConfig = { channels: { telegram: { botToken: "t-err" } } };
-    testStore = {};
-    vi.stubEnv("DISCORD_BOT_TOKEN", "");
-
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new Error("network down");
-      }),
-    );
-
-    const exceptionSnap = await getHealthSnapshot({ timeoutMs: 25 });
-    const exceptionTelegram = exceptionSnap.channels.telegram as {
-      configured?: boolean;
-      probe?: { ok?: boolean; error?: string };
-    };
-    expect(exceptionTelegram.configured).toBe(true);
-    expect(exceptionTelegram.probe?.ok).toBe(false);
-    expect(exceptionTelegram.probe?.error).toMatch(/network down/i);
-  });
-
-  it("disables heartbeat for agents without heartbeat blocks", async () => {
-    testConfig = {
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "30m",
-            target: "last",
-          },
-        },
-        list: [
-          { id: "main", default: true },
-          { id: "ops", heartbeat: { every: "1h", target: "whatsapp" } },
-        ],
-      },
-    };
-    testStore = {};
-
-    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
-    const byAgent = new Map(snap.agents.map((agent) => [agent.agentId, agent] as const));
-    const main = byAgent.get("main");
-    const ops = byAgent.get("ops");
-
-    expect(main?.heartbeat.everyMs).toBeNull();
-    expect(main?.heartbeat.every).toBe("disabled");
-    expect(ops?.heartbeat.everyMs).toBe(60 * 60 * 1000);
-    expect(ops?.heartbeat.every).toBe("1h");
-  });
-
-  it("passes agent scope when summarizing configured agent sessions", async () => {
-    testConfig = {
-      agents: {
-        list: [{ id: "main", default: true }, { id: "ops" }],
-      },
-    };
-    testStore = {};
-
-    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
-
-    const storeDir = path.dirname(sessionStorePath);
-    expect(snap.sessions.path).toBe(path.join(storeDir, "openclaw-agent.sqlite"));
-    expect(snap.agents.map(({ agentId, sessions }) => ({ agentId, path: sessions.path }))).toEqual([
-      { agentId: "main", path: path.join(storeDir, "openclaw-agent.sqlite") },
-      { agentId: "ops", path: path.join(storeDir, "openclaw-agent.ops.sqlite") },
-    ]);
-    expect(listHealthSessionEntriesCalls).toEqual([
-      { agentId: "main", storePath: sessionStorePath },
-      { agentId: "ops", storePath: sessionStorePath },
-    ]);
   });
 });

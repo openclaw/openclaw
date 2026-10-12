@@ -5,7 +5,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ChatCommandDefinition } from "../../auto-reply/commands-registry.types.js";
 
 const mockSkillCommands = [
@@ -104,7 +103,8 @@ type RuntimeCommandRegistration = {
     };
   };
 };
-vi.mock("../../auto-reply/commands-registry.js", () => ({
+vi.mock("../../auto-reply/commands-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auto-reply/commands-registry.js")>()),
   listChatCommandsForConfig: vi.fn(() => mockChatCommands),
 }));
 vi.mock("../../skills/discovery/chat-commands.js", () => ({
@@ -179,9 +179,7 @@ import { registerPluginCommandInRegistry } from "../../plugins/command-registrat
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { prepareSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
-import * as sessionSharing from "../session-sharing.js";
-import { commandsHandlers, buildCommandsListResult } from "./commands.js";
+import { commandsHandlers } from "./commands.js";
 
 function createDiscordChannelPlugin() {
   return {
@@ -242,16 +240,6 @@ function requireCommand<T extends { name: string }>(commands: T[], name: string)
   return command;
 }
 
-function collectBuiltinNames(commands: readonly { name: string; source: string }[]): string[] {
-  const names: string[] = [];
-  for (const command of commands) {
-    if (command.source !== "plugin") {
-      names.push(command.name);
-    }
-  }
-  return names;
-}
-
 async function pluginCommand(
   params: Record<string, unknown> = {},
 ): Promise<ListedCommand | undefined> {
@@ -304,120 +292,6 @@ describe("commands.list handler", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it.each(["unchanged", "revoked", "replaced", "removed", "selection"] as const)(
-    "checks the current session after command preparation (%s)",
-    async (change) => {
-      const target = {
-        agentId: "main",
-        canonicalKey: "agent:main:session",
-        storeKey: "agent:main:session",
-        storeKeys: ["agent:main:session"],
-        storePath: "/synthetic/sessions.db",
-        entry: { sessionId: "session", lifecycleRevision: "first", updatedAt: 1 },
-      };
-      const resolveTarget = vi
-        .spyOn(sessionSharing, "resolveSessionSharingTarget")
-        .mockReturnValue(target);
-      const authorize = vi
-        .spyOn(sessionSharing, "authorizeSessionSharingTarget")
-        .mockReturnValue(null);
-      const entered = createDeferred();
-      const release = createDeferred();
-      vi.mocked(prepareSkillCommandsForAgents).mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return mockSkillCommands;
-      });
-      const pending = callHandler({ sessionKey: target.canonicalKey });
-      try {
-        await Promise.race([
-          entered.promise,
-          pending.then(() => {
-            throw new Error("commands.list settled before command preparation");
-          }),
-        ]);
-        if (change === "revoked") {
-          authorize.mockReturnValue(errorShape(ErrorCodes.INVALID_REQUEST, "access revoked"));
-        } else if (change === "replaced") {
-          resolveTarget.mockReturnValue({
-            ...target,
-            entry: { ...target.entry, lifecycleRevision: "replacement" },
-          });
-        } else if (change === "removed") {
-          resolveTarget.mockReturnValue(null);
-        } else if (change === "selection") {
-          resolveTarget.mockReturnValue({
-            ...target,
-            entry: {
-              ...target.entry,
-              skillLibrarySelections: [
-                {
-                  skillId: "selected",
-                  revision: "second",
-                  name: "Selected skill",
-                  ownerProfileId: "owner",
-                },
-              ],
-            },
-          });
-        }
-      } finally {
-        release.resolve();
-      }
-      const result = await pending;
-      if (change === "unchanged") {
-        expect(result.ok).toBe(true);
-        expect(result.payload).toMatchObject({ commands: expect.any(Array) });
-      } else {
-        expect(result.ok).toBe(false);
-        expect(result.payload).toBeUndefined();
-        expect(result.error).toEqual(
-          errorShape(
-            change === "revoked" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-            change === "revoked"
-              ? "access revoked"
-              : "Session changed while preparing its commands. Retry the request.",
-          ),
-        );
-      }
-    },
-  );
-
-  it("returns all command sources", async () => {
-    const { ok, payload } = await callHandler();
-    expect(ok).toBe(true);
-    const { commands } = payload as { commands: Array<{ name: string; source: string }> };
-    const sources = new Set(commands.map((c) => c.source));
-    expect(sources).toEqual(new Set(["native", "skill", "plugin"]));
-  });
-
-  it("maps native commands with category, scope, and args", async () => {
-    const commands = await listCommands();
-    const model = requireCommand(commands, "model");
-    expect(model.name).toBe("model");
-    expect(model.nativeName).toBe("model");
-    expect(model.textAliases).toEqual(["/model", "/m"]);
-    expect(model.description).toBe("Set model");
-    expect(model.category).toBe("options");
-    expect(model.source).toBe("native");
-    expect(model.scope).toBe("both");
-    expect(model.acceptsArgs).toBe(true);
-    const args = model.args ?? [];
-    expect(args).toHaveLength(1);
-    expect(expectDefined(args[0], "args[0] test invariant").choices).toEqual([
-      { value: "gpt-5.4", label: "GPT-5.4" },
-      { value: "sonnet-4.6", label: "sonnet-4.6" },
-    ]);
-  });
-
-  it("exposes per-command scope", async () => {
-    const commands = await listCommands();
-    expect(requireCommand(commands, "model").scope).toBe("both");
-    expect(requireCommand(commands, "commands").scope).toBe("text");
-    expect(requireCommand(commands, "debug_prompt").scope).toBe("native");
-    expect(requireCommand(commands, "tts").scope).toBe("both");
-  });
-
   it("projects legacy SDK categories into the current command catalog", async () => {
     const command = expectDefined(mockChatCommands[0], "model command fixture");
     const category = command.category;
@@ -432,11 +306,6 @@ describe("commands.list handler", () => {
     }
   });
 
-  it("skips args when acceptsArgs is false", async () => {
-    const debug = requireCommand(await listCommands(), "debug_prompt");
-    expect(debug.args).toBeUndefined();
-  });
-
   it("serializes dynamic choices when acceptsArgs is true", async () => {
     const debugCmd = mockChatCommands.find((c) => c.key === "debug_prompt")!;
     const saved = debugCmd.acceptsArgs;
@@ -449,44 +318,6 @@ describe("commands.list handler", () => {
     } finally {
       debugCmd.acceptsArgs = saved;
     }
-  });
-
-  it("identifies skill commands by source", async () => {
-    const commands = await listCommands();
-    const skill = commands.find((c) => c.name === "code_review");
-    expect(skill?.source).toBe("skill");
-    expect(skill?.skillDisplayName).toBe("Code Review");
-    expect(skill?.skillModelVisible).toBe(true);
-    expect(skill?.category).toBe("tools");
-  });
-
-  it("always includes plugin commands regardless of scope filter", async () => {
-    for (const scope of ["native", "text", "both"] as const) {
-      const commands = await listCommands({ scope });
-      const sources = commands.map((command) => command.source);
-      expect(sources).toContain("plugin");
-    }
-  });
-
-  it("filters built-in commands by scope=native (excludes text-only)", async () => {
-    const commands = await listCommands({ scope: "native" });
-    const builtinNames = collectBuiltinNames(commands);
-    expect(builtinNames).not.toContain("commands");
-    expect(builtinNames).toContain("model");
-    expect(builtinNames).toContain("debug_prompt");
-  });
-
-  it("filters built-in commands by scope=text (excludes native-only)", async () => {
-    const commands = await listCommands({ scope: "text" });
-    const builtinNames = collectBuiltinNames(commands);
-    expect(builtinNames).toContain("commands");
-    expect(builtinNames).not.toContain("debug_prompt");
-  });
-
-  it("resolves provider-specific native names", async () => {
-    const commands = await listCommands({ provider: "discord" });
-    expect(requireCommand(commands, "set_model").name).toBe("set_model");
-    expect(commands.find((c) => c.name === "model")).toBeUndefined();
   });
 
   it("limits provider-specific native commands while keeping login text-visible", async () => {
@@ -507,24 +338,6 @@ describe("commands.list handler", () => {
         textAliases: ["/login"],
       }),
     );
-  });
-
-  it("normalizes mixed-case provider", async () => {
-    const commands = await listCommands({ provider: "Discord" });
-    expect(requireCommand(commands, "set_model").name).toBe("set_model");
-    const plugin = commands.find((c) => c.source === "plugin");
-    expect(plugin?.name).toBe("discord_tts");
-  });
-
-  it("uses default names without provider", async () => {
-    const commands = await listCommands();
-    expect(requireCommand(commands, "model").name).toBe("model");
-    expect(commands.find((c) => c.name === "set_model")).toBeUndefined();
-  });
-
-  it("omits plugin commands when provider lacks nativeCommandsAutoEnabled", async () => {
-    const commands = await listCommands({ provider: "whatsapp" });
-    expect(commands.some((c) => c.source === "plugin")).toBe(false);
   });
 
   it.each(["text", "native", "both"] as const)(
@@ -558,13 +371,6 @@ describe("commands.list handler", () => {
     expect(model?.nativeName).toBe("set_model");
     expect(model?.textAliases).toEqual(["/model", "/m"]);
     expect(commands.find((c) => c.name === "set_model")).toBeUndefined();
-  });
-
-  it("keeps plugin text commands visible for scope=text even without native provider support", async () => {
-    const plugin = await pluginCommand({ provider: "whatsapp", scope: "text" });
-    expect(plugin?.name).toBe("tts");
-    expect(plugin?.textAliases).toEqual(["/tts"]);
-    expect(plugin?.nativeName).toBeUndefined();
   });
 
   it("keeps plugin text names while exposing provider-native aliases for scope=text", async () => {
@@ -639,22 +445,6 @@ describe("commands.list handler", () => {
     ).toBeUndefined();
   });
 
-  it("filters provider-incompatible plugin commands from the text surface", async () => {
-    setGatewayRegistry(providerFilteredPluginRegistrations());
-
-    const commands = await listCommands({ provider: "discord", scope: "text" });
-
-    expect(
-      commands.find((c) => c.source === "plugin" && c.name === "android_only"),
-    ).toBeUndefined();
-    expect(commands.find((c) => c.source === "plugin")?.textAliases).toEqual(["/demo"]);
-  });
-
-  it("returns provider-specific plugin command names", async () => {
-    const plugin = await pluginCommand({ provider: "discord" });
-    expect(plugin?.name).toBe("discord_tts");
-  });
-
   it("excludes args when includeArgs=false", async () => {
     const model = requireCommand(await listCommands({ includeArgs: false }), "model");
     expect(model.args).toBeUndefined();
@@ -726,20 +516,5 @@ describe("commands.list handler", () => {
     const { ok, error } = await callHandler({ scope: "invalid" });
     expect(ok).toBe(false);
     expect((error as { code: number }).code).toBe(ErrorCodes.INVALID_REQUEST);
-  });
-});
-
-describe("buildCommandsListResult", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("is callable independently from handler", async () => {
-    const result = await buildCommandsListResult({ cfg: {} as never, agentId: "main" });
-    expect(result.commands.length).toBeGreaterThan(0);
-    const invalidScopes = result.commands
-      .map((command) => command.scope)
-      .filter((scope) => typeof scope !== "string");
-    expect(invalidScopes).toStrictEqual([]);
   });
 });

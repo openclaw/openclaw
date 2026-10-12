@@ -36,5 +36,6 @@ export function createActiveSnapshotTracker() {
     },
     has: (key: string) => processed.has(key),
     add: (key: string) => processed.add(key),
+    addIfAccepted: (key: string, accepted: boolean) => accepted && processed.add(key),
   };
 }

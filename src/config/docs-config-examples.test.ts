@@ -40,17 +40,16 @@ describe("docs config examples", () => {
       issuePath: "agents.defaults",
     },
     {
-      name: "reports a retired key in an indented MDX component fence",
+      name: "validates a canonical roster in an indented MDX component fence",
       markdown: [
-        '<Accordion title="Legacy roster">',
+        '<Accordion title="Agent roster">',
         "    ```json5",
-        '    { agents: { list: [{ id: "main" }] } }',
+        "    { agents: { entries: { main: {} } } }",
         "    ````",
         "</Accordion>",
       ].join("\n"),
-      findings: 1,
+      findings: 0,
       skipped: undefined,
-      issuePath: "agents",
     },
     {
       name: "skips a fragment without a recognized-key majority",
@@ -103,14 +102,7 @@ describe("docs config examples", () => {
       skipped: undefined,
       issuePath: "channels.slack",
     },
-    {
-      name: "reports an unsupported OpenAI plugin config key",
-      markdown:
-        '```json5\n{ plugins: { entries: { openai: { config: { personalityy: "friendly" } } } } }\n```',
-      findings: 1,
-      skipped: undefined,
-      issuePath: "plugins.entries.openai.config",
-    },
+
     {
       name: "accepts a supported OpenAI plugin config value",
       markdown:

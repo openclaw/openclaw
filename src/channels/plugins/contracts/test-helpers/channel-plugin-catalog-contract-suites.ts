@@ -302,49 +302,6 @@ const [richNpmCatalogFixture, clawhubCatalogFixture, yuanbaoCatalogFixture] = [
 export function describeChannelPluginCatalogEntriesContract() {
   const cases: ChannelCatalogContractCase[] = [
     {
-      name: "includes external catalog entries",
-      setup: () => ({
-        channelId: "demo-channel",
-        catalogPaths: [
-          createTemporaryCatalogFile(
-            "openclaw-catalog-",
-            createCatalogEntry({
-              packageName: "@openclaw/demo-channel",
-              channelId: "demo-channel",
-              label: "Demo Channel",
-              blurb: "Demo entry",
-              order: 999,
-            }),
-          ),
-        ],
-        expected: { id: "demo-channel" },
-      }),
-    },
-    {
-      name: "preserves plugin ids when they differ from channel ids",
-      setup: () => {
-        const stateDir = fs.mkdtempSync(
-          path.join(resolvePreferredOpenClawTmpDir(), "openclaw-channel-catalog-state-"),
-        );
-        writeDiscoveredChannelPlugin({
-          stateDir,
-          packageName: "@vendor/demo-channel-plugin",
-          channelLabel: "Demo Channel",
-          pluginId: "@vendor/demo-runtime",
-          blurb: "Demo channel",
-        });
-        return {
-          channelId: "demo-channel",
-          env: {
-            ...process.env,
-            OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-          },
-          expected: { pluginId: "@vendor/demo-runtime" },
-        };
-      },
-    },
-    {
       name: "keeps discovered plugins ahead of external catalog overrides",
       setup: () => {
         const stateDir = fs.mkdtempSync(

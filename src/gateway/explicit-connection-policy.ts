@@ -14,12 +14,8 @@ function hasExplicitGatewayConnectionAuth(auth?: ExplicitGatewayAuth): boolean {
 // targets. Skipping the config load for one would silently drop the edge
 // credential and surface as an identity-proxy rejection the flags cannot explain.
 function targetMayRequireConfiguredEdgeAuth(url: string): boolean {
-  try {
-    const protocol = new URL(url).protocol;
-    return protocol === "wss:" || protocol === "https:";
-  } catch {
-    return false;
-  }
+  const protocol = URL.parse(url)?.protocol;
+  return protocol === "wss:" || protocol === "https:";
 }
 
 /**

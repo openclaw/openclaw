@@ -7,10 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import corePackagePolicy from "../../scripts/lib/npm-core-release-packages.json" with { type: "json" };
 import {
   createPublishPreflightEvidenceClient,
+  ensureReleasePublishToolingTag,
   inspectPublishPreflightTelegramEvidence,
   readPublishPreflightRelease,
   validatePublishPreflightNpm,
   verifyPublishedPreflightTarball,
+  type PublishPreflightGh,
 } from "../../scripts/lib/release-publish-preflight-evidence.mts";
 import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -25,12 +27,125 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("protected tooling tag resolution", () => {
+  const repo = "openclaw/openclaw";
+  const toolingSha = "a".repeat(40);
+  const prefix = "release-publish/aaaaaaaaaaaa-";
+  const compare = [
+    "api",
+    `repos/${repo}/compare/${toolingSha}...main`,
+    "--method",
+    "GET",
+    "--jq",
+    ".status",
+  ];
+  const inventory = ["api", `repos/${repo}/git/matching-refs/tags/${prefix}`, "--method", "GET"];
+  const ref = (suffix: string, type = "commit", sha = toolingSha) => ({
+    ref: `refs/tags/${prefix}${suffix}`,
+    object: { type, sha },
+  });
+  const scriptedGh = (...responses: string[]) => {
+    const runGh = vi.fn<PublishPreflightGh>(() => {
+      throw new Error("Unexpected GitHub request");
+    });
+    for (const response of responses) {
+      runGh.mockReturnValueOnce(response);
+    }
+    return runGh;
+  };
+
+  it.each(["ahead", "identical"])(
+    "reuses the newest lightweight tag on %s main ancestry",
+    (ancestry) => {
+      const runGh = scriptedGh(
+        `${ancestry}\n`,
+        JSON.stringify([
+          ref("10"),
+          ref("9"),
+          ref("11", "tag"),
+          ref("12", "commit", "b".repeat(40)),
+          ref("0"),
+          ref("01"),
+          ref("13-extra"),
+          null,
+        ]),
+      );
+      expect(ensureReleasePublishToolingTag({ runGh, repo, toolingSha })).toEqual({
+        tag: `${prefix}10`,
+        created: false,
+      });
+      expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare, inventory]);
+    },
+  );
+
+  it.each([true, false])(
+    "mints through git refs and verifies the created target (matches: %s)",
+    (matches) => {
+      const tag = `${prefix}1750000000`;
+      const runGh = scriptedGh(
+        "ahead",
+        JSON.stringify([ref("1750000001", "tag"), ref("1750000002", "commit", "b".repeat(40))]),
+        "ignored POST output",
+        JSON.stringify({ object: { type: "commit", sha: matches ? toolingSha : "b".repeat(40) } }),
+      );
+      const ensure = () =>
+        ensureReleasePublishToolingTag({ runGh, repo, toolingSha, now: () => 1750000000999 });
+      if (matches) {
+        expect(ensure()).toEqual({ tag, created: true });
+      } else {
+        expect(ensure).toThrow(`Protected tooling tag ${tag} does not resolve to ${toolingSha}.`);
+      }
+      expect(runGh.mock.calls.map(([args]) => args)).toEqual([
+        compare,
+        inventory,
+        [
+          "api",
+          `repos/${repo}/git/refs`,
+          "--method",
+          "POST",
+          "-f",
+          `ref=refs/tags/${tag}`,
+          "-f",
+          `sha=${toolingSha}`,
+        ],
+        ["api", `repos/${repo}/git/ref/tags/${tag}`, "--method", "GET"],
+      ]);
+    },
+  );
+
+  it.each(["behind", "diverged"])(
+    "refuses %s ancestry before tag inventory or mutation",
+    (ancestry) => {
+      const runGh = scriptedGh(ancestry);
+      expect(() => ensureReleasePublishToolingTag({ runGh, repo, toolingSha })).toThrow(
+        `Tooling SHA ${toolingSha} is not reachable from trusted main.`,
+      );
+      expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare]);
+    },
+  );
+
+  it("rejects malformed SHAs before API access and malformed inventory before mutation", () => {
+    const runGh = scriptedGh("ahead", "{}");
+    expect(() => ensureReleasePublishToolingTag({ runGh, repo, toolingSha: "ABC123" })).toThrow(
+      "Tooling SHA must be a lowercase 40-character commit SHA.",
+    );
+    expect(runGh).not.toHaveBeenCalled();
+    expect(() => ensureReleasePublishToolingTag({ runGh, repo, toolingSha })).toThrow(
+      "Invalid protected tooling tag inventory.",
+    );
+    expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare, inventory]);
+  });
+});
+
 describe("publish preflight release inventory", () => {
   it.each(["malformed", "interrupted", "unbounded"])(
     "refuses absence from an %s inventory",
     (state) => {
       let reads = 0;
-      const runGh = () => {
+      const runGh = (args: string[]) => {
+        if (args[1]?.includes("/releases/tags/")) {
+          throw new Error("HTTP 404: Not Found");
+        }
         reads++;
         if (state === "malformed") {
           return JSON.stringify([{ draft: true }]);
@@ -66,13 +181,30 @@ describe("publish preflight release inventory", () => {
       body: "Published release notes",
       assets: [{ name: "dependency-evidence.zip" }],
     };
-    expect(
-      readPublishPreflightRelease(
-        () => JSON.stringify([release]),
-        "openclaw/openclaw",
-        `v${version}`,
-      ),
-    ).toEqual({ state: "found", release });
+    // The exact-tag endpoint serves published releases; drafts need the inventory.
+    const runGh = (args: string[]) => {
+      if (args[1]?.includes("/releases/tags/")) {
+        if (draft) {
+          throw new Error("HTTP 404: Not Found");
+        }
+        return JSON.stringify(release);
+      }
+      return JSON.stringify([release]);
+    };
+    expect(readPublishPreflightRelease(runGh, "openclaw/openclaw", `v${version}`)).toEqual({
+      state: "found",
+      release,
+    });
+  });
+
+  it("does not mask a failed exact-tag read as absence", () => {
+    const runGh = vi.fn(() => {
+      throw new Error("HTTP 502: Bad Gateway");
+    });
+    expect(() => readPublishPreflightRelease(runGh, "openclaw/openclaw", `v${version}`)).toThrow(
+      "HTTP 502",
+    );
+    expect(runGh).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -260,9 +392,9 @@ function coreEvidenceFixture() {
 }
 
 describe("publish preflight immutable npm evidence", () => {
-  it("qualifies the complete prepared core package set against exact source metadata", () => {
+  it("qualifies the complete prepared core package set against exact source metadata", async () => {
     const fixture = coreEvidenceFixture();
-    expect(fixture.verify().corePackages).toEqual(fixture.corePackages);
+    expect((await fixture.verify()).corePackages).toEqual(fixture.corePackages);
   });
 
   it.each([
@@ -272,7 +404,7 @@ describe("publish preflight immutable npm evidence", () => {
     ["invalid checksums", "checksum verification failed"],
     ["changed reused manifest", "changed after candidate validation"],
     ["changed reused root bytes", "wrong digest"],
-  ])("rejects %s before publication", (mode, message) => {
+  ])("rejects %s before publication", async (mode, message) => {
     const fixture = coreEvidenceFixture();
     if (mode === "missing required package") {
       fixture.manifest.corePackageTarballs = fixture.corePackages.slice(0, -1);
@@ -296,7 +428,7 @@ describe("publish preflight immutable npm evidence", () => {
     if (mode === "changed reused root bytes") {
       writeFileSync(join(fixture.artifacts, "openclaw.tgz"), "changed root bytes");
     }
-    expect(() => fixture.verify()).toThrow(message);
+    await expect(fixture.verify()).rejects.toThrow(message);
   });
 
   it.each([

@@ -1,8 +1,14 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
+import * as stepWrites from "../infra/update-run-write.async.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import {
@@ -56,69 +62,10 @@ describe("update-cli", () => {
     mockGatewayHealth,
     mockOwnedGitService,
     mockPackageInstallAtCaseDir,
-    runUpdateCliScenario,
-    setupNonInteractiveDowngrade,
     tempDirs,
   } = createUpdateCliFixture();
 
   it.each([
-    {
-      name: "preview mode",
-      run: async () => {
-        vi.mocked(defaultRuntime.log).mockClear();
-        serviceLoaded.mockResolvedValue(true);
-        mockOwnedGitService();
-        await updateCommand({ dryRun: true, channel: "beta" });
-      },
-      assert: () => {
-        expectNoSideEffects(
-          cleanupStaleManagedServiceUpdateHandoffs,
-          replaceConfigFile,
-          updateGitCheckout,
-          runDaemonInstall,
-          runDaemonRestart,
-          launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
-        );
-        expect(freshRestartCalls()).toHaveLength(0);
-
-        const logs = getLogOutput();
-        expect(logs).toContain("Update dry-run");
-        expect(logs).toContain("No changes were applied.");
-      },
-    },
-    {
-      name: "downgrade bypass",
-      run: async () => {
-        await setupNonInteractiveDowngrade();
-        vi.mocked(defaultRuntime.exit).mockClear();
-        await updateCommand({ dryRun: true });
-      },
-      assert: () => {
-        expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-        expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
-        expect(updateGitCheckout).not.toHaveBeenCalled();
-        expect(
-          launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
-        ).not.toHaveBeenCalled();
-      },
-    },
-  ] as const)("updateCommand dry-run behavior: $name", runUpdateCliScenario);
-
-  it.each([
-    { name: "text", options: { dryRun: true, channel: "beta" } },
-    { name: "JSON", options: { dryRun: true, json: true, channel: "beta" } },
-  ])("reads config without recording observations during a $name dry run", async ({ options }) => {
-    await updateCommand(options);
-
-    expect(readConfigFileSnapshot).toHaveBeenCalledWith({
-      skipPluginValidation: true,
-      observe: false,
-    });
-    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { installKind: "git", installedVersion: "2026.9.3" },
     { installKind: "package", installedVersion: "2026.9.3" },
     { installKind: "git", installedVersion: null },
   ] as const)(
@@ -132,7 +79,13 @@ describe("update-cli", () => {
         config: { update: { channel: "dev" } },
       });
 
-      await invokeUpdateCli({ dryRun: true, json: true, restart: false });
+      await invokeUpdateCli({
+        dryRun: true,
+        json: true,
+        restart: false,
+        channel: "dev",
+        acceptCapabilities: true,
+      });
 
       expect(lastWriteJsonCall()).toMatchObject({
         currentVersion: installedVersion ?? VERSION,
@@ -145,19 +98,10 @@ describe("update-cli", () => {
           reason: "dry-run",
         },
       });
-      await invokeUpdateCli({ dryRun: true, restart: false });
-      expect(getLogOutput()).toContain(`Current version: ${installedVersion ?? VERSION}`);
-      expect(getLogOutput()).toContain("Target version: unresolved");
-      expectNoSideEffects(updateGitCheckout, replaceConfigFile, runDaemonInstall, runDaemonRestart);
-      expect(packageInstallCommandCall()).toBeUndefined();
-    },
-  );
-
-  it("does not clean managed-service handoffs during a JSON dry run", async () => {
-    const stateDir = tempDirs.make("openclaw-update-run-preview-");
-    initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await updateCommand({ dryRun: true, json: true, channel: "beta", acceptCapabilities: true });
+      expect(readConfigFileSnapshot).toHaveBeenCalledWith({
+        skipPluginValidation: true,
+        observe: false,
+      });
       const output = lastWriteJsonCall() as { runId: string };
       expect(listUpdateRuns()).toMatchObject([
         {
@@ -168,18 +112,22 @@ describe("update-cli", () => {
           reason: "dry-run",
         },
       ]);
-    });
-
-    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
-    expectNoSideEffects(
-      replaceConfigFile,
-      updateGitCheckout,
-      runDaemonInstall,
-      syncPluginsForUpdateChannel,
-      updateNpmInstalledPlugins,
-    );
-    expect(defaultRuntime.writeJson).toHaveBeenCalled();
-  });
+      expect(defaultRuntime.writeJson).toHaveBeenCalled();
+      await invokeUpdateCli({ dryRun: true, restart: false });
+      expect(getLogOutput()).toContain(`Current version: ${installedVersion ?? VERSION}`);
+      expect(getLogOutput()).toContain("Target version: unresolved");
+      expectNoSideEffects(
+        cleanupStaleManagedServiceUpdateHandoffs,
+        updateGitCheckout,
+        replaceConfigFile,
+        runDaemonInstall,
+        runDaemonRestart,
+        syncPluginsForUpdateChannel,
+        updateNpmInstalledPlugins,
+      );
+      expect(packageInstallCommandCall()).toBeUndefined();
+    },
+  );
 
   it.each(["progress initialization", "triage preparation"] as const)(
     "finishes the admitted run when %s fails before update execution",
@@ -204,7 +152,18 @@ describe("update-cli", () => {
           (error: unknown) => error,
         );
         const runs = listUpdateRuns();
-        expectUpdateFailureReport(reported, failure, lastWriteJsonCall(), runs[0]?.runId);
+        if (boundary === "progress initialization") {
+          expect(reported).toEqual(new ExitError(1));
+          expect(lastWriteJsonCall()).toMatchObject({
+            status: "error",
+            reason: "update-failed",
+            runId: runs[0]?.runId,
+            reportPath: expect.any(String),
+          });
+          expect(JSON.stringify(lastWriteJsonCall())).toContain(failure.message);
+        } else {
+          expectUpdateFailureReport(reported, failure, lastWriteJsonCall(), runs[0]?.runId);
+        }
         expect(runs).toHaveLength(1);
         expect(runs[0]).toMatchObject({
           trigger: "cli",
@@ -265,7 +224,11 @@ describe("update-cli", () => {
         version: "2026.9.1",
       },
     });
-    vi.spyOn(postUpdate, "finishUpdate").mockRejectedValueOnce(new UpdateCommandFailure(result));
+    const failure = new UpdateCommandFailure(result);
+    vi.spyOn(postUpdate, "finishUpdate").mockImplementationOnce(async (_params, options) => {
+      await options?.beforeFinalization?.();
+      throw failure;
+    });
     mockOwnedGitService();
     mockGitUpdateAfterMutation(makeOkUpdateResult({ root: process.cwd() }));
 
@@ -306,9 +269,42 @@ describe("update-cli", () => {
     expect(ledgerReads).toHaveBeenCalledTimes(readsAtHandoff);
   });
 
-  it.each([false, true])(
-    "records ordered update phases across service stop, restart, and verified health (json=%s)",
-    async (json) => {
+  it.each(["confirmed", "unknown"] as const)(
+    "records ordered update phases only after buffered receipt settlement (%s)",
+    async (outcome) => {
+      const json = false;
+      const progressReads = await import("../infra/update-run-reader.js");
+      const readProgress = progressReads.getUpdateRunForProgressAsync;
+      const heldReads: ReturnType<typeof readProgress>[] = [];
+      const readSignals: AbortSignal[] = [];
+      const releaseReads = new Set<() => void>();
+      const progressReadSpy = vi
+        .spyOn(progressReads, "getUpdateRunForProgressAsync")
+        .mockImplementation((...args) => {
+          const readSignal = expectDefined(args[2], "owned progress reader signal");
+          readSignals.push(readSignal);
+          const delayed = (async () => {
+            const snapshot = structuredClone(await readProgress(...args));
+            if (!readSignal.aborted) {
+              await new Promise<void>((resolve) => {
+                const release = () => {
+                  readSignal.removeEventListener("abort", release);
+                  releaseReads.delete(release);
+                  resolve();
+                };
+                releaseReads.add(release);
+                readSignal.addEventListener("abort", release, { once: true });
+              });
+            }
+            return snapshot;
+          })();
+          heldReads.push(delayed);
+          return delayed;
+        });
+      const prepareService = vi.spyOn(
+        await import("./update-cli/update-command-post-update-maintenance.js"),
+        "preparePostUpdateService",
+      );
       const ledgerReads = vi.spyOn(await import("../infra/update-run-ledger.js"), "getUpdateRun");
       const inspectSchemas = expectDefined(
         stateSchemaVersions.getMockImplementation(),
@@ -325,7 +321,7 @@ describe("update-cli", () => {
             "update progress",
           );
           const readsBefore = ledgerReads.mock.calls.length;
-          expectDefined(
+          await expectDefined(
             progress.onStepComplete,
             "step completion",
           )({
@@ -359,64 +355,180 @@ describe("update-cli", () => {
       vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(
         path.join(process.cwd(), "dist", "index.js"),
       );
-      try {
-        await updateCommand({ yes: true, json });
-      } catch (error) {
-        throw new Error(`${getErrorOutput()}\n${JSON.stringify(lastWriteJsonCall())}`, {
-          cause: error,
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const unknown = new SqliteWorkerError("buffered receipt reply lost", "outcome-unknown");
+      let armed = false;
+      let intercepted = false;
+      let receiptCalls = 0;
+      let receiptRunId: string | undefined;
+      let receiptError: unknown;
+      let workerReply: unknown;
+      const runWorker = stateWorker.runOpenClawStateWorkerOperation;
+      const worker = vi
+        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+        .mockImplementation(async (...args) => {
+          const target = armed;
+          if (target) {
+            armed = false;
+            intercepted = true;
+          }
+          const reply = await runWorker(...args);
+          if (target) {
+            workerReply = reply;
+            entered.resolve();
+            await release.promise;
+            if (outcome === "unknown") {
+              throw unknown;
+            }
+          }
+          return reply;
         });
-      }
-      expect(observedActivation).toBe(true);
-      expect(freshRestartCalls()).toHaveLength(1);
-      expect(runDaemonRestart).not.toHaveBeenCalled();
-      const run = expectDefined(listUpdateRuns({ limit: 1 })[0], "admitted update run");
-      expect(serviceStop, getErrorOutput()).toHaveBeenCalledOnce();
-      expect(run, getErrorOutput()).toMatchObject({
-        trigger: "cli",
-        status: "succeeded",
-        phase: "finished",
-        verification: { serviceRunning: true, runningVersion: VERSION },
-      });
-      expect(
-        run?.steps
-          .filter((step) =>
-            [
-              "requested",
-              "staging",
-              "validating",
-              "activating",
-              "restarting",
-              "verifying",
-            ].includes(step.step),
-          )
-          .map((step) => step.step),
-      ).toEqual(["requested", "staging", "validating", "activating", "restarting", "verifying"]);
-      if (!json) {
-        expect(getLogOutput()).toContain("Phase: activating");
-        expect(getLogOutput()).toContain("Phase: verifying");
+      const writeStep = stepWrites.recordUpdateRunStepAsync;
+      const writer = vi
+        .spyOn(stepWrites, "recordUpdateRunStepAsync")
+        .mockImplementation((...args) => {
+          if (args[1].step !== "core migrations" || args[1].status !== "completed") {
+            return writeStep(...args);
+          }
+          receiptCalls++;
+          receiptRunId = args[0];
+          armed = !intercepted;
+          try {
+            return writeStep(...args).catch((error: unknown) => {
+              receiptError = error;
+              throw error;
+            });
+          } finally {
+            armed = false;
+          }
+        });
+      const pending = updateCommand({ yes: true, json });
+      const settled = pending.then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      try {
+        await Promise.race([
+          entered.promise,
+          settled.then((result) => {
+            throw new Error("Update finished without its buffered worker receipt", {
+              cause: result.ok ? undefined : result.error,
+            });
+          }),
+        ]);
+        expect(observedActivation).toBe(true);
+        expect(receiptCalls).toBe(1);
+        expect(prepareService).not.toHaveBeenCalled();
+        expect(freshRestartCalls()).toHaveLength(0);
+        expect(runDaemonRestart).not.toHaveBeenCalled();
+        const runId = expectDefined(receiptRunId, "buffered receipt run");
+        expect(workerReply).toMatchObject({ kind: "recorded", record: { runId } });
+        expect(getUpdateRun(runId)).toMatchObject({
+          status: "running",
+          steps: expect.arrayContaining([
+            expect.objectContaining({ step: "core migrations", status: "completed" }),
+          ]),
+        });
+        release.resolve();
+        const result = await settled;
+        expect(receiptCalls).toBe(1);
+        if (outcome === "unknown") {
+          expect(result.ok).toBe(false);
+          const cliError = result.ok ? undefined : result.error;
+          expect(hasCommandProcessCleanupError(cliError)).toBe(true);
+          expect(collectNestedErrorCandidates(cliError)).toContain(receiptError);
+          expect(hasCommandProcessCleanupError(receiptError)).toBe(true);
+          expect(collectNestedErrorCandidates(receiptError)).toContain(unknown);
+          expect(prepareService).not.toHaveBeenCalled();
+          expect(freshRestartCalls()).toHaveLength(0);
+          expect(runDaemonRestart).not.toHaveBeenCalled();
+          expect(serviceRestart).not.toHaveBeenCalled();
+          expect(serviceStart).not.toHaveBeenCalled();
+          const failed = expectDefined(getUpdateRun(runId), "uncertain receipt history");
+          expect(failed.status).not.toBe("succeeded");
+          expect(failed.steps).toContainEqual(
+            expect.objectContaining({ step: "core migrations", status: "completed" }),
+          );
+          expect(defaultRuntime.writeJson).not.toHaveBeenCalledWith(
+            expect.objectContaining({ status: "ok" }),
+          );
+          return;
+        }
+        if (!result.ok) {
+          throw new Error(`${getErrorOutput()}\n${JSON.stringify(lastWriteJsonCall())}`, {
+            cause: result.error,
+          });
+        }
+        expect(observedActivation).toBe(true);
+        expect(prepareService).toHaveBeenCalledOnce();
+        expect(freshRestartCalls()).toHaveLength(1);
+        expect(runDaemonRestart).not.toHaveBeenCalled();
+        const run = expectDefined(listUpdateRuns({ limit: 1 })[0], "admitted update run");
+        expect(serviceStop, getErrorOutput()).toHaveBeenCalledOnce();
+        expect(run, getErrorOutput()).toMatchObject({
+          trigger: "cli",
+          status: "succeeded",
+          phase: "finished",
+          verification: { serviceRunning: true, runningVersion: VERSION },
+        });
+        expect(
+          run?.steps
+            .filter((step) =>
+              [
+                "requested",
+                "staging",
+                "validating",
+                "activating",
+                "restarting",
+                "verifying",
+              ].includes(step.step),
+            )
+            .map((step) => step.step),
+        ).toEqual(["requested", "staging", "validating", "activating", "restarting", "verifying"]);
+        expect(heldReads.length).toBeGreaterThan(0);
+        expect(readSignals.every((signal) => signal.aborted)).toBe(true);
+        const output = getLogOutput();
+        const phases = output.split("\n").filter((line) => line.startsWith("Phase:"));
+        expect(phases).toEqual([
+          "Phase: requested",
+          "Phase: staging",
+          "Phase: validating",
+          "Phase: activating",
+          "Phase: restarting",
+          "Phase: verifying",
+          "Phase: finished",
+        ]);
+        expect(output.indexOf("OpenClaw updated")).toBeGreaterThan(
+          output.indexOf("Phase: finished"),
+        );
+      } finally {
+        release.resolve();
+        await settled;
+        writer.mockRestore();
+        worker.mockRestore();
+        prepareService.mockRestore();
+        for (const releaseRead of releaseReads) {
+          releaseRead();
+        }
+        await Promise.allSettled(heldReads);
+        progressReadSpy.mockRestore();
       }
     },
   );
 
-  it("does not clean managed-service handoffs before rejecting an invalid timeout", async () => {
-    const runsBefore = listUpdateRuns();
-    await invokeUpdateCli({ timeout: "" });
-
-    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(listUpdateRuns()).toEqual(runsBefore);
-  });
-
   it.each([
-    { name: "update", run: async () => await invokeUpdateCli({ channel: "" }) },
-    { name: "finalization", run: async () => await updateFinalizeCommand({ channel: "" }) },
-  ])("rejects an explicitly empty $name channel before mutation", async ({ run }) => {
+    { name: "update channel", run: () => invokeUpdateCli({ channel: "" }) },
+    { name: "finalization channel", run: () => updateFinalizeCommand({ channel: "" }) },
+  ])("rejects an explicitly empty $name before mutation", async ({ run }) => {
+    const runsBefore = listUpdateRuns();
     await run();
 
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       '--channel must be "stable", "extended-stable", "beta", or "dev" (got "")',
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(listUpdateRuns()).toEqual(runsBefore);
     expectNoSideEffects(
       cleanupStaleManagedServiceUpdateHandoffs,
       replaceConfigFile,

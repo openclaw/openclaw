@@ -30,14 +30,10 @@ extension GatewayConnection {
     // MARK: - VoiceWake
 
     func voiceWakeSetTriggers(_ triggers: [String]) async {
-        do {
-            try await self.requestVoid(
-                method: .voicewakeSet,
-                params: ["triggers": AnyCodable(triggers)],
-                timeoutMs: 10000)
-        } catch {
-            // Best-effort only.
-        }
+        try? await self.requestVoid(
+            method: .voicewakeSet,
+            params: ["triggers": AnyCodable(triggers)],
+            timeoutMs: 10000)
     }
 
     func talkMode(enabled: Bool, phase: String? = nil) async {
@@ -72,11 +68,11 @@ extension GatewayConnection {
             throw OpenClawChatTransportSendError.notDispatched
         }
         let configuredSessionKey = snapshot.config?["session"]?.dictionaryValue?["mainKey"]?
-            .stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .stringValue?.nonEmpty
         return RealtimeTalkBootstrap(
             transport: self.realtimeTalkTransport(ifCurrentServerLease: lease),
             configSnapshot: snapshot,
-            sessionKey: configuredSessionKey?.isEmpty == false ? configuredSessionKey! : "main")
+            sessionKey: configuredSessionKey ?? "main")
     }
 
     /// Creates a realtime Talk transport bound to one physical Gateway socket.
@@ -151,11 +147,8 @@ extension GatewayConnection {
     func finishRealtimeTalkSubscribers(socketGeneration: UInt64? = nil) {
         let subscribers: [AsyncStream<PushDelivery>.Continuation]
         if let socketGeneration {
-            if let removed = self.realtimeTalkSubscribers.removeValue(forKey: socketGeneration) {
-                subscribers = Array(removed.values)
-            } else {
-                subscribers = []
-            }
+            subscribers = self.realtimeTalkSubscribers.removeValue(forKey: socketGeneration)
+                .map { Array($0.values) } ?? []
         } else {
             subscribers = self.realtimeTalkSubscribers.values.flatMap(\.values)
             self.realtimeTalkSubscribers.removeAll()

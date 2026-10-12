@@ -5,7 +5,6 @@ import type {
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import {
   auditNativeToolName,
   auditNativeToolTerminalStatus,
@@ -30,6 +29,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 type CodexNativeToolLifecycleContext = Pick<
   EmbeddedRunAttemptParams,
@@ -64,11 +64,11 @@ function isMcpToolCallItemNotification(method: string, params: JsonObject): bool
 export class CodexNativeToolLifecycleProjector {
   private readonly terminalPresentationClearedItemIds = new Set<string>();
   private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
-  private readonly startedAtByItem = new Map<string, number>();
   private readonly activeItems = new Map<
     string,
     {
       toolName: string;
+      startedAt: number;
       unfinishedStatus: CodexNativeToolUnfinishedStatus;
       mcpToolCall?: CodexThreadItem;
       commandProcessId?: string | null;
@@ -153,8 +153,7 @@ export class CodexNativeToolLifecycleProjector {
     if (
       !candidate ||
       candidate.status !== "inProgress" ||
-      typeof candidate.server !== "string" ||
-      !candidate.server.trim() ||
+      !serverName.trim() ||
       typeof candidate.tool !== "string" ||
       !candidate.tool.trim() ||
       candidate.arguments === undefined ||
@@ -165,7 +164,7 @@ export class CodexNativeToolLifecycleProjector {
     }
     return {
       id: candidate.id,
-      server: candidate.server,
+      server: serverName,
       tool: candidate.tool,
       arguments: candidate.arguments,
     };
@@ -352,10 +351,9 @@ export class CodexNativeToolLifecycleProjector {
     const approvalFailureDisposition = this.approvalFailureDispositionByItem.get(toolCallId);
     this.approvalFailureDispositionByItem.delete(toolCallId);
     this.completedItemIds.add(toolCallId);
+    const startedAt = this.activeItems.get(toolCallId)?.startedAt;
     this.activeItems.delete(toolCallId);
     this.webSearchCompletionByItem.delete(toolCallId);
-    const startedAt = this.startedAtByItem.get(toolCallId);
-    this.startedAtByItem.delete(toolCallId);
     const endedAt = options.sourceTimestampMs ?? Date.now();
     const durationMs =
       options.itemDurationMs ?? (startedAt === undefined ? 0 : Math.max(0, endedAt - startedAt));
@@ -496,8 +494,13 @@ export class CodexNativeToolLifecycleProjector {
     if (this.activeItems.has(toolCallId)) {
       return;
     }
-    this.startedAtByItem.set(toolCallId, sourceTimestampMs ?? Date.now());
-    this.activeItems.set(toolCallId, { toolName, unfinishedStatus, mcpToolCall, commandProcessId });
+    this.activeItems.set(toolCallId, {
+      toolName,
+      startedAt: sourceTimestampMs ?? Date.now(),
+      unfinishedStatus,
+      mcpToolCall,
+      commandProcessId,
+    });
     emitTrustedDiagnosticEvent({
       type: "tool.execution.started",
       ...this.buildBase(toolCallId, toolName),

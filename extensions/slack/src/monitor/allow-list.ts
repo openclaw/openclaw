@@ -7,7 +7,6 @@ import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeHyphenSlug,
-  normalizeStringEntries,
   normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { parseSlackTarget } from "../target-parsing.js";
@@ -26,14 +25,6 @@ export function normalizeSlackSlug(raw?: string) {
   slackSlugCache.set(key, normalized);
   pruneMapToMaxSize(slackSlugCache, SLACK_SLUG_CACHE_MAX);
   return normalized;
-}
-
-export function normalizeAllowList(list?: Array<string | number>) {
-  return normalizeStringEntries(list);
-}
-
-export function normalizeAllowListLower(list?: Array<string | number>) {
-  return normalizeStringEntriesLower(list);
 }
 
 export function normalizeSlackAllowOwnerEntry(entry: string): string | undefined {
@@ -118,7 +109,7 @@ export function resolveSlackUserAllowed(params: {
   userName?: string;
   allowNameMatching?: boolean;
 }) {
-  const allowList = normalizeAllowListLower(params.allowList);
+  const allowList = normalizeStringEntriesLower(params.allowList);
   if (allowList.length === 0) {
     return true;
   }
@@ -136,7 +127,7 @@ export function resolveSlackUserAllowListForTeam(params: {
   teamId?: string;
   preserveUnmatchedScopedEntries?: boolean;
 }): string[] {
-  const allowList = normalizeAllowListLower(params.allowList);
+  const allowList = normalizeStringEntriesLower(params.allowList);
   const teamId = normalizeOptionalLowercaseString(params.teamId);
   return allowList.flatMap((entry) => {
     if (entry === "*") {

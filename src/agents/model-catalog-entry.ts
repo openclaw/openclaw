@@ -1,6 +1,6 @@
 import { MODEL_APIS } from "../config/types.models.js";
-import { normalizeCatalogRouteBaseUrl } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 
 function isCatalogModelApi(
@@ -21,6 +21,8 @@ export function modelCatalogRowToEntry(
     ...(isCatalogModelApi(row.api) ? { api: row.api } : {}),
     ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(row.contextWindowSource ? { contextWindowSource: row.contextWindowSource } : {}),
+    ...(row.contextCapacitySource ? { contextCapacitySource: row.contextCapacitySource } : {}),
     ...(row.contextWindows
       ? { contextWindows: row.contextWindows.map((option) => ({ ...option })) }
       : {}),

@@ -3,8 +3,9 @@ export {
   loadCostUsageSummary,
   loadCostUsageSummaryFromCache,
   loadSessionCostSummariesFromCache,
+  loadSessionCostOverviewFromCache,
 } from "./session-cost-usage-cache-runtime.js";
-export { resolveExistingUsageSessionFile } from "./session-cost-usage-collection.js";
+export { resolveUsageSessionSource } from "./session-cost-usage-collection.js";
 export {
   discoverAllSessions,
   loadSessionCostSummary,

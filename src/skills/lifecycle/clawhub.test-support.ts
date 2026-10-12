@@ -141,7 +141,6 @@ const {
   readTrackedClawHubSkillSlugs,
   readVerifiedClawHubSkillSourceUrl,
   resolveClawHubSkillVerificationTarget,
-  searchSkillsFromClawHub,
   updateSkillsFromClawHub,
 } = await import("./clawhub.js");
 
@@ -426,6 +425,5 @@ export {
   readTrackedClawHubSkillSlugs,
   readVerifiedClawHubSkillSourceUrl,
   resolveClawHubSkillVerificationTarget,
-  searchSkillsFromClawHub,
   updateSkillsFromClawHub,
 };

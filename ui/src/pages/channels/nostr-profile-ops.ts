@@ -1,5 +1,3 @@
-// Nostr profile HTTP operations for the channels page: gateway REST calls for
-// publishing and importing the relay profile, plus validation-error parsing.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NostrProfile } from "../../api/types.ts";
 import { fetchWithControlUiAuth, readControlUiJsonResponse } from "../../app/control-ui-auth.ts";
@@ -14,10 +12,16 @@ type NostrProfileRequest = {
 };
 
 async function requestNostrProfile(
-  url: string,
-  init: { method: string; headers: Record<string, string>; body: string },
   auth: NostrProfileRequest,
+  method: "PUT" | "POST",
+  body: unknown,
+  suffix = "",
 ) {
+  const init = {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
   const controller = new AbortController();
   const timeout = setTimeout(
     () =>
@@ -28,7 +32,7 @@ async function requestNostrProfile(
   );
   try {
     const response = await fetchWithControlUiAuth(
-      url,
+      `/api/channels/nostr/${encodeURIComponent(auth.accountId)}/profile${suffix}`,
       { ...init, signal: controller.signal },
       auth.authCandidates,
       auth.isCurrent,
@@ -61,26 +65,12 @@ export function parseValidationErrors(details: unknown): Record<string, string> 
   return errors;
 }
 
-function buildNostrProfileUrl(accountId: string, suffix = ""): string {
-  return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
-}
-
-export async function putNostrProfile(
+export function putNostrProfile(
   params: NostrProfileRequest & {
     values: NostrProfile;
   },
 ) {
-  return await requestNostrProfile(
-    buildNostrProfileUrl(params.accountId),
-    {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(params.values),
-    },
-    params,
-  );
+  return requestNostrProfile(params, "PUT", params.values);
 }
 
 function isNostrProfile(value: unknown): value is NostrProfile {
@@ -94,17 +84,7 @@ function isNostrProfile(value: unknown): value is NostrProfile {
 }
 
 export async function importNostrProfile(params: NostrProfileRequest) {
-  const result = await requestNostrProfile(
-    buildNostrProfileUrl(params.accountId, "/import"),
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ autoMerge: true }),
-    },
-    params,
-  );
+  const result = await requestNostrProfile(params, "POST", { autoMerge: true }, "/import");
   return {
     ...result,
     data: result.data && {

@@ -51,10 +51,8 @@ function buildDeepgramFluxUrl(params: {
   model: string;
   query?: Record<string, string | number | boolean | undefined>;
 }): string {
-  let url: URL;
-  try {
-    url = new URL(params.baseUrl);
-  } catch {
+  const url = URL.parse(params.baseUrl);
+  if (!url) {
     throw new Error("Invalid Deepgram baseUrl: value is not a valid URL");
   }
   if (url.protocol === "http:") {

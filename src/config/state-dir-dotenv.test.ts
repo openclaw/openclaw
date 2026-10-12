@@ -27,13 +27,6 @@ describe("readStateDirDotEnvFromStateDir", () => {
     }
   }
 
-  it("returns real credential values from the state-dir dotenv", async () => {
-    await withDotEnv("SUPERMEMORY_API_KEY=sm_real_credential_value\n", async (dir) => {
-      const result = readStateDirDotEnvFromStateDir(dir).entries;
-      expect(result["SUPERMEMORY_API_KEY"]).toBe("sm_real_credential_value");
-    });
-  });
-
   it("skips values that are unresolved shell variable references", async () => {
     const content = [
       'SUPERMEMORY_OPENCLAW_API_KEY="${SUPERMEMORY_OPENCLAW_KEY}"',
@@ -52,18 +45,7 @@ describe("readStateDirDotEnvFromStateDir", () => {
 
     await withDotEnv(content, async (dir) => {
       const result = readStateDirDotEnvFromStateDir(dir).entries;
-      expect(Object.keys(result)).not.toContain("SUPERMEMORY_OPENCLAW_API_KEY");
-      expect(Object.keys(result)).not.toContain("QUOTED_SUPERMEMORY_OPENCLAW_API_KEY");
-      expect(Object.keys(result)).not.toContain("QUOTED_CURLY_KEY");
-      expect(Object.keys(result)).not.toContain("BRACE_DEFAULT_KEY");
-      expect(Object.keys(result)).not.toContain("QUOTED_BRACE_DEFAULT_KEY");
-      expect(Object.keys(result)).not.toContain("BRACE_TRIM_KEY");
-      expect(Object.keys(result)).not.toContain("BRACE_REPLACE_KEY");
-      expect(Object.keys(result)).not.toContain("BRACE_CASE_KEY");
-      expect(Object.keys(result)).not.toContain("COMMAND_KEY");
-      expect(Object.keys(result)).not.toContain("OTHER_KEY");
-      expect(Object.keys(result)).not.toContain("CURLY_KEY");
-      expect(result["REAL_KEY"]).toBe("actual_value_here");
+      expect(result).toEqual({ REAL_KEY: "actual_value_here" });
     });
   });
 

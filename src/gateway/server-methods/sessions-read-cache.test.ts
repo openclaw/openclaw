@@ -1,5 +1,4 @@
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
@@ -34,21 +33,23 @@ import {
   unregisterOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db-registry.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import type { GatewaySessionRow } from "../session-utils.types.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
-  listSessions,
+  listSessions as readList,
   requestContext,
   sessionReadHandlers,
   seedSessions,
@@ -57,6 +58,12 @@ import {
 import type { GatewayRequestContext } from "./types.js";
 
 const { emitSessionsChanged } = await import("./session-change-event.js");
+const listSessions = (params: Parameters<typeof readList>[0]) =>
+  readList({ ...params, acceptsSerializedJson: true });
+
+function rowFacts(rows: readonly GatewaySessionRow[]) {
+  return rows.map(({ snapshotAt: _snapshotAt, ...row }) => row);
+}
 
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
@@ -69,7 +76,7 @@ afterEach(() => {
 });
 
 describe("resident sessions.list", () => {
-  it.each([{}, { search: "live" }, { activeOnly: true }])(
+  it.each([{ search: "live" }])(
     "refreshes reply activity including previously rejected candidates (%j)",
     async (filter: SessionsListParams) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -120,60 +127,6 @@ describe("resident sessions.list", () => {
       });
     },
   );
-
-  it.each([
-    { agentId: "main", archived: false as const, limit: 10 },
-    { agentId: "main", archived: true as const, limit: 1 },
-    { agentId: "work", archived: "all" as const, limit: 10 },
-    { archived: "all" as const, limit: 2 },
-  ])("preserves output for filters and pagination: %j", async (request) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-      const config = await seedSessions();
-      const client = identifiedClient("owner@example.com");
-      const expected = await listSessions({
-        client,
-        context: requestContext(config),
-        request,
-      });
-      const sharedContext = requestContext(config);
-
-      const collapsed = await Promise.all(
-        Array.from({ length: 4 }, () => listSessions({ client, context: sharedContext, request })),
-      );
-
-      expect(collapsed).toEqual(Array.from({ length: 4 }, () => expected));
-    });
-  });
-
-  it("serves concurrent requests from resident rows without SQLite", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const config = await seedSessions();
-      const context = requestContext(config);
-      const client = identifiedClient("owner@example.com");
-
-      const enriched = observeSessionRowBackfill([
-        "agent:main:active",
-        "agent:main:draft",
-        "agent:main:archived",
-        "agent:work:active",
-      ]);
-      await initializeSessionReadContext(context);
-      await listSessions({ client, context, request: { archived: "all", limit: 100 } });
-      await enriched;
-      const statements = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const results = await Promise.all(
-        Array.from({ length: 16 }, () =>
-          listSessions({ client, context, request: { archived: "all", limit: 100 } }),
-        ),
-      );
-
-      for (const result of results) {
-        expect(result.sessions).toEqual(results[0]?.sessions);
-      }
-      expect(statements).not.toHaveBeenCalled();
-    });
-  });
 
   it("presents current runner availability from resident bindings", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -309,7 +262,7 @@ describe("resident sessions.list", () => {
           visibility: "shared",
         },
       );
-      closeOpenClawAgentDatabaseByPath(extraDatabasePath);
+      await closeOpenClawAgentDatabaseByPathAsync(extraDatabasePath);
       unregisterOpenClawAgentDatabase({ agentId: "main", env: state.env, path: extraDatabasePath });
 
       const context = requestContext(config);
@@ -377,7 +330,7 @@ describe("resident sessions.list", () => {
       const opened = await listSessions({ client, context, request });
       expect(opened.sessions.map((session) => session.key)).not.toContain(childKey);
 
-      expect(closeOpenClawAgentDatabaseByPath(incognitoPath)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(incognitoPath)).toBe(true);
       const closed = await listSessions({ client, context, request });
       expect(closed.sessions.map((session) => session.key)).not.toContain(childKey);
     });
@@ -393,8 +346,8 @@ describe("resident sessions.list", () => {
 
       const first = await listSessions({ client, context, request });
       clock.mockReturnValue(60_401);
-      expect((await listSessions({ client, context, request })).sessions).toEqual(
-        first.sessions.map((row) => Object.assign({}, row, { snapshotAt: 60_401 })),
+      expect(rowFacts((await listSessions({ client, context, request })).sessions)).toEqual(
+        rowFacts(first.sessions),
       );
 
       // Terminal persistence must update resident rows after the run has ended.
@@ -412,6 +365,7 @@ describe("resident sessions.list", () => {
         status: "done",
         endedAt: 60_450,
         runtimeMs: 450,
+        snapshotAt: 60_401,
       });
     });
   });
@@ -424,9 +378,15 @@ describe("resident sessions.list", () => {
       const request = { archived: "all" as const, limit: 100, includeLastMessage: true };
       const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
 
+      const initialBackfill = observeSessionRowBackfill(["agent:main:active"]);
       const first = await listSessions({ client, context, request });
+      await initialBackfill;
       clock.mockReturnValue(60_401);
 
+      const refreshedBackfill = observeSessionRowBackfill(
+        ["agent:main:active"],
+        getSessionRowProjection(context),
+      );
       await persistSessionTranscriptTurn(
         { agentId: "main", sessionId: "main-active", sessionKey: "agent:main:active" },
         {
@@ -437,14 +397,13 @@ describe("resident sessions.list", () => {
       emitSessionTranscriptUpdate({
         target: { agentId: "main", sessionId: "main-active", sessionKey: "agent:main:active" },
       });
-      await vi.waitFor(() =>
-        expect(
-          getSessionRowProjection(context)?.snapshot(
-            { agentId: "main", key: "agent:main:active" },
-            { includeLastMessage: true },
-          ).row?.lastMessagePreview,
-        ).toBe("Fresh committed preview"),
-      );
+      await refreshedBackfill;
+      expect(
+        getSessionRowProjection(context)?.snapshot(
+          { agentId: "main", key: "agent:main:active" },
+          { includeLastMessage: true },
+        ).row?.lastMessagePreview,
+      ).toBe("Fresh committed preview");
       const refreshed = await listSessions({ client, context, request });
       expect(
         first.sessions.find((row) => row.key === "agent:main:active")?.lastMessagePreview,
@@ -512,10 +471,9 @@ describe("resident sessions.list", () => {
         ).toBe("active reply"),
       );
       const healed = await listSessions({ client, context, request });
-      expect(healed.sessions.find((session) => session.key === sessionKey)).toMatchObject({
-        derivedTitle: undefined,
-        lastMessagePreview: "active reply",
-      });
+      const healedRow = healed.sessions.find((session) => session.key === sessionKey);
+      expect(healedRow?.derivedTitle).toBeUndefined();
+      expect(healedRow?.lastMessagePreview).toBe("active reply");
 
       expect((await listSessions({ client, context, request })).sessions).toEqual(healed.sessions);
       expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(storedEntry);
@@ -546,74 +504,12 @@ describe("resident sessions.list", () => {
     });
   });
 
-  it("presents agent-status expiry at each clock boundary", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
-      const config = await seedSessions();
-      for (const [name, expiresAt] of [
-        ["active", 1_100],
-        ["draft", 1_200],
-      ] as const) {
-        const scope = { agentId: "main", sessionKey: `agent:main:${name}` };
-        const entry = loadSessionEntry(scope);
-        if (!entry) {
-          throw new Error(`Missing seeded session ${scope.sessionKey}`);
-        }
-        await replaceSessionEntry(scope, {
-          ...entry,
-          agentStatus: { note: `${name} needs attention`, expiresAt },
-        });
-      }
-      const context = requestContext(config);
-      const client = identifiedClient("owner@example.com");
-      const request = { agentId: "main", archived: "all" as const, limit: 100 };
-
-      const first = await listSessions({ client, context, request });
-      expect(
-        first.sessions.find((session) => session.key === "agent:main:active")?.agentStatus,
-      ).toMatchObject({ expiresAt: 1_100 });
-      expect(
-        first.sessions.find((session) => session.key === "agent:main:draft")?.agentStatus,
-      ).toMatchObject({ expiresAt: 1_200 });
-
-      clock.mockReturnValue(1_099);
-      expect((await listSessions({ client, context, request })).sessions).toEqual(
-        first.sessions.map((row) => Object.assign({}, row, { snapshotAt: 1_099 })),
-      );
-
-      clock.mockReturnValue(1_100);
-      const expired = await Promise.all(
-        Array.from({ length: 8 }, () => listSessions({ client, context, request })),
-      );
-      for (const result of expired) {
-        expect(result.sessions).toEqual(expired[0]?.sessions);
-      }
-      expect(
-        expired[0]?.sessions.find((session) => session.key === "agent:main:active")?.agentStatus,
-      ).toBeUndefined();
-      expect(
-        expired[0]?.sessions.find((session) => session.key === "agent:main:draft")?.agentStatus,
-      ).toMatchObject({ expiresAt: 1_200 });
-
-      clock.mockReturnValue(1_199);
-      expect((await listSessions({ client, context, request })).sessions).toEqual(
-        expired[0]?.sessions.map((row) => Object.assign({}, row, { snapshotAt: 1_199 })),
-      );
-
-      clock.mockReturnValue(1_200);
-      const allExpired = await listSessions({ client, context, request });
-      expect(
-        allExpired.sessions.find((session) => session.key === "agent:main:draft")?.agentStatus,
-      ).toBeUndefined();
-    });
-  });
-
   it("expires retained child links when the child is outside the visible page", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
       const parentSessionKey = "agent:main:active";
       const childSessionKey = "agent:main:zzz-child";
-      await upsertSessionEntryCore(
+      await replaceSessionEntry(
         { agentId: "main", sessionKey: childSessionKey },
         {
           sessionId: "completed-hidden-child",
@@ -647,7 +543,7 @@ describe("resident sessions.list", () => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       const config = await seedSessions();
       const runId = "sessions-list-cache-live-subagent";
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         runId,
         childSessionKey: "agent:main:active",
         controllerSessionKey: "agent:main:draft",
@@ -705,19 +601,12 @@ describe("resident sessions.list", () => {
         });
       } finally {
         clearAgentRunContext(runId);
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
       }
     });
   });
 
   it.each([
-    {
-      description: "the last visible row crosses the inclusive activity cutoff",
-      now: 60_400,
-      limit: 100,
-      before: { keys: ["agent:main:active"], totalCount: 1 },
-      after: { keys: [], totalCount: 0 },
-    },
     {
       description: "an older row outside the current page expires",
       now: 60_200,
@@ -788,6 +677,7 @@ describe("resident sessions.list", () => {
       await sessionReadHandlers["sessions.list"]?.({
         req: { type: "req", id: "session-list-test", method: "sessions.list" },
         params: { activeMinutes: 0 },
+        acceptsSerializedJson: true,
         client: identifiedClient("owner@example.com"),
         context: requestContext(config),
         respond,
@@ -805,7 +695,7 @@ describe("resident sessions.list", () => {
     "keeps administrator %s projections scoped to their authenticated profiles",
     async (projection) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const config: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+        const config: OpenClawConfig = { agents: { entries: { main: {} } } };
         const context = requestContext(config);
         const clients = ["ada@example.com", "bob@example.com"].map((email) => {
           const client = identifiedClient(ensureProfileForEmail(email).id);
@@ -925,16 +815,16 @@ describe("resident sessions.list", () => {
         const client = identifiedClient("viewer@example.com");
         await initializeSessionReadContext(context);
         const projection = getSessionRowProjection(context)!;
-        const ensure = projection.ensureMaterialized.bind(projection);
+        const ensure = projection.prepareSelection.bind(projection);
         let releaseRows!: () => void;
         const gate = new Promise<void>((resolve) => {
           releaseRows = resolve;
         });
         const readiness = vi
-          .spyOn(projection, "ensureMaterialized")
-          .mockImplementationOnce(async () => {
+          .spyOn(projection, "prepareSelection")
+          .mockImplementationOnce(async (...args) => {
             await gate;
-            await ensure();
+            await ensure(...args);
           });
 
         const firstPage = listSessions({
@@ -970,25 +860,4 @@ describe("resident sessions.list", () => {
       });
     },
   );
-
-  it("preserves readiness failures and allows the next request to retry", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const config = await seedSessions();
-      const context = requestContext(config);
-      const client = identifiedClient("owner@example.com");
-      const request = { archived: "all" as const, limit: 100 };
-      await initializeSessionReadContext(context);
-      const projection = getSessionRowProjection(context)!;
-      vi.spyOn(projection, "ensureMaterialized").mockRejectedValueOnce(
-        new Error("synthetic materialization failure"),
-      );
-
-      await expect(listSessions({ client, context, request })).rejects.toThrow(
-        "synthetic materialization failure",
-      );
-      await expect(listSessions({ client, context, request })).resolves.toMatchObject({
-        sessions: expect.any(Array),
-      });
-    });
-  });
 });

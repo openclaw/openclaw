@@ -1,9 +1,7 @@
 import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Matrix plugin module implements client bootstrap behavior.
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { CoreConfig } from "../types.js";
-import type { SharedMatrixClientLease } from "./client/shared.js";
+import type { MatrixClientReleaseMode, SharedMatrixClientLease } from "./client/shared.js";
 import type { MatrixClient } from "./sdk.js";
 
 type ResolvedRuntimeMatrixClient = {
@@ -11,15 +9,20 @@ type ResolvedRuntimeMatrixClient = {
   lease?: SharedMatrixClientLease;
 };
 
-type MatrixRuntimeClientReadiness = "none" | "prepared" | "started";
-type ResolvedRuntimeMatrixClientStopMode = "stop" | "persist" | "discard";
+export type MatrixRuntimeClientOptions = {
+  client?: MatrixClient;
+  cfg?: CoreConfig;
+  timeoutMs?: number;
+  accountId?: string | null;
+  readiness?: "none" | "prepared" | "started";
+};
 
 const loadMatrixSharedClientRuntimeDeps = createLazyRuntimeModule(() => import("./client.js"));
 
 async function ensureResolvedClientReadiness(params: {
   client: MatrixClient;
   lease?: SharedMatrixClientLease;
-  readiness?: MatrixRuntimeClientReadiness;
+  readiness?: MatrixRuntimeClientOptions["readiness"];
   preparedByDefault: boolean;
 }): Promise<void> {
   if (params.readiness === "started") {
@@ -35,13 +38,9 @@ async function ensureResolvedClientReadiness(params: {
   }
 }
 
-export async function resolveRuntimeMatrixClientWithReadiness(opts: {
-  client?: MatrixClient;
-  cfg?: CoreConfig;
-  timeoutMs?: number;
-  accountId?: string | null;
-  readiness?: MatrixRuntimeClientReadiness;
-}): Promise<ResolvedRuntimeMatrixClient> {
+export async function resolveRuntimeMatrixClientWithReadiness(
+  opts: MatrixRuntimeClientOptions,
+): Promise<ResolvedRuntimeMatrixClient> {
   const assertCurrent = captureChannelReadAuthority();
   assertCurrent?.();
   if (opts.client) {
@@ -59,7 +58,7 @@ export async function resolveRuntimeMatrixClientWithReadiness(opts: {
       "Matrix runtime client requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
     );
   }
-  const cfg = requireRuntimeConfig(opts.cfg, "Matrix runtime client") as CoreConfig;
+  const cfg = opts.cfg;
   const { acquireSharedMatrixClient, resolveMatrixAuthContext } =
     await loadMatrixSharedClientRuntimeDeps();
   assertCurrent?.();
@@ -94,15 +93,9 @@ export async function resolveRuntimeMatrixClientWithReadiness(opts: {
 }
 
 export async function withResolvedRuntimeMatrixClient<T>(
-  opts: {
-    client?: MatrixClient;
-    cfg?: CoreConfig;
-    timeoutMs?: number;
-    accountId?: string | null;
-    readiness?: MatrixRuntimeClientReadiness;
-  },
+  opts: MatrixRuntimeClientOptions,
   run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
-  stopMode: ResolvedRuntimeMatrixClientStopMode = "stop",
+  stopMode: MatrixClientReleaseMode = "stop",
 ): Promise<T> {
   const assertCurrent = captureChannelReadAuthority();
   assertCurrent?.();

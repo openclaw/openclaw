@@ -105,7 +105,7 @@ describe("agent model config", () => {
     const runtimeConfig = createRuntimeConfig({
       agents: {
         defaults: { model: { primary: "openai/gpt-5.4" } },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     });
     await runtimeConfig.ensureLoaded();
@@ -118,7 +118,6 @@ describe("agent model config", () => {
         defaults: { model: { primary: "openai/gpt-5.4" } },
         entries: {
           main: {
-            default: true,
             model: {
               primary: "anthropic/claude-sonnet-4-6",
               fallbacks: ["openai/gpt-5.4"],
@@ -131,17 +130,10 @@ describe("agent model config", () => {
     runtimeConfig.dispose();
   });
 
-  it.each([
-    { name: "an implicit primary", model: undefined },
-    { name: "a shared string primary", model: "openai/gpt-5.4" },
-    {
-      name: "a shared object primary",
-      model: { primary: "openai/gpt-5.4", fallbacks: ["google/gemini-3-pro"] },
-    },
-  ])("preserves $name when editing fallbacks", async ({ model }) => {
-    const defaults = model === undefined ? {} : { model };
+  it("preserves inherited primary and shared defaults when editing fallbacks", async () => {
+    const defaults = { model: { primary: "openai/gpt-5.4", fallbacks: ["google/gemini-3-pro"] } };
     const runtimeConfig = createRuntimeConfig({
-      agents: { defaults, entries: { main: { default: true } } },
+      agents: { defaults, entries: { main: {} } },
     });
     await runtimeConfig.ensureLoaded();
 
@@ -155,7 +147,6 @@ describe("agent model config", () => {
         defaults,
         entries: {
           main: {
-            default: true,
             model: { fallbacks: ["google/gemini-3-pro", "anthropic/claude-sonnet-4-6"] },
           },
         },
@@ -168,12 +159,6 @@ describe("agent model config", () => {
     {
       name: "an inherited primary",
       defaultModel: { primary: "openai/gpt-5.4", fallbacks: ["google/gemini-3-pro"] },
-      model: { fallbacks: ["anthropic/claude-sonnet-4-6"] },
-      expectedModel: { fallbacks: [] },
-    },
-    {
-      name: "an implicit primary",
-      defaultModel: { fallbacks: ["google/gemini-3-pro"] },
       model: { fallbacks: ["anthropic/claude-sonnet-4-6"] },
       expectedModel: { fallbacks: [] },
     },
@@ -191,7 +176,7 @@ describe("agent model config", () => {
       const runtimeConfig = createRuntimeConfig({
         agents: {
           defaults,
-          entries: { main: { default: true, name: "Main", model }, other: otherAgent },
+          entries: { main: { name: "Main", model }, other: otherAgent },
         },
       });
       await runtimeConfig.ensureLoaded();
@@ -202,7 +187,7 @@ describe("agent model config", () => {
         agents: {
           defaults,
           entries: {
-            main: { default: true, name: "Main", model: expectedModel },
+            main: { name: "Main", model: expectedModel },
             other: otherAgent,
           },
         },
@@ -234,7 +219,6 @@ describe("agent model config", () => {
           defaults: { model: { primary: "openai/gpt-5.4" } },
           entries: {
             main: {
-              default: true,
               model: { primary: "anthropic/claude-sonnet-4-6", fallbacks },
             },
           },
@@ -248,7 +232,7 @@ describe("agent model config", () => {
         agents: {
           defaults: { model: { primary: "openai/gpt-5.4" } },
           entries: {
-            main: { default: true, model: { fallbacks } },
+            main: { model: { fallbacks } },
           },
         },
       });
@@ -259,7 +243,7 @@ describe("agent model config", () => {
   it("still removes the model node when clearing a primary with no fallbacks", async () => {
     const runtimeConfig = createRuntimeConfig({
       agents: {
-        entries: { main: { default: true, model: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: { model: "anthropic/claude-sonnet-4-6" } },
       },
     });
     await runtimeConfig.ensureLoaded();
@@ -267,7 +251,7 @@ describe("agent model config", () => {
     modelActionsFor(runtimeConfig).onModelChange("main", null);
 
     expect(runtimeConfig.state.configForm).toEqual({
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
     });
     runtimeConfig.dispose();
   });

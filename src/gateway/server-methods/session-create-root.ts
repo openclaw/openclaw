@@ -1,11 +1,15 @@
 import fs from "node:fs";
+import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type {
+  ErrorShape,
+  SessionsCreateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   ErrorCodes,
   errorShape,
-  type ErrorShape,
-  type SessionsCreateParams,
+  missingScopeErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
@@ -13,12 +17,50 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
+import { invalidSessionRequest } from "../session-request-error.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
+import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 type PreparedSessionCreateRoot = {
   sessionCwd?: string;
   sessionRoot?: string;
 };
+
+export async function prepareSessionCreateRequestedCwd(params: {
+  cfg: OpenClawConfig;
+  requestedCwd?: string;
+  requestedExecNode?: string;
+  permissionMode?: SessionsCreateParams["permissionMode"];
+  clientPresent: boolean;
+  clientScopes: readonly string[];
+}): Promise<Result<string | undefined, ErrorShape>> {
+  const { requestedCwd, requestedExecNode } = params;
+  const cwdIsAbsolute =
+    !requestedCwd ||
+    (requestedExecNode
+      ? path.isAbsolute(requestedCwd) || path.win32.isAbsolute(requestedCwd)
+      : path.isAbsolute(requestedCwd));
+  if (!cwdIsAbsolute) {
+    return err(errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create cwd must be absolute"));
+  }
+  if (
+    params.permissionMode === "full" &&
+    params.clientPresent &&
+    !params.clientScopes.includes(ADMIN_SCOPE)
+  ) {
+    return err(
+      missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+    );
+  }
+  if (requestedCwd && !requestedExecNode && !params.clientScopes.includes(ADMIN_SCOPE)) {
+    const containment = await resolveWorkspacePathContainment(requestedCwd, params.cfg);
+    return containment
+      ? ok(containment.path)
+      : err(missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }));
+  }
+  return ok(requestedCwd);
+}
 
 export function prepareSessionCreateFilesystemRoot(params: {
   cfg: OpenClawConfig;
@@ -42,7 +84,7 @@ export function prepareSessionCreateFilesystemRoot(params: {
     }
     const sessionRoot = fs.realpathSync(rootCandidate);
     if (!fs.statSync(sessionRoot).isDirectory()) {
-      return err(errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create cwd is not a directory"));
+      return invalidSessionRequest("sessions.create cwd is not a directory");
     }
     if (params.sessionCwd && params.enforceSandboxContainment) {
       const targetRuntime = resolveSandboxRuntimeStatus({
@@ -56,23 +98,17 @@ export function prepareSessionCreateFilesystemRoot(params: {
         (params.sandboxRequired || targetRuntime.sandboxed) &&
         !isPathInside(fs.realpathSync(workspaceDir), sessionRoot)
       ) {
-        return err(
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            params.requestedProjectId
-              ? "sessions.create project is outside the sandboxed agent workspace"
-              : "sessions.create cwd is outside the sandboxed agent workspace",
-          ),
+        return invalidSessionRequest(
+          params.requestedProjectId
+            ? "sessions.create project is outside the sandboxed agent workspace"
+            : "sessions.create cwd is outside the sandboxed agent workspace",
         );
       }
     }
     return ok({ sessionRoot, sessionCwd: params.sessionCwd ? sessionRoot : undefined });
   } catch (error) {
-    return err(
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `sessions.create cwd is unavailable: ${formatErrorMessage(error)}`,
-      ),
+    return invalidSessionRequest(
+      `sessions.create cwd is unavailable: ${formatErrorMessage(error)}`,
     );
   }
 }
@@ -120,24 +156,18 @@ export function prepareSessionForkFilesystemRoot(params: {
     return ok({});
   }
   const roots = resolveSessionWorkspaceRoots(params.cfg, params.targetAgentId, parent);
-  const cwd = prepareSessionCreateFilesystemRoot({
-    ...params,
-    enforceSandboxContainment: true,
-    requestedProjectId: parent.projectId,
-    sessionCwd: roots.diffCwd,
-  });
+  const prepareRoot = (sessionCwd: string | undefined) =>
+    prepareSessionCreateFilesystemRoot({
+      ...params,
+      enforceSandboxContainment: true,
+      requestedProjectId: parent.projectId,
+      sessionCwd,
+    });
+  const cwd = prepareRoot(roots.diffCwd);
   if (!cwd.ok) {
     return cwd;
   }
-  const root =
-    roots.root === roots.diffCwd
-      ? cwd
-      : prepareSessionCreateFilesystemRoot({
-          ...params,
-          enforceSandboxContainment: true,
-          requestedProjectId: parent.projectId,
-          sessionCwd: roots.root,
-        });
+  const root = roots.root === roots.diffCwd ? cwd : prepareRoot(roots.root);
   if (!root.ok) {
     return root;
   }

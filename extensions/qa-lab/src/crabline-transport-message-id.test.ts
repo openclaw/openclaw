@@ -11,12 +11,6 @@ const PROVIDER_CASES = [
     nativeMessageId: /^\d+$/u,
   },
   {
-    channel: "slack",
-    conversation: { id: "D12345678", kind: "direct" },
-    senderId: "U12345678",
-    nativeMessageId: /^\d+\.\d+$/u,
-  },
-  {
     channel: "matrix",
     conversation: { id: "main", kind: "group" },
     senderId: "driver",

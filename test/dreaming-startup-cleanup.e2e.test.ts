@@ -2,11 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
-import {
-  getSessionEntry,
-  listSessionEntries,
-  upsertSessionEntry,
-} from "../src/plugin-sdk/session-store-runtime.js";
+import { listSessionEntries, upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
 import {
   appendSqliteSessionTranscriptEventForTest,
   closeOpenClawAgentDatabasesForTest,
@@ -81,7 +77,11 @@ async function connect(instance: OpenClawTestInstance): Promise<GatewaySessionCl
 describe("Gateway dreaming session restart cleanup", () => {
   it("removes stale child sessions after a real restart even when dreaming and cron are disabled", async () => {
     const config = {
-      agents: { list: [{ id: "main", default: true }, { id: "worker" }] },
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, worker: {} },
+      },
       plugins: {
         enabled: true,
         allow: ["memory-core"],
@@ -113,11 +113,9 @@ describe("Gateway dreaming session restart cleanup", () => {
     let client = await connect(instance);
 
     try {
-      // gateway_start fires after the listener opens; observe its first sweep.
-      await vi.waitFor(() => {
-        expect(getSessionEntry({ agentId: "main", sessionKey: sentinel }), instance.logs()).toBe(
-          undefined,
-        );
+      // Observe the Gateway's sweep through its owner, not this process's cached projection.
+      await vi.waitFor(async () => {
+        expect(await listSessionKeys(client), instance.logs()).not.toContain(sentinel);
       }, WAIT_OPTIONS);
 
       // The serving Gateway owns its resident projection. Seed persisted rows only

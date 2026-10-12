@@ -69,29 +69,23 @@ describe("resolveApprovalCommandAuthorization", () => {
     ).toEqual({ authorized: false, reason: "plugin denied", explicit: true });
   });
 
-  it("uses approvalCapability as the canonical approval auth contract", () => {
-    const getActionAvailabilityState = vi.fn(() => ({ kind: "enabled" as const }));
-    getChannelPluginMock.mockReturnValue({
-      approvalCapability: {
-        authorizeActorAction: () => ({ authorized: true }),
-        getActionAvailabilityState,
-      },
-    });
+  it("rejects commands through an older channel capability with scoped plugin reviewers", () => {
+    const authorizeActorAction = vi.fn(() => ({ authorized: true }));
+    getChannelPluginMock.mockReturnValue({ approvalCapability: { authorizeActorAction } });
+    const cfg = {
+      approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
+    } as never;
 
     expect(
       resolveApprovalCommandAuthorization({
-        cfg: {} as never,
-        channel: "matrix",
-        senderId: "123",
-        kind: "exec",
+        cfg,
+        channel: "slack",
+        accountId: "default",
+        senderId: "U22222222",
+        kind: "plugin",
       }),
-    ).toEqual({ authorized: true, explicit: true });
-    expect(getActionAvailabilityState).toHaveBeenCalledWith({
-      cfg: {} as never,
-      accountId: undefined,
-      action: "approve",
-      approvalKind: "exec",
-    });
+    ).toMatchObject({ authorized: false, explicit: true });
+    expect(authorizeActorAction).not.toHaveBeenCalled();
   });
 
   it("keeps disabled approval availability implicit even when same-chat auth returns allow", () => {
@@ -137,24 +131,5 @@ describe("resolveApprovalCommandAuthorization", () => {
         kind: "exec",
       }),
     ).toEqual({ authorized: true, explicit: false });
-  });
-
-  it("keeps configured approvers explicit when sender matches", () => {
-    getChannelPluginMock.mockReturnValue({
-      approvalCapability: createResolvedApproverActionAuthAdapter({
-        channelLabel: "QuietChat",
-        resolveApprovers: () => ["uuid:owner"],
-      }),
-    });
-
-    expect(
-      resolveApprovalCommandAuthorization({
-        cfg: {} as never,
-        channel: "quietchat",
-        accountId: "work",
-        senderId: "uuid:owner",
-        kind: "exec",
-      }),
-    ).toEqual({ authorized: true, explicit: true });
   });
 });

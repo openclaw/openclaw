@@ -1,0 +1,116 @@
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
+import {
+  onSqliteWalCheckpoint,
+  type SqliteWalCheckpointSnapshot,
+} from "../infra/sqlite-wal-checkpoint.js";
+import {
+  SQLITE_WORKER_CLOSE_RECEIPT,
+  type SqliteWorkerCloseReceipt,
+} from "../infra/sqlite-worker-contract.js";
+import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
+import { closeOpenClawAgentDatabaseByPath } from "./openclaw-agent-db-lifecycle.js";
+import type { AgentDatabaseFileExecutionIdentity } from "./openclaw-agent-execution-contract.js";
+
+type AgentDatabaseExecutionCloseState = {
+  database: OpenClawAgentDatabase | undefined;
+  identity: AgentDatabaseFileExecutionIdentity | undefined;
+  releasePreparations: readonly (() => void)[];
+  closeDomain: () => void;
+  releaseBorrow: (() => void) | undefined;
+};
+
+/** Keep the native receipt and both cleanup modes with the same retirement owner. */
+export function createAgentDatabaseExecutionCloser(
+  capture: () => AgentDatabaseExecutionCloseState & {
+    sharedBorrow: { release(): void; releaseAsync(): Promise<void> } | undefined;
+  },
+) {
+  let receipt: SqliteWorkerCloseReceipt | undefined;
+  return {
+    [SQLITE_WORKER_CLOSE_RECEIPT]: () => receipt,
+    closeAfterFailedOpen() {
+      const { sharedBorrow, ...state } = capture();
+      receipt = undefined;
+      receipt = closeAgentDatabaseExecution({
+        ...state,
+        releaseSharedBorrow: () => sharedBorrow?.release(),
+      });
+    },
+    async close() {
+      const { sharedBorrow, ...state } = capture();
+      receipt = undefined;
+      await state.database?.walMaintenance.stop();
+      const errors: unknown[] = [];
+      try {
+        receipt = closeAgentDatabaseExecution({ ...state, releaseSharedBorrow: () => {} });
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        await sharedBorrow?.releaseAsync();
+      } catch (error) {
+        errors.push(error);
+      }
+      throwSqliteLifecycleErrors(errors, "Agent database cleanup failed");
+    },
+  };
+}
+
+function closeAgentDatabaseExecution({
+  database,
+  identity,
+  releasePreparations,
+  closeDomain,
+  releaseBorrow,
+  releaseSharedBorrow,
+}: AgentDatabaseExecutionCloseState & {
+  releaseSharedBorrow: () => void;
+}): SqliteWorkerCloseReceipt | undefined {
+  let checkpoint: SqliteWalCheckpointSnapshot | undefined;
+  const errors: unknown[] = [];
+  for (const cleanup of [
+    ...releasePreparations,
+    closeDomain,
+    () => {
+      if (!database) {
+        return;
+      }
+      const closingPath = sqliteReaderDatabasePathKey(database.path);
+      const stopObserving = onSqliteWalCheckpoint((observation) => {
+        if (observation.databasePath === closingPath) {
+          checkpoint = {
+            health: observation.health,
+            observedAtNs: observation.observedAtNs,
+            lastCompletedAtNs: observation.lastCompletedAtNs,
+          };
+        }
+      });
+      try {
+        closeOpenClawAgentDatabaseByPath(database.path, database.agentId);
+      } finally {
+        stopObserving();
+      }
+    },
+    () => releaseBorrow?.(),
+    releaseSharedBorrow,
+  ]) {
+    try {
+      cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  throwSqliteLifecycleErrors(errors, "Agent database cleanup failed");
+  if (identity && checkpoint) {
+    return {
+      identity: {
+        key: `file:${identity.physicalIdentity}`,
+        canonicalPath: identity.nativeLocation,
+      },
+      incarnation: identity.incarnation,
+      checkpoint,
+    };
+  }
+  return undefined;
+}

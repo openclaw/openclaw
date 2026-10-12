@@ -1,4 +1,3 @@
-/** Coordinates one direct compaction attempt through explicit lifecycle phases. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {

@@ -10,7 +10,7 @@ export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions
     env: NodeJS.ProcessEnv,
   ) => void | Promise<void>;
   relativeInput?: boolean;
-  validationResult?: "failed" | "skipped";
+  validationResult?: "failed" | "skipped" | "child-result";
   validationClockAdvanceMs?: number;
   terminalParentExitProbe?: true;
   cancelDuringValidation?: boolean;

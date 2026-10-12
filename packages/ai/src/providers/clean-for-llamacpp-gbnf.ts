@@ -1,15 +1,9 @@
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
+import { inheritToolSchemaTruncation, truncateToolSchemaDepth } from "./tool-schema-depth.js";
+import { SCHEMA_MAP_KEYS } from "./tool-schema-refs.js";
 
 /** llama.cpp rejects grammar repetitions whose expanded rule count reaches 2000. */
 export const LLAMACPP_GBNF_MAX_REPETITION_THRESHOLD = 2000;
-
-const SCHEMA_MAP_KEYS = new Set([
-  "$defs",
-  "definitions",
-  "dependentSchemas",
-  "patternProperties",
-  "properties",
-]);
 
 const SCHEMA_CHILD_KEYS = new Set([
   "additionalItems",
@@ -29,23 +23,29 @@ const SCHEMA_CHILD_KEYS = new Set([
   "unevaluatedProperties",
 ]);
 
-function cleanSchemaNode(node: unknown): unknown {
-  if (Array.isArray(node)) {
+/** Removes JSON Schema constraints that llama.cpp cannot compile into GBNF. */
+export function cleanSchemaForLlamacppGbnf(schema: unknown, toolName?: string): unknown {
+  const bounded = truncateToolSchemaDepth(schema, toolName);
+  return inheritToolSchemaTruncation(bounded, cleanSchema(bounded));
+}
+
+function cleanSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
     let changed = false;
-    const entries = node.map((entry) => {
-      const next = cleanSchemaNode(entry);
+    const entries = schema.map((entry) => {
+      const next = cleanSchema(entry);
       changed ||= next !== entry;
       return next;
     });
-    return changed ? entries : node;
+    return changed ? entries : schema;
   }
-  if (!isSchemaRecord(node)) {
-    return node;
+  if (!isSchemaRecord(schema)) {
+    return schema;
   }
 
   let changed = false;
   const cleaned: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(node)) {
+  for (const [key, value] of Object.entries(schema)) {
     if (key === "pattern") {
       changed = true;
       continue;
@@ -64,7 +64,7 @@ function cleanSchemaNode(node: unknown): unknown {
       let mapChanged = false;
       next = Object.fromEntries(
         Object.entries(value).map(([childKey, childValue]) => {
-          const cleanedChild = cleanSchemaNode(childValue);
+          const cleanedChild = cleanSchema(childValue);
           mapChanged ||= cleanedChild !== childValue;
           return [childKey, cleanedChild];
         }),
@@ -73,12 +73,12 @@ function cleanSchemaNode(node: unknown): unknown {
         next = value;
       }
     } else if (SCHEMA_CHILD_KEYS.has(key)) {
-      next = cleanSchemaNode(value);
+      next = cleanSchema(value);
     }
     cleaned[key] = next;
     changed ||= next !== value;
   }
-  return changed ? cleaned : node;
+  return changed ? cleaned : schema;
 }
 
 function collectSchemaViolations(node: unknown, path: string, violations: string[]): void {
@@ -111,14 +111,9 @@ function collectSchemaViolations(node: unknown, path: string, violations: string
   }
 }
 
-/** Removes JSON Schema constraints that llama.cpp cannot compile into GBNF. */
-export function cleanSchemaForLlamacppGbnf(schema: unknown): unknown {
-  return cleanSchemaNode(schema);
-}
-
 /** Reports schema paths that llama.cpp cannot compile into GBNF. */
 export function findLlamacppGbnfSchemaViolations(schema: unknown, path: string): string[] {
   const violations: string[] = [];
-  collectSchemaViolations(schema, path, violations);
+  collectSchemaViolations(truncateToolSchemaDepth(schema), path, violations);
   return violations;
 }

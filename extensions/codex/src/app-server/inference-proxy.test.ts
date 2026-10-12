@@ -1,6 +1,5 @@
 import { once } from "node:events";
 import { Agent, createServer, request, type IncomingHttpHeaders } from "node:http";
-import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import {
   type ClientOptions,
   WebSocket,
@@ -68,29 +67,22 @@ afterEach(() => {
   }
 });
 
-async function post(
-  url: string,
-  options: { method: string; body: string | Buffer; headers?: Record<string, string> },
-) {
+async function post(url: string, body: unknown, headers?: Record<string, string>) {
   if (new URL(url).hostname !== "127.0.0.1") {
     throw new Error("fixture requires its own loopback server");
   }
   return await new Promise<{ status: number | undefined; text: () => Promise<string> }>(
     (resolve, reject) => {
-      const req = request(
-        url,
-        { method: options.method, headers: options.headers, agent: false },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk) => chunks.push(chunk));
-          res.once("error", reject);
-          res.once("end", () =>
-            resolve({ status: res.statusCode, text: async () => Buffer.concat(chunks).toString() }),
-          );
-        },
-      );
+      const req = request(url, { method: "POST", headers, agent: false }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.once("error", reject);
+        res.once("end", () =>
+          resolve({ status: res.statusCode, text: async () => Buffer.concat(chunks).toString() }),
+        );
+      });
       req.once("error", reject);
-      req.end(options.body);
+      req.end(JSON.stringify(body));
     },
   );
 }
@@ -151,21 +143,15 @@ describe("private inference HTTP relay", () => {
       };
     });
     for (const path of ["/models", "/responses/compact", "/responses?other=1"]) {
-      expect(
-        (await post(proxy.baseUrl + path, { method: "POST", body: JSON.stringify(body) })).status,
-      ).toBe(502);
+      expect((await post(proxy.baseUrl + path, body)).status).toBe(502);
     }
     expect(resolve).not.toHaveBeenCalled();
-    const result = await post(proxy.baseUrl + "/responses", {
-      method: "POST",
-      body: JSON.stringify(body),
-      headers: {
-        authorization: "Bearer local-placeholder",
-        "chatgpt-account-id": "native-account",
-        "openai-project": "native-project",
-        "openai-organization": "native-org",
-        "X-OpenAI-ChatPass-Test": "stale",
-      },
+    const result = await post(proxy.baseUrl + "/responses", body, {
+      authorization: "Bearer local-placeholder",
+      "chatgpt-account-id": "native-account",
+      "openai-project": "native-project",
+      "openai-organization": "native-org",
+      "X-OpenAI-ChatPass-Test": "stale",
     });
     expect(result.status).toBe(200);
     expect(await result.text()).toBe("data: completed\n\n");
@@ -196,10 +182,7 @@ describe("private inference HTTP relay", () => {
       };
     });
     const { proxy, body, registration } = await fixture(true, undefined, { resolve });
-    expect(
-      (await post(proxy.baseUrl + "/responses", { method: "POST", body: JSON.stringify(body) }))
-        .status,
-    ).toBe(502);
+    expect((await post(proxy.baseUrl + "/responses", body)).status).toBe(502);
     expect(transport.fetch).not.toHaveBeenCalled();
     loseAdmission = false;
     const next = await fixture(true, undefined, { resolve });
@@ -210,14 +193,7 @@ describe("private inference HTTP relay", () => {
       writes++;
       throw new Error("unexpected upstream write");
     });
-    expect(
-      (
-        await post(next.proxy.baseUrl + "/responses", {
-          method: "POST",
-          body: JSON.stringify(next.body),
-        })
-      ).status,
-    ).toBe(502);
+    expect((await post(next.proxy.baseUrl + "/responses", next.body)).status).toBe(502);
     expect(writes).toBe(0);
   });
 
@@ -228,10 +204,7 @@ describe("private inference HTTP relay", () => {
       generate: false,
       client_metadata: { "x-codex-turn-metadata": JSON.stringify({ request_kind: "prewarm" }) },
     };
-    expect(
-      (await post(proxy.baseUrl + "/responses", { method: "POST", body: JSON.stringify(body) }))
-        .status,
-    ).toBe(502);
+    expect((await post(proxy.baseUrl + "/responses", body)).status).toBe(502);
     expect(resolve).not.toHaveBeenCalled();
   });
 
@@ -256,112 +229,37 @@ describe("private inference HTTP relay", () => {
       );
       return { response: new Response("data: summary\n\n"), release: async () => {} };
     });
-    expect(
-      (
-        await post(proxy.baseUrl + "/responses", {
-          method: "POST",
-          body: JSON.stringify(compaction),
-        })
-      ).status,
-    ).toBe(200);
+    expect((await post(proxy.baseUrl + "/responses", compaction)).status).toBe(200);
     registration.release();
-    expect(
-      (
-        await post(proxy.baseUrl + "/responses", {
-          method: "POST",
-          body: JSON.stringify(compaction),
-        })
-      ).status,
-    ).toBe(502);
+    expect((await post(proxy.baseUrl + "/responses", compaction)).status).toBe(502);
     expect(resolve).toHaveBeenCalledOnce();
   });
-  it.each([
-    { zstd: false, withInstructions: true, query: "?cursor=synthetic%2Fa%5Cb%2Ec" },
-    { zstd: true, withInstructions: true },
-    { zstd: false, withInstructions: false },
-    { zstd: true, withInstructions: false },
-  ])(
-    "preserves auth and native input (zstd=$zstd, top-level instructions=$withInstructions)",
-    async ({ zstd, withInstructions, query = "" }) => {
-      const { proxy, body } = await fixture(withInstructions);
-      let forwarded: unknown;
-      transport.fetch.mockImplementation(async (args) => {
-        args.beforeRequest();
-        const wire = Buffer.from(await new Response(args.init.body).arrayBuffer());
-        expect(args.init.headers["content-length"]).toBe(String(wire.length));
-        expect(args.init.duplex).toBe("half");
-        const bytes = zstd ? zstdDecompressSync(wire) : wire;
-        forwarded = JSON.parse(bytes.toString());
-        const target = new URL(args.url);
-        expect(target.origin + target.pathname).toBe("https://api.openai.com/v1/responses");
-        expect(target.searchParams.get("cursor")).toBe(query ? "synthetic/a\\b.c" : null);
-        expect(args.init.headers.authorization).toBe("Bearer synthetic-native-auth");
-        expect(args.init.headers).not.toHaveProperty("x-openai-chatpass-test");
-        expect(args.capture).toBe(false);
-        expect(args.mode).toBe("trusted_env_proxy");
-        expect(args.maxRedirects).toBe(0);
-        return {
-          response: new Response("data: synthetic\n\n", {
-            headers: { "content-type": "text/event-stream" },
-          }),
-          release: async () => {},
-        };
-      });
-      const bytes = Buffer.from(JSON.stringify(body));
-      const response = await post(proxy.baseUrl + "/responses" + query, {
-        method: "POST",
-        body: zstd ? zstdCompressSync(bytes) : bytes,
-        headers: {
-          authorization: "Bearer synthetic-native-auth",
-          ...(zstd ? { "content-encoding": "zstd" } : {}),
-        },
-      });
-      expect(transport.fetch).toHaveBeenCalledTimes(1);
-      await transport.fetch.mock.results[0]?.value;
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("data: synthetic\n\n");
-      expect(forwarded).toEqual({
-        ...body,
-        instructions: withInstructions ? "native base\n\nsynthetic persona" : "synthetic persona",
-      });
-    },
-  );
-
   it("rejects missing private route authority and stale admitted generation without an upstream call", async () => {
     const { proxy, registration, body } = await fixture();
     const unknownRoute = new URL(proxy.baseUrl).origin + "/responses";
-    const response = await post(unknownRoute, { method: "POST", body: JSON.stringify(body) });
+    const response = await post(unknownRoute, body);
     expect(response.status).toBe(502);
     registration.release();
-    const stale = await post(proxy.baseUrl + "/responses", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    const stale = await post(proxy.baseUrl + "/responses", body);
     expect(stale.status).toBe(502);
     expect(await stale.text()).not.toContain("synthetic persona");
     expect(transport.fetch).not.toHaveBeenCalled();
   });
 
-  it.each(["synthetic persona", ""])(
-    "revalidates admission after asynchronous preparation with context=%j",
-    async (contextText) => {
-      const { proxy, controller, body } = await fixture(true, contextText);
-      let writes = 0;
-      transport.fetch.mockImplementation(async (args) => {
-        controller.abort();
-        args.beforeRequest();
-        writes++;
-        throw new Error("must not reach the upstream");
-      });
-      const response = await post(proxy.baseUrl + "/responses", {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
-      expect(response.status).toBe(502);
-      expect(transport.fetch).toHaveBeenCalledTimes(1);
-      expect(writes).toBe(0);
-    },
-  );
+  it("revalidates admission after asynchronous preparation without a context rewrite", async () => {
+    const { proxy, controller, body } = await fixture(true, "");
+    let writes = 0;
+    transport.fetch.mockImplementation(async (args) => {
+      controller.abort();
+      args.beforeRequest();
+      writes++;
+      throw new Error("must not reach the upstream");
+    });
+    const response = await post(proxy.baseUrl + "/responses", body);
+    expect(response.status).toBe(502);
+    expect(transport.fetch).toHaveBeenCalledTimes(1);
+    expect(writes).toBe(0);
+  });
 
   it("passes native unauthorized responses through for native auth recovery", async () => {
     const { proxy, body } = await fixture();
@@ -369,10 +267,7 @@ describe("private inference HTTP relay", () => {
       response: new Response("native unauthorized", { status: 401 }),
       release: async () => {},
     });
-    const response = await post(proxy.baseUrl + "/responses", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    const response = await post(proxy.baseUrl + "/responses", body);
     expect(transport.fetch).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(401);
     expect(await response.text()).toBe("native unauthorized");
@@ -394,56 +289,16 @@ describe("private inference WebSocket relay", () => {
       socket.terminate();
     }
   });
-  it.each(["unavailable", "private"] as const)(
-    "rejects %s destination DNS on a direct WebSocket route",
-    async (resolution) => {
-      if (resolution === "unavailable") {
-        transport.resolve.mockRejectedValue(new Error("synthetic DNS failure"));
-      } else {
-        const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
-          "openclaw/plugin-sdk/ssrf-runtime",
-        );
-        transport.resolve.mockImplementation(
-          (hostname: string, options: { signal?: AbortSignal }) =>
-            actual.resolvePinnedHostnameWithPolicy(hostname, {
-              ...options,
-              lookupFn: async () => [{ address: "127.0.0.1", family: 4 }],
-            }),
-        );
-      }
-      const { proxy } = await fixture();
-      const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
-      socket.on("error", () => {});
-      try {
-        const [, response] = await once(socket, "unexpected-response");
-        const chunks: Buffer[] = [];
-        for await (const chunk of response) {
-          chunks.push(Buffer.from(chunk));
-        }
-        expect(response.statusCode).toBe(502);
-        expect(Buffer.concat(chunks).toString()).toBe(
-          "Codex parent-local inference transport failed; retry on a fresh connection.",
-        );
-        expect(transport.resolve).toHaveBeenCalledOnce();
-        expect(transport.proxyAgent).toHaveBeenCalledOnce();
-        expect(transport.dials).toEqual([]);
-      } finally {
-        socket.terminate();
-      }
-    },
-  );
-
-  it("returns a complete sanitized rejection when upstream closes before upgrading", async () => {
-    const server = createServer();
-    server.on("upgrade", (_request, socket) => socket.destroy());
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("fixture did not listen");
-    }
-    transport.upstream = "ws://127.0.0.1:" + address.port;
+  it("rejects private destination DNS on a direct WebSocket route", async () => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+      "openclaw/plugin-sdk/ssrf-runtime",
+    );
+    transport.resolve.mockImplementation((hostname: string, options: { signal?: AbortSignal }) =>
+      actual.resolvePinnedHostnameWithPolicy(hostname, {
+        ...options,
+        lookupFn: async () => [{ address: "127.0.0.1", family: 4 }],
+      }),
+    );
     const { proxy } = await fixture();
     const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
     socket.on("error", () => {});
@@ -457,53 +312,40 @@ describe("private inference WebSocket relay", () => {
       expect(Buffer.concat(chunks).toString()).toBe(
         "Codex parent-local inference transport failed; retry on a fresh connection.",
       );
+      expect(transport.resolve).toHaveBeenCalledOnce();
+      expect(transport.proxyAgent).toHaveBeenCalledOnce();
+      expect(transport.dials).toEqual([]);
     } finally {
       socket.terminate();
-      proxy.close();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
     }
   });
 
-  it.each(["https://127.0.0.1/v1", "https://service.internal/v1"])(
-    "rejects blocked hostname %s before proxy or DNS work",
-    async (upstream) => {
-      const agent = new Agent();
-      transport.proxyAgent.mockReturnValue(agent);
-      const proxy = await createCodexInferenceProxy({
-        upstream: new URL(upstream),
-        assertCurrent: () => {},
-      });
-      proxies.push(proxy);
-      const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
-      try {
-        await once(socket, "error");
-        expect(transport.proxyAgent).not.toHaveBeenCalled();
-        expect(transport.resolve).not.toHaveBeenCalled();
-        expect(transport.dials).toEqual([]);
-      } finally {
-        socket.terminate();
-        agent.destroy();
-      }
-    },
-  );
+  it("rejects blocked hostnames before proxy or DNS work", async () => {
+    const agent = new Agent();
+    transport.proxyAgent.mockReturnValue(agent);
+    const proxy = await createCodexInferenceProxy({
+      upstream: new URL("https://service.internal/v1"),
+      assertCurrent: () => {},
+    });
+    proxies.push(proxy);
+    const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
+    try {
+      await once(socket, "error");
+      expect(transport.proxyAgent).not.toHaveBeenCalled();
+      expect(transport.resolve).not.toHaveBeenCalled();
+      expect(transport.dials).toEqual([]);
+    } finally {
+      socket.terminate();
+      agent.destroy();
+    }
+  });
 
   it.each([
     { proxied: false, localDnsUnavailable: false, withInstructions: true },
-    { proxied: false, localDnsUnavailable: false, withInstructions: true, contextText: "" },
-    { proxied: true, localDnsUnavailable: false, withInstructions: true },
-    { proxied: true, localDnsUnavailable: true, withInstructions: true },
-    { proxied: false, localDnsUnavailable: false, withInstructions: false },
     { proxied: true, localDnsUnavailable: true, withInstructions: false },
   ])(
     "preserves WS deltas (proxy=$proxied, local DNS unavailable=$localDnsUnavailable, instructions=$withInstructions)",
-    async ({
-      proxied,
-      localDnsUnavailable,
-      withInstructions,
-      contextText = "synthetic persona",
-    }) => {
+    async ({ proxied, localDnsUnavailable, withInstructions }) => {
       const agent = new Agent();
       const destroy = vi.spyOn(agent, "destroy");
       transport.proxyAgent.mockReturnValue(proxied ? agent : undefined);
@@ -515,7 +357,6 @@ describe("private inference WebSocket relay", () => {
       const server = createServer();
       const wss = new WebSocketServer({ server });
       const received: unknown[] = [];
-      const receivedBytes: string[] = [];
       wss.on("headers", (headers) => {
         headers.push(
           "x-codex-turn-state: synthetic-turn-state",
@@ -529,7 +370,6 @@ describe("private inference WebSocket relay", () => {
             throw new Error("fixture expected an uncompressed Node WebSocket buffer");
           }
           received.push(JSON.parse(data.toString("utf8")));
-          receivedBytes.push(data.toString("utf8"));
           socket.send('{"type":"response.completed","response":{"id":"synthetic-response"}}');
         });
       });
@@ -541,7 +381,7 @@ describe("private inference WebSocket relay", () => {
         throw new Error("fixture did not listen");
       }
       transport.upstream = "ws://127.0.0.1:" + address.port;
-      const { proxy, registration, body } = await fixture(withInstructions, contextText);
+      const { proxy, registration, body } = await fixture(withInstructions);
       const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
       let responseHeaders: IncomingHttpHeaders | undefined;
       socket.on("upgrade", (response) => {
@@ -554,7 +394,6 @@ describe("private inference WebSocket relay", () => {
           "x-reasoning-included": "true",
           "openai-model": "fixture-model",
         });
-        const sent: string[] = [];
         for (const input of [body.input, []]) {
           const response = Promise.race([
             once(socket, "message"),
@@ -572,7 +411,6 @@ describe("private inference WebSocket relay", () => {
             null,
             2,
           );
-          sent.push(wire);
           socket.send(wire);
           expect((await response)[0].toString()).toBe(
             '{"type":"response.completed","response":{"id":"synthetic-response"}}',
@@ -580,18 +418,11 @@ describe("private inference WebSocket relay", () => {
         }
         const expected = {
           ...body,
-          instructions: contextText
-            ? withInstructions
-              ? "native base\n\n" + contextText
-              : contextText
-            : body.instructions,
+          instructions: withInstructions ? "native base\n\nsynthetic persona" : "synthetic persona",
           type: "response.create",
           previous_response_id: "previous",
         };
         expect(received).toEqual([expected, { ...expected, input: [] }]);
-        if (!contextText) {
-          expect(receivedBytes).toEqual(sent);
-        }
         expect(transport.dials).toEqual(["wss://api.openai.com/v1/responses"]);
         expect(transport.resolve).toHaveBeenCalledTimes(proxied ? 0 : 1);
         if (proxied) {

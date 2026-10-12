@@ -13,10 +13,7 @@ import {
 } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
-import {
-  requestProviderUsage,
-  type ProviderUsageRequestResult,
-} from "../../lib/provider-usage-request.ts";
+import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
 import { requestSessionUsage } from "../../lib/sessions/usage.ts";
 
 registerSettingsEnglish();
@@ -115,13 +112,6 @@ export async function loadModelProvidersData(
   };
 }
 
-export function loadModelProviderUsage(
-  client: GatewayBrowserClient,
-  signal: AbortSignal,
-): Promise<ProviderUsageRequestResult> {
-  return requestProviderUsage(client, { signal });
-}
-
 export function loadModelProviderCost(
   client: GatewayBrowserClient,
   signal: AbortSignal,
@@ -134,7 +124,7 @@ export function loadModelProviderCost(
       scope: "family",
       timeZone: "local",
     },
-    { signal },
+    { signal, projection: "overview" },
   )
     .then((result) => result?.aggregates?.byProvider ?? null)
     .catch((error: unknown) => {
