@@ -17,8 +17,8 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import {
-  createOperationalRunInstanceRef,
   createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../admitted-run-context.js";
 import {
@@ -175,6 +175,7 @@ describe("host-prepared embedded tool authority", () => {
     const dispatch = await createPersonalToolScreenDispatcher(["alice", "bob"]);
     const retained = await published(
       async ({ handle }) => {
+        expect(getGatewayToolCallerIdentity()?.operatorAuthority?.profileId).toBe("alice");
         const releaseQueue = createDeferred();
         let queueReturned = false;
         handle.supportsTranscriptCommitWait = true;

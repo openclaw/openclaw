@@ -13,7 +13,11 @@ describe("repair phase progress", () => {
     expect(progress).not.toHaveBeenCalled();
     observe(first.subarray(12));
     observe(event("preflight", "completed") + event("doctor"));
-    expect(progress).toHaveBeenCalledTimes(3);
+    expect(progress.mock.calls).toEqual([
+      ["preflight", "in_progress"],
+      ["preflight", "completed"],
+      ["doctor", "in_progress"],
+    ]);
   });
 
   it("does not renew for repeated, backward, failed, warning or arbitrary output", () => {
@@ -34,7 +38,10 @@ describe("repair phase progress", () => {
     }
     expect(progress).toHaveBeenCalledTimes(1);
     observe(event("doctor", "completed"));
-    expect(progress).toHaveBeenCalledTimes(2);
+    expect(progress.mock.calls).toEqual([
+      ["doctor", "in_progress"],
+      ["doctor", "completed"],
+    ]);
   });
 
   it("discards an oversized line including its apparent progress suffix, then recovers", () => {

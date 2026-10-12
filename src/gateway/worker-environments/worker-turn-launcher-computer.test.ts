@@ -24,6 +24,7 @@ import type { WorkerGitHubLaunchBinding } from "../../worker/launch-descriptor.j
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import * as skillTransfer from "./skill-resource-transfer.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import type { WorkerGitHubBindingGrant } from "./worker-github-binding.js";
 import {
   createWorkerTurnTunnel,
   ENVIRONMENT_ID,
@@ -51,8 +52,12 @@ import {
 afterAll(closeStateDatabaseForTest);
 
 const prepareGitHubBinding = vi.hoisted(() => vi.fn());
+// mock-isolation: Launch tests own grant preparation and revocation without real GitHub credentials.
 vi.mock("./worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: prepareGitHubBinding,
+  prepareWorkerGitHubBindingGrant: prepareGitHubBinding,
+  revokeWorkerGitHubBindingGrant: async (grant: WorkerGitHubBindingGrant | undefined) => {
+    await grant?.revoke();
+  },
 }));
 
 describe("worker launch capabilities", () => {
@@ -73,7 +78,8 @@ describe("worker launch capabilities", () => {
         remoteUrl: "https://github.com/owner/repo.git",
         gitAuthor: { name: "Shared Bot", email: "shared@example.test" },
       };
-      prepareGitHubBinding.mockResolvedValue(available ? github : undefined);
+      const revoke = vi.fn(async () => {});
+      prepareGitHubBinding.mockResolvedValue(available ? { binding: github, revoke } : undefined);
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
         if (available) {
           expect(plan.assignment.github).toEqual(github);
@@ -104,6 +110,7 @@ describe("worker launch capabilities", () => {
         ),
       ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
       expect(launchTurn).toHaveBeenCalledOnce();
+      expect(revoke).toHaveBeenCalledTimes(available ? 1 : 0);
     },
   );
 

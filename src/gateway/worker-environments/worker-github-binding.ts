@@ -1,6 +1,21 @@
-import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
+import { GITHUB_PUBLIC_HOST } from "../../agents/github-host.js";
+import {
+  resolveConfiguredGitHubToolIdentity,
+  onManagedGitHubProfileChanged,
+} from "../../agents/github-tool-identity.js";
+import type { AgentRunSessionTarget } from "../../agents/run-session-target.types.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { registerConfigWriteListener } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  onUserProfileEmailBindingChanged,
+  onUserProfilesChanged,
+} from "../../state/user-profile-events.js";
 import {
   parseWorkerGitHubLaunchBinding,
   type WorkerGitHubLaunchBinding,
@@ -12,9 +27,257 @@ import {
   prepareGitHubPublicationWorkspaceOwner,
   sameGitHubPublicationWorkspace,
 } from "../github-publication-availability.js";
+import {
+  GitHubPublicationSessionChangedError,
+  GitHubPublicationWorkspaceChangedError,
+} from "../github-publication-failure.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
+import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
+import { createWorkerGitHubBindingGrant } from "./worker-github-grant.js";
 
 const log = createSubsystemLogger("gateway/worker-github");
+
+export type {
+  WorkerGitHubBindingGrant,
+  WorkerGitHubBindingRefresh,
+} from "./worker-github-binding-contract.js";
+
+/** Credential cleanup cannot erase work already accepted by its execution owner. */
+export async function revokeWorkerGitHubBindingGrant(
+  grant: WorkerGitHubBindingGrant | undefined,
+): Promise<void> {
+  try {
+    await grant?.revoke();
+  } catch {
+    log.warn(
+      "Worker GitHub cleanup failed; accepted work still reconciles and final cleanup can retry.",
+    );
+  }
+}
+
+/** Project the same selected account for checkout and renewable execution. */
+function workerGitHubLaunchBinding(params: {
+  agentId: string;
+  identity: Awaited<ReturnType<typeof prepareCurrentGitHubPublicationIdentity>>;
+  originUrl?: string;
+  branch?: string;
+}): WorkerGitHubLaunchBinding | undefined {
+  const { identity, agentId, originUrl, branch } = params;
+  const host = identity.host ?? GITHUB_PUBLIC_HOST;
+  const remote = originUrl ? parseGitHubRemoteUrl(originUrl, host) : undefined;
+  const remoteUrl =
+    remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo)
+      ? `https://${host}/${remote.owner}/${remote.repo}.git`
+      : undefined;
+  const scope =
+    identity.source === "agent-override"
+      ? "agent"
+      : identity.source === "system-configured"
+        ? "system"
+        : undefined;
+  const gitAuthor = scope
+    ? resolveConfiguredGitHubToolIdentity({
+        config: currentGitHubPublicationConfig(),
+        agentId,
+        scope,
+      })?.gitAuthor
+    : undefined;
+  return parseWorkerGitHubLaunchBinding({
+    token: identity.env.GH_TOKEN,
+    login: identity.account.login,
+    ...(host !== GITHUB_PUBLIC_HOST ? { host } : {}),
+    ...(branch !== undefined ? { branch } : {}),
+    ...(remoteUrl ? { remoteUrl } : {}),
+    ...(gitAuthor ? { gitAuthor } : {}),
+  });
+}
+
+export async function prepareWorkerGitHubBindingGrant(params: {
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  assertCurrent?: () => boolean;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  signal?: AbortSignal;
+  sessionTarget?: AgentRunSessionTarget;
+}): Promise<WorkerGitHubBindingGrant | undefined> {
+  if (params.signal?.aborted || params.assertCurrent?.() === false) {
+    return undefined;
+  }
+  const caller = getGatewayToolCallerIdentity();
+  const operator =
+    params.operatorAuthority ??
+    (caller?.agentId === params.agentId && caller.sessionKey === params.sessionKey
+      ? caller.operatorAuthority
+      : undefined);
+  if (operator) {
+    assertAdmittedRunOperatorAuthority(operator);
+    operator.assertCurrent();
+  }
+  const controller = new AbortController();
+  const signal = AbortSignal.any(
+    [params.signal, operator?.signal, controller.signal].filter(
+      (candidate): candidate is AbortSignal => candidate !== undefined,
+    ),
+  );
+  const assertRunCurrent = () => {
+    signal.throwIfAborted();
+    operator?.assertCurrent();
+    if (params.assertCurrent?.() === false) {
+      throw new Error("Worker GitHub credential authority closed");
+    }
+  };
+  const preparedWorkspace = await prepareGitHubPublicationWorkspaceOwner(params, {
+    allowMissingWorkspace: true,
+    sessionTarget: params.sessionTarget,
+    assertCurrent: assertRunCurrent,
+  });
+  signal.throwIfAborted();
+  operator?.assertCurrent();
+  if (params.assertCurrent?.() === false) {
+    return undefined;
+  }
+  const workspace = preparedWorkspace.initial;
+  const assertAuthority = () => {
+    assertRunCurrent();
+    if (!sameGitHubPublicationWorkspace(workspace, preparedWorkspace.current())) {
+      throw new Error("Worker GitHub credential authority closed");
+    }
+  };
+  const refreshWorkspace = async () => {
+    const current = await preparedWorkspace.read().catch((error: unknown) => {
+      if (
+        error instanceof GitHubPublicationSessionChangedError ||
+        error instanceof GitHubPublicationWorkspaceChangedError
+      ) {
+        // A newer worker snapshot can revoke authority before the local projection catches up.
+        controller.abort(error);
+      }
+      throw error;
+    });
+    assertAuthority();
+    if (!sameGitHubPublicationWorkspace(workspace, current)) {
+      const error = new Error("Worker GitHub credential authority closed");
+      controller.abort(error);
+      throw error;
+    }
+  };
+  assertAuthority();
+  let profileRevision = 0;
+  let preparedProfileRevision = 0;
+  let preparingProfileDir: string | undefined;
+  // Cover preparation awaits until the constructed grant installs its own profile listener.
+  using _ = {
+    [Symbol.dispose]: onManagedGitHubProfileChanged((profileDir) => {
+      if (preparingProfileDir === undefined || preparingProfileDir === profileDir) {
+        profileRevision++;
+      }
+    }),
+  };
+  let identity: Awaited<ReturnType<typeof prepareCurrentGitHubPublicationIdentity>>;
+  let originUrl: string | undefined;
+  do {
+    preparedProfileRevision = profileRevision;
+    try {
+      identity = await prepareCurrentGitHubPublicationIdentity(params.agentId, assertAuthority);
+    } catch (error) {
+      assertAuthority();
+      const config = currentGitHubPublicationConfig();
+      if (
+        (["agent", "system"] as const).some((scope) =>
+          resolveConfiguredGitHubToolIdentity({ config, agentId: params.agentId, scope }),
+        )
+      ) {
+        throw new Error(
+          "The selected GitHub identity is unavailable; reconnect it in Settings before starting this turn.",
+          { cause: error },
+        );
+      }
+      return undefined;
+    }
+    preparingProfileDir = identity.env.GH_CONFIG_DIR;
+    assertAuthority();
+    originUrl =
+      workspace.kind === "none"
+        ? undefined
+        : workspace.kind === "repository"
+          ? workspace.workspace.url
+          : (await managedWorktrees.resolveRepositoryIdentity(workspace.worktree.path)).originUrl;
+    await refreshWorkspace();
+  } while (preparedProfileRevision !== profileRevision);
+  const assertCurrent = () => {
+    assertAuthority();
+    if (!matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity })) {
+      throw new Error("Selected GitHub identity changed; start a new turn.");
+    }
+  };
+  assertCurrent();
+  const githubHost = identity.host ?? GITHUB_PUBLIC_HOST;
+  const binding = workerGitHubLaunchBinding({
+    agentId: params.agentId,
+    identity,
+    originUrl,
+    branch:
+      workspace.kind === "none"
+        ? undefined
+        : workspace.kind === "repository"
+          ? workspace.workspace.branch
+          : workspace.worktree.branch,
+  });
+  if (!binding) {
+    throw new Error("Selected GitHub identity does not meet the worker launch contract");
+  }
+  const refreshCredential = async () => {
+    assertCurrent();
+    let currentIdentity: typeof identity;
+    let revision: number;
+    do {
+      revision = profileRevision;
+      currentIdentity = await prepareCurrentGitHubPublicationIdentity(
+        params.agentId,
+        assertAuthority,
+      );
+      await refreshWorkspace();
+      assertCurrent();
+    } while (revision !== profileRevision);
+    if (
+      currentIdentity.source !== identity.source ||
+      currentIdentity.profileId !== identity.profileId ||
+      (currentIdentity.host ?? GITHUB_PUBLIC_HOST) !== githubHost ||
+      currentIdentity.account.accountId !== identity.account.accountId ||
+      currentIdentity.account.login.toLowerCase() !== identity.account.login.toLowerCase()
+    ) {
+      controller.abort(new Error("Selected GitHub account changed; start a new turn."));
+      signal.throwIfAborted();
+    }
+    const token = currentIdentity.env.GH_TOKEN;
+    if (!token) {
+      throw new Error("Selected GitHub credential is unavailable; reconnect it in Settings.");
+    }
+    preparedProfileRevision = revision;
+    return { token, expiresAtMs: currentIdentity.accessExpiresAtMs };
+  };
+  return createWorkerGitHubBindingGrant({
+    binding,
+    credential: { token: binding.token, expiresAtMs: identity.accessExpiresAtMs },
+    controller,
+    signal,
+    assertCurrent,
+    refreshCredential,
+    refreshRequired: () => profileRevision !== preparedProfileRevision,
+    subscribe: (changed) => [
+      registerConfigWriteListener(changed),
+      onManagedGitHubProfileChanged((profileDir) => {
+        if (identity.env.GH_CONFIG_DIR === profileDir) {
+          profileRevision++;
+          changed();
+        }
+      }),
+      onUserProfilesChanged(changed),
+      onUserProfileEmailBindingChanged(changed),
+    ],
+  });
+}
 
 export async function prepareWorkerGitHubBinding(params: {
   sessionId: string;
@@ -65,35 +328,12 @@ export async function prepareWorkerGitHubBinding(params: {
     ) {
       return undefined;
     }
-    const token = identity.env.GH_TOKEN;
-    if (!token) {
-      return undefined;
-    }
-    const remote = parseGitHubRemoteUrl(originUrl);
-    const remoteUrl =
-      remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo)
-        ? `https://github.com/${remote.owner}/${remote.repo}.git`
-        : undefined;
-    const scope =
-      identity.source === "agent-override"
-        ? "agent"
-        : identity.source === "system-configured"
-          ? "system"
-          : undefined;
-    const gitAuthor = scope
-      ? resolveConfiguredGitHubToolIdentity({
-          config: currentGitHubPublicationConfig(),
-          agentId: params.agentId,
-          scope,
-        })?.gitAuthor
-      : undefined;
-    const binding = parseWorkerGitHubLaunchBinding({
-      token,
-      login: identity.account.login,
+    const binding = workerGitHubLaunchBinding({
+      agentId: params.agentId,
+      identity,
+      originUrl,
       branch:
         workspace.kind === "repository" ? workspace.workspace.branch : workspace.worktree.branch,
-      ...(remoteUrl ? { remoteUrl } : {}),
-      ...(gitAuthor ? { gitAuthor } : {}),
     });
     if (!binding) {
       log.debug("Worker GitHub binding does not meet the worker launch contract.");

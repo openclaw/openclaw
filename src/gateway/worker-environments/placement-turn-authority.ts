@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { SqliteSessionMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -283,7 +284,10 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
     assertCurrent(this: void) {
       assertUsable();
       if (observation.revoked || hasPendingPublication(owner, sessionId)) {
-        throw new Error(changedMessage);
+        // Reply initialization can reprepare known inventory conflicts, never lost source custody.
+        throw sessionId === undefined
+          ? new SqliteSessionMutationConflictError("session maintenance")
+          : new Error(changedMessage);
       }
     },
     release(this: void) {
@@ -298,11 +302,6 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
     },
   };
   return { authority, observation, owner, assertUsable };
-}
-
-/** Omit the session to fence non-local placements, including creations after an empty read. */
-function observePlacementAuthority(pathname: string, sessionId?: string) {
-  return capturePlacementObservation(pathname, sessionId).authority;
 }
 
 /** A concurrent placement mutation fails this read; the caller can retry it. */
@@ -475,7 +474,7 @@ export async function preparePlacementWorkspaceResultAuthority(
   const claim = structuredClone(requestedClaim);
   claim.sessionId = required(claim.sessionId, "session id");
   const publicationSequence = owner.published.get(claim.sessionId) ?? 0;
-  const observation = observePlacementAuthority(pathname, claim.sessionId);
+  const { authority: observation } = capturePlacementObservation(pathname, claim.sessionId);
   try {
     const projection = await read([claim.sessionId]);
     context.admission.assertCurrent();

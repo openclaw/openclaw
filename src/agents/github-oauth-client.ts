@@ -4,7 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
-import { resolveConfiguredGitHubApiBaseUrl } from "./github-host.js";
+import { GITHUB_PUBLIC_API_BASE_URL } from "./github-host.js";
 import { clearNativeGitHubTokenCache } from "./github-read-identity.js";
 import type { GitHubToolAccount } from "./github-tool-account.js";
 
@@ -296,7 +296,7 @@ export async function verifyGitHubCredential(
     if (/\s/u.test(token)) {
       return { status: "unavailable" };
     }
-    const apiBaseUrl = options.apiBaseUrl ?? resolveConfiguredGitHubApiBaseUrl();
+    const apiBaseUrl = options.apiBaseUrl ?? GITHUB_PUBLIC_API_BASE_URL;
     const key = createHash("sha256").update(`${apiBaseUrl}\0${token}`).digest("hex");
     const create = async (): Promise<GitHubCredentialVerificationResult> => {
       const timeoutMs = resolveTimerTimeoutMs(

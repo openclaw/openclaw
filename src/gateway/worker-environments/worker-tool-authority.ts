@@ -1,7 +1,10 @@
+import { getAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import { prepareInstalledSkillCatalog } from "../../agents/installed-skill-runtime.js";
 import { supportsModelTools } from "../../agents/model-tool-support.js";
@@ -14,10 +17,25 @@ import {
   prepareAgentToolSurfacePresentation,
   type AgentToolSurfacePlanParams,
 } from "../../agents/tool-surface-plan.js";
+import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
-import { logWarn } from "../../logger.js";
+import { logInfo, logWarn } from "../../logger.js";
 import type { WorkerToolAuthority } from "../../worker/launch-descriptor.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
+
+type WorkerToolPreparationOptions = {
+  preparedModelRuntime: NonNullable<
+    Parameters<typeof createOpenClawCodingToolsInternalAsync>[0]
+  >["preparedModelRuntime"];
+  operationalRunInstance: NonNullable<
+    Parameters<typeof createOpenClawCodingToolsInternalAsync>[0]
+  >["operationalRunInstance"];
+  githubPublicationAvailable: boolean;
+  placementTools: AnyAgentTool[];
+  adapters: AnyAgentTool[];
+  launchToolNames: readonly string[];
+  preparation: Parameters<typeof createOpenClawCodingToolsInternalAsync>[4];
+};
 
 export async function resolveWorkerToolAuthority(params: {
   modelRef: { provider: string; model: string };
@@ -138,5 +156,54 @@ export async function resolveWorkerToolAuthority(params: {
     execUnavailable,
     presentation,
     installedSkills,
+    prepareTools: async (options: WorkerToolPreparationOptions) => {
+      const availablePlacementTools = new Set(options.placementTools.map((tool) => tool.name));
+      const prepared = await createOpenClawCodingToolsInternalAsync(
+        {
+          ...turn,
+          authProfileStoreSource,
+          agentId: params.placement.agentId,
+          conversationCapabilityProfile: capabilityProfile,
+          preparedModelRuntime: options.preparedModelRuntime,
+          installedSkills,
+          githubPublicationAvailable: options.githubPublicationAvailable,
+          cronCreatorAuthorityUnavailableReason: undefined,
+          runSessionKey: params.placement.sessionKey,
+          sessionKey: turn.sandboxSessionKey ?? params.placement.sessionKey,
+          policyAgentId: turn.sandboxAgentId ?? turn.agentId,
+          operationalRunInstance: options.operationalRunInstance,
+          sessionPermissionPolicy: turn.permissionMode
+            ? { mode: turn.permissionMode, root: turn.workspaceDir }
+            : undefined,
+          modelProvider: params.modelRef.provider,
+          modelId: params.modelRef.model,
+          modelContextWindowTokens: corePolicy.modelContextWindowTokens,
+          runtimeToolAllowlist: turn.toolsAllow,
+          skillWorkshop: undefined,
+          computerTransport: null,
+        },
+        undefined,
+        undefined,
+        { tools: [...options.placementTools, ...options.adapters], policy: corePolicy },
+        options.preparation,
+      );
+      if (turn.disableTools || turn.modelRun || turn.promptMode === "none") {
+        return [];
+      }
+      return applyEmbeddedAttemptToolsAllow(prepared, turn.toolsAllow).filter((tool) => {
+        const location = getAgentToolExecutionLocation(tool);
+        const reason =
+          location.kind === "gateway"
+            ? location.unavailableReason
+            : !availablePlacementTools.has(tool.name) ||
+                !options.launchToolNames.includes(tool.name)
+              ? "the placement has no available execution capability"
+              : undefined;
+        if (reason) {
+          logInfo(`Worker tool ${tool.name} withheld: ${reason}.`);
+        }
+        return !reason;
+      });
+    },
   };
 }

@@ -17,6 +17,7 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import {
   hasSupportedGitHubPublicationTarget,
   prepareGitHubPublicationAvailability,
+  prepareGitHubPublicationWorkspaceOwner,
 } from "./github-publication-availability.js";
 
 const mocks = vi.hoisted(() => ({
@@ -87,6 +88,7 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("publication-worktree-read-"));
   mocks.config.mockReset().mockReturnValue({});
   mocks.session.mockReset().mockReturnValue({
+    storePath: "/synthetic/admitted.sqlite",
     canonicalKey: session.sessionKey,
     agentId: session.agentId,
     entry: {
@@ -179,6 +181,16 @@ it.each(["unbound", "replaced-session", "replaced-lifecycle", "replaced-writer"]
     );
   },
 );
+
+it("checks retained worktree retirement without caller-thread registry SQL", async () => {
+  const prepared = await prepareGitHubPublicationWorkspaceOwner(session);
+  expect(prepared.current().kind).toBe("worktree");
+  await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
+  const sql = observeMainThreadSql();
+  sql.calibrate();
+  expect(() => prepared.current()).toThrow("changed");
+  sql.expectIdle();
+});
 
 it("rejects a worktree retired while publication identity is prepared", async () => {
   mocks.identity.mockImplementationOnce(async () => {

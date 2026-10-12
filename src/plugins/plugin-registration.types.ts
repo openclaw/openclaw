@@ -390,7 +390,7 @@ export type OpenClawPluginServiceContext = {
     params: Omit<
       Parameters<import("./runtime/types.js").PluginRuntime["nodes"]["openDuplex"]>[0],
       "scopes"
-    > & { assertCurrent?: () => void },
+    >,
   ) => ReturnType<import("./runtime/types.js").PluginRuntime["nodes"]["openDuplex"]>;
   gatewayEvents?: import("./gateway-events.js").OpenClawPluginGatewayEvents;
   startupTrace?: {

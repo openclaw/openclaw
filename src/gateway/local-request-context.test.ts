@@ -311,9 +311,25 @@ describe("local gateway request context", () => {
       .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
       .mockImplementation(() => new Promise(() => {}));
     const recheckNativeLogin = vi.fn();
+    const refreshExpiredModelCatalog = vi.fn();
+    const loadFullModelCatalog = vi.fn();
+    const nativeOwner = {
+      ...asPublishedOwner(candidate),
+      recheckNativeLogin,
+      refreshExpiredModelCatalog,
+      loadFullModelCatalog,
+      readFullModelCatalog: vi.fn(),
+    };
+    const responseOwner = {
+      ...nativeOwner,
+      readFullModelCatalog:
+        vi.fn<NonNullable<NonNullable<PublishedOwnerSnapshot>["readFullModelCatalog"]>>(),
+    };
+    const materializeOwner = vi.spyOn(preparedModelCatalog, "materializePreparedModelCatalogOwner");
     const readOwner = vi
       .spyOn(preparedModelCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockReturnValue({ ...asPublishedOwner(candidate), recheckNativeLogin });
+      .mockReturnValueOnce(nativeOwner)
+      .mockReturnValue(responseOwner);
 
     const result = await withLocalGatewayRequestScope(
       { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
@@ -322,10 +338,20 @@ describe("local gateway request context", () => {
 
     expect(result).toMatchObject({ ok: true, payload: { models: [] } });
     expect(loadOwner).not.toHaveBeenCalled();
-    expect(readOwner).toHaveBeenCalledTimes(2);
+    expect(refreshExpiredModelCatalog).not.toHaveBeenCalled();
+    expect(loadFullModelCatalog).not.toHaveBeenCalled();
     expect(recheckNativeLogin).toHaveBeenCalledOnce();
+    // Native-login demand does not retain the response's catalog/auth generation across awaits.
+    expect(readOwner.mock.calls).toEqual([
+      [{ agentId: "main", config: cfg }],
+      [{ agentId: "main", config: cfg }],
+    ]);
+    expect(materializeOwner).toHaveBeenCalledExactlyOnceWith(responseOwner);
+    expect(nativeOwner.readFullModelCatalog).not.toHaveBeenCalled();
+    expect(responseOwner.readFullModelCatalog).toHaveBeenCalledOnce();
     loadOwner.mockRestore();
     readOwner.mockRestore();
+    materializeOwner.mockRestore();
   });
 
   it("commits agent deletion through the canonical cron store", async () => {

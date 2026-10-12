@@ -1,22 +1,43 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   installManagedGitHubProfile,
   resolveManagedGitHubProfileDir,
+  writeManagedGitHubProfileFiles,
 } from "../../agents/github-tool-identity.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
+import { clearRuntimeConfigSnapshot, writeConfigFile } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { withIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import {
+  prepareWorkerGitHubBinding,
+  prepareWorkerGitHubBindingGrant,
+} from "./worker-github-binding.js";
 
 const mocks = vi.hoisted(() => ({
   snapshot: vi.fn(),
   refresh: vi.fn(),
   verify: vi.fn(),
   worktree: vi.fn(),
+  worktreeRead: vi.fn(),
   repository: vi.fn(),
   repositoryWorkspace: vi.fn(),
   session: vi.fn(),
+  admittedSessionRead: vi.fn(),
   nativeToken: vi.fn(),
+  oauth: vi.fn(),
 }));
 
 vi.mock("../../agents/github-oauth-client.js", () => ({ verifyGitHubCredential: mocks.verify }));
@@ -35,9 +56,13 @@ vi.mock("../../agents/worktrees/service.js", () => ({
 vi.mock("../../agents/worktrees/registry-read.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/worktrees/registry-read.js")>()),
   readLiveRegistryWorktreeByOwner: async (_context: unknown, kind: string, id: string) =>
-    mocks.worktree(kind, id),
+    mocks.worktreeRead(kind, id),
 }));
 vi.mock("../session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.session }));
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntriesFromStoreInWorker: mocks.admittedSessionRead,
+}));
 vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
   loadGatewaySessionEntryReadOnlyInWorker: async (
@@ -54,6 +79,8 @@ vi.mock("../../state/session-repository-workspaces.js", () => ({
     }),
   }),
 }));
+// mock-isolation: Grant tests control OAuth expiry without reading the persistent credential store.
+vi.mock("../../agents/github-oauth-records.js", () => ({ inspectGitHubOAuthRecord: mocks.oauth }));
 vi.mock("../../process/exec.js", () => ({ runCommandBuffered: mocks.nativeToken }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -76,13 +103,20 @@ const verified = {
 };
 let config: OpenClawConfig;
 
-async function installProfile(scope: "agent" | "system" = "system") {
+async function installProfile(scope: "agent" | "system" = "system", host?: string) {
   const profileDir = resolveManagedGitHubProfileDir({ agentId: "main", scope, profileId });
   await installManagedGitHubProfile({
     profileDir,
     token,
     commitConfig: async () => {},
   });
+  if (host) {
+    await writeManagedGitHubProfileFiles(profileDir, {
+      login: verified.account.login,
+      token,
+      host,
+    });
+  }
   mocks.verify.mockClear();
   return profileDir;
 }
@@ -93,8 +127,10 @@ describe("worker GitHub launch binding", () => {
     config = { tools: { github: { profileId, gitAuthor: { name: "Shared Bot" } } } };
     mocks.snapshot.mockReset().mockImplementation(() => ({ config, sourceConfig: config }));
     mocks.refresh.mockReset().mockResolvedValue(undefined);
+    mocks.oauth.mockReset().mockReturnValue({ state: "missing" });
     mocks.verify.mockReset().mockResolvedValue(verified);
     mocks.worktree.mockReset().mockReturnValue(worktree);
+    mocks.worktreeRead.mockReset().mockImplementation((kind, id) => mocks.worktree(kind, id));
     mocks.repository.mockReset().mockResolvedValue({ originUrl: "git@github.com:owner/repo.git" });
     mocks.repositoryWorkspace.mockReset();
     mocks.session.mockReset().mockReturnValue({
@@ -105,13 +141,298 @@ describe("worker GitHub launch binding", () => {
         worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
       },
     });
+    mocks.admittedSessionRead.mockReset().mockImplementation(async () => ({
+      entries: [{ sessionKey: session.sessionKey, entry: mocks.session().entry }],
+    }));
     mocks.nativeToken.mockReset().mockResolvedValue({
       code: 0,
       stdout: Buffer.from(token),
       stderr: Buffer.alloc(0),
     });
   });
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    { workspace: "none", changed: "writer" },
+    { workspace: "none", changed: "lifecycle" },
+    { workspace: "none", changed: "actor" },
+    { workspace: "worktree", changed: "actor" },
+  ] as const)(
+    "retains its incognito $workspace source outside binding until $changed retirement",
+    async ({ workspace, changed }) => {
+      const profileDir = await installProfile();
+      const authority = { assertCurrent() {} };
+      const actor = await captureOpenClawAgentDatabaseExecution({
+        kind: "ephemeral",
+        agentId: "main",
+        env: process.env,
+        authority,
+      });
+      assert(actor);
+      const selected = { ...session, sessionKey: "agent:main:dashboard:incognito-worker-github" };
+      const entry = {
+        sessionId: selected.sessionId,
+        updatedAt: Date.now(),
+        lifecycleRevision: "lifecycle",
+        activeWriterRunId: "writer",
+        ...(workspace === "worktree"
+          ? { worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot } }
+          : {}),
+      };
+      let successor: typeof actor | undefined;
+      let grant: Awaited<ReturnType<typeof prepareWorkerGitHubBindingGrant>>;
+      try {
+        await actor.sessions.create(authority, { sessionKey: selected.sessionKey, entry });
+        mocks.worktree.mockReturnValue({ ...worktree, ownerId: selected.sessionKey });
+        mocks.session.mockImplementation(() => {
+          throw new Error("Private grant read host session SQL");
+        });
+        grant = await withIncognitoSessionBinding({ actor }, () =>
+          prepareWorkerGitHubBindingGrant({
+            ...selected,
+            sessionTarget: {
+              ...selected,
+              storePath: actor.path,
+              expectedLifecycleRevision: "lifecycle",
+              expectedWriterRunId: "writer",
+            },
+          }),
+        );
+        assert(grant);
+        expect(grant.binding.token).toBe(token);
+        expect(() => grant!.assertCurrent!()).not.toThrow();
+        await withIncognitoSessionBinding({ actor }, () =>
+          patchSessionEntryCore({ ...selected, storePath: actor.path }, () => ({
+            label: "Renamed private session",
+          })),
+        );
+        await writeManagedGitHubProfileFiles(profileDir, {
+          login: verified.account.login,
+          token: "synthetic-private-rotation",
+        });
+        expect(grant.signal?.aborted).toBe(false);
+        expect(await grant.refresh?.()).toMatchObject({
+          generation: 1,
+          token: "synthetic-private-rotation",
+        });
+        await grant.refresh?.(1);
+        expect(grant.binding.token).toBe("synthetic-private-rotation");
+        expect(mocks.session).not.toHaveBeenCalled();
+        // A matching durable projection cannot lend authority to the retired private source.
+        mocks.session.mockReturnValue({
+          agentId: selected.agentId,
+          canonicalKey: selected.sessionKey,
+          storePath: actor.path,
+          entry,
+        });
+        if (changed === "actor") {
+          await actor.close();
+          successor = await captureOpenClawAgentDatabaseExecution({
+            kind: "ephemeral",
+            agentId: "main",
+            env: process.env,
+            authority,
+          });
+          assert(successor);
+          expect(successor.path).toBe(actor.path);
+          await successor.sessions.create(authority, { sessionKey: selected.sessionKey, entry });
+          withIncognitoSessionBinding({ actor: successor }, () => {
+            expect(() => grant!.assertCurrent!()).toThrow();
+          });
+        } else {
+          await withIncognitoSessionBinding({ actor }, () =>
+            patchSessionEntryCore({ ...selected, storePath: actor.path }, () =>
+              changed === "writer"
+                ? { activeWriterRunId: "replacement" }
+                : { lifecycleRevision: "replacement" },
+            ),
+          );
+          expect(() => grant!.assertCurrent!()).toThrow();
+        }
+        expect(grant.signal?.aborted).toBe(true);
+        expect(mocks.session).not.toHaveBeenCalled();
+      } finally {
+        await grant?.revoke();
+        await successor?.close();
+        await actor.close();
+      }
+    },
+  );
+
+  it("rejects a missing admitted session instead of borrowing a routed session", async () => {
+    await installProfile();
+    mocks.session.mockReturnValue({ ...mocks.session(), storePath: "/synthetic/admitted.sqlite" });
+    mocks.admittedSessionRead.mockResolvedValue({ entries: [] });
+    let grant: Awaited<ReturnType<typeof prepareWorkerGitHubBindingGrant>>;
+    try {
+      await expect(
+        prepareWorkerGitHubBindingGrant({
+          ...session,
+          sessionTarget: { ...session, storePath: "/synthetic/admitted.sqlite" },
+        }).then((value) => {
+          grant = value;
+          return value;
+        }),
+      ).rejects.toThrow();
+      expect(mocks.admittedSessionRead).toHaveBeenCalled();
+    } finally {
+      await grant?.revoke();
+    }
+  });
+
+  it.each(["session", "lifecycle", "writer"] as const)(
+    "retires a credential-only grant when its admitted %s changes before renewal",
+    async (changed) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      await installProfile();
+      const entry = {
+        sessionId: session.sessionId,
+        lifecycleRevision: "lifecycle",
+        activeWriterRunId: "writer",
+      };
+      mocks.session.mockReturnValue({
+        canonicalKey: session.sessionKey,
+        agentId: session.agentId,
+        storePath: "/synthetic/admitted.sqlite",
+        entry,
+      });
+      const grant = await prepareWorkerGitHubBindingGrant({
+        ...session,
+        sessionTarget: {
+          ...session,
+          storePath: "/synthetic/admitted.sqlite",
+          expectedLifecycleRevision: "lifecycle",
+          expectedWriterRunId: "writer",
+        },
+      });
+      try {
+        expect(grant?.binding).toEqual({
+          token,
+          login: verified.account.login,
+          gitAuthor: { name: "Shared Bot" },
+        });
+        expect(mocks.repository).not.toHaveBeenCalled();
+        expect(mocks.nativeToken).not.toHaveBeenCalled();
+        const replacement = {
+          ...entry,
+          ...(changed === "session"
+            ? { sessionId: "replacement" }
+            : changed === "lifecycle"
+              ? { lifecycleRevision: "replacement" }
+              : { activeWriterRunId: "replacement" }),
+        };
+        // Only the admitted worker read changes; the synchronous projection remains stale.
+        mocks.admittedSessionRead.mockResolvedValue({
+          entries: [{ sessionKey: session.sessionKey, entry: replacement }],
+        });
+        vi.setSystemTime(Date.now() + 60_001);
+        await expect(grant!.refresh!()).rejects.toThrow();
+        expect(grant!.signal?.aborted).toBe(true);
+        expect(mocks.admittedSessionRead).toHaveBeenLastCalledWith(
+          expect.objectContaining({ storePath: "/synthetic/admitted.sqlite" }),
+          expect.any(Function),
+        );
+      } finally {
+        await grant?.revoke();
+      }
+    },
+  );
+
+  it("rejects a rerouted session without lending the original grant to its replacement store", async () => {
+    await installProfile();
+    mocks.session.mockReturnValue({ ...mocks.session(), storePath: "/synthetic/admitted.sqlite" });
+    const grant = await prepareWorkerGitHubBindingGrant({
+      ...session,
+      sessionTarget: { ...session, storePath: "/synthetic/admitted.sqlite" },
+    });
+    try {
+      mocks.session.mockReturnValue({
+        ...mocks.session(),
+        storePath: "/synthetic/replacement.sqlite",
+      });
+      expect(() => grant!.assertCurrent!()).toThrow();
+      expect(grant!.signal?.aborted).toBe(true);
+    } finally {
+      await grant?.revoke();
+    }
+  });
+
+  it("rejects claim closure while the admitted workspace read is pending", async () => {
+    await installProfile();
+    let active = true;
+    mocks.admittedSessionRead.mockImplementationOnce(async () => {
+      active = false;
+      return { entries: [{ sessionKey: session.sessionKey, entry: mocks.session().entry }] };
+    });
+    await expect(
+      prepareWorkerGitHubBindingGrant({
+        ...session,
+        assertCurrent: () => active,
+        sessionTarget: { ...session, storePath: "/synthetic/admitted.sqlite" },
+      }),
+    ).rejects.toThrow("authority closed");
+    expect(mocks.verify).not.toHaveBeenCalled();
+  });
+
+  it("revalidates admitted ownership before replaying an unacknowledged credential", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const profileDir = await installProfile();
+    mocks.session.mockReturnValue({ ...mocks.session(), storePath: "/synthetic/admitted.sqlite" });
+    const grant = await prepareWorkerGitHubBindingGrant({
+      ...session,
+      sessionTarget: { ...session, storePath: "/synthetic/admitted.sqlite" },
+    });
+    try {
+      await writeManagedGitHubProfileFiles(profileDir, {
+        login: verified.account.login,
+        token: "synthetic-pending-rotation",
+      });
+      const pending = await grant!.refresh!();
+      expect(pending).toMatchObject({ generation: 1, token: "synthetic-pending-rotation" });
+      mocks.admittedSessionRead.mockClear();
+      vi.setSystemTime(Date.now() + 60_001);
+      expect(await grant!.refresh!()).toEqual(pending);
+      expect(mocks.admittedSessionRead).toHaveBeenCalled();
+      mocks.admittedSessionRead.mockResolvedValue({ entries: [] });
+      vi.setSystemTime(Date.now() + 60_001);
+      await expect(grant!.refresh!()).rejects.toThrow();
+      expect(grant!.signal?.aborted).toBe(true);
+    } finally {
+      await grant?.revoke();
+    }
+  });
+
+  it("replaces an unacknowledged credential when its selected profile rotates again", async () => {
+    const profileDir = await installProfile();
+    const grant = await prepareWorkerGitHubBindingGrant(session);
+    try {
+      await writeManagedGitHubProfileFiles(profileDir, {
+        login: verified.account.login,
+        token: "synthetic-pending-first",
+      });
+      expect(await grant!.refresh!()).toMatchObject({
+        generation: 1,
+        token: "synthetic-pending-first",
+      });
+      await writeManagedGitHubProfileFiles(profileDir, {
+        login: verified.account.login,
+        token: "synthetic-pending-second",
+      });
+      expect(await grant!.refresh!()).toMatchObject({
+        generation: 2,
+        token: "synthetic-pending-second",
+      });
+      expect(grant!.binding.token).toBe(token);
+      await grant!.refresh!(2);
+      expect(grant!.binding.token).toBe("synthetic-pending-second");
+    } finally {
+      await grant?.revoke();
+    }
+  });
 
   it("binds the verified shared account and canonical HTTPS remote", async () => {
     await installProfile();
@@ -127,6 +448,448 @@ describe("worker GitHub launch binding", () => {
       apiBaseUrl: "https://api.github.com",
     });
     expect(mocks.nativeToken).not.toHaveBeenCalled();
+  });
+
+  it.each(["system", "agent"] as const)(
+    "retains the selected %s account through rotation and exact profile acknowledgment",
+    async (scope) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      if (scope === "agent") {
+        config.agents = {
+          entries: { main: { tools: { github: { profileId, gitAuthor: { name: "Agent Bot" } } } } },
+        };
+      }
+      const selectedConfig =
+        scope === "agent" ? config.agents!.entries!.main!.tools!.github! : config.tools!.github!;
+      selectedConfig.kind = "oauth";
+      let expiresAtMs = Date.now() + 8 * 3_600_000;
+      mocks.oauth.mockImplementation(() => ({
+        state: "valid",
+        record: {
+          accountId: verified.account.accountId,
+          accessExpiresAtMs: expiresAtMs,
+        },
+      }));
+      const profileDir = await installProfile(scope);
+      const grant = await prepareWorkerGitHubBindingGrant(session);
+      try {
+        expect(grant?.binding).toMatchObject({
+          token,
+          login: verified.account.login,
+          gitAuthor: { name: scope === "agent" ? "Agent Bot" : "Shared Bot" },
+        });
+        expect(grant?.refresh).toBeTypeOf("function");
+        expect(grant?.expiresAtMs).toBe(expiresAtMs);
+        const started = Date.now();
+        for (let step = 1; step <= 7; step++) {
+          vi.setSystemTime(started + step * 8 * 3_600_000);
+          expiresAtMs = Date.now() + 8 * 3_600_000;
+          const rotated = `synthetic-selected-token-${step}`;
+          await writeManagedGitHubProfileFiles(profileDir, {
+            login: verified.account.login,
+            token: rotated,
+          });
+          const next = await grant?.refresh?.();
+          expect(next).toMatchObject({ generation: step, token: rotated, expiresAtMs });
+          expect(grant?.binding.token).toBe(
+            step === 1 ? token : `synthetic-selected-token-${step - 1}`,
+          );
+          expect(await grant?.refresh?.(step - 1)).toEqual(next);
+          await grant?.refresh?.(step);
+          expect(grant?.binding.token).toBe(rotated);
+          const calls = mocks.refresh.mock.calls.length;
+          expect(await grant?.refresh?.(step)).toBeUndefined();
+          expect(mocks.refresh).toHaveBeenCalledTimes(calls);
+        }
+      } finally {
+        await grant?.revoke();
+      }
+      expect(grant?.signal?.aborted).toBe(true);
+      // Retiring execution must leave the account's canonical profile usable.
+      expect((await prepareWorkerGitHubBinding(session))?.token).toBe("synthetic-selected-token-7");
+    },
+  );
+
+  it.each(["before renewal", "after renewal"] as const)(
+    "delivers rotations %s, retries failed delivery, and joins cleanup",
+    async (timing) => {
+      const profileDir = await installProfile();
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const grant = await prepareWorkerGitHubBindingGrant(session);
+      expect(grant).toBeDefined();
+      const firstDelivery = createDeferredCore();
+      const retryDelivery = createDeferredCore();
+      const heldDelivery = createDeferredCore();
+      const releaseDelivery = createDeferredCore();
+      const followupDelivery = createDeferredCore();
+      const releaseFollowup = createDeferredCore();
+      const install = vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          firstDelivery.resolve();
+          throw new Error("synthetic transient transport failure");
+        })
+        .mockImplementationOnce(async () => {
+          retryDelivery.resolve();
+        })
+        .mockImplementationOnce(async () => {
+          heldDelivery.resolve();
+          await releaseDelivery.promise;
+        })
+        .mockImplementationOnce(async () => {
+          followupDelivery.resolve();
+          await releaseFollowup.promise;
+        });
+      const rotate = () =>
+        writeManagedGitHubProfileFiles(profileDir, {
+          login: verified.account.login,
+          token: "synthetic-auto-token-1",
+        });
+      if (timing === "before renewal") {
+        await rotate();
+      }
+      const schedule = vi.spyOn(globalThis, "setTimeout");
+      const stop = grant!.startRenewal!(install);
+      try {
+        if (timing === "after renewal") {
+          await rotate();
+        }
+        expect(schedule).toHaveBeenCalledWith(expect.any(Function), 1);
+        await vi.advanceTimersByTimeAsync(1);
+        await firstDelivery.promise;
+        expect(grant!.binding.token).toBe(token);
+        await vi.advanceTimersByTimeAsync(60_000);
+        await retryDelivery.promise;
+        // The consumer's completed installation acknowledges the exact pending generation.
+        await vi.advanceTimersByTimeAsync(0);
+        expect(install).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ generation: 1, token: "synthetic-auto-token-1" }),
+        );
+        expect(grant!.binding.token).toBe("synthetic-auto-token-1");
+        await writeManagedGitHubProfileFiles(profileDir, {
+          login: verified.account.login,
+          token: "synthetic-auto-token-2",
+        });
+        await vi.advanceTimersByTimeAsync(1);
+        await heldDelivery.promise;
+        await writeManagedGitHubProfileFiles(profileDir, {
+          login: verified.account.login,
+          token: "synthetic-auto-token-3",
+        });
+        releaseDelivery.resolve();
+        await followupDelivery.promise;
+        expect(install).toHaveBeenNthCalledWith(
+          4,
+          expect.objectContaining({ generation: 3, token: "synthetic-auto-token-3" }),
+        );
+        let settled = false;
+        const cleanup = grant!.revoke().then(() => {
+          settled = true;
+        });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        expect(grant!.signal!.aborted).toBe(true);
+        releaseFollowup.resolve();
+        await cleanup;
+        expect(settled).toBe(true);
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(install).toHaveBeenCalledTimes(4);
+      } finally {
+        releaseDelivery.resolve();
+        releaseFollowup.resolve();
+        stop();
+        await grant!.revoke();
+      }
+      expect((await prepareWorkerGitHubBinding(session))?.token).toBe("synthetic-auto-token-3");
+    },
+  );
+
+  it("keeps a profile rotation that arrives while credential verification is pending", async () => {
+    const profileDir = await installProfile();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const grant = await prepareWorkerGitHubBindingGrant(session);
+    const verifying = createDeferredCore();
+    const verifiedRead = createDeferredCore();
+    mocks.verify.mockImplementationOnce(async () => {
+      verifying.resolve();
+      await verifiedRead.promise;
+      return verified;
+    });
+    try {
+      vi.setSystemTime(Date.now() + 60_001);
+      const refresh = grant!.refresh!();
+      await verifying.promise;
+      await writeManagedGitHubProfileFiles(profileDir, {
+        login: verified.account.login,
+        token: "synthetic-concurrent-rotation",
+      });
+      verifiedRead.resolve();
+      await expect(refresh).resolves.toMatchObject({
+        generation: 1,
+        token: "synthetic-concurrent-rotation",
+      });
+    } finally {
+      verifiedRead.resolve();
+      await grant?.revoke();
+    }
+  });
+
+  it.each(["repository lookup", "workspace read"] as const)(
+    "retains profile rotation during grant %s",
+    async (phase) => {
+      const profileDir = await installProfile();
+      const rotate = () =>
+        writeManagedGitHubProfileFiles(profileDir, {
+          login: verified.account.login,
+          token: "synthetic-preparation-rotation",
+        });
+      if (phase === "repository lookup") {
+        mocks.repository.mockImplementationOnce(async () => {
+          await rotate();
+          return { originUrl: "git@github.com:owner/repo.git" };
+        });
+      } else {
+        mocks.worktreeRead.mockResolvedValueOnce(worktree).mockImplementationOnce(async () => {
+          await rotate();
+          return worktree;
+        });
+      }
+      const grant = await prepareWorkerGitHubBindingGrant(session);
+      try {
+        expect(grant?.binding.token).toBe("synthetic-preparation-rotation");
+      } finally {
+        await grant?.revoke();
+      }
+    },
+  );
+
+  it("binds selected credentials for non-repository turns without checkout metadata or native fallback", async () => {
+    mocks.session.mockReturnValue({
+      canonicalKey: session.sessionKey,
+      agentId: "main",
+      entry: { sessionId: session.sessionId },
+    });
+    await expect(prepareWorkerGitHubBindingGrant(session)).rejects.toThrow(
+      "selected GitHub identity is unavailable",
+    );
+    await installProfile();
+    const grant = await prepareWorkerGitHubBindingGrant(session);
+    try {
+      expect(grant?.binding).toEqual({
+        token,
+        login: verified.account.login,
+        gitAuthor: { name: "Shared Bot" },
+      });
+      expect(mocks.nativeToken).not.toHaveBeenCalled();
+      expect(mocks.repository).not.toHaveBeenCalled();
+      mocks.session.mockReturnValue({
+        canonicalKey: session.sessionKey,
+        agentId: "main",
+        entry: { sessionId: "replacement-session" },
+      });
+      expect(() => grant?.assertCurrent?.()).toThrow();
+      await expect(prepareWorkerGitHubBindingGrant(session)).rejects.toThrow();
+    } finally {
+      await grant?.revoke();
+    }
+  });
+
+  it.each(["preparation", "repository lookup", "renewal"] as const)(
+    "rejects changed workspace facts from the reader during %s",
+    async (phase) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      await installProfile();
+      let grant: Awaited<ReturnType<typeof prepareWorkerGitHubBindingGrant>>;
+      try {
+        if (phase === "renewal") {
+          grant = await prepareWorkerGitHubBindingGrant(session);
+          vi.setSystemTime(Date.now() + 60_001);
+        } else {
+          mocks.worktreeRead.mockResolvedValueOnce(worktree);
+        }
+        const replaceWorkspace = () =>
+          mocks.worktreeRead.mockResolvedValue({ ...worktree, branch: "replacement" });
+        // The synchronous projection still has the old facts; the worker read sees replacement.
+        if (phase === "repository lookup") {
+          mocks.repository.mockImplementationOnce(async () => {
+            replaceWorkspace();
+            return { originUrl: "git@github.com:owner/repo.git" };
+          });
+        } else {
+          replaceWorkspace();
+        }
+        await expect(
+          phase === "renewal" ? grant!.refresh!() : prepareWorkerGitHubBindingGrant(session),
+        ).rejects.toThrow();
+        if (phase === "renewal") {
+          expect(grant!.signal?.aborted).toBe(true);
+        }
+      } finally {
+        await grant?.revoke();
+      }
+    },
+  );
+
+  it("refuses missing configured credentials without borrowing the host login", async () => {
+    await expect(prepareWorkerGitHubBindingGrant(session)).rejects.toThrow(
+      "selected GitHub identity is unavailable",
+    );
+    expect(mocks.nativeToken).not.toHaveBeenCalled();
+  });
+
+  it("closes selected credentials when a committed configuration selects another profile", async () => {
+    await installProfile();
+    const grant = await prepareWorkerGitHubBindingGrant(session);
+    try {
+      config = { tools: { github: { profileId: "ghp_22222222222222222222222222222222" } } };
+      await writeConfigFile(config);
+      expect(grant?.signal?.aborted).toBe(true);
+      await expect(grant?.refresh?.()).rejects.toThrow();
+    } finally {
+      await grant?.revoke();
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it.each(["selection", "account", "turn"] as const)(
+    "closes the execution credential after its %s authority changes",
+    async (changed) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      await installProfile();
+      let current = true;
+      const grant = await prepareWorkerGitHubBindingGrant({
+        ...session,
+        assertCurrent: () => current,
+      });
+      try {
+        if (changed === "selection") {
+          config = { tools: { github: { profileId: "ghp_22222222222222222222222222222222" } } };
+        } else if (changed === "account") {
+          mocks.verify.mockResolvedValue({
+            ...verified,
+            account: { ...verified.account, accountId: 99, login: "another-account" },
+          });
+        } else {
+          current = false;
+        }
+        vi.setSystemTime(Date.now() + 60_001);
+        await expect(grant?.refresh?.()).rejects.toThrow(
+          /identity changed|account changed|authority closed/i,
+        );
+        expect(grant?.signal?.aborted).toBe(true);
+      } finally {
+        await grant?.revoke();
+      }
+    },
+  );
+
+  it.each([
+    ["github.com", "https://api.github.com", "host"],
+    ["fixture.ghe.com", "https://api.fixture.ghe.com", "host"],
+    ["ghe.example.test", "https://ghe.example.test/api/v3", "host"],
+    ["github.com", "https://api.github.com", "user"],
+    ["ghe.example.test", "https://ghe.example.test/api/v3", "user"],
+  ])(
+    "carries the %s bot through %s separately from the signed-in person until %s changes",
+    async (host, apiBaseUrl, changed) => {
+      config = { gateway: { github: { host, apiBaseUrl } } };
+      setRuntimeConfigSnapshot(config);
+      vi.stubEnv("GH_HOST", host);
+      for (const name of [
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+      ]) {
+        vi.stubEnv(name, undefined);
+      }
+      mocks.repository.mockResolvedValue({ originUrl: "git@" + host + ":owner/repo.git" });
+      mocks.nativeToken.mockImplementation(async () => ({
+        code: 0,
+        stdout: Buffer.from(token),
+        stderr: Buffer.alloc(0),
+      }));
+      let userCurrent = true;
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "signed-in-person",
+        scopes: ["operator.read", "operator.write"],
+        gatewayAccessGrant: null,
+        modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
+        readCurrentGithubLogin: () => "signed-in-human",
+        assertCurrent: () => {
+          if (!userCurrent) {
+            throw new Error("signed-in user authority closed");
+          }
+        },
+      });
+      let grant: Awaited<ReturnType<typeof prepareWorkerGitHubBindingGrant>> = undefined;
+      try {
+        grant = await withGatewayToolCallerIdentity(
+          {
+            agentId: session.agentId,
+            sessionKey: session.sessionKey,
+            personalToolUser: "signed-in-person",
+            operatorAuthority,
+          },
+          async () => {
+            const prepared = await prepareWorkerGitHubBindingGrant(session);
+            expect(
+              getGatewayToolCallerIdentity()?.operatorAuthority?.readCurrentGithubLogin?.(),
+            ).toBe("signed-in-human");
+            expect(getGatewayToolCallerIdentity()?.personalToolUser).toBe("signed-in-person");
+            return prepared;
+          },
+        );
+        expect(grant?.binding).toMatchObject({
+          ...(host === "github.com" ? {} : { host }),
+          token,
+          login: verified.account.login,
+          remoteUrl: "https://" + host + "/owner/repo.git",
+        });
+        expect(mocks.verify).toHaveBeenCalledWith(token, { apiBaseUrl });
+        expect(await prepareWorkerGitHubBinding(session)).toEqual(grant?.binding);
+        expect(JSON.stringify(grant?.binding)).not.toContain("signed-in-human");
+        if (changed === "user") {
+          userCurrent = false;
+        } else {
+          config = {
+            gateway: {
+              github: {
+                host: "other.example.test",
+                apiBaseUrl: "https://other.example.test/api/v3",
+              },
+            },
+          };
+          setRuntimeConfigSnapshot(config);
+        }
+        await expect(grant?.refresh?.()).rejects.toThrow(
+          changed === "user" ? /signed-in user authority closed/ : /identity changed/i,
+        );
+      } finally {
+        await grant?.revoke();
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
+
+  it("keeps an existing public managed identity on its host when App host settings change", async () => {
+    vi.stubEnv("GITHUB_HOST", "fixture.ghe.com");
+    vi.stubEnv("GITHUB_API_BASE_URL", "https://api.fixture.ghe.com");
+    await installProfile();
+    mocks.repository.mockResolvedValue({
+      originUrl: "fixture@fixture.ghe.com:example/repo.git",
+    });
+
+    await expect(prepareWorkerGitHubBinding(session)).resolves.toEqual({
+      token,
+      login: "shared-bot",
+      branch: worktree.branch,
+      gitAuthor: { name: "Shared Bot" },
+    });
+    expect(mocks.verify).toHaveBeenCalledWith(token, {
+      apiBaseUrl: "https://api.github.com",
+    });
   });
 
   it("uses the agent override author without inheriting system author fields", async () => {

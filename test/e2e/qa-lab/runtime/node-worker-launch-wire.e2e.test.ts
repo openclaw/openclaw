@@ -16,6 +16,7 @@ import {
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../../../../src/infra/node-commands.js";
+import { createFixtureDiagnostics } from "../../../helpers/fixture-diagnostics.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
@@ -81,7 +82,9 @@ describe("node worker launch wire", () => {
   it(
     "transfers and reconciles a gateway-push workspace through a device runner",
     { timeout: TEST_TIMEOUT_MS },
-    async () => {
+    async ({ onTestFailed }) => {
+      const diagnostics = createFixtureDiagnostics("node-worker-launch-wire");
+      onTestFailed(() => diagnostics.report("failure"));
       const root = tempDirs.make("openclaw-node-worker-launch-wire-");
       const provider = await startMidturnProvider();
       const published = await createPublishedWireWorkspace(root);
@@ -102,13 +105,22 @@ describe("node worker launch wire", () => {
       let cleanupFailures: unknown[];
 
       try {
+        diagnostics.stage("gateway-start");
         gateway = await startPairedNodeWorkerGateway({
           owner: gatewayOwner,
           providerBaseUrl: provider.baseUrl,
           executionIdentity: true,
           useRepoCli: false,
+          // Keep state/worktree allocation on the same filesystem as the owned test root.
+          command: {
+            executablePath: process.execPath,
+            argsPrefix: [path.join(process.cwd(), "dist", "index.js")],
+            tempParentDir: root,
+          },
         });
+        diagnostics.stage("operator-connect");
         operator = await connectWireClient({ gateway, role: "operator", identity: null });
+        diagnostics.stage("worker-pair");
         workerNode = await createPairedNodeWorkerHost({
           gateway,
           operator,
@@ -150,6 +162,7 @@ describe("node worker launch wire", () => {
         });
         expect(workerNode.client).toBeTruthy();
 
+        diagnostics.stage("initial-worktree");
         await operator.request("sessions.create", {
           key: SESSION_KEY,
           agentId: "qa",
@@ -170,6 +183,7 @@ describe("node worker launch wire", () => {
           path.join(localWorkspaceDir!, "gateway-push.txt"),
           "dirty gateway workspace\n",
         );
+        diagnostics.stage("workspace-inventory");
         const inventoryRoot = path.join(localWorkspaceDir!, "inventory-load");
         await fs.mkdir(inventoryRoot);
         for (let start = 0; start < WORKSPACE_INVENTORY_FILES; start += 64) {
@@ -182,6 +196,7 @@ describe("node worker launch wire", () => {
             ),
           );
         }
+        diagnostics.stage("initial-dispatch");
         const dispatched = await gateway.call(
           "sessions.dispatch",
           { key: SESSION_KEY, deviceId: workerNode.identity.deviceId },
@@ -218,6 +233,7 @@ describe("node worker launch wire", () => {
         ).resolves.toBe("workspace inventory fixture\n");
         await fs.writeFile(path.join(remoteWorkspaceDir, "node-result.txt"), "device result\n");
 
+        diagnostics.stage("baseline-turn");
         const runId = `node-worker-launch-wire-${Date.now()}`;
         const started = await operator.request<{ runId?: string; status?: string }>("chat.send", {
           sessionKey: SESSION_KEY,
@@ -249,6 +265,7 @@ describe("node worker launch wire", () => {
           state: "completed",
         });
 
+        diagnostics.stage("audit-before-restart");
         workerAuditBeforeRestart = await gateway.runCli([
           "audit",
           "--run",
@@ -301,6 +318,7 @@ describe("node worker launch wire", () => {
             code: "ENOENT",
           });
         }
+        diagnostics.stage("permission-turn");
         const permissionRunId = `node-worker-permission-${Date.now()}`;
         await expect(
           operator.request<{ runId?: string; status?: string }>("chat.send", {
@@ -357,6 +375,7 @@ describe("node worker launch wire", () => {
 
         // Simulate the old capability declaration with the current supervisor over real wire.
         // This proves negotiation and same-identity reconnect, not an older binary upgrade.
+        diagnostics.stage("legacy-node-pair-and-dispatch");
         legacyWorkerNode = await createPairedNodeWorkerHost({
           gateway,
           operator,
@@ -384,6 +403,7 @@ describe("node worker launch wire", () => {
           { key: legacySessionKey, deviceId: legacyWorkerNode.identity.deviceId },
           { timeoutMs: PROOF_TIMEOUT_MS },
         );
+        diagnostics.stage("legacy-capability-rejection");
         const unsupportedRunId = `node-worker-lifetime-unsupported-${Date.now()}`;
         await expect(
           operator.request("chat.send", {
@@ -411,6 +431,7 @@ describe("node worker launch wire", () => {
           gateway.call("sessions.describe", { key: legacySessionKey }),
         ).resolves.toMatchObject({ session: { placement: { state: "active" } } });
 
+        diagnostics.stage("legacy-reconnect-and-turn");
         await legacyWorkerNode.disconnect();
         await legacyWorkerNode.connect({ environmentSession: true });
         const legacyRunId = `node-worker-launch-wire-legacy-${Date.now()}`;
@@ -446,6 +467,7 @@ describe("node worker launch wire", () => {
 
         const loadSessions: string[] = [];
         for (let index = 0; index < FINALIZATION_LOAD_CONCURRENCY; index += 1) {
+          diagnostics.stage(`load-dispatch-${index}`);
           const sessionKey = `${SESSION_KEY}-load-${index}`;
           await operator.request("sessions.create", {
             key: sessionKey,
@@ -491,6 +513,7 @@ describe("node worker launch wire", () => {
         const freshConnectionSamples: number[] = [];
         try {
           for (let wave = 0; wave < FINALIZATION_LOAD_WAVES; wave += 1) {
+            diagnostics.stage(`wave-${wave}-submit`);
             const waveFinalizationStarted = new Promise<number>((resolve) => {
               resolveWaveFinalizationStarted = resolve;
             });
@@ -524,6 +547,7 @@ describe("node worker launch wire", () => {
                 ).toMatchObject({ status: "ok" });
               }),
             );
+            diagnostics.stage(`wave-${wave}-upload-wait`);
             // Failed turns may never upload; observe their failure while waiting for finalization.
             await Promise.race([
               waveFinalizationStarted,
@@ -531,6 +555,7 @@ describe("node worker launch wire", () => {
                 throw new Error("load wave completed without workspace finalization");
               }),
             ]);
+            diagnostics.stage(`wave-${wave}-control-probe`);
             const freshConnectionStartedAt = performance.now();
             const freshClient = await connectWireClient({
               gateway,
@@ -540,6 +565,7 @@ describe("node worker launch wire", () => {
             });
             freshConnectionSamples.push(performance.now() - freshConnectionStartedAt);
             await freshClient.stopAndWait({ timeoutMs: 2_000 });
+            diagnostics.stage(`wave-${wave}-completion-wait`);
             await waits;
           }
         } finally {
@@ -557,13 +583,16 @@ describe("node worker launch wire", () => {
         expect(Math.max(...freshConnectionSamples)).toBeLessThan(CONTROL_PROBE_MAX_MS);
         expect(freshConnectionSamples).toHaveLength(FINALIZATION_LOAD_WAVES);
 
+        diagnostics.stage("worker-stop");
         await workerNode.stop();
         workerNode = undefined;
         await legacyWorkerNode.stop();
         legacyWorkerNode = undefined;
         await operator.stopAndWait({ timeoutMs: 2_000 });
         operator = undefined;
+        diagnostics.stage("gateway-restart");
         await gateway.restartAfterStateMutation(async () => {});
+        diagnostics.stage("audit-after-restart");
         const workerAuditAfterRestart = await gateway.runCli([
           "audit",
           "--run",
@@ -576,8 +605,10 @@ describe("node worker launch wire", () => {
         );
         expect(workerAuditAfterRestart).toBe(workerAuditBeforeRestart);
       } catch (error) {
+        diagnostics.report("failure");
         testFailure = { error };
       } finally {
+        diagnostics.stage("cleanup");
         const cleanup = await Promise.allSettled([
           workerNode?.stop() ?? Promise.resolve(),
           legacyWorkerNode?.stop() ?? Promise.resolve(),

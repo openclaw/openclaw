@@ -29,7 +29,11 @@ import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
-vi.mock("./worker-github-binding.js", () => ({ prepareWorkerGitHubBinding: vi.fn() }));
+// mock-isolation: Workspace transfer uses synthetic Git credentials, never host account preparation.
+vi.mock("./worker-github-binding.js", () => ({
+  prepareWorkerGitHubBinding: vi.fn(),
+  prepareWorkerGitHubBindingGrant: vi.fn(),
+}));
 
 const session = {
   sessionId: "repository-session",

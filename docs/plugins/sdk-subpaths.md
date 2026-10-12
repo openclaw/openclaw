@@ -419,6 +419,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
     | `plugin-sdk/process-runtime` | Private-local after July 2026; bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, configurable TERM-to-KILL grace, `prepareSecretInputStdio` for one-shot credential descriptors, and `createCpuTrackedWorker` for shared Worker resource and lifecycle diagnostics |
     | `plugin-sdk/node-host` | Private-local after July 2026; Node-host executable resolution and PTY resume helpers |
+    | `plugin-sdk/github-worker-runtime` | Private-local JavaScript-only host runtime for bundled Codex node launches; selected System/agent credential binding, profile refresh, and execution cleanup without revoking account authorization |
     | `plugin-sdk/node-selection-runtime` | Private-local bundled runtime facade for shared capability-gated node selection policy |
     | `plugin-sdk/cli-argv` | Dependency-light root-option parsing for CLI metadata, including `getRootOptionAwareCommandPath` and `consumeRootOptionToken` |
     | `plugin-sdk/cli-runtime` | Private-local after July 2026; Deprecated broad barrel for CLI formatting, wait, version, argument-invocation, and lazy command-group helpers; prefer focused CLI/runtime subpaths |

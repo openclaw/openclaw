@@ -70,6 +70,7 @@ import {
   canReplayAmbiguousFinalText,
   isPermanentDeliveryError,
   resolveMaxRetries,
+  selectDeliveryRecoveryCandidates,
 } from "./delivery-queue-recovery-policy.js";
 import {
   claimDeliveryPlatformSendAttempt,
@@ -1249,12 +1250,11 @@ export async function drainPendingDeliveriesCore(
 ): Promise<void> {
   const opts = { ...params, stateDir: stateContext.stateDir };
   const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
-    const now = Date.now();
-    const matchingEntries = (await loadUnfinishedDeliveries(opts.stateDir, stateContext)).filter(
-      (entry) => entry.settlement || opts.selectEntry(entry, now).match,
-    );
     await recoveryCoordinator.scan({
-      entries: matchingEntries,
+      entries: selectDeliveryRecoveryCandidates(
+        await loadUnfinishedDeliveries(opts.stateDir, stateContext),
+        (entry, now) => opts.selectEntry(entry, now).match,
+      ),
       loadEntry: (id) => loadUnfinishedDelivery(id, opts.stateDir, stateContext),
       onMissingEntry: (entry) => {
         opts.log.info(`${opts.logLabel}: entry ${entry.id} already gone, skipping`);
@@ -1307,7 +1307,7 @@ export async function recoverPendingDeliveries(
     opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
   };
   await recoveryCoordinator.scan({
-    entries: pending,
+    entries: selectDeliveryRecoveryCandidates(pending),
     loadEntry: (id) => loadUnfinishedDelivery(id, opts.stateDir, stateContext),
     deadlineMs: deadline,
     onDeadlineExceeded,

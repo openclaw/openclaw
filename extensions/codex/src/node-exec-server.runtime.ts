@@ -22,6 +22,11 @@ import {
 } from "./app-server/managed-binary.js";
 import { createStdioTransport } from "./app-server/transport-stdio.js";
 import { closeCodexAppServerTransportAndWait } from "./app-server/transport.js";
+import {
+  parseCodexNodeGitHubControl,
+  encodeCodexNodeGitHubControl,
+  type CodexNodeGitHubRefresh,
+} from "./node-github-refresh.js";
 
 const MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES = 64 * 1024 * 1024;
 const MAX_CODEX_EXEC_SERVER_STDERR_BYTES = 4 * 1024;
@@ -177,17 +182,19 @@ export async function runCodexNodeExecServer(params: {
   workspace: { workspaceDir: string; homeDir?: string; release: () => void };
   io: OpenClawPluginNodeHostCommandIo;
   activeProcesses: Set<() => Promise<void>>;
+  github?: import("openclaw/plugin-sdk/github-worker-runtime").WorkerGitHubLaunchBinding;
 }): Promise<string> {
   const { io, workspace } = params;
   const frames = io.frames;
   const cwd = workspace.workspaceDir;
   let writes: Promise<void> | undefined;
+  let githubControlWork = Promise.resolve();
   let output: Promise<void> | undefined;
   let temporaryHome: TempWorkspace | undefined;
   let unsubscribe: (() => void) | undefined;
   const releaseResources = async () => {
     try {
-      await Promise.allSettled([output, writes]);
+      await Promise.allSettled([output, writes, githubControlWork]);
       await temporaryHome?.cleanup();
     } finally {
       workspace.release();
@@ -217,6 +224,55 @@ export async function runCodexNodeExecServer(params: {
     const codexHome = path.join(dir, ".codex");
     // Codex canonicalizes CODEX_HOME during startup and rejects missing directories.
     await mkdir(codexHome, { recursive: true, mode: 0o700 });
+    let githubEnv: Record<string, string> = {};
+    let refreshGitHub:
+      | ((snapshot: { token: string; expiresAtMs?: number }) => Promise<void>)
+      | undefined;
+    let installedGitHub: CodexNodeGitHubRefresh | undefined;
+    if (params.github) {
+      const login = params.github.login;
+      const { managedGitHubIdentityEnvironment, writeManagedGitHubProfileFiles } =
+        await import("openclaw/plugin-sdk/github-worker-runtime");
+      const profileDir = path.join(dir, "github");
+      const host = params.github.host ?? "github.com";
+      await writeManagedGitHubProfileFiles(profileDir, { ...params.github, host });
+      refreshGitHub = async (snapshot) => {
+        params.assertExecAuthorized();
+        io.signal.throwIfAborted();
+        if (snapshot.expiresAtMs !== undefined && snapshot.expiresAtMs <= Date.now()) {
+          throw new Error("Node GitHub refresh expired");
+        }
+        await writeManagedGitHubProfileFiles(
+          profileDir,
+          { host, login, token: snapshot.token },
+          {
+            assertCurrent: () => {
+              params.assertExecAuthorized();
+              io.signal.throwIfAborted();
+            },
+          },
+        );
+        params.assertExecAuthorized();
+        io.signal.throwIfAborted();
+      };
+      githubEnv = {
+        ...managedGitHubIdentityEnvironment({
+          profileDir,
+          gitAuthor: params.github.gitAuthor,
+          gitConfig: [
+            ["credential.helper", ""],
+            ["credential.helper", "!gh auth git-credential"],
+          ],
+        }),
+        GH_HOST: host,
+        // Codex brokers GH_TOKEN across every GHE.com tenant. The host-keyed gh
+        // profile supplies stock commands without registering this token with the broker.
+        GH_TOKEN: "",
+        GH_ENTERPRISE_TOKEN: "",
+        GITHUB_TOKEN: "",
+        GITHUB_ENTERPRISE_TOKEN: "",
+      };
+    }
     const resolved = await resolveManagedCodexAppServerStartOptions(
       {
         transport: "stdio",
@@ -261,6 +317,7 @@ export async function runCodexNodeExecServer(params: {
           CODEX_HOME: codexHome,
           RUST_LOG:
             "error,opentelemetry_sdk=off,opentelemetry_otlp=off,codex_exec_server::server::transport=info",
+          ...githubEnv,
           ...(process.platform === "win32" ? { USERPROFILE: workspace.homeDir ?? dir } : {}),
         },
         clearEnv: ["NODE_OPTIONS"],
@@ -335,7 +392,56 @@ export async function runCodexNodeExecServer(params: {
     // Framed readiness starts Codex's initialize budget. Native startup
     // belongs to this cancellable launch, before that handshake begins.
     unsubscribe = frames.onMessage((message) => {
-      const encoded = validateNodeExecServerMessage(message);
+      const control = parseCodexNodeGitHubControl(message);
+      if (control) {
+        const operation = githubControlWork.then(async () => {
+          const installedGeneration = installedGitHub?.generation ?? 0;
+          if (
+            control.type !== "openclaw.github.profile" ||
+            !refreshGitHub ||
+            control.generation < installedGeneration
+          ) {
+            return;
+          }
+          let ok =
+            control.generation === installedGeneration &&
+            installedGitHub?.token === control.token &&
+            installedGitHub.expiresAtMs === control.expiresAtMs;
+          try {
+            if (control.generation > installedGeneration) {
+              await refreshGitHub(control);
+              installedGitHub = control;
+              ok = true;
+            }
+          } catch {
+            /* The sender retains the old grant until a successful acknowledgement. */
+          }
+          io.signal.throwIfAborted();
+          params.assertExecAuthorized();
+          await frames.send(
+            encodeCodexNodeGitHubControl({
+              type: "openclaw.github.profile.ack",
+              generation: control.generation,
+              ok,
+            }),
+          );
+        });
+        githubControlWork = operation.catch(() => {});
+        return operation;
+      }
+      let encoded = validateNodeExecServerMessage(message);
+      if (params.github) {
+        const request: unknown = JSON.parse(encoded.toString("utf8"));
+        if (isRecord(request) && request.method === "process/start") {
+          if (!isRecord(request.params) || !isRecord(request.params.env)) {
+            throw new Error("Codex process/start requires an environment object.");
+          }
+          // Native Codex applies envPolicy before this overlay. The admitted
+          // profile must survive inherit:none and narrower caller filters.
+          request.params.env = { ...request.params.env, ...githubEnv };
+          encoded = validateNodeExecServerMessage(Buffer.from(JSON.stringify(request)));
+        }
+      }
       const operation = writes
         ? writes.then(() => writeNodeExecServerMessage(child, encoded, io.signal))
         : writeNodeExecServerMessage(child, encoded, io.signal);

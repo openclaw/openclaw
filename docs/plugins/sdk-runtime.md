@@ -581,3 +581,19 @@ Revalidate each caller before delivering any result.
 `allowStale: false` waits for freshness; `refresh: true` replaces an older load.
 `clear()` retires pending cache publications. Cache keys must include the owning
 identity or revision; the cache never provides authorization.
+
+## Managed worker GitHub runtime
+
+`openclaw/plugin-sdk/github-worker-runtime` is a private-local host composition seam used by bundled worker and Codex node execution. `prepareWorkerGitHubBindingGrant` returns a run-scoped launch binding and an asynchronous `revoke` operation. The caller owns closure on every launch failure and at process or lease completion. Closure retires the execution copy and settles in-flight delivery; it does not revoke the selected account's GitHub authorization. `writeManagedGitHubProfileFiles` writes the private `gh` profile in the worker's owned state. These helpers do not authorize an arbitrary plugin to mint or retain worker credentials; callers must preserve their admitted run and placement authority at launch and cleanup.
+
+### Node command features
+
+A node-host command may declare optional `features` separately from its approved capability and command. When the Gateway hello advertises `node-command-features`, the connection's existing optional publisher sends bounded `node.command.features` metadata through `node.event`. The Gateway retains it only on that exact live NodeSession; it does not persist it or change pairing or command permission. Older Gateways receive no publication, and older nodes declare no features.
+
+Trusted `api.runtime.nodes.list()` callers receive features for currently invocable commands. `openDuplex({ requiredCommandFeatures: [...] })` fences that exact connection and feature declaration throughout the existing invocation. Feature availability does not authorize a command: the ordinary plugin, run, node, workspace, and approval gates still apply. The v1 duplex framing remains unchanged.
+
+`openDuplex({ assertCurrent })` carries a caller's prepared-fact assertion through discovery, approval, final dispatch, and retained channel effects. The callback stays inside the Gateway and is never serialized into node parameters. Service-owned `openNodeDuplex` uses the same assertion contract. A stale assertion closes the channel before dispatch or the next effect; it never replaces ordinary node or approval authority.
+
+Selected-identity worker grants refresh through the existing authenticated heartbeat only after a build-bound `worker-github-refresh` feature and explicit profile generation opt-in. Approved Codex node leases require `github-profile-refresh` and use typed private profile messages that stay outside native Codex JSON-RPC. A node without that feature must be updated and reconnected before a GitHub-backed launch. The canonical grant updates its delivered generation after the profile writer acknowledges the exact replacement. Actual OAuth rotation belongs to the existing account owner; execution cleanup never revokes that account token. Unknown native/PAT expiry is omitted rather than invented. Stale authority, lease, profile write, and acknowledgement cannot install a replacement. Terminal worker acknowledgments stop credential renewal while ordinary control heartbeats remain available for accepted-result cleanup.
+
+This subpath is excluded from the typed public SDK by the private-local subpath owner. It introduces no third-party compatibility window or permission to select arbitrary account credentials. Its bundled consumers preserve the effective system or explicit agent identity and original execution authority. My GitHub is reserved for explicitly selected user actions. Refresh cannot switch accounts or workspaces; an identity selection change closes delivery, and the next turn prepares the new account.

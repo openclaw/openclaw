@@ -201,6 +201,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     admittedRunContext,
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,
+    operatorAuthority,
     assertActive: capability.receiptAuthority,
     takeFinishingOutcome,
   };
@@ -363,6 +364,7 @@ export async function finalizeWorkerTurnResult(
     baseLeafId: string | null;
     promptContext: Awaited<ReturnType<typeof prepareWorkerTurnPrompt>>;
     prepareReplyMedia: WorkerReplyMediaPreparer;
+    revokeExecutionCredentials: () => Promise<void>;
     takeFinishingOutcome: () => ReturnType<
       Awaited<ReturnType<typeof prepareWorkerAgentRuntimeIdentity>>["takeFinishingOutcome"]
     >;
@@ -431,6 +433,8 @@ export async function finalizeWorkerTurnResult(
     recordModelFallbackStop(workerFailure);
   }
   const reply = workerFailure ? { text } : await params.prepareReplyMedia({ text });
+  // Retained workspace commands must not resume with the completed turn's credentials.
+  await params.revokeExecutionCredentials();
   const workspaceConflict = await reconcileWorkspaceAfterTurn({
     ...params,
     publishAcceptedWorkspace: async (claim) => {

@@ -147,11 +147,17 @@ describe("worker launch descriptor", () => {
     };
     for (const github of [
       undefined,
+      { token: identity.token, login: identity.login },
       identity,
       {
         ...identity,
         remoteUrl: "https://github.com/openclaw/openclaw.git",
         gitAuthor: { name: "Worker Bot", email: "worker@example.test" },
+      },
+      {
+        ...identity,
+        host: "fixture.ghe.com",
+        remoteUrl: "https://fixture.ghe.com/example/repo.git",
       },
     ]) {
       if (github) {
@@ -186,7 +192,11 @@ describe("worker launch descriptor", () => {
       withBinding({ unexpected: true }),
       { login: github.login, branch: github.branch },
       { token: github.token, branch: github.branch },
-      { token: github.token, login: github.login },
+      {
+        token: github.token,
+        login: github.login,
+        remoteUrl: "https://github.com/openclaw/openclaw.git",
+      },
       ...["", "token with space", "token\n", "token\u0001", "x".repeat(2049)].map((token) =>
         withBinding({ token }),
       ),
@@ -208,6 +218,9 @@ describe("worker launch descriptor", () => {
         "https://github.com/openclaw/openclaw.git?token=x",
         "https://github.com/openclaw/openclaw.git\n",
       ].map((remoteUrl) => withBinding({ remoteUrl })),
+      withBinding({ host: "fixture.ghe.com", remoteUrl: "https://github.com/example/repo.git" }),
+      withBinding({ host: "Microsoft.ghe.com" }),
+      withBinding({ host: "microsoft..ghe.com" }),
       withBinding({ gitAuthor: { unexpected: true } }),
       withBinding({ remoteUrl: undefined }),
       withBinding({ gitAuthor: undefined }),

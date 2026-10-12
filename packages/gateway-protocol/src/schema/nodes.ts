@@ -75,6 +75,16 @@ export const NodeHostStatsPayloadSchema = Type.Refine(
   () => "free resources must not exceed totals and disk values must be paired",
 );
 
+/** Connection-owned behavior metadata; it never changes the approved command surface. */
+export const NodeCommandFeaturesPayloadSchema = closedObject({
+  features: Type.Record(
+    Type.String({ minLength: 1, maxLength: 256 }),
+    Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 8 }),
+    { maxProperties: 32 },
+  ),
+});
+export type NodeCommandFeaturesPayload = Static<typeof NodeCommandFeaturesPayloadSchema>;
+
 export const NodeEventResultSchema = closedObject({
   ok: Type.Boolean(),
   event: NonEmptyString,

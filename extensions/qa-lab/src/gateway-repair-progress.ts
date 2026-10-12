@@ -13,7 +13,9 @@ const PREFIX = "[update finalize] ";
 const MAX_LINE_LENGTH = 8_192;
 
 /** Only new finalizer phase boundaries renew repair's bounded inactivity deadline. */
-export function createQaRepairProgressObserver(onProgress: () => void) {
+export function createQaRepairProgressObserver(
+  onProgress: (phase: string, status: "in_progress" | "completed") => void,
+) {
   const decoder = new StringDecoder("utf8");
   let pending = "";
   let discarded = false;
@@ -59,7 +61,7 @@ export function createQaRepairProgressObserver(onProgress: () => void) {
       // Repeated steps, warnings, partial lines and arbitrary output are not progress.
       if (boundary > lastBoundary) {
         lastBoundary = boundary;
-        onProgress();
+        onProgress(FINALIZATION_PHASES[phase]!, value.status);
       }
     }
   };

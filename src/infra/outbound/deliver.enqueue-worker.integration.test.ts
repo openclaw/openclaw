@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type {
@@ -22,8 +23,10 @@ import {
 import { holdEnqueueReply } from "./delivery-queue-enqueue.worker.test-support.js";
 import { DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import { StableDeliveryPreparationLostError } from "./delivery-queue-preparation.js";
-import { ackDelivery, enqueueDelivery } from "./delivery-queue-storage.js";
+import { drainPendingDeliveriesCore, recoverPendingDeliveries } from "./delivery-queue-recovery.js";
+import * as queueStorage from "./delivery-queue-storage.js";
 import {
+  createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
   setQueuedEntryState,
@@ -110,6 +113,85 @@ describe("enqueue publication custody through the real sender", () => {
     );
     return send;
   }
+
+  it.each(["startup", "recurring"] as const)(
+    "preserves the live producer when %s recovery scans before enqueue publication",
+    async (mode) => {
+      const stateDir = fixtures.tmpDir();
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const send = installSender();
+      const reply = holdEnqueueReply();
+      const delivery = deliverOutboundPayloads({
+        ...deliveryParams(stateDir),
+        payloads: [{ text: "synthetic retained text" }],
+      });
+      const outcome = delivery.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      const reloadEntered = createDeferred();
+      const releaseReload = createDeferred();
+      const load = queueStorage.loadUnfinishedDelivery;
+      const recoverSend = vi.fn();
+      let recovery: Promise<unknown> | undefined;
+      try {
+        expect(
+          await awaitGateBeforeSettlement(
+            reply.held,
+            outcome,
+            "Delivery settled before the committed enqueue reply",
+          ),
+        ).toBe("created");
+        const [entry] = await loadPendingDeliveries(stateDir);
+        expect(entry).toMatchObject({
+          requiresProducerClaim: true,
+          recoveryState: "producer_claimed",
+          producerClaimId: expect.any(String),
+        });
+        expect(queueStorage.hasActiveDeliveryOwner(entry!, Date.now())).toBe(true);
+        expect(send).not.toHaveBeenCalled();
+        // Before the fix, recovery holds the process-local claim across this
+        // reload, preventing the committed producer from starting its live send.
+        vi.spyOn(queueStorage, "loadUnfinishedDelivery").mockImplementationOnce(async (...args) => {
+          reloadEntered.resolve();
+          await releaseReload.promise;
+          return load(...args);
+        });
+        const options = { cfg: {}, stateDir, log: createRecoveryLog(), deliver: recoverSend };
+        recovery =
+          mode === "startup"
+            ? recoverPendingDeliveries(options)
+            : drainPendingDeliveriesCore({
+                ...options,
+                drainKey: stateDir,
+                logLabel: "enqueue publication recovery",
+                selectEntry: () => ({ match: true, bypassBackoff: true }),
+              });
+        // Fixed recovery skips the active producer before taking a local claim,
+        // so its scan settles without reaching the reload gate.
+        await Promise.race([reloadEntered.promise, recovery]);
+        reply.release();
+        expect(await outcome).toMatchObject({
+          value: [
+            {
+              messageId: "synthetic-delivered",
+              receipt: { platformMessageIds: ["synthetic-delivered"] },
+            },
+          ],
+        });
+        expect(send).toHaveBeenCalledOnce();
+        expect(recoverSend).not.toHaveBeenCalled();
+        expect(await loadPendingDeliveries(stateDir)).toEqual([]);
+      } finally {
+        reply.release();
+        releaseReload.resolve();
+        await Promise.all([outcome, recovery]);
+        reply.restore();
+      }
+      expect(recoverSend).not.toHaveBeenCalled();
+      expect(await loadPendingDeliveries(stateDir)).toEqual([]);
+    },
+  );
 
   it("retains prepared media after a committed reply is lost, suppresses live fallback, and recovers exactly once", async () => {
     const { stateDir, mediaUrl } = await source();
@@ -214,11 +296,11 @@ if (!isMainThread) {
         for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preloadPath))) {
           vi.stubEnv(key, value);
         }
-        const warmId = await enqueueDelivery(
+        const warmId = await queueStorage.enqueueDelivery(
           { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "warm" }] },
           stateDir,
         );
-        await ackDelivery(warmId, stateDir);
+        await queueStorage.ackDelivery(warmId, stateDir);
         await fs.writeFile(armPath, "armed");
       }
       const send = installSender();

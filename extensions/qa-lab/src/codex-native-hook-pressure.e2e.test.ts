@@ -21,6 +21,16 @@ const execFileAsync = promisify(execFile);
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const PLUGIN_ID = "qa-native-hook-pressure";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const startedAt = performance.now();
+
+function reportPhase(phase: string, selection?: string) {
+  // Console is silent in E2E runs; emit only completed boundaries, never timer heartbeats.
+  process.stderr.write(
+    "NATIVE_HOOK_PHASE " +
+      JSON.stringify({ phase, selection, elapsedMs: Math.round(performance.now() - startedAt) }) +
+      "\n",
+  );
+}
 
 type Tool = {
   type?: string;
@@ -154,6 +164,7 @@ describe.skipIf(process.platform !== "linux")(
   () => {
     let sandboxSkipReason: string | undefined;
     beforeAll(async () => {
+      reportPhase("sandbox-probe-start");
       try {
         const cwd = tempDirs.make("openclaw-codex-sandbox-probe-");
         const codexHome = path.join(cwd, "codex-home");
@@ -199,6 +210,8 @@ describe.skipIf(process.platform !== "linux")(
         }
       } catch {
         // Unknown probe failures must leave the real Gateway test enabled.
+      } finally {
+        reportPhase(sandboxSkipReason ? "sandbox-probe-denied" : "sandbox-probe-complete");
       }
     });
 
@@ -210,6 +223,7 @@ describe.skipIf(process.platform !== "linux")(
           context.skip(sandboxSkipReason);
         }
         expect(process.platform).toBe("linux");
+        reportPhase("fixture-start", selection);
         const root = tempDirs.make("openclaw-native-hook-pressure-");
         const pluginDir = path.join(root, "plugin");
         await fs.mkdir(pluginDir);
@@ -294,19 +308,17 @@ export default {
               );
             }
             const properties = native.tool.parameters?.properties ?? {};
-            expect(Object.hasOwn(properties, "login")).toBe(true);
             for (const i of pending) {
               const command =
                 current.mode === "deny"
                   ? "printf PRESSURE_DENIED > pressure-denied.txt"
                   : `printf PRESSURE_ALLOW_${current.id}_${i}_END; printf PRESSURE_ALLOW_${current.id}_${i}_END > pressure-${current.id}-${i}.txt`;
-              // Host login profiles can leave the granted workspace before the command runs.
-              // Use the advertised non-login option equally for every measured scenario.
+              // Codex omits login when the host already enforces non-login shells.
               const args = {
                 ...(Object.hasOwn(properties, "cmd")
                   ? { cmd: command }
                   : { command: native.tool.name === "shell" ? ["sh", "-c", command] : command }),
-                login: false,
+                ...(Object.hasOwn(properties, "login") ? { login: false } : {}),
               };
               stream.tool({
                 type: "function_call",
@@ -376,6 +388,7 @@ export default {
         const observedRelays = new Map<string, ProcessIdentity>();
         let gatewayPid: number | undefined;
         try {
+          reportPhase("gateway-start", selection);
           const gateway = await owner.start({
             repoRoot: REPO_ROOT,
             command: {
@@ -414,6 +427,7 @@ export default {
               },
             }),
           });
+          reportPhase("gateway-ready", selection);
           if (!gateway.pid) {
             throw new Error("Gateway has no PID");
           }
@@ -436,6 +450,7 @@ export default {
           const cpuTickRate = Number((await execFileAsync("getconf", ["CLK_TCK"])).stdout.trim());
           expect(cpuTickRate).toBeGreaterThan(0);
           const status = await fs.readFile(`/proc/${gateway.pid}/status`, "utf8");
+          reportPhase("hardware-ready", selection);
           console.log(
             "NATIVE_HOOK_HARDWARE " +
               JSON.stringify({
@@ -452,6 +467,7 @@ export default {
           );
           for (const count of selection === "matched" ? [1, 5, 20, 1] : [5]) {
             const mode = selection === "matched" && reports.length === 3 ? "deny" : "allow";
+            reportPhase(`wave-${count}-${mode}-start`, selection);
             scenario = {
               id: randomUUID(),
               count,
@@ -696,9 +712,12 @@ export default {
               remainingObservedOrDescendantRelays: { live: 0, zombies: 0 },
             });
             console.log("NATIVE_HOOK_PRESSURE " + JSON.stringify(reports.at(-1)));
+            reportPhase(`wave-${count}-${mode}-complete`, selection);
           }
         } finally {
+          reportPhase("cleanup-start", selection);
           const stopped = await owner.stop();
+          reportPhase("gateway-stopped", selection);
           await sockets.close();
           await new Promise<void>((resolve, reject) => {
             server.close((error) => (error ? reject(error) : resolve()));
@@ -713,6 +732,7 @@ export default {
             console.log("NATIVE_HOOK_CLEANUP " + JSON.stringify({ live: [], zombies: [] }));
           }
           expect(stopped.errors).toEqual([]);
+          reportPhase("cleanup-complete", selection);
         }
       },
     );

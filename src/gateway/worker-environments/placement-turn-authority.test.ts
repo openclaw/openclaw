@@ -21,6 +21,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { SqliteSessionMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -164,7 +165,7 @@ it.each(["native", "worker"] as const)(
           expectedGeneration: failed.generation,
         });
       }
-      expect(() => inventory.assertCurrent()).toThrow("placement inventory changed");
+      expect(() => inventory.assertCurrent()).toThrow(SqliteSessionMutationConflictError);
     } finally {
       inventory.release();
     }
@@ -195,9 +196,16 @@ it.each(["requested", "worker-turn", "remote-exec", "unknown"] as const)(
         prior === "unknown" ? undefined : previous.state,
       );
       try {
-        expect.soft(() => inventory.assertCurrent()).toThrow("placement inventory changed");
+        expect.soft(() => inventory.assertCurrent()).toThrow(SqliteSessionMutationConflictError);
         publication[settlement]();
-        expect.soft(() => inventory.assertCurrent()).toThrow("placement inventory changed");
+        if (settlement === "commit") {
+          expect.soft(() => inventory.assertCurrent()).toThrow(SqliteSessionMutationConflictError);
+        } else {
+          expect.soft(() => inventory.assertCurrent()).toThrow("placement inventory changed");
+          expect
+            .soft(() => inventory.assertCurrent())
+            .not.toThrow(SqliteSessionMutationConflictError);
+        }
       } finally {
         publication.rollback();
         inventory.release();
@@ -888,7 +896,7 @@ it("shares claim revocation across facades while restart clearing leaves worker 
     expect(workerAuthority.isCurrent()).toBe(true);
     await facade.releaseTurn(worker);
     expect(workerAuthority.isCurrent()).toBe(false);
-    expect(() => inventory.assertCurrent()).toThrow("placement inventory changed");
+    expect(() => inventory.assertCurrent()).toThrow(SqliteSessionMutationConflictError);
   } finally {
     inventory.release();
     workerAuthority.release();

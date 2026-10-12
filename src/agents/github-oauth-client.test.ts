@@ -172,6 +172,42 @@ describe("GitHub OAuth client", () => {
     },
   );
 
+  it("verifies enterprise credentials at the configured API origin", async () => {
+    const probe = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ id: 303, login: "enterprise-user", avatar_url: null }));
+    await expect(
+      verifyGitHubCredential("synthetic-enterprise-token", {
+        apiBaseUrl: "https://api.fixture.ghe.com",
+      }),
+    ).resolves.toMatchObject({
+      status: "available",
+      account: { accountId: 303, login: "enterprise-user" },
+    });
+    expect(probe).toHaveBeenCalledExactlyOnceWith(
+      "https://api.fixture.ghe.com/user",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("keeps ordinary credential verification on public GitHub when an App API is configured", async () => {
+    vi.stubEnv("GITHUB_API_BASE_URL", "https://api.fixture.ghe.com");
+    try {
+      const probe = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ id: 304, login: "public-user", avatar_url: null }));
+      await expect(
+        verifyGitHubCredential("synthetic-public-token-with-enterprise-app"),
+      ).resolves.toMatchObject({ status: "available", account: { accountId: 304 } });
+      expect(probe).toHaveBeenCalledExactlyOnceWith(
+        "https://api.github.com/user",
+        expect.objectContaining({ method: "GET" }),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each([
     ["invalid-json", "not-json synthetic-token"],
     ["long-login", JSON.stringify({ id: 202, login: "x".repeat(101) })],

@@ -17,7 +17,12 @@ import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { reportPlacementTransition } from "./worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
-import { createPlacementTurnClaimFixtureOps } from "./worker-environments/placement-test-fixtures.js";
+import {
+  advancePlacementFixtureToActive,
+  createPlacementTurnClaimFixtureOps,
+} from "./worker-environments/placement-test-fixtures.js";
+import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
+import { failHandedOffTurn } from "./worker-environments/worker-turn-failure.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -249,6 +254,103 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
       });
       expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("session.placement");
     } finally {
+      projection.dispose();
+    }
+  });
+});
+
+it("publishes failed placement after asynchronous handed-off turn cleanup", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { defaults: { model: "unit-test/model", utilityModel: "" } } };
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:failed-placement-publication",
+      sessionId: "failed-placement-publication",
+    };
+    replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const database = openOpenClawStateDatabase();
+    const placements = createWorkerSessionPlacementStore({ database });
+    const active = await advancePlacementFixtureToActive(placements, database, target);
+    const environments = await createWorkerEnvironmentStore({ database });
+    const environment = environments.get(active.environmentId);
+    if (environment?.state !== "attached") {
+      throw new Error("Expected the seeded attached worker environment");
+    }
+    const environmentView = {
+      ...environment,
+      desktopAvailable: false,
+      desktopApps: [],
+      tunnelStatus: "stopped" as const,
+    };
+    const claim = await placements.claimTurn({
+      ...target,
+      claimId: "failed-placement-claim",
+      runId: "failed-placement-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    const projection = await createSessionRowProjection({
+      cfg,
+      modelCatalog: [],
+      placementFactsReader: placements,
+    });
+    const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+    const respond = vi.fn();
+    const describe = async () => {
+      respond.mockClear();
+      await sessionByKeyReadHandlers["sessions.describe"]!({
+        req: { type: "req", id: "failed-placement", method: "sessions.describe" },
+        params: { key: target.sessionKey },
+        client: null,
+        context,
+        isWebchatConnect: () => false,
+        respond,
+      });
+    };
+    const stopping = Promise.withResolvers<void>();
+    const stopped = Promise.withResolvers<void>();
+    const unused = () => {
+      throw new Error("Unexpected environment operation");
+    };
+    await projection.ensureMaterialized();
+    const cleanup = failHandedOffTurn({
+      environments: {
+        get: () => environmentView,
+        acknowledgeCredentialDelivery: unused,
+        acquireTurnCredential: unused,
+        startTunnel: unused,
+        stopTunnel: async () => {
+          stopping.resolve();
+          await stopped.promise;
+        },
+        destroy: async () => ({ ...environmentView, state: "destroyed" as const }),
+      },
+      placements,
+      placement: active,
+      turnClaim: claim,
+      error: new Error("node cancellation acknowledgement lost"),
+    });
+    try {
+      await stopping.promise;
+      await describe();
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+        session: expect.objectContaining({
+          placement: expect.objectContaining({ state: "draining" }),
+        }),
+      });
+      stopped.resolve();
+      await cleanup;
+      expect(placements.get(target.sessionId)).toMatchObject({ state: "failed", turnClaim: null });
+      await describe();
+      expect(respond).toHaveBeenCalledOnce();
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      expect(respond.mock.calls[0]?.[1]?.session?.placement?.state).toBe("failed");
+    } finally {
+      stopped.resolve();
+      await cleanup;
       projection.dispose();
     }
   });

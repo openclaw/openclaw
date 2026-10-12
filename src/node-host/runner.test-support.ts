@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
     | ((capacity: { total: number; available: number }) => void)
     | undefined,
   nodeHostCommands: [] as string[],
+  commandFeatures: {} as Record<string, string[]>,
   nodeHostCaps: [] as string[],
   availabilityOnWatch: undefined as { caps: string[]; commands: string[] } | undefined,
   availabilityChanged: undefined as (() => void) | undefined,
@@ -148,6 +149,7 @@ vi.mock("./config.js", () => ({
   loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
 
+// mock-isolation: Runner fixtures own command discovery and watchers without activating bundled plugins.
 vi.mock("./plugin-node-host.js", () => ({
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
   notifyRegisteredNodeHostCommandDisconnect: vi.fn(async () => {}),
@@ -155,6 +157,7 @@ vi.mock("./plugin-node-host.js", () => ({
     mocks.runtimeSteps.push(`commands:${context.env.PATH ?? ""}`);
     return {
       commands: [...mocks.nodeHostCommands],
+      commandFeatures: mocks.commandFeatures,
       caps: [...mocks.nodeHostCaps],
       nodePluginTools: [...mocks.nodePluginTools],
     };
@@ -259,6 +262,7 @@ export function resetRunnerTestState() {
   mocks.fakeRuntimeWorkerHostingDisabledReason = undefined;
   mocks.runnerCapacityChanged = undefined;
   mocks.nodeHostCommands = [];
+  mocks.commandFeatures = {};
   mocks.nodeHostCaps = [];
   mocks.availabilityOnWatch = undefined;
   mocks.availabilityChanged = undefined;

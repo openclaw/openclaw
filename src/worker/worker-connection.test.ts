@@ -29,6 +29,7 @@ import { PRESENCE_QUERY_TIMEOUT_MS } from "../agents/tools/presence-tool-contrac
 import {
   WorkerAdmissionDeadlineExceededError,
   WorkerAdmissionError,
+  WorkerConnectionInterruptedError,
   WorkerConnectionStoppedError,
   WorkerFencedError,
 } from "./worker-connection-contract.js";
@@ -166,6 +167,87 @@ describe("worker presence request lifetime", () => {
       );
       await expect(pending).resolves.toMatchObject({ ok: true });
     } finally {
+      vi.useRealTimers();
+      await connection.stop();
+      for (const peer of server.clients) {
+        peer.terminate();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+});
+
+describe("worker heartbeat callback lifetime", () => {
+  it("settles admitted heartbeat work before stop releases cleanup", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("test gateway did not allocate a TCP port");
+    }
+    const admitted = createDeferred<WebSocket>();
+    server.once("connection", (peer) => {
+      peer.once("message", (data) => {
+        try {
+          const frame: unknown = JSON.parse(rawDataToString(data));
+          if (!Value.Check(WorkerConnectRequestFrameSchema, frame)) {
+            throw new Error("expected the worker admission request");
+          }
+          sendWorkerHello(peer, frame.id, FRAME_CONNECT_PARAMS.admission);
+          admitted.resolve(peer);
+        } catch (error) {
+          admitted.reject(error);
+        }
+      });
+    });
+    const entered = createDeferred<() => void>();
+    const release = createDeferred();
+    const connection = createWorkerConnection({
+      endpoint: {
+        kind: "websocket",
+        url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
+      },
+      connectParams: FRAME_CONNECT_PARAMS,
+      onHeartbeat: async (_result, assertCurrent) => {
+        entered.resolve(assertCurrent);
+        await release.promise;
+      },
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const [peer] = await Promise.all([admitted.promise, connection.start()]);
+      const heartbeat = once(peer, "message");
+      await vi.advanceTimersByTimeAsync(60_000);
+      const [data] = await heartbeat;
+      const frame = JSON.parse(rawDataToString(data));
+      peer.send(
+        JSON.stringify({
+          type: "res",
+          id: frame.id,
+          ok: true,
+          payload: {
+            receivedAtMs: Date.now(),
+            status: "ok",
+            ownerEpoch: FRAME_CONNECT_PARAMS.admission.ownerEpoch,
+          },
+        }),
+      );
+      const assertCurrent = await entered.promise;
+      let stopped = false;
+      const stopping = connection.stop().then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connection.state.kind).toBe("stopped");
+      expect(assertCurrent).toThrow(WorkerConnectionInterruptedError);
+      expect(stopped).toBe(false);
+      release.resolve();
+      await stopping;
+      expect(stopped).toBe(true);
+    } finally {
+      release.resolve();
       vi.useRealTimers();
       await connection.stop();
       for (const peer of server.clients) {
