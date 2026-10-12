@@ -39,6 +39,14 @@ the session and keep both stable. Start a new session for a planned change.
 Invalidating reuse means the next request misses that cached state; it does not
 necessarily delete the provider's older cache entry before its normal expiry.
 
+## Stable tools between turns
+
+WebChat keeps the `message` reaction description and schema stable between runs
+in the same conversation, including runs without a current-prompt reaction grant.
+Code Mode's schema-derived `exec` description stays stable with it. Reaction
+execution still requires the current prompt's live authority; an advertised
+action does not grant permission to execute it.
+
 ## Keep replayed tool results stable
 
 OpenClaw applies the same tool-result text cap before the first model request
