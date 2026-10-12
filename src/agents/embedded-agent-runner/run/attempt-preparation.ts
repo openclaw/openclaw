@@ -5,9 +5,9 @@ import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 
 let nextPreparationStart = Promise.resolve();
 const MAX_PREPARATION_STARTS_PER_SLICE = 16;
-const PREPARATION_SLICE_MS = 4;
+const PREPARATION_SLICE_MS = 8;
 let preparationStarts = MAX_PREPARATION_STARTS_PER_SLICE;
-let preparationSliceStartedAt = 0;
+let preparationSyncMs = 0;
 
 /** Dispatches attempt stages without letting concurrent starts monopolize the event loop. */
 export function createEmbeddedAttemptPreparation(options: {
@@ -18,22 +18,27 @@ export function createEmbeddedAttemptPreparation(options: {
     // Only start turns are serialized. Async work overlaps, and a failed or cancelled
     // attempt cannot reject the shared tail or inherit another caller's async context.
     nextPreparationStart = nextPreparationStart.then(async () => {
-      // Elapsed slices include CPU work in async continuations. A completed I/O wait
-      // can cause an extra yield; counting only initial dispatch misses that work.
       if (
         preparationStarts >= MAX_PREPARATION_STARTS_PER_SLICE ||
-        performance.now() - preparationSliceStartedAt >= PREPARATION_SLICE_MS
+        preparationSyncMs >= PREPARATION_SLICE_MS
       ) {
         await yieldToEventLoop();
         preparationStarts = 0;
-        preparationSliceStartedAt = performance.now();
+        preparationSyncMs = 0;
       }
       preparationStarts++;
     });
     await nextPreparationStart;
     // Check before acquisition; the caller must receive each result before another
     // checkpoint can throw so its existing finally blocks own every acquired resource.
-    options.assertCurrent();
-    return measureEmbeddedAgentPreparation(stage, run, { config: options.config });
+    const startedAt = performance.now();
+    try {
+      options.assertCurrent();
+      return measureEmbeddedAgentPreparation(stage, run, { config: options.config });
+    } finally {
+      // Charge dispatch work, not asynchronous I/O wait. Cheap stages can share a
+      // bounded slice instead of each waiting another congested event-loop turn.
+      preparationSyncMs += performance.now() - startedAt;
+    }
   };
 }

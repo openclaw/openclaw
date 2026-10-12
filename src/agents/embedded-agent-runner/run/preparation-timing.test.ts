@@ -121,30 +121,20 @@ describe("embedded attempt preparation dispatch", () => {
     expect(observedStarts).toBeLessThanOrEqual(16);
   });
 
-  it("yields after CPU work before admitting the next stage", async () => {
-    let elapsed = performance.now();
+  it("yields after expensive synchronous work before admitting the next stage", async () => {
+    let elapsed = 0;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    const events: string[] = [];
     try {
-      // The dispatcher shares its clock across stages; keep both cases monotonic.
-      for (const continuation of [false, true]) {
-        const events: string[] = [];
-        const project = () => {
-          events.push("projection");
+      await Promise.all([
+        prepare("attempt.bootstrap", () => {
+          events.push("expensive");
           elapsed += 10;
           setImmediate(() => events.push("control"));
-        };
-        await prepare(
-          "attempt.bundle-tools",
-          continuation
-            ? async () => {
-                await Promise.resolve();
-                project();
-              }
-            : project,
-        );
-        await prepare("attempt.tool-catalog", () => events.push("catalog"));
-        expect(events).toEqual(["projection", "control", "catalog"]);
-      }
+        }),
+        prepare("attempt.tool-catalog", () => events.push("next")),
+      ]);
+      expect(events).toEqual(["expensive", "control", "next"]);
     } finally {
       clock.mockRestore();
     }

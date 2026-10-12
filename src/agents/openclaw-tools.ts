@@ -1,4 +1,3 @@
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { createShowWidgetTool, hasRegisteredShowWidgetKinds } from "../canvas/widget-tool.js";
@@ -18,6 +17,11 @@ import {
 } from "./agent-scope.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
+import {
+  type HookContext,
+  isToolWrappedWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "./agent-tools.before-tool-call.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import {
   resolveOpenClawPluginToolsForOptions,
@@ -25,7 +29,6 @@ import {
 } from "./openclaw-plugin-tools.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
-import { wrapOpenClawToolHooks } from "./openclaw-tools.hooks.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
   mergeFactoryPolicyList,
@@ -48,6 +51,7 @@ import {
   type PreparedToolConstruction,
   type ToolConstructionPreparationOptions,
 } from "./tool-construction-preparation.js";
+import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createAskUserTool } from "./tools/ask-user-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -61,6 +65,7 @@ import { createCronTool } from "./tools/cron-tool.js";
 import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createDecisionTool } from "./tools/decision-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
+import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
 import { createGitHubIdentityStatusTool } from "./tools/github-identity-status-tool.js";
 import { createGitHubPublishTool } from "./tools/github-publish-tool.js";
 import {
@@ -126,7 +131,6 @@ export async function createOpenClawToolsWithPreparation(
 ): Promise<AnyAgentTool[]> {
   const { captured, delegated, webSearchConfigured, mediaTools, personalInstructionsEnabled } =
     await prepareOpenClawTools(options, shared);
-  await yieldToEventLoop();
   shared.assertCurrent();
   captured.assertInvocationCurrent?.();
   const steps = createOpenClawToolsSteps(
@@ -142,8 +146,6 @@ export async function createOpenClawToolsWithPreparation(
       "message" in next.value
         ? [await createMessageToolAsync(next.value.message)]
         : await resolveOpenClawPluginToolsForOptionsAsync(next.value.plugins);
-    // Cached preparation can resolve entirely in microtasks; let sockets and timers run.
-    await yieldToEventLoop();
     shared.assertCurrent();
     captured.assertInvocationCurrent?.();
     next = steps.next(tools);
@@ -699,5 +701,30 @@ function* createOpenClawToolsSteps(
     bindAssembledAgentToolActionDescriptor(tool);
   }
 
-  return wrapOpenClawToolHooks(allTools, sessionAgentId, gatewayCallerAccountId, options);
+  const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
+  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(
+    hookAgentId,
+    options ? { ...options, agentAccountId: gatewayCallerAccountId } : options,
+  );
+
+  if (options?.wrapBeforeToolCallHook === false) {
+    return allTools.map(wrapGatewayCallerIdentity);
+  }
+  const defaultHookContext: HookContext = {
+    ...(hookAgentId ? { agentId: hookAgentId } : {}),
+    ...(resolvedConfig ? { config: resolvedConfig } : {}),
+    ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
+    ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
+    ...(options?.currentChannelId ? { channelId: options.currentChannelId } : {}),
+    loopDetection: resolveToolLoopDetectionConfig({ cfg: resolvedConfig, agentId: hookAgentId }),
+  };
+  const hookContext = { ...defaultHookContext, ...options?.beforeToolCallHookContext };
+  options?.recordToolPrepStage?.("openclaw-tools:tool-hooks");
+  return allTools
+    .map((tool) =>
+      isToolWrappedWithBeforeToolCallHook(tool)
+        ? tool
+        : wrapToolWithBeforeToolCallHook(tool, hookContext),
+    )
+    .map(wrapGatewayCallerIdentity);
 }
