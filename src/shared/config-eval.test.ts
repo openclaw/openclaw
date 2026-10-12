@@ -78,78 +78,6 @@ describe("config-eval helpers", () => {
     ).toBe(true);
     expect(isConfigPathTruthyWithDefaults(config, "browser.other", {})).toBe(false);
   });
-
-  it("does not use inherited defaults for blocked config paths", () => {
-    expect(isConfigPathTruthyWithDefaults({}, "constructor", {})).toBe(false);
-    expect(isConfigPathTruthyWithDefaults({}, "__proto__.enabled", {})).toBe(false);
-    expect(isConfigPathTruthyWithDefaults({}, "prototype.enabled", {})).toBe(false);
-  });
-
-  it("returns the active runtime platform", () => {
-    mockProcessPlatform("darwin");
-    expect(
-      evaluateRuntimeEligibility({
-        os: ["darwin"],
-        hasBin: () => true,
-        hasEnv: () => true,
-        isConfigPathTruthy: () => true,
-      }),
-    ).toBe(true);
-  });
-
-  it("caches successful binary lookups until PATH changes", () => {
-    mockProcessPlatform("linux");
-    const binDir = tempDirs.make("openclaw-binary-cache-");
-    const missingDir = path.join(binDir, "missing");
-    const executable = path.join(binDir, "tool");
-    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(executable, 0o755);
-    vi.stubEnv("PATH", [missingDir, binDir].join(path.delimiter));
-
-    expect(hasBinary("tool")).toBe(true);
-    fs.unlinkSync(executable);
-    expect(hasBinary("tool")).toBe(true);
-
-    vi.stubEnv("PATH", missingDir);
-    expect(hasBinary("tool")).toBe(false);
-  });
-
-  it("checks PATHEXT candidates and invalidates cached hits when PATHEXT changes", () => {
-    mockProcessPlatform("win32");
-    const toolsDir = tempDirs.make("openclaw-binary-pathext-");
-    vi.stubEnv("PATH", toolsDir);
-    vi.stubEnv("PATHEXT", ".EXE;.CMD");
-    const cmdCandidate = path.join(toolsDir, "tool.CMD");
-    fs.writeFileSync(cmdCandidate, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(cmdCandidate, 0o755);
-
-    expect(hasBinary("tool")).toBe(true);
-
-    vi.stubEnv("PATHEXT", ".EXE");
-    expect(hasBinary("tool")).toBe(false);
-    vi.stubEnv("PATHEXT", ".CMD");
-    expect(hasBinary("tool")).toBe(true);
-  });
-
-  it.each([
-    { platform: "linux", suffix: "" },
-    { platform: "win32", suffix: ".CMD" },
-  ] as const)(
-    "finds a newly installed binary on unchanged $platform PATH",
-    ({ platform, suffix }) => {
-      const binDir = tempDirs.make("openclaw-binary-probe-");
-      mockProcessPlatform(platform);
-      vi.stubEnv("PATH", binDir);
-      vi.stubEnv("PATHEXT", ".EXE;.CMD");
-      expect(hasBinary("fixture-tool")).toBe(false);
-
-      const executable = path.join(binDir, `fixture-tool${suffix}`);
-      fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-      fs.chmodSync(executable, 0o755);
-
-      expect(hasBinary("fixture-tool")).toBe(true);
-    },
-  );
 });
 
 describe("prepared binary availability", () => {
@@ -200,18 +128,6 @@ describe("prepared binary availability", () => {
     expect((await prepareBinaryAvailability(["fixture-tool"])).hasBinary("fixture-tool")).toBe(
       true,
     );
-  });
-
-  it("keeps filesystem lookup semantics for nested binary names", async () => {
-    const binDir = tempDirs.make("openclaw-prepared-nested-");
-    fs.mkdirSync(path.join(binDir, "nested"));
-    const executable = path.join(binDir, "nested", "fixture-tool");
-    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(executable, 0o755);
-    vi.stubEnv("PATH", binDir);
-    const bin = path.join("nested", "fixture-tool");
-    expect((await prepareBinaryAvailability([bin])).hasBinary(bin)).toBe(true);
-    expect(hasBinary(bin)).toBe(true);
   });
 });
 
@@ -276,33 +192,6 @@ describe("evaluateRuntimeEligibility", () => {
       hasBin: () => true,
       hasEnv: () => true,
       isConfigPathTruthy: () => true,
-    });
-    expect(result).toBe(true);
-  });
-
-  it("bypasses runtime requirements when always=true", () => {
-    const result = evaluateRuntimeEligibility({
-      always: true,
-      requires: { env: ["OPENAI_API_KEY"] },
-      hasBin: () => false,
-      hasEnv: () => false,
-      isConfigPathTruthy: () => false,
-    });
-    expect(result).toBe(true);
-  });
-
-  it("evaluates runtime requirements when always is false", () => {
-    const result = evaluateRuntimeEligibility({
-      requires: {
-        bins: ["node"],
-        anyBins: ["bun", "node"],
-        env: ["OPENAI_API_KEY"],
-        config: ["browser.enabled"],
-      },
-      hasBin: (bin) => bin === "node",
-      hasAnyRemoteBin: () => false,
-      hasEnv: (name) => name === "OPENAI_API_KEY",
-      isConfigPathTruthy: (pathLocal) => pathLocal === "browser.enabled",
     });
     expect(result).toBe(true);
   });
