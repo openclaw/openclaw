@@ -545,6 +545,36 @@ describe("session groups catalog", () => {
     ).toBeUndefined();
   });
 
+  it("sweeps only the stores that hold members of the group", async () => {
+    const groupCfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, other: {} },
+      },
+    };
+    await putSessionGroups({ cfg: groupCfg, names: ["Old", "Empty"], env });
+    const sessionKey = "agent:main:dashboard:member";
+    const storePath = await seedSessionStore({
+      [sessionKey]: { sessionId: "member", updatedAt: Date.now(), category: "Old" },
+    });
+    await seedSessionStore(
+      { "agent:other:dashboard:bystander": { sessionId: "bystander", updatedAt: Date.now() } },
+      "other",
+    );
+    const sweep = vi.spyOn(sessionGroupCategories, "updateSessionGroupCategoriesInWorker");
+
+    const renamed = await renameSessionGroup({ cfg: groupCfg, name: "Old", to: "New", env });
+    expect(renamed.updatedSessions).toBe(1);
+    expect(sweep.mock.calls.map(([{ scope }]) => scope.agentId)).toEqual(["main"]);
+    expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })?.category).toBe("New");
+
+    sweep.mockClear();
+    const deleted = await deleteSessionGroup({ cfg: groupCfg, name: "Empty", env });
+    expect(sweep).not.toHaveBeenCalled();
+    expect(deleted.groups.map(({ name }) => name)).toEqual(["New"]);
+  });
+
   it.each([
     { action: "rename", targetExists: false, stopAgent: "main" },
     { action: "rename", targetExists: true, stopAgent: "other" },
@@ -805,6 +835,64 @@ describe("session groups catalog", () => {
       expect.arrayContaining(["Old", "New"]),
     );
     expect(readSessionGroupCatalog(env).sectionOrder).toContain("category:Old");
+  });
+
+  it("retains a group when a member is assigned in a store the sweep skipped", async () => {
+    const groupCfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, other: {} },
+      },
+    };
+    await putSessionGroups({ cfg: groupCfg, names: ["Old"], env });
+    await seedSessionStore({
+      "agent:main:dashboard:existing": {
+        sessionId: "existing",
+        updatedAt: Date.now(),
+        category: "Old",
+      },
+    });
+    const lateKey = "agent:other:dashboard:late";
+    const otherStore = await seedSessionStore(
+      { "agent:other:dashboard:bystander": { sessionId: "bystander", updatedAt: Date.now() } },
+      "other",
+    );
+    const lateCategory = () =>
+      loadSessionEntry({ agentId: "other", storePath: otherStore, sessionKey: lateKey })?.category;
+    let inserted = false;
+    await expect(
+      renameSessionGroup({
+        cfg: groupCfg,
+        name: "Old",
+        to: "New",
+        env,
+        assertTargetCurrent: () => {
+          if (inserted) {
+            return;
+          }
+          inserted = true;
+          runOpenClawAgentWriteTransaction(
+            (database) => {
+              writeSessionEntry(database, lateKey, {
+                sessionId: "late",
+                updatedAt: Date.now(),
+                category: "Old",
+              });
+            },
+            { agentId: "other", env },
+          );
+        },
+      }),
+    ).rejects.toThrow("still has members");
+    expect(lateCategory()).toBe("Old");
+    expect(readSessionGroupCatalog(env).groups.map(({ name }) => name)).toEqual(
+      expect.arrayContaining(["Old", "New"]),
+    );
+
+    await renameSessionGroup({ cfg: groupCfg, name: "Old", to: "New", env });
+    expect(lateCategory()).toBe("New");
+    expect(readSessionGroupCatalog(env).groups.map(({ name }) => name)).toEqual(["New"]);
   });
 
   it("keeps the source sidebar slot when the merge target has no stored slot", async () => {

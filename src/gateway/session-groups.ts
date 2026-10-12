@@ -188,9 +188,16 @@ async function mutateSessionGroup(
     }
     const source = prepared.source;
     try {
-      const { stores } = await readSessionGroupMembershipInWorker(params.cfg, env);
+      const { stores, groups } = await readSessionGroupMembershipInWorker(params.cfg, env);
+      // Each store sweep costs a write worker; a store without members has nothing to move.
+      const memberAgents = new Set(
+        groups.find(([name]) => name === from)?.[1].map((member) => member.agentId),
+      );
       // Category updates preserve updatedAt so group maintenance cannot reorder sessions.
       for (const target of stores) {
+        if (!memberAgents.has(target.agentId)) {
+          continue;
+        }
         updatedSessions += await updateSessionGroupCategoriesInWorker({
           scope: { ...target, sessionKey: "", env },
           from,
