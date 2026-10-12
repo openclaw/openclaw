@@ -83,41 +83,64 @@ export async function settleOAuthRefreshClaim(params: {
   refreshed: OAuthCredential;
   validateCredential?: (credential: OAuthCredential) => void;
 }): Promise<{ credential: OAuthCredential; persisted: boolean } | null> {
-  const current = (
-    await loadStoredOAuthRefreshStore(params.agentDir, params.profileId, params.personalStore)
-  ).profiles[params.profileId];
-  if (
-    current?.type === "oauth" &&
-    !isExactOAuthCredential(current, params.fence) &&
-    isSafeOAuthPostClaimSettlement(params.generation, current)
-  ) {
-    return { credential: current, persisted: false };
-  }
-  let credential: OAuthCredential | null = null;
-  let persisted = false;
-  const result = await updateOAuthStore({
-    personalStore: params.personalStore,
-    assertCurrent: () => params.validateCredential?.(params.refreshed),
-    agentDir: params.agentDir,
-    profileId: params.profileId,
-    updater: (store) => {
-      const existing = store.profiles[params.profileId];
-      if (existing?.type !== "oauth") {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const current = (
+      await loadStoredOAuthRefreshStore(params.agentDir, params.profileId, params.personalStore)
+    ).profiles[params.profileId];
+    // A known-null reply can follow a committed write. Confirm the exact
+    // validated postimage before treating it as a stale claim.
+    if (
+      attempt > 0 &&
+      current?.type === "oauth" &&
+      isExactOAuthCredential(current, params.refreshed) &&
+      !isExactOAuthCredential(current, params.fence)
+    ) {
+      return { credential: current, persisted: true };
+    }
+    if (
+      current?.type === "oauth" &&
+      !isExactOAuthCredential(current, params.fence) &&
+      isSafeOAuthPostClaimSettlement(params.generation, current)
+    ) {
+      return { credential: current, persisted: false };
+    }
+    // Retry only while a fresh read proves the same claim still owns the fence.
+    if (attempt > 0 && !isExactOAuthCredential(current, params.fence)) {
+      return null;
+    }
+    // The updater may run even when the store helper ultimately returns null.
+    // Keep its captured result local to this attempt, never to a later retry.
+    let credential: OAuthCredential | null = null;
+    let persisted = false;
+    const result = await updateOAuthStore({
+      personalStore: params.personalStore,
+      assertCurrent: () => params.validateCredential?.(params.refreshed),
+      agentDir: params.agentDir,
+      profileId: params.profileId,
+      updater: (store) => {
+        const existing = store.profiles[params.profileId];
+        if (existing?.type !== "oauth") {
+          return false;
+        }
+        if (isExactOAuthCredential(existing, params.fence)) {
+          store.profiles[params.profileId] = { ...params.refreshed };
+          credential = params.refreshed;
+          persisted = true;
+          return true;
+        }
+        // A reconnect or newer owner generation wins. The stale refresh may use
+        // that live credential for this call, but it never overwrites it.
+        credential = isSafeOAuthPostClaimSettlement(params.generation, existing) ? existing : null;
         return false;
-      }
-      if (isExactOAuthCredential(existing, params.fence)) {
-        store.profiles[params.profileId] = { ...params.refreshed };
-        credential = params.refreshed;
-        persisted = true;
-        return true;
-      }
-      // A reconnect or newer owner generation wins. The stale refresh may use
-      // that live credential for this call, but it never overwrites it.
-      credential = isSafeOAuthPostClaimSettlement(params.generation, existing) ? existing : null;
-      return false;
-    },
-  });
-  return result === null || !credential ? null : { credential, persisted };
+      },
+    });
+    if (result !== null) {
+      return credential ? { credential, persisted } : null;
+    }
+    // updateAuthProfileStoreWithLock returns null only for known contention or
+    // changed inherited reads; the next iteration rereads before its one retry.
+  }
+  return null;
 }
 
 export async function markOAuthRefreshClaimFailed(params: {
