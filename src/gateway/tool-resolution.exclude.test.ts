@@ -13,6 +13,7 @@ type CreateOpenClawToolsArg = {
   agentAccountId?: string;
   agentChannel?: string;
   clientCaps?: string[];
+  currentChannelId?: string;
   pinnedWidgetAuthoring?: boolean;
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
   inheritedToolAllowlist?: string[];
@@ -163,7 +164,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     },
   );
 
-  it("hands loopback ask_user the originating-channel prompt sender", () => {
+  it("hands loopback tools the originating-channel question target", () => {
     resolveGatewayScopedTools({
       cfg: {} as OpenClawConfig,
       sessionKey: "agent:main:telegram:direct:1",
@@ -173,21 +174,12 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       surface: "loopback",
     });
 
-    expect(readCreateToolsArgs().questionPrompt).toEqual(
-      expect.objectContaining({
-        messageChannel: "telegram",
-        send: expect.any(Function),
-      }),
-    );
-  });
-
-  it("does not invent a prompt sender without a deliverable channel", () => {
-    resolveGatewayScopedTools({
-      cfg: {} as OpenClawConfig,
-      sessionKey: "agent:main:main",
-      surface: "loopback",
+    // The tool surface builds the channel prompt sender from these facts.
+    expect(readCreateToolsArgs()).toMatchObject({
+      agentChannel: "telegram",
+      currentChannelId: "1",
+      agentAccountId: "default",
     });
-
     expect(readCreateToolsArgs().questionPrompt).toBeUndefined();
   });
 

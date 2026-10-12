@@ -603,7 +603,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     onReasoningStream: params.onReasoningStream,
     streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
     onReasoningEnd: params.onReasoningEnd,
-    onToolResult: notifyToolResult,
+    // Without a caller sink, the tool must deliver its own prompt rather than reserve one.
+    onToolResult: params.onToolResult ? notifyToolResult : undefined,
     onAgentToolResult: params.onAgentToolResult,
     onAgentEvent: notifyAgentEvent,
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.

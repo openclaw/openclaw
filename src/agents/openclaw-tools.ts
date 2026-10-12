@@ -69,6 +69,7 @@ import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createAvailablePortalTools } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
+import { createChannelQuestionPromptDelivery } from "./tools/question-prompt-send.js";
 import { createScreenTool } from "./tools/screen-tool.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
@@ -359,6 +360,17 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       })
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
+  // Routed turns deliver blocking questions to their originating conversation; a harness
+  // prompt reservation still owns delivery when one exists.
+  const resolveQuestionPrompt = () =>
+    options?.questionPrompt ??
+    createChannelQuestionPromptDelivery({
+      cfg: resolvedConfig ?? getRuntimeConfig(),
+      channel: options?.agentChannel,
+      to: options?.currentChannelId ?? options?.agentTo,
+      accountId: options?.agentAccountId,
+      threadId: options?.currentThreadTs ?? options?.agentThreadId,
+    });
   const tools: AnyAgentTool[] = [
     createDashboardTool({
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
@@ -511,7 +523,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentId: sessionAgentId,
             sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             runId: options?.runId,
-            ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
+            questionPrompt: resolveQuestionPrompt(),
           }),
         ]
       : []),
@@ -526,7 +538,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentId: sessionAgentId,
             sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             runId: options?.runId,
-            ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
+            questionPrompt: resolveQuestionPrompt(),
           }),
         ]
       : []),

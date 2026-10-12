@@ -78,6 +78,10 @@ the time remaining, dismisses expired prompts, and restores pending questions
 for the selected session after reconnecting or switching sessions. Local mode
 keeps questions in the running process; they do not survive exiting the TUI.
 
+A turn started through the `agent` Gateway method with a messaging-channel
+target also delivers its question to that conversation. The question is an
+explicit tool message; automatic final-reply delivery is configured separately.
+
 ## Async questions
 
 Codex async questions use the same panel above the Control UI composer. They open
