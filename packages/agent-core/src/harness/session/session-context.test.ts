@@ -138,9 +138,81 @@ function compactionEntry(
 }
 
 describe("buildSessionContext", () => {
-  it.each([false, true])(
+  it.each(["compaction", "reset", "prompt-restart", "prompt-checkpoint"])(
+    "retires only operators from an earlier prompt series across %s",
+    (boundary) => {
+      const operator = (
+        id: string,
+        kind: "prompt-update" | "runtime-context",
+      ): SessionTreeEntry => ({
+        type: "custom_message",
+        id,
+        parentId: "user",
+        timestamp,
+        customType: "openclaw.system-update",
+        content: id,
+        display: false,
+        details: { kind, turnScoped: kind === "runtime-context" },
+      });
+      const entries: SessionTreeEntry[] = [
+        userEntry("user", null, "Kept question"),
+        operator("old-update", "prompt-update"),
+        operator("old-runtime", "runtime-context"),
+        assistantEntry("answer", "old-runtime", "Kept answer"),
+        boundary === "compaction"
+          ? compactionEntry("boundary", "answer", "user", "Summary", 1_000)
+          : boundary === "reset"
+            ? resetEntry("boundary", "answer", "user")
+            : {
+                type: "custom",
+                id: "boundary",
+                parentId: "answer",
+                timestamp,
+                customType: "openclaw.system-prompt",
+                data: { restart: boundary === "prompt-restart" },
+              },
+        operator("new-update", "prompt-update"),
+        operator("new-runtime", "runtime-context"),
+      ];
+      const context = buildSessionContext(entries);
+      expect(
+        context.messages
+          .filter((message) => message.role === "custom")
+          .map((message) => message.content),
+      ).toEqual(
+        boundary === "prompt-checkpoint"
+          ? ["old-update", "old-runtime", "new-update", "new-runtime"]
+          : boundary === "reset"
+            ? ["new-update", "new-runtime"]
+            : ["old-runtime", "new-update", "new-runtime"],
+      );
+      expect(context.messages).toContainEqual(
+        expect.objectContaining({ role: "user", content: "Kept question" }),
+      );
+      expect(context.messages).toContainEqual(
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "Kept answer" }],
+        }),
+      );
+      expect(entries.filter((entry) => entry.type === "custom_message")).toHaveLength(4);
+    },
+  );
+
+  it.each(["extension", "legacy-runtime", "operator-runtime"])(
     "keeps runtime carriers with their user at compaction boundaries (carrier=%s)",
-    (runtimeContextCarrier) => {
+    (carrier) => {
+      const runtimeContextCarrier = carrier !== "extension";
+      const customType =
+        carrier === "operator-runtime"
+          ? "openclaw.system-update"
+          : runtimeContextCarrier
+            ? "openclaw.runtime-context"
+            : "extension-context";
+      const details =
+        carrier === "operator-runtime"
+          ? { kind: "runtime-context", turnScoped: true }
+          : { runtimeContextCarrier };
       const entries: SessionTreeEntry[] = [
         userEntry("entry-0", null, "original request"),
         {
@@ -148,10 +220,15 @@ describe("buildSessionContext", () => {
           id: "entry-1",
           parentId: "entry-0",
           timestamp,
-          customType: runtimeContextCarrier ? "openclaw.runtime-context" : "extension-context",
+          customType,
           content: "metadata ".repeat(100),
           display: false,
-          details: { runtimeContextCarrier },
+          details:
+            carrier === "operator-runtime"
+              ? details
+              : runtimeContextCarrier
+                ? { source: "openclaw-runtime-context", runtimeContextCarrier }
+                : details,
         },
         assistantEntry("entry-2", "entry-1", "done"),
       ];
@@ -178,9 +255,14 @@ describe("buildSessionContext", () => {
             { role: "user", content: "original request" },
             {
               role: "custom",
-              customType: runtimeContextCarrier ? "openclaw.runtime-context" : "extension-context",
+              customType,
               content: "metadata ".repeat(100),
-              details: { runtimeContextCarrier },
+              details:
+                carrier === "operator-runtime"
+                  ? details
+                  : runtimeContextCarrier
+                    ? { source: "openclaw-runtime-context", runtimeContextCarrier }
+                    : details,
             },
             { role: "assistant", content: [{ type: "text", text: "done" }] },
           ].slice(expectedIndex),
@@ -203,7 +285,7 @@ describe("buildSessionContext", () => {
       customType: "openclaw.runtime-context",
       content: "Model-visible runtime context",
       display: false,
-      details: { runtimeContextCarrier: true },
+      details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
       timestamp: Date.parse(timestamp),
     };
     const activityEntry: SessionTreeEntry = {
@@ -238,8 +320,9 @@ describe("buildSessionContext", () => {
       { role: "user", content: "original request" },
       {
         role: "user",
-        content: [{ type: "text", text: "Model-visible runtime context" }],
-        runtimeContextCarrier: true,
+        content:
+          "OpenClaw runtime context:\nModel-visible runtime context\nEnd OpenClaw runtime context.",
+        runtimeContext: {},
       },
       { role: "user", content: "continue" },
     ]);

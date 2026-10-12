@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { closeSync, createWriteStream } from "node:fs";
+import { closeSync } from "node:fs";
+import { createRequire } from "node:module";
 import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -8,7 +9,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
-import { hasLiveOwnedProcessGroupMembers } from "./service-child-group-ownership.js";
+import {
+  hasLiveOwnedProcessGroupMembers,
+  killOwnedProcessGroupMembers,
+} from "./service-child-group-ownership.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorMessage,
@@ -19,14 +23,9 @@ import {
 import { reserveStdioEntry, setStdioEntry } from "./service-child-stdio.js";
 
 type AnchorState = "starting" | "active" | "closing" | "closed";
-type BunFdSocket = Socket & { connect(options: { fd: number }): Socket };
 declare const WORKER_DEPLOY_BUILD: boolean;
 
-function commandStdio(start: ServiceChildStart): {
-  stdio: SpawnStdioEntry[];
-  lineageFd: number;
-  inheritedLineageFds: number[];
-} {
+function commandStdio(start: ServiceChildStart) {
   const stdio: SpawnStdioEntry[] = [
     start.stdinMode === "inherit" ? "inherit" : "pipe",
     "pipe",
@@ -56,6 +55,7 @@ function delay(ms: number, retainOwner = false): Promise<void> {
 }
 
 export function runServiceChildGroupAnchor(): void {
+  const launchGrant = createDeferredCore();
   let start: ServiceChildStart | undefined;
   let subreaper:
     | ReturnType<typeof import("./linux-child-subreaper.js").acquireLinuxChildSubreaper>
@@ -75,8 +75,7 @@ export function runServiceChildGroupAnchor(): void {
   let rootSettlementStarted = false;
   let rootResultDelivery: Promise<void> | undefined;
   let rootExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
-  let stdoutDrained = false;
-  let stderrDrained = false;
+  const pendingOutput = new Set(["stdout", "stderr"] as const);
   let lineageClosed = false;
   let lineageObservationFailed = false;
   let markHostLineageClosed: (() => void) | undefined;
@@ -95,16 +94,30 @@ export function runServiceChildGroupAnchor(): void {
     }
     sequence += 1;
     await new Promise<void>((resolve) => {
-      const framed = {
-        ...message,
-        generation: start!.generation,
-        sequence,
-      };
       control!.write(
-        encodeServiceChildMessage(framed as ServiceChildAnchorMessage), // SAFETY: typed payload plus live envelope forms the protocol union.
+        encodeServiceChildMessage({ ...message, generation: start!.generation, sequence }),
         () => resolve(),
       );
     });
+  };
+
+  const finish = (code: number) => {
+    process.exitCode = code;
+    process.stdin.destroy();
+    const disconnect = () => {
+      // end() flushes the receipt; destroy() also releases the readable socket.
+      control?.off("close", disconnect);
+      control?.destroy();
+      if (process.connected) {
+        process.disconnect?.();
+      }
+    };
+    if (control && !control.destroyed) {
+      control.once("close", disconnect);
+      control.end(disconnect);
+    } else {
+      disconnect();
+    }
   };
 
   const closeAuthority = async (
@@ -135,7 +148,7 @@ export function runServiceChildGroupAnchor(): void {
         retirementReady.promise,
         delay(Math.max(0, deadline - Date.now())).then(() => false),
       ]);
-      control?.end(() => process.exit(acknowledged ? 0 : 1));
+      finish(acknowledged ? 0 : 1);
       return;
     }
     state = "closed";
@@ -171,7 +184,7 @@ export function runServiceChildGroupAnchor(): void {
       process.kill(0, "SIGKILL");
       return;
     }
-    control?.end(() => process.exit(0));
+    finish(0);
   };
 
   const closeInheritedLineage = () => {
@@ -216,6 +229,11 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     const cleanupDeadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
+    const termGraceDone = delay(GRACEFUL_CANCEL_TIMEOUT_MS);
+    if (!start.ownedWorker && !forceCleanup && rootExit && pendingOutput.size > 0) {
+      // Preserve inherited diagnostics after root exit within the same cleanup budget.
+      await Promise.race([rootSettledDone.promise, termGraceDone, forceCleanupRequested.promise]);
+    }
     if (subreaper) {
       try {
         while (
@@ -261,7 +279,6 @@ export function runServiceChildGroupAnchor(): void {
       }
       return;
     }
-    const termGraceDone = delay(GRACEFUL_CANCEL_TIMEOUT_MS);
     if (start.ownedWorker) {
       if (!forceCleanup) {
         process.kill(0, "SIGTERM");
@@ -272,6 +289,9 @@ export function runServiceChildGroupAnchor(): void {
       }
       if (!rootExit) {
         command?.kill("SIGKILL");
+      }
+      if (!lineageClosed) {
+        killOwnedProcessGroupMembers();
       }
       // Nested command relays can outlive the application. Keep their reader alive
       // until they close lineage; killing this observer would discard that custody.
@@ -325,7 +345,7 @@ export function runServiceChildGroupAnchor(): void {
     }
     for (;;) {
       // Process and control events can change these facts during the awaited observation.
-      if (forceCleanup || !rootExit || !stdoutDrained || !stderrDrained || !lineageClosed) {
+      if (forceCleanup || !rootExit || pendingOutput.size > 0 || !lineageClosed) {
         break;
       }
       const remainingMs = cleanupDeadline - Date.now();
@@ -373,6 +393,10 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     lastHostSequence = message.sequence;
+    if (message.type === "launch") {
+      launchGrant.resolve();
+      return;
+    }
     if (message.type === "startup-error-ack") {
       startupErrorAcknowledged.resolve();
       return;
@@ -418,7 +442,8 @@ export function runServiceChildGroupAnchor(): void {
   const startCommand = async (next: ServiceChildStart) => {
     const controlFd = next.controlFd;
     if (controlFd === undefined) {
-      process.exitCode = 1;
+      state = "closed";
+      finish(1);
       return;
     }
     start = next;
@@ -457,7 +482,7 @@ export function runServiceChildGroupAnchor(): void {
     if (process.versions.bun) {
       // Attach readers before adoption; end() must shut down the transport after the ACK.
       // SAFETY: Bun 1.4+ uses this fd overload for its own inherited stdio.
-      (socket as BunFdSocket).connect({ fd: controlFd });
+      (socket as Socket & { connect(options: { fd: number }): Socket }).connect({ fd: controlFd });
     }
 
     // Prepare before launch: loading this writer during TERM consumes cleanup grace
@@ -481,6 +506,10 @@ export function runServiceChildGroupAnchor(): void {
         return;
       }
     }
+    if (next.type === "prepare") {
+      await send({ type: "prepared" });
+      await Promise.race([launchGrant.promise, retirementReady.promise]);
+    }
     if (
       start !== next ||
       control !== socket ||
@@ -495,7 +524,23 @@ export function runServiceChildGroupAnchor(): void {
     }
     const { stdio, lineageFd, inheritedLineageFds } = commandStdio(start);
     workerLineageFds = inheritedLineageFds;
+    let shutdownOutput: ((fd: number, how: number) => number) | undefined;
     try {
+      if (process.versions.bun && (process.platform === "darwin" || process.platform === "linux")) {
+        // SAFETY: Bun's built-in FFI binds only the POSIX socket shutdown ABI here.
+        const ffi = createRequire(import.meta.url)("bun:ffi") as {
+          dlopen(
+            path: string,
+            symbols: Record<string, { args: string[]; returns: string }>,
+          ): {
+            symbols: { shutdown: (fd: number, how: number) => number };
+          };
+        };
+        const library = process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6";
+        shutdownOutput = ffi.dlopen(library, {
+          shutdown: { args: ["i32", "i32"], returns: "i32" },
+        }).symbols.shutdown;
+      }
       command = spawnWithInheritedOomScore(start.command, start.args, {
         cwd: start.cwd,
         env: start.env,
@@ -571,7 +616,7 @@ export function runServiceChildGroupAnchor(): void {
       lineage.resume();
     }
     const settleRoot = async () => {
-      if (rootSettlementStarted || !rootResultDelivery || !stdoutDrained || !stderrDrained) {
+      if (rootSettlementStarted || !rootResultDelivery || pendingOutput.size > 0) {
         return;
       }
       rootSettlementStarted = true;
@@ -581,22 +626,15 @@ export function runServiceChildGroupAnchor(): void {
         await requestCleanup("lineage-lost");
       }
     };
-    // Bun's global streams retain output writers after pipeline completion. Node's
-    // stdio streams must preserve fd 1/2: closing them aborts its later Linux spawnSync census.
-    const stdout = process.versions.bun
-      ? createWriteStream("", { fd: 1, autoClose: true })
-      : process.stdout;
-    const stderr = process.versions.bun
-      ? createWriteStream("", { fd: 2, autoClose: true })
-      : process.stderr;
-    pipeline(command.stdout!, stdout, () => {
-      stdoutDrained = true;
-      void settleRoot();
-    });
-    pipeline(command.stderr!, stderr, () => {
-      stderrDrained = true;
-      void settleRoot();
-    });
+    for (const stream of ["stdout", "stderr"] as const) {
+      pipeline(command[stream]!, process[stream], () => {
+        // Older Bun needs this half-close; newer Bun can report ENOTCONN after its own.
+        // Shutdown completion is not lineage loss; the host still requires output EOF.
+        shutdownOutput?.(stream === "stdout" ? 1 : 2, 1);
+        pendingOutput.delete(stream);
+        void settleRoot();
+      });
+    }
     if (start.stdinMode !== "inherit" && command.stdin) {
       const input = process.stdin;
       const destination = command.stdin;
@@ -673,13 +711,19 @@ export function runServiceChildGroupAnchor(): void {
   process.on("message", (raw: unknown) => {
     // SAFETY: the spawned relay is the sole sender on this private IPC channel.
     const message = raw as ServiceChildStart | { type: "parent-loss"; generation?: string };
-    if (message.type === "start" && !start && state === "starting") {
+    if (
+      (message.type === "start" || message.type === "prepare") &&
+      !start &&
+      state === "starting"
+    ) {
       if (
         isRecord(raw) &&
         raw.acknowledgeClosing !== undefined &&
         raw.acknowledgeClosing !== true
       ) {
-        process.exit(1);
+        state = "closed";
+        finish(1);
+        return;
       }
       void startCommand(message);
     } else if (message.type === "parent-loss" && message.generation === start?.generation) {

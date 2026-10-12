@@ -47,6 +47,7 @@ export function createModelSelectionMocks() {
       resolveSessionWorkerPlacementContext: () => ({
         workerSessionPlacementService: {
           getMany: placementMocks.getMany,
+          getManyAsync: async (sessionIds: readonly string[]) => placementMocks.getMany(sessionIds),
         },
       }),
     }),

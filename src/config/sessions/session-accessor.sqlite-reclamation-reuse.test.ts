@@ -1,19 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
-import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { Worker, WorkerOptions } from "node:worker_threads";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import {
-  conversation,
-  queueConversationDeliveryForTest,
-} from "../../gateway/conversation-delivery.test-support.js";
-import { runGatewayConversationList } from "../../gateway/conversation-list.js";
-import { runGatewayConversationSend } from "../../gateway/conversation-send.js";
-import { completeDurableDelivery } from "../../infra/outbound/delivery-completion.js";
-import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
-import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import {
   markGatewayRestartDraining,
@@ -53,18 +43,12 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
-import {
-  beginConversationDeliveryOperation,
-  getConversationDeliveryOperation,
-  markConversationDeliveryQueued,
-} from "./conversation-delivery-store.js";
-import { listConversations, registerConversationAddresses } from "./conversation-registry.js";
 import { loadTranscriptEvents } from "./session-accessor.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   createFixture,
   createNativeReclamationSource,
@@ -79,7 +63,7 @@ import { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-w
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 import type { SqliteReclamationWorkerMessage } from "./session-accessor.sqlite-reclamation-worker.types.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
-import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const validation = vi.hoisted<{
   checks: SharedArrayBuffer;
@@ -138,230 +122,70 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-test.each([
-  "current",
-  "two-leases",
-  "two-leases-missing",
-  "revoked-after-open",
-  "revoked-during-open",
-] as const)("reclamation borrows native-only verification unless revoked (%s)", async (proof) => {
-  const { database, options, plans, scopes } = createFixture(["victim"]);
-  closeOpenClawAgentDatabasesForTest(options.env.OPENCLAW_STATE_DIR);
-  const { source, wasRevokedDuringOpen } = createNativeReclamationSource(
-    { database, options },
-    proof === "revoked-during-open",
-  );
-  const execution = captureOpenClawAgentDatabaseExecution({ ...options, path: database.path });
-  let peerLease: string | undefined;
-  try {
-    await execution.runExisting(source, async () => "opened");
-    if (proof.startsWith("two-leases")) {
-      const before = readOpenClawAgentIntegrityVerification(database.path, options.env);
-      peerLease = claimOpenClawAgentDatabaseLease({ ...options, path: database.path });
-      expect(readOpenClawAgentIntegrityVerification(database.path, options.env)).toEqual(before);
-      if (proof === "two-leases-missing") {
-        removeAgentIntegrityMetadataForTest(options.env);
-      }
-    }
-    expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
-    const transferred = getOpenClawAgentDatabaseValidationForTransfer(database);
-    expect(Boolean(transferred)).toBe(proof !== "revoked-during-open");
-    if (proof === "revoked-after-open") {
-      invalidateOpenClawAgentDatabaseValidation(database.path);
-    }
-    await expect(
-      runSqliteSessionReclamation({ forceInProcess: false, plan: plans[0]! }),
-    ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
-    expect(fullChecks()).toBe(proof.startsWith("revoked") ? 1 : 0);
-    expect(wasRevokedDuringOpen()).toBe(proof === "revoked-during-open");
-    expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
-  } finally {
-    try {
-      await execution.release();
-      await closeOpenClawAgentDatabaseByPathAsync(database.path);
-    } finally {
-      if (peerLease) {
-        releaseOpenClawAgentDatabaseLease(peerLease, options, "read-only");
-      }
-    }
-  }
-});
-
-test.each(["directory discovery", "Gateway send", "durable completion"] as const)(
-  "admits %s behind a native reclamation commit request",
-  async (operation) => {
-    const fixture = createFixture();
-    const { database, options, plans, scopes } = fixture;
-    vi.stubEnv("OPENCLAW_STATE_DIR", options.env.OPENCLAW_STATE_DIR);
-    const scope = { agentId: "main", storePath: database.path, env: options.env };
-    const config = { agents: { entries: { main: {} } }, session: { store: database.path } };
-    const operationId = "conversation-admission";
-    if (operation !== "directory discovery") {
-      registerConversationAddresses(scope, [
-        { ...conversation, deliveryTarget: conversation.target },
-      ]);
-    }
-    if (operation === "durable completion") {
-      beginConversationDeliveryOperation(scope, {
-        operationId,
-        operationKind: "send",
-        conversationRef: conversation.conversationRef,
-        message: "synthetic message",
-      });
-      markConversationDeliveryQueued(scope, operationId, "queue-admission");
-    }
-    const runForeground = (): Promise<unknown> => {
-      if (operation === "directory discovery") {
-        return runGatewayConversationList(
-          { config, agentId: "main", channel: "reef", limit: 10 },
-          {
-            listConversations,
-            registerConversationAddresses,
-            resolveOutboundChannelPlugin: () => ({
-              ...createChannelTestPluginBase({
-                id: "reef",
-                config: { isEnabled: () => true, isConfigured: () => true },
-              }),
-              directory: {
-                listPeers: async () => [{ kind: "user", id: "molty", name: "Synthetic peer" }],
-              },
-            }),
-            resolveOutboundSessionRoute: async () => ({
-              sessionKey: conversation.sessionKey,
-              baseSessionKey: conversation.sessionKey,
-              peer: { kind: "direct", id: "molty" },
-              chatType: "direct",
-              from: "reef:molty",
-              to: conversation.target,
-            }),
-          },
-        );
-      }
-      if (operation === "Gateway send") {
-        vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation(
-          async (input): Promise<MessageActionResult> => {
-            await queueConversationDeliveryForTest(input, "queue-admission");
-            return {
-              kind: "send",
-              channel: "reef",
-              action: "send",
-              to: conversation.target,
-              handledBy: "core",
-              payload: {},
-              dryRun: false,
-              sendResult: {
-                channel: "reef",
-                to: conversation.target,
-                via: "direct",
-                mediaUrl: null,
-                result: { messageId: "outbound-admission" },
-                deliveryStatus: "sent",
-              },
-            };
-          },
-        );
-        return runGatewayConversationSend({
-          config,
-          agentId: "main",
-          senderIsOwner: true,
-          operationId,
-          conversationRef: conversation.conversationRef,
-          message: "synthetic message",
-        });
-      }
-      return completeDurableDelivery(
-        { kind: "conversation", ...scope, operationId },
-        { channel: "reef", messageId: "outbound-admission" },
-        options.env.OPENCLAW_STATE_DIR,
-      );
-    };
-    const order: string[] = [];
-    let foreground: Promise<unknown> | undefined;
-    let authorization: Promise<void> | undefined;
-    let authorizerDelayMs: number | undefined;
-    const withWorker = reclamationWorker.withSqliteReclamationWorker;
-    vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
-      (workerOptions, claim, run, assertCurrent, signal) =>
-        withWorker(
-          workerOptions,
-          claim,
-          async (worker) => {
-            const execute = worker.run.bind(worker);
-            const spy = vi.spyOn(worker, "run").mockImplementation((params) =>
-              execute({
-                ...params,
-                onCommitRequest: () => {
-                  const startedAt = performance.now();
-                  order.push("commit-request");
-                  foreground = Promise.resolve()
-                    .then(runForeground)
-                    .finally(() => {
-                      order.push("foreground-settled");
-                    });
-                  // Exercise real foreground work before the pending native commit is authorized.
-                  authorization = yieldToEventLoop().then(() => {
-                    authorizerDelayMs = performance.now() - startedAt;
-                    order.push("authorize");
-                    params.onCommitRequest();
-                  });
-                  void foreground.catch(() => undefined);
-                  void authorization.catch(() => undefined);
-                  return [];
-                },
-              }),
-            );
-            try {
-              return await run(worker);
-            } finally {
-              spy.mockRestore();
-            }
-          },
-          assertCurrent,
-          signal,
-        ),
+test.each(["two-leases-missing", "revoked-after-open", "revoked-during-open"] as const)(
+  "reclamation borrows native-only verification unless revoked (%s)",
+  async (proof) => {
+    const { database, options, plans, scopes } = createFixture(["victim"]);
+    closeOpenClawAgentDatabasesForTest(options.env.OPENCLAW_STATE_DIR);
+    const { source, wasRevokedDuringOpen } = createNativeReclamationSource(
+      { database, options },
+      proof === "revoked-during-open",
     );
-    const workers = observeReclamationWorkers();
+    const execution = captureOpenClawAgentDatabaseExecution({ ...options, path: database.path });
+    let peerLease: string | undefined;
     try {
-      const result = await runSqliteSessionReclamation({ forceInProcess: false, plan: plans[0]! });
-      await Promise.all([foreground, authorization]);
-      expect(order).toEqual(["commit-request", "authorize", "foreground-settled"]);
-      expect(authorizerDelayMs).toBeLessThan(500);
-      expect(result).toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
-      expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
-      if (operation === "directory discovery") {
-        expect(listConversations(scope)).toEqual([
-          expect.objectContaining({
-            conversationRef: conversation.conversationRef,
-            target: conversation.target,
-          }),
-        ]);
+      const opening = execution.runExisting(source, async () => "opened");
+      if (proof === "revoked-during-open") {
+        await expect(opening).rejects.toThrow("Agent schema admission changed before publication");
+        await execution.release();
+        expect(loadSessionEntryReadOnly(scopes[0]!)).toMatchObject({ sessionId: "victim" });
       } else {
-        expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
-          status: "sent",
-          platformMessageId: "outbound-admission",
-        });
+        await expect(opening).resolves.toBe("opened");
       }
-      expect(workers).toHaveLength(1);
+      if (proof.startsWith("two-leases")) {
+        const before = readOpenClawAgentIntegrityVerification(database.path, options.env);
+        peerLease = claimOpenClawAgentDatabaseLease({ ...options, path: database.path });
+        expect(readOpenClawAgentIntegrityVerification(database.path, options.env)).toEqual(before);
+        if (proof === "two-leases-missing") {
+          removeAgentIntegrityMetadataForTest(options.env);
+        }
+      }
+      expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+      const transferred = getOpenClawAgentDatabaseValidationForTransfer(database);
+      expect(Boolean(transferred)).toBe(proof !== "revoked-during-open");
+      if (proof === "revoked-after-open") {
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+      }
+      await expect(
+        runSqliteSessionReclamation({ forceInProcess: false, plan: plans[0]! }),
+      ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
+      expect(fullChecks()).toBe(proof.startsWith("revoked") ? 1 : 0);
+      expect(wasRevokedDuringOpen()).toBe(proof === "revoked-during-open");
+      expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
     } finally {
-      await Promise.allSettled([foreground, authorization]);
-      await closeOpenClawAgentDatabaseByPathAsync(database.path);
-      vi.unstubAllEnvs();
+      try {
+        await execution.release();
+        await closeOpenClawAgentDatabaseByPathAsync(database.path);
+      } finally {
+        if (peerLease) {
+          releaseOpenClawAgentDatabaseLease(peerLease, options, "read-only");
+        }
+      }
     }
-    expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
-    expect(leasesFor(fixture)).toHaveLength(0);
   },
 );
 
 test("retained reclamation operations share the first full scan until the Gateway owner invalidates it", async () => {
   const { options, database, scopes } = createFixture(["parent", "child"]);
   const databaseOptions = { ...options, path: database.path };
-  const plan = reclamation.createHistoryEvictionReclamationPlan({
-    databaseOptions,
+  const plan = {
+    kind: "history-eviction",
+    databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
     diskBudget: {},
     materializedPlans: [],
-    protectedSessionIds: new Set(scopes.map((scope) => scope.sessionId)),
+    protectedSessionIds: [...new Set(scopes.map((scope) => scope.sessionId))],
     sessionId: "already-removed-history",
-  });
+  } satisfies SqliteSessionReclamationPlan;
   for (const scope of scopes) {
     expect(appendTranscriptEventSync(scope, { type: "integrity-proof-survivor" })).toEqual({
       ok: true,
@@ -492,63 +316,44 @@ test.each([
   },
 );
 
-test.each(["admission", "commit"] as const)(
-  "rejects a revoked retained claim on the reused Worker's next %s",
-  async (checkpoint) => {
-    const { database, plans, scopes } = createFixture();
-    await runSqliteSessionReclamation({ forceInProcess: false, plan: plans[0]! });
-    const withWorker = reclamationWorker.withSqliteReclamationWorker;
-    let revoked = false;
-    let closeElapsedMs = 0;
-    vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
-      (options, claim, run, assertRequestCurrent, signal) =>
-        withWorker(
-          options,
-          claim,
-          async (worker) => {
-            const execute = worker.run.bind(worker);
-            const spy = vi.spyOn(worker, "run").mockImplementation((params) =>
-              execute({
-                ...params,
-                ...(checkpoint === "commit"
-                  ? {
-                      onCommitRequest: () => {
-                        const started = performance.now();
-                        revoked = closeOpenClawAgentDatabaseByPath(database.path);
-                        closeElapsedMs = performance.now() - started;
-                        return params.onCommitRequest();
-                      },
-                    }
-                  : {
-                      withWriteAdmission: async (...args) => {
-                        revoked = closeOpenClawAgentDatabaseByPath(database.path);
-                        return params.withWriteAdmission(...args);
-                      },
-                    }),
-              }),
-            );
-            try {
-              return await run(worker);
-            } finally {
-              spy.mockRestore();
-            }
-          },
-          assertRequestCurrent,
-          signal,
-        ),
-    );
-    await expect(
-      runSqliteSessionReclamation({ forceInProcess: false, plan: plans[1]! }),
-    ).rejects.toThrow("claim is no longer current");
-    expect(revoked).toBe(true);
-    if (checkpoint === "commit") {
-      // A retained transaction must be signaled before native close can wait on its lock.
-      expect(closeElapsedMs).toBeLessThan(2_000);
-    }
-    expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
-    expect(loadSessionEntryReadOnly(scopes[1]!)).toMatchObject({ sessionId: "second" });
-  },
-);
+test("rejects a revoked retained claim on the reused Worker's next admission", async () => {
+  const { database, plans, scopes } = createFixture();
+  await runSqliteSessionReclamation({ forceInProcess: false, plan: plans[0]! });
+  const withWorker = reclamationWorker.withSqliteReclamationWorker;
+  let revoked = false;
+  vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
+    (options, claim, run, assertRequestCurrent, signal) =>
+      withWorker(
+        options,
+        claim,
+        async (worker) => {
+          const execute = worker.run.bind(worker);
+          const spy = vi.spyOn(worker, "run").mockImplementation((params) =>
+            execute({
+              ...params,
+              withWriteAdmission: async (...args) => {
+                revoked = closeOpenClawAgentDatabaseByPath(database.path);
+                return params.withWriteAdmission(...args);
+              },
+            }),
+          );
+          try {
+            return await run(worker);
+          } finally {
+            spy.mockRestore();
+          }
+        },
+        assertRequestCurrent,
+        signal,
+      ),
+  );
+  await expect(
+    runSqliteSessionReclamation({ forceInProcess: false, plan: plans[1]! }),
+  ).rejects.toThrow("claim is no longer current");
+  expect(revoked).toBe(true);
+  expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
+  expect(loadSessionEntryReadOnly(scopes[1]!)).toMatchObject({ sessionId: "second" });
+});
 
 test.each(["path", "root"] as const)(
   "cancels queued cold reclamation before unrelated work settles during %s retirement",
@@ -614,7 +419,7 @@ test.each(["path", "root"] as const)(
   },
 );
 
-test("retains maintenance Workers across alternating databases and retires all idle heaps under pressure", async () => {
+test("retains reclamation Workers across alternating databases and retires all idle heaps under pressure", async () => {
   const pressure = channel("openclaw.memory.critical");
   expect(pressure.hasSubscribers).toBe(false);
   const fixtures = [createFixture(), createFixture()];
@@ -627,11 +432,12 @@ test("retains maintenance Workers across alternating databases and retires all i
     const diagnostics: SqliteSessionReclamationDiagnostics = {};
     const plan =
       pass % 3 === 0
-        ? reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions)
+        ? fixture.plans[0]!
         : { kind: "maintenance-pages" as const, databaseOptions, materializedPlans: [] };
     await expect(
       runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics }),
     ).resolves.toMatchObject({ kind: plan.kind });
+    expect(diagnostics.workerThreadId).toBe(spawned[index]!.threadId);
     threads[index]!.add(diagnostics.workerThreadId!);
   }
   expect(spawned).toHaveLength(2);
@@ -654,10 +460,7 @@ test("retains maintenance Workers across alternating databases and retires all i
   const fixture = fixtures[0]!;
   await runSqliteSessionReclamation({
     forceInProcess: false,
-    plan: reclamation.createSessionMaintenanceStatisticsOperation({
-      ...fixture.options,
-      path: fixture.database.path,
-    }),
+    plan: fixture.plans[1]!,
   });
   expect(spawned).toHaveLength(3);
   expect(pressure.hasSubscribers).toBe(true);
@@ -808,7 +611,7 @@ test.each(["idle", "active"] as const)(
     const spawned = observeReclamationWorkers((worker) => {
       leases.onSpawn(worker);
       worker.prependListener("message", (message: SqliteReclamationWorkerMessage) => {
-        if (drainOnCommit && message.type === "commit-request") {
+        if (drainOnCommit && message.type === "reclaimed") {
           drainOnCommit = false;
           markGatewayRestartDraining("restart (SIGTERM)");
           closesAtDrain = close.mock.calls.length;

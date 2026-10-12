@@ -1,4 +1,4 @@
-// CI artifacts use the same SDK declaration partitions as full/package builds.
+// CI and standalone SDK builds select only SDK roots from the canonical declaration inputs.
 import fs from "node:fs";
 import { listCacheFiles } from "./lib/build-artifact-cache.mts";
 import { TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS } from "./lib/tsdown-config-groups.mts";

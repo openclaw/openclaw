@@ -47,7 +47,7 @@ const enMcp = {
     noServers: "No MCP servers configured.",
     setUpFirstServer: "Set up your first MCP server",
     operatorCommands: "MCP operator commands",
-    operatorCommandsHint: "Status, diagnostics, auth, probing, and runtime reload.",
+    operatorCommandsHint: "Status, diagnostics, auth, connection checks, and runtime reload.",
     runtimeHint:
       "Edits save automatically. With automatic reload enabled, MCP connections rebuild on next use.",
     toolFilter: "tool filter",

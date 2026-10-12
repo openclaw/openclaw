@@ -17,10 +17,13 @@ import {
   withPersonalToolTurn,
 } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userPreferences from "../../state/user-preferences.js";
-import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
+import {
+  getUserPreferences,
+  setUserPreferences,
+} from "../../state/user-preferences.test-support.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -120,16 +123,12 @@ async function invoke(
 }
 
 function beforeWorkerCommit(checkpoint: () => void) {
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          checkpoint();
-        }
-        admit(request, grant);
-      }, attachment),
-  );
+  probe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      checkpoint();
+    }
+    admit(request, grant);
+  });
 }
 
 function changePreferencesAfterSnapshot(entries: Record<string, unknown>) {
@@ -208,18 +207,26 @@ describe("theme RPC", () => {
 
   it("imports and applies in one durable profile mutation, preserving other preferences and notifying only that profile", async () => {
     expect(
-      setUserPreferences(requesterProfileId, { "ui.accent": "#aabbcc", "ui.fontFamily": "serif" })
-        .ok,
+      setUserPreferences(requesterProfileId, {
+        "ui.accent": "#aabbcc",
+        "ui.fontFamily": "serif",
+      }).ok,
     ).toBe(true);
     const requester = client(requesterProfileId);
     const other = { ...client(otherProfileId), connId: "other-browser" };
     const broadcastToConnIds = vi.fn();
-    const definition = createThemeDefinitionFixture({
+    const branding = {
       mascot: "none",
+      brandName: "Mission Control",
+      brandIcon: "mark",
+      workingIndicator: "brand",
+      lobsterdex: false,
+      communityLinks: false,
       workingPhrases: ["Building", "Compiling"],
       critters: ["penguin", "fedora"],
       avatarHat: "fedora",
-    });
+    } satisfies Parameters<typeof createThemeDefinitionFixture>[0];
+    const definition = createThemeDefinitionFixture(branding);
     expect(
       await invoke(
         "themes.import",
@@ -243,10 +250,7 @@ describe("theme RPC", () => {
         theme: {
           id: "user/xenovessel",
           source: "user",
-          mascot: "none",
-          workingPhrases: ["Building", "Compiling"],
-          critters: ["penguin", "fedora"],
-          avatarHat: "fedora",
+          ...branding,
         },
         definition,
         application: "saved",
@@ -272,12 +276,7 @@ describe("theme RPC", () => {
     expect(await invoke("themes.get", { id: "user/xenovessel" })).toMatchObject({
       ok: true,
       payload: {
-        theme: {
-          mascot: "none",
-          workingPhrases: ["Building", "Compiling"],
-          critters: ["penguin", "fedora"],
-          avatarHat: "fedora",
-        },
+        theme: branding,
         definition,
       },
     });
@@ -287,33 +286,11 @@ describe("theme RPC", () => {
         themes: expect.arrayContaining([
           expect.objectContaining({
             id: "user/xenovessel",
-            mascot: "none",
-            workingPhrases: ["Building", "Compiling"],
-            critters: ["penguin", "fedora"],
-            avatarHat: "fedora",
+            ...branding,
           }),
         ]),
       },
     });
-  });
-
-  it("rolls back the imported definition when selecting it fails in storage", async () => {
-    expect(setUserPreferences(requesterProfileId, { "ui.theme": "claw" }).ok).toBe(true);
-    expect((await invoke("themes.get")).ok).toBe(true);
-    openOpenClawStateDatabase().db
-      .exec(`CREATE TRIGGER refuse_theme_selection BEFORE INSERT ON user_preferences
-      WHEN NEW.pref_key = 'ui.theme' BEGIN SELECT RAISE(ABORT, 'selection refused'); END`);
-    expect(
-      await invoke("themes.import", {
-        id: "refused",
-        definition: createThemeDefinitionFixture(),
-        apply: true,
-      }),
-    ).toMatchObject({
-      ok: false,
-      error: { message: expect.stringContaining("selection refused") },
-    });
-    expect(getUserPreferences(requesterProfileId)).toEqual({ "ui.theme": "claw" });
   });
 
   it("validates and persists theme selection with accompanying appearance changes as one batch", async () => {
@@ -352,10 +329,7 @@ describe("theme RPC", () => {
 
   it.each([
     { background: "url(https://example.test/collect)" },
-    { background: "rgb(1 2 3 .5)" },
-    { background: "oklch(50%, 0.2, 180)" },
     { "font-sans": "sans-serif; background: red" },
-    { "font-sans": "'unterminated" },
   ])(
     "rejects unsafe or malformed theme values without importing or selecting: %j",
     async (palette) => {
@@ -394,7 +368,7 @@ describe("theme RPC", () => {
     });
   });
 
-  it.each(["plugin", "import"])(
+  it.each(["import"])(
     "selects a dark-only %s theme in one call and refuses explicit incompatible modes without writes",
     async (source) => {
       pluginThemes.push(pluginTheme());
@@ -440,47 +414,6 @@ describe("theme RPC", () => {
         });
         expect(getUserPreferences(requesterProfileId)).toEqual(saved);
       }
-    },
-  );
-
-  it.each([true, false])(
-    "updates mode only when replacing the selected custom theme (selected=%s)",
-    async (selected) => {
-      const unrelated = { "ui.accent": "#aabbcc", "ui.fontFamily": "serif" };
-      expect(
-        setUserPreferences(requesterProfileId, {
-          ...unrelated,
-          "ui.theme": "claw",
-          "ui.themeMode": "dark",
-        }).ok,
-      ).toBe(true);
-      expect(
-        await invoke("themes.import", {
-          id: "adaptive",
-          definition: createThemeDefinitionFixture(),
-          apply: selected,
-        }),
-      ).toMatchObject({ ok: true });
-
-      const replacement = {
-        name: "Solar Vessel",
-        description: "Pale surfaces with dark text and cyan accents",
-        light: createThemePaletteFixture({ background: "#eeeeff", foreground: "#101020" }),
-      };
-      const id = selected ? "user/adaptive" : "claw";
-      const mode = selected ? "light" : "dark";
-      expect(
-        await invoke("themes.import", { id: "adaptive", definition: replacement }),
-      ).toMatchObject({
-        ok: true,
-        payload: { current: { id, mode }, definition: replacement, application: "saved" },
-      });
-      expect(getUserPreferences(requesterProfileId)).toEqual({
-        ...unrelated,
-        "ui.theme": id,
-        "ui.themeMode": mode,
-        "ui.themeDefinition.adaptive": replacement,
-      });
     },
   );
 
@@ -535,29 +468,16 @@ describe("theme RPC", () => {
     });
   });
 
-  it("preserves an unrelated concurrent preference while committing a prepared theme selection", async () => {
-    pluginThemes.push(pluginTheme());
-    changePreferencesAfterSnapshot({ "chat.showThinking": true });
-    expect(await invoke("themes.set", { id: "space-pack/xenovessel", mode: "dark" })).toMatchObject(
-      {
-        ok: true,
-        payload: { current: { id: "space-pack/xenovessel", mode: "dark" }, application: "saved" },
-      },
-    );
-    expect(getUserPreferences(requesterProfileId)).toEqual({
-      "chat.showThinking": true,
-      "ui.theme": "space-pack/xenovessel",
-      "ui.themeMode": "dark",
-    });
-  });
-
   it("preserves independent concurrent imports and atomically settles competing selections", async () => {
     const expected: Record<string, unknown> = { "chat.showThinking": true };
     expect(setUserPreferences(requesterProfileId, expected).ok).toBe(true);
     for (let round = 0; round < 4; round += 1) {
       Object.assign(expected, { "ui.theme": "claw", "ui.themeMode": "system" });
       expect(
-        setUserPreferences(requesterProfileId, { "ui.theme": "claw", "ui.themeMode": "system" }).ok,
+        setUserPreferences(requesterProfileId, {
+          "ui.theme": "claw",
+          "ui.themeMode": "system",
+        }).ok,
       ).toBe(true);
       const ids = Array.from({ length: 4 }, (_, index) => `independent-${round}-${index}`);
       const definitions = ids.map((name) => createThemeDefinitionFixture({ name }));

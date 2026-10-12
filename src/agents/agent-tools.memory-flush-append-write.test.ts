@@ -1,16 +1,18 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createWriteTool } from "./sessions/tools/index.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const RELATIVE_PATH = "memory/2026-08-08.md";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 let declaredWriteTool: ReturnType<typeof createWriteTool>;
 let declaredWriteOutputSchema: JsonSchemaObject;
@@ -37,8 +39,8 @@ function validateAgainstDeclaredSchema(value: unknown) {
 describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
   let root: string;
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "memory-flush-write-"));
+  beforeEach(() => {
+    root = tempDirs.make("memory-flush-write-");
     // Mirror the catalog path: declared schemas are JSON-serialized before the
     // bridge validates results against them. Read the schema from the public
     // tool factory so production internals do not need a test-only export.
@@ -50,23 +52,68 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
     declaredWriteOutputSchema = structuredClone(outputSchema);
   });
 
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
+  describe.each(["host", "sandbox"] as const)("%s append", (backend) => {
+    const saved =
+      "# Daily notes\n\n- Project Alder uses port 7319.\n\n## Deployment\nUse staging first.\n\n---\n";
+    const added = "- Project Birch uses port 8421.\n";
+    const wrap = () =>
+      wrapToolMemoryFlushAppendOnlyWrite(baseWriteTool(), {
+        root,
+        relativePath: RELATIVE_PATH,
+        sandbox:
+          backend === "sandbox" ? { root, bridge: createHostSandboxFsBridge(root) } : undefined,
+      });
 
-  async function runAppend(): Promise<unknown> {
-    const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseWriteTool(), {
-      root,
-      relativePath: RELATIVE_PATH,
-    });
-    const result = await wrapped.execute(
-      "call-1",
-      { path: RELATIVE_PATH, content: "hello" },
-      new AbortController().signal,
-      undefined,
+    it.each([
+      { name: "whole note", existing: saved, content: saved + added },
+      {
+        name: "whole note without trailing newline",
+        existing: saved.trimEnd(),
+        content: saved + added,
+      },
+      {
+        name: "interior read window",
+        existing: saved,
+        content: "## Deployment\nUse staging first.\n\n" + added,
+      },
+      {
+        name: "copied fact",
+        existing: saved,
+        content: "- Project Alder uses port 7319.\n\n" + added,
+      },
+      {
+        name: "copied prefix without a blank separator",
+        existing: saved,
+        content: "- Project Alder uses port 7319.\n" + added,
+      },
+      { name: "Windows note", existing: saved.replaceAll("\n", "\r\n"), content: saved + added },
+      { name: "retry of saved note", existing: saved, content: saved },
+    ])(
+      "rejects $name without mutation and accepts a new-content retry",
+      async ({ existing, content }) => {
+        const absolute = path.join(root, RELATIVE_PATH);
+        await fs.mkdir(path.dirname(absolute), { recursive: true });
+        await fs.writeFile(absolute, existing);
+        const tool = wrap();
+        await expect(tool.execute("replay", { path: RELATIVE_PATH, content })).rejects.toThrow(
+          "Retry with only new content",
+        );
+        expect(await fs.readFile(absolute, "utf8")).toBe(existing);
+        await tool.execute("delta", { path: RELATIVE_PATH, content: added });
+        expect(await fs.readFile(absolute, "utf8")).toBe(
+          existing + (existing.endsWith("\n") ? "" : "\n") + added,
+        );
+      },
     );
-    return result.details;
-  }
+
+    it("creates a note and permits repeated headings with new facts", async () => {
+      const tool = wrap();
+      await tool.execute("create", { path: RELATIVE_PATH, content: saved });
+      const content = "# Daily notes\n\n---\n\n## Deployment\nUse port 8421 for Birch.\n";
+      await tool.execute("new-facts", { path: RELATIVE_PATH, content });
+      expect(await fs.readFile(path.join(root, RELATIVE_PATH), "utf8")).toBe(saved + content);
+    });
+  });
 
   it("rechecks source authority after provenance work before appending", async () => {
     const absolute = path.join(root, RELATIVE_PATH);
@@ -99,12 +146,6 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
     await expect(pending).rejects.toThrow("authority is no longer active");
     expect(reachedCommit).toBe(true);
     expect(await fs.readFile(absolute, "utf8")).toBe("seed\n");
-  });
-
-  it("returns write-schema-conforming details when creating the memory file", async () => {
-    const details = await runAppend();
-    expect(details).toEqual({ changed: true });
-    expect(validateAgainstDeclaredSchema(details).ok).toBe(true);
   });
 
   it("appends schema-conforming results only to the allowed memory file", async () => {

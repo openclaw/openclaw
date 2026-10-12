@@ -1,20 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SIDEBAR_ENTRIES,
-  SIDEBAR_NAV_ROUTES,
   isSessionsHubRoute,
   isSettingsNavigationRoute,
   normalizeSidebarEntries,
   parseSidebarEntry,
   serializeSidebarEntry,
-  settingsNavigationOwnerRoute,
-  sidebarMoreRoutes,
   visibleSettingsNavigationGroups,
   isSettingsNavigationRouteVisible,
 } from "./app-navigation.ts";
 import type { NativeDeviceSettingsCapability } from "./app/native-device-settings.ts";
 import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
+import { settingsNavigationOwnerRoute } from "./lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
 import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
 import {
@@ -156,14 +154,8 @@ describe("sidebar entries", () => {
       ).toBe(true);
     }
   });
-  it("keeps operational destinations visible by default", () => {
-    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual([
-      "route:agents-home",
-      "route:dashboards",
-      "route:systems",
-      "route:cron",
-      "route:plugins",
-    ]);
+  it("starts with no personal rail shortcuts", () => {
+    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual([]);
     expect(isSettingsNavigationRoute("agents-home")).toBe(false);
   });
 
@@ -179,7 +171,6 @@ describe("sidebar entries", () => {
       "plugin:workboard/workboard",
       "plugin:workboard/board-ops",
     ]);
-    expect(sidebarMoreRoutes([])).not.toContain("workboard");
   });
 
   it("recognizes every settings navigation route", () => {
@@ -281,13 +272,5 @@ describe("sidebar entries", () => {
     expect(normalizeSidebarEntries(undefined)).toBeNull();
     expect(normalizeSidebarEntries({ usage: true })).toBeNull();
     expect(normalizeSidebarEntries("route:usage")).toBeNull();
-  });
-
-  it("puts every hidden nav route into the More section", () => {
-    const entries = ["route:cron", "session:agent:main:test", "route:usage"] as const;
-    const more = sidebarMoreRoutes(entries);
-    expect(more).not.toContain("cron");
-    expect(more).not.toContain("usage");
-    expect(new Set(["cron", "usage", ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
   });
 });

@@ -78,21 +78,21 @@ function createAgentRuntime(
       return await mutator(sessionStore);
     },
   );
-  const getSessionEntry = vi.fn(
-    (params: { sessionKey: string }) => sessionStore[params.sessionKey],
+  const getSessionEntryAsync = vi.fn(
+    async (params: { sessionKey: string }) => sessionStore[params.sessionKey],
   );
-  const patchSessionEntry = vi.fn(
+  const prepareSessionEntryPatch = vi.fn(
     async (params: {
       sessionKey: string;
       fallbackEntry?: TestSessionEntry;
       replaceEntry?: boolean;
-      update: (entry: TestSessionEntry) => Partial<TestSessionEntry> | null;
+      prepare: (entry: TestSessionEntry) => Partial<TestSessionEntry> | null;
     }) => {
       const existing = sessionStore[params.sessionKey] ?? params.fallbackEntry;
       if (!existing) {
         return null;
       }
-      const patch = params.update({ ...existing });
+      const patch = params.prepare({ ...existing });
       if (!patch) {
         return existing;
       }
@@ -157,8 +157,8 @@ function createAgentRuntime(
       loadSessionStore: () => sessionStore,
       saveSessionStore,
       updateSessionStore,
-      getSessionEntry,
-      patchSessionEntry,
+      getSessionEntryAsync,
+      prepareSessionEntryPatch,
       upsertSessionEntry,
       runWithWorkAdmission,
       resolveSessionFilePath,
@@ -171,7 +171,7 @@ function createAgentRuntime(
     runWithWorkAdmission,
     saveSessionStore,
     updateSessionStore,
-    patchSessionEntry,
+    prepareSessionEntryPatch,
     sessionStore,
     resolveAgentDir,
     resolveAgentWorkspaceDir,
@@ -216,6 +216,7 @@ async function runGenerateVoiceResponse(
     coreConfig,
     agentRuntime: runtime,
     callId: "call-123",
+    agentId: "main",
     from: "+15550001111",
     senderIsOwner: overrides?.senderIsOwner,
     transcript: overrides?.transcript ?? [{ speaker: "user", text: userMessage }],
@@ -619,9 +620,8 @@ describe("generateVoiceResponse", () => {
   });
 
   it("pins the voice session to responseModel before running the embedded agent", async () => {
-    const { runtime, runEmbeddedAgent, patchSessionEntry, sessionStore } = createAgentRuntime([
-      { text: '{"spoken":"Pinned model works."}' },
-    ]);
+    const { runtime, runEmbeddedAgent, prepareSessionEntryPatch, sessionStore } =
+      createAgentRuntime([{ text: '{"spoken":"Pinned model works."}' }]);
     sessionStore["agent:main:voice:15550001111"] = {
       sessionId: "existing-session",
       updatedAt: 100,
@@ -640,6 +640,7 @@ describe("generateVoiceResponse", () => {
       coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "main",
       from: "+15550001111",
       senderIsOwner: undefined,
       transcript: [{ speaker: "user", text: "hello there" }],
@@ -655,16 +656,18 @@ describe("generateVoiceResponse", () => {
     expect(pinnedSessionEntry?.modelProvider).toBeUndefined();
     expect(pinnedSessionEntry?.contextTokens).toBeUndefined();
     expect(pinnedSessionEntry?.authProfileOverride).toBeUndefined();
-    const patchSessionEntryCall = expectDefined(
-      patchSessionEntry.mock.calls.at(0),
+    const prepareSessionEntryPatchCall = expectDefined(
+      prepareSessionEntryPatch.mock.calls.at(0),
       "session entry patch",
     );
-    expect(patchSessionEntryCall[0]).toMatchObject({
+    expect(prepareSessionEntryPatchCall[0]).toMatchObject({
       storePath: "/tmp/openclaw/main/sessions.json",
       sessionKey: "agent:main:voice:15550001111",
       replaceEntry: true,
     });
-    expect((patchSessionEntryCall[0] as { update?: unknown }).update).toBeTypeOf("function");
+    expect((prepareSessionEntryPatchCall[0] as { prepare?: unknown }).prepare).toBeTypeOf(
+      "function",
+    );
     const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.provider).toBe("openai");
     expect(args.model).toBe("gpt-4.1-nano");
@@ -672,7 +675,8 @@ describe("generateVoiceResponse", () => {
   });
 
   it("rejects responseModel for a model-locked session without running the embedded agent", async () => {
-    const { runtime, runEmbeddedAgent, patchSessionEntry, sessionStore } = createAgentRuntime([]);
+    const { runtime, runEmbeddedAgent, prepareSessionEntryPatch, sessionStore } =
+      createAgentRuntime([]);
     sessionStore["agent:main:voice:15550001111"] = {
       sessionId: "locked-session",
       updatedAt: 100,
@@ -690,6 +694,7 @@ describe("generateVoiceResponse", () => {
       coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "main",
       from: "+15550001111",
       senderIsOwner: undefined,
       transcript: [{ speaker: "user", text: "hello there" }],
@@ -702,7 +707,7 @@ describe("generateVoiceResponse", () => {
       error: "Model selection is locked for this session.",
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    expect(patchSessionEntry).not.toHaveBeenCalled();
+    expect(prepareSessionEntryPatch).not.toHaveBeenCalled();
     expect(sessionStore["agent:main:voice:15550001111"]).toMatchObject({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -738,6 +743,7 @@ describe("generateVoiceResponse", () => {
       coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "main",
       sessionKey,
       from: "+15550001111",
       senderIsOwner: undefined,
@@ -811,6 +817,7 @@ describe("generateVoiceResponse", () => {
       coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "main",
       sessionKey: "voice:call:call-123",
       from: "+15550001111",
       senderIsOwner: undefined,
@@ -842,6 +849,7 @@ describe("generateVoiceResponse", () => {
       coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "voice",
       sessionKey: "meet-room-1",
       from: "+15550001111",
       senderIsOwner: undefined,
@@ -869,6 +877,7 @@ describe("generateVoiceResponse", () => {
         coreConfig: {} as OpenClawConfig,
         agentRuntime: runtime,
         callId: "call-123",
+        agentId: "voice",
         sessionKey,
         from: "+15550001111",
         senderIsOwner: undefined,
@@ -907,6 +916,7 @@ describe("generateVoiceResponse", () => {
       coreConfig: { session: { mainKey: "work" } },
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "voice",
       sessionKey: "agent:voice:main",
       from: "+15550001111",
       senderIsOwner: undefined,
@@ -919,10 +929,10 @@ describe("generateVoiceResponse", () => {
   });
 
   it.each([
-    { configuredAgentId: undefined, agentId: "main" },
-    { configuredAgentId: "voice", agentId: "voice" },
+    { configuredAgentId: "voice", agentId: "main" },
+    { configuredAgentId: undefined, agentId: "voice" },
   ])(
-    "uses the $agentId agent workspace with config agentId=$configuredAgentId",
+    "uses recorded owner $agentId with config agentId=$configuredAgentId",
     async ({ configuredAgentId, agentId }) => {
       const {
         runtime,
@@ -943,6 +953,7 @@ describe("generateVoiceResponse", () => {
         coreConfig,
         agentRuntime: runtime,
         callId: "call-123",
+        agentId,
         from: "+15550001111",
         senderIsOwner: undefined,
         transcript: [],
@@ -971,6 +982,31 @@ describe("generateVoiceResponse", () => {
       expect(args.sessionFile).toBeUndefined();
     },
   );
+
+  it("rejects an empty recorded owner before session work", async () => {
+    const { runtime, runEmbeddedAgent, runWithWorkAdmission, sessionStore } = createAgentRuntime(
+      [],
+    );
+
+    await expect(
+      generateVoiceResponse({
+        voiceConfig: VoiceCallConfigSchema.parse({ agentId: "voice" }),
+        coreConfig: {},
+        agentRuntime: runtime,
+        callId: "call-unowned",
+        agentId: " ",
+        sessionKey: "agent:support:voice:15550001111",
+        from: "+15550001111",
+        senderIsOwner: undefined,
+        transcript: [],
+        userMessage: "hello there",
+      }),
+    ).rejects.toThrow("Voice Call has no recorded agent owner");
+
+    expect(runWithWorkAdmission).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(sessionStore).toEqual({});
+  });
 
   it("prefers the agent frozen on the call", async () => {
     const { runtime, runEmbeddedAgent, resolveStorePath } = createAgentRuntime([
@@ -1020,6 +1056,7 @@ describe("generateVoiceResponse", () => {
       coreConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "voice",
       from: "+15550001111",
       senderIsOwner: undefined,
       transcript: [],

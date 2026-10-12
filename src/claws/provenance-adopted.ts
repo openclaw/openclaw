@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import { assertAgentDeletionAllowsMutation } from "../agents/agent-lifecycle-registry.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -10,10 +10,8 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { digestClawValue } from "./digest.js";
-import {
-  CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION,
-  encodeClawAgentOwnership,
-} from "./provenance-agent-origin.js";
+import { readClawInstallRecordFromDatabase } from "./provenance-read.kernel.js";
+import { prepareClawInstallRecord } from "./provenance-record.js";
 import {
   cacheClawInstallSchemaVersion,
   deleteCachedClawInstallSchemaVersion,
@@ -25,23 +23,25 @@ import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
 type ClawAdoptedDatabase = Pick<DB, "claw_installs" | "claw_workspace_files">;
 
-function agentOwnedPaths(plan: ClawAddPlan): string[] {
-  return plan.actions.filter((action) => action.kind === "agent").map((action) => action.target);
-}
-
 /** Atomically records a migration's adopted agent and already-present workspace files. */
-export function persistClawMigrationOwnershipWithInstallRecordReader(
+export function persistClawMigrationOwnership(
   plan: ClawAddPlan,
   workspaceFiles: PersistedClawWorkspaceFile[],
-  readInstallRecord: (db: DatabaseSync, agentId: string) => PersistedClawInstall | undefined,
   options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
 ): PersistedClawInstall {
   const nowMs = options.nowMs ?? Date.now();
   const agentConfigDigest = digestClawValue(plan.agent.config);
-  const ownedPaths = agentOwnedPaths(plan);
-  const ownership = encodeClawAgentOwnership(ownedPaths, "adopted");
-  const record = runOpenClawStateWriteTransaction(({ db }) => {
-    if (readInstallRecord(db, plan.agent.finalId)) {
+  const adoptedRecord = prepareClawInstallRecord(plan, {
+    agentConfigDigest,
+    agentOrigin: "adopted",
+    status: "complete",
+    addedAtMs: nowMs,
+    updatedAtMs: nowMs,
+  });
+  const record = runOpenClawStateWriteTransaction((database) => {
+    assertAgentDeletionAllowsMutation(database, plan.agent.finalId);
+    const { db } = database;
+    if (readClawInstallRecordFromDatabase(db, plan.agent.finalId)) {
       throw new Error(
         `Agent ${JSON.stringify(plan.agent.finalId)} already has Claw ownership; inspect claws status before migrating.`,
       );
@@ -93,25 +93,8 @@ export function persistClawMigrationOwnershipWithInstallRecordReader(
       db,
       state.insertInto("claw_installs").values({
         agent_id: plan.agent.finalId,
-        schema_version: ownership.schemaVersion,
-        source_kind: plan.claw.kind,
-        claw_name: plan.claw.name,
-        claw_version: plan.claw.version,
-        package_root: plan.claw.packageRoot,
-        manifest_path: plan.claw.manifestPath,
-        integrity_kind: plan.claw.integrityKind,
-        integrity: plan.claw.integrity,
-        source_byte_length: plan.claw.byteLength,
-        manifest_schema_version: plan.manifestSchemaVersion,
-        plan_integrity: plan.planIntegrity,
-        workspace: plan.agent.workspace,
-        agent_config_digest: agentConfigDigest,
-        agent_owned_paths_json: ownership.agentOwnedPathsJson,
-        bootstrap_source_path: null,
-        bootstrap_content_digest: null,
-        status: "complete",
+        ...adoptedRecord.sqlFields,
         added_at_ms: nowMs,
-        updated_at_ms: nowMs,
       }),
     );
     for (const file of workspaceFiles) {
@@ -130,20 +113,7 @@ export function persistClawMigrationOwnershipWithInstallRecordReader(
         }),
       );
     }
-    return {
-      schemaVersion: CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION,
-      claw: plan.claw,
-      manifestSchemaVersion: plan.manifestSchemaVersion,
-      planIntegrity: plan.planIntegrity,
-      agentId: plan.agent.finalId,
-      workspace: plan.agent.workspace,
-      agentConfigDigest,
-      agentOrigin: "adopted" as const,
-      agentOwnedPaths: ownedPaths,
-      status: "complete" as const,
-      addedAtMs: nowMs,
-      updatedAtMs: nowMs,
-    };
+    return adoptedRecord.record;
   }, options);
   cacheClawInstallSchemaVersion(
     plan.agent.finalId,
@@ -155,14 +125,15 @@ export function persistClawMigrationOwnershipWithInstallRecordReader(
 }
 
 /** Releases adopted ownership metadata without changing the pre-existing agent or files. */
-export function releaseAdoptedClawInstallRecordWithInstallRecordReader(
+export function releaseAdoptedClawInstallRecord(
   agentId: string,
   expectedPlanIntegrity: string,
-  readInstallRecord: (db: DatabaseSync, agentId: string) => PersistedClawInstall | undefined,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const record = readInstallRecord(db, agentId);
+  runOpenClawStateWriteTransaction((database) => {
+    assertAgentDeletionAllowsMutation(database, agentId);
+    const { db } = database;
+    const record = readClawInstallRecordFromDatabase(db, agentId);
     if (!record) {
       throw new Error(`No Claw install record exists for agent ${JSON.stringify(agentId)}.`);
     }

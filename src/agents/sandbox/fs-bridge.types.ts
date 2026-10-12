@@ -1,26 +1,17 @@
-/**
- * Public sandbox filesystem bridge contracts.
- *
- * Tool and backend code use this interface to access files through the sandbox
- * boundary instead of reaching directly into host paths.
- */
 import type { DirectoryEntry } from "../../infra/directory-entries.js";
 
-/** Resolved sandbox path with host, relative, and container views. */
 export type SandboxResolvedPath = {
   hostPath?: string;
   relativePath: string;
   containerPath: string;
 };
 
-/** Minimal file stat shape returned by sandbox fs bridge implementations. */
 export type SandboxFsStat = {
   type: "file" | "directory" | "other";
   size: number;
   mtimeMs: number;
 };
 
-/** Filesystem operations exposed across the sandbox boundary. */
 export type SandboxFsBridge = {
   /**
    * Backend-owned runtime roots and their local policy projections, in mount
@@ -30,6 +21,15 @@ export type SandboxFsBridge = {
    */
   readonly pathMappings?: readonly { readonly hostRoot: string; readonly containerRoot: string }[];
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
+  /**
+   * Resolves a host-backed file into the caller-facing path policy namespace.
+   * Implementations must bind matching expectedPolicyPath inputs to final I/O.
+   */
+  resolveReadPolicyPath?(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): string | Promise<string>;
   /**
    * Resolves the canonical mutation destination before caller authorization.
    *
@@ -70,6 +70,8 @@ export type SandboxFsBridge = {
     cwd?: string;
     signal?: AbortSignal;
     maxBytes?: number;
+    /** Policy path authorized by the caller before this read. */
+    expectedPolicyPath?: string;
   }): Promise<Buffer>;
   /**
    * Returns the canonical runtime path pinned by the successful read itself.
@@ -131,6 +133,8 @@ export type SandboxFsBridge = {
   stat(params: {
     filePath: string;
     cwd?: string;
+    /** Policy path authorized by the caller before this read. */
+    expectedPolicyPath?: string;
     signal?: AbortSignal;
   }): Promise<SandboxFsStat | null>;
 };

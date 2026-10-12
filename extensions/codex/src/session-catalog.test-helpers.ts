@@ -191,7 +191,12 @@ function asControlFactory(
 }
 
 export async function listCodexSessionCatalog(
-  params: Omit<Parameters<typeof createCodexSessionCatalogListOperation>[0], "control"> & {
+  params: Omit<
+    Parameters<typeof createCodexSessionCatalogListOperation>[0],
+    "control" | "localHomes"
+  > & {
+    includeLocal?: boolean;
+    localHomes?: CodexCatalogHome[];
     control:
       | CodexSessionCatalogControl
       | CodexSessionCatalogControlFactory
@@ -202,6 +207,7 @@ export async function listCodexSessionCatalog(
     hosts: await runCatalogListInline(
       createCodexSessionCatalogListOperation({
         ...params,
+        localHomes: params.localHomes ?? (params.includeLocal === false ? [] : [undefined]),
         control: asControlFactory(params.control),
       }),
     ),
@@ -303,7 +309,7 @@ type CreateSessionEntryResult = Awaited<
   ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>
 >;
 type PatchSessionEntryParams = Parameters<
-  PluginRuntime["agent"]["session"]["patchSessionEntry"]
+  PluginRuntime["agent"]["session"]["prepareSessionEntryPatch"]
 >[0];
 type SessionEntrySummary = ReturnType<
   PluginRuntime["agent"]["session"]["listSessionEntries"]
@@ -365,9 +371,11 @@ export const config = {} as OpenClawConfig;
 export function compatibilityOwnerConfig(owner = "alpha"): OpenClawConfig {
   return {
     agents: {
-      list: ["alpha", "beta"].map((id) => (id === owner ? { id, default: true } : { id })),
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: owner } },
+      entries: { alpha: {}, beta: {} },
     },
-  } as OpenClawConfig;
+  };
 }
 
 export async function normalizeCodexManifestConfig(
@@ -608,7 +616,7 @@ export function createRuntime(
       return null;
     }
     const current = structuredClone(summary.entry);
-    const patch = await patchParams.update(current, { existingEntry: structuredClone(current) });
+    const patch = await patchParams.prepare(current, { existingEntry: structuredClone(current) });
     if (!patch) {
       return summary.entry;
     }
@@ -630,6 +638,7 @@ export function createRuntime(
     agent: {
       session: {
         getSessionEntry: session.getSessionEntry,
+        getSessionEntryAsync: session.getSessionEntryAsync,
         createSessionEntry,
         listSessionEntries: vi.fn((listParams) => {
           const agentPrefix = listParams?.agentId ? `agent:${listParams.agentId}:` : undefined;
@@ -637,7 +646,11 @@ export function createRuntime(
             ({ sessionKey }) => !agentPrefix || sessionKey.startsWith(agentPrefix),
           );
         }),
-        patchSessionEntry,
+        listSessionEntriesAsync: vi.fn(async (listParams) => {
+          const agentPrefix = `agent:${listParams.agentId}:`;
+          return entries.filter(({ sessionKey }) => sessionKey.startsWith(agentPrefix));
+        }),
+        prepareSessionEntryPatch: patchSessionEntry,
       },
     },
   } as unknown as PluginRuntime;

@@ -1,22 +1,15 @@
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import type { SessionEntryWindowFacts } from "./session-entry-window.types.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionEntry } from "./types.js";
 
 export type SqliteLifecycleTargetSnapshot = Array<{
   entry: SessionEntry;
   sessionKey: string;
-  /** Complete rows from preparation; absent snapshots require a hydrated commit read. */
-  persistedRows?: {
-    lookupKeys: readonly string[];
-    rows: readonly ResolvedSessionEntryRow["row"][];
-  };
+  window?: SessionEntryWindowFacts;
+  sideTables?: { memberIdsJson: string; hasBoard: boolean };
+  row?: ResolvedSessionEntryRow["row"];
 }>;
-
-class SqliteSessionMutationConflictError extends Error {
-  constructor(operationLabel: string) {
-    super(`SQLite session state changed while preparing ${operationLabel}`);
-    this.name = "SqliteSessionMutationConflictError";
-  }
-}
 
 export function sqliteSessionEntriesEqual(
   left: SessionEntry | undefined,

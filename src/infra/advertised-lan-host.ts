@@ -17,7 +17,6 @@ const WINDOWS_DEFAULT_ROUTE_COMMAND =
 type AdvertisedLanHostCommandResult = {
   code: number | null;
   stdout: string;
-  stderr?: string;
 };
 
 type AdvertisedLanHostCommandRunner = (

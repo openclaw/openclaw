@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import * as responseBytes from "./chat-response-bytes.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import "./chat-sidebar.ts";
+import "./chat-detail-panel.tsx";
 
 const PDF_PREVIEW_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -46,77 +46,53 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("loads a bounded PDF into a CSP-compatible iframe", async () => {
-  const objectUrls = stubObjectUrls();
-  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("%PDF-1.7"));
-  vi.stubGlobal("fetch", fetchMock);
-  const panel = await mountAttachment({ sizeBytes: 8_231 });
-
-  await vi.waitFor(() => expect(panel.querySelector("iframe")).not.toBeNull());
-  const frame = panel.querySelector<HTMLIFrameElement>("iframe")!;
-  expect(frame.className).toBe("sidebar-pdf-preview__frame");
-  expect(frame.getAttribute("src")).toBe("blob:pdf-preview");
-  expect(frame.title).toBe("brief.pdf");
-  expect(panel.querySelector(".sidebar-file-toolbar")).toBeNull();
-  expect(panel.querySelector("object")).toBeNull();
-  expect(objectUrls.createObjectURL).toHaveBeenCalledOnce();
-  expect(fetchMock).toHaveBeenCalledWith(
-    "/__openclaw__/assistant-media?mediaTicket=pdf-preview",
-    expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
-  );
-});
-
-it("does not fetch a PDF known to exceed the preview budget", async () => {
-  const fetchMock = vi.fn<typeof fetch>();
-  vi.stubGlobal("fetch", fetchMock);
-  const panel = await mountAttachment({ sizeBytes: PDF_PREVIEW_MAX_BYTES + 1 });
-
-  await vi.waitFor(() => expect(panel.textContent).toContain("Preview unavailable"));
-  expect(panel.querySelector("iframe")).toBeNull();
-  expect(fetchMock).not.toHaveBeenCalled();
-  const download = panel.querySelector<HTMLAnchorElement>("a[download]");
-  expect(download?.getAttribute("href")).toBe(
-    "/__openclaw__/assistant-media?mediaTicket=pdf-preview",
-  );
-  expect(download?.download).toBe("brief.pdf");
-});
-
-it("cancels an oversized streamed PDF response", async () => {
-  const cancel = vi.fn();
-  const response = new Response(new ReadableStream({ start() {}, cancel }), {
-    headers: { "Content-Length": String(PDF_PREVIEW_MAX_BYTES + 1) },
-  });
-  vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(response));
-  const panel = await mountAttachment();
-
-  await vi.waitFor(() => expect(panel.textContent).toContain("Preview unavailable"));
-  expect(cancel).toHaveBeenCalledOnce();
-  expect(panel.querySelector("iframe")).toBeNull();
-});
-
-it("times out a PDF response that stalls while reading", async () => {
-  vi.useFakeTimers();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>().mockImplementation(
-      async (_input, init) =>
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              init?.signal?.addEventListener("abort", () =>
-                controller.error(new DOMException("Aborted", "AbortError")),
-              );
-            },
-          }),
-        ),
-    ),
-  );
-  const panel = await mountAttachment();
-
-  await vi.advanceTimersByTimeAsync(10_000);
-  await vi.waitFor(() => expect(panel.textContent).toContain("Preview unavailable"));
-  expect(panel.querySelector("iframe")).toBeNull();
-});
+it.each(["metadata", "header", "timeout"] as const)(
+  "declines a PDF after %s rejection",
+  async (failure) => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const cancel = vi.fn();
+    if (failure === "header") {
+      fetchMock.mockResolvedValue(
+        new Response(new ReadableStream({ start() {}, cancel }), {
+          headers: { "Content-Length": String(PDF_PREVIEW_MAX_BYTES + 1) },
+        }),
+      );
+    } else if (failure === "timeout") {
+      vi.useFakeTimers();
+      fetchMock.mockImplementation(
+        async (_input, init) =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                init?.signal?.addEventListener("abort", () =>
+                  controller.error(new DOMException("Aborted", "AbortError")),
+                );
+              },
+            }),
+          ),
+      );
+    }
+    vi.stubGlobal("fetch", fetchMock);
+    const panel = await mountAttachment({
+      sizeBytes: failure === "metadata" ? PDF_PREVIEW_MAX_BYTES + 1 : undefined,
+    });
+    if (failure === "timeout") {
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    await vi.waitFor(() => expect(panel.textContent).toContain("Preview unavailable"));
+    expect(panel.querySelector("iframe")).toBeNull();
+    if (failure === "metadata") {
+      expect(fetchMock).not.toHaveBeenCalled();
+      const download = panel.querySelector<HTMLAnchorElement>("a[download]");
+      expect(download?.getAttribute("href")).toBe(
+        "/__openclaw__/assistant-media?mediaTicket=pdf-preview",
+      );
+      expect(download?.download).toBe("brief.pdf");
+    } else if (failure === "header") {
+      expect(cancel).toHaveBeenCalledOnce();
+    }
+  },
+);
 
 it("aborts an interrupted PDF load and reloads it after reconnect", async () => {
   const objectUrls = stubObjectUrls();
@@ -132,7 +108,7 @@ it("aborts an interrupted PDF load and reloads it after reconnect", async () => 
     )
     .mockResolvedValueOnce(new Response("%PDF-1.7"));
   vi.stubGlobal("fetch", fetchMock);
-  const panel = await mountAttachment();
+  const panel = await mountAttachment({ sizeBytes: 8_231 });
 
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
   panel.remove();
@@ -142,6 +118,16 @@ it("aborts an interrupted PDF load and reloads it after reconnect", async () => 
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(objectUrls.createObjectURL).toHaveBeenCalledOnce();
   expect(objectUrls.revokeObjectURL).not.toHaveBeenCalled();
+  const frame = panel.querySelector<HTMLIFrameElement>("iframe")!;
+  expect(frame.className).toBe("sidebar-pdf-preview__frame");
+  expect(frame.getAttribute("src")).toBe("blob:pdf-preview");
+  expect(frame.title).toBe("brief.pdf");
+  expect(panel.querySelector(".sidebar-file-toolbar")).toBeNull();
+  expect(panel.querySelector("object")).toBeNull();
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/__openclaw__/assistant-media?mediaTicket=pdf-preview",
+    expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
+  );
 });
 
 it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(

@@ -9,16 +9,16 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   onSessionIdentityMutation,
-  replaceTranscriptEventsSync,
-  resolveSessionTranscriptDatabasePath,
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { SessionManager } from "./session-manager.js";
@@ -235,14 +235,12 @@ describe("SessionManager branch replacement", () => {
     const beforeEntries = manager.getEntries();
     const beforeTarget = manager.getSessionTarget();
     expect(beforeTarget).toMatchObject(scope);
-    const database = openOpenClawAgentDatabase({
-      agentId: scope.agentId,
-      path: resolveSessionTranscriptDatabasePath(scope),
+    const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        throw new Error("branch transcript write failed");
+      }
+      admit(request, grant);
     });
-    database.db.exec(`
-      CREATE TRIGGER reject_branch_transcript BEFORE INSERT ON transcript_events
-      BEGIN SELECT RAISE(ABORT, 'branch transcript write failed'); END;
-    `);
     const replacements: unknown[] = [];
     const stop = onSessionIdentityMutation((mutation) => {
       if (mutation.previous.sessionKeys.includes(scope.sessionKey)) {
@@ -255,6 +253,7 @@ describe("SessionManager branch replacement", () => {
       );
     } finally {
       stop();
+      admission.mockRestore();
     }
 
     expect(loadSessionEntry(scope)).toEqual(beforeEntry);
@@ -339,15 +338,15 @@ describe("SessionManager branch replacement", () => {
       });
       await ownerChangeStarted;
 
-      const queuedAt = Date.now();
-      const committedAt = queuedAt + 1_000;
+      const queuedAt = Date.now() - 1_000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(queuedAt);
       const branch = runAsWriter(() => sessionManager.createBranchedSession(assistant.messageId));
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
       const whileQueued = readManagerState();
-      clock.mockReturnValue(committedAt);
+      clock.mockRestore();
+      const commitStartedAt = Date.now();
       releaseOwnerChange();
 
       await ownerChange;
@@ -376,7 +375,7 @@ describe("SessionManager branch replacement", () => {
             sessionManager.appendMessage({
               role: "user",
               content: "stale successor append",
-              timestamp: committedAt,
+              timestamp: commitStartedAt,
             }),
           ).toThrow(SessionTranscriptWriterClaimReboundError);
         }
@@ -386,9 +385,11 @@ describe("SessionManager branch replacement", () => {
         expect(loadSessionEntry(scope)).toMatchObject({
           label: "updated while branch queued",
           sessionId: branchId,
-          updatedAt: committedAt,
           activeWriterRunId: "branch-original-writer",
         });
+        const updatedAt = loadSessionEntry(scope)?.updatedAt;
+        expect(updatedAt).toBeGreaterThanOrEqual(commitStartedAt);
+        expect(updatedAt).toBeLessThanOrEqual(Date.now());
         expect(sessionManager.getSessionId()).toBe(branchId);
       }
       expect(whileQueued).toEqual(beforeBranch);

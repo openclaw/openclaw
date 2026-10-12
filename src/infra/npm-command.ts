@@ -17,7 +17,7 @@ class BundledNpmCliNotFoundError extends Error {
 }
 
 /** Runs the packaged npm CLI with the current JavaScript runtime. */
-function resolveBundledNpmCommand(args: readonly string[]): [string, ...string[]] {
+export function resolveBundledNpmCommand(args: readonly string[]): [string, string, ...string[]] {
   let cliPath = "npm/bin/npm-cli.js";
   try {
     cliPath = path.join(path.dirname(require.resolve("npm/package.json")), "bin", "npm-cli.js");

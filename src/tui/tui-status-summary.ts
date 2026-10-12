@@ -5,8 +5,7 @@ import type { GatewayStatusSummary } from "./tui-types.js";
 
 /** Formats Gateway/session health into compact status lines for the TUI. */
 export function formatStatusSummary(summary: GatewayStatusSummary) {
-  const lines: string[] = [];
-  lines.push("Gateway status");
+  const lines = ["Gateway status"];
   if (summary.runtimeVersion) {
     lines.push(`Version: ${summary.runtimeVersion}`);
   }
@@ -25,8 +24,7 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
 
   const channelSummary = Array.isArray(summary.channelSummary) ? summary.channelSummary : [];
   if (channelSummary.length > 0) {
-    lines.push("");
-    lines.push("System:");
+    lines.push("", "System:");
     for (const line of channelSummary) {
       lines.push(`  ${line}`);
     }
@@ -41,8 +39,7 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
       }
       return `${agent.every ?? "unknown"} (${agentId})`;
     });
-    lines.push("");
-    lines.push(`Heartbeat: ${heartbeatParts.join(", ")}`);
+    lines.push("", `Heartbeat: ${heartbeatParts.join(", ")}`);
   }
 
   const sessionPaths = summary.sessions?.paths ?? [];

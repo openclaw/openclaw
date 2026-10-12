@@ -36,12 +36,7 @@ export interface TruncationOptions {
   maxBytes?: number;
 }
 
-interface ResolvedTruncationInput {
-  totalLines: number;
-  totalBytes: number;
-  maxLines: number;
-  maxBytes: number;
-}
+type ResolvedTruncationInput = ReturnType<typeof resolveTruncationInput>;
 
 interface RuntimeBuffer {
   byteLength(content: string, encoding: "utf8"): number;
@@ -108,10 +103,7 @@ export function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-function resolveTruncationInput(
-  content: string,
-  options: TruncationOptions,
-): ResolvedTruncationInput {
+function resolveTruncationInput(content: string, options: TruncationOptions) {
   let totalLines = content.length > 0 && !content.endsWith("\n") ? 1 : 0;
   for (let index = content.indexOf("\n"); index !== -1; index = content.indexOf("\n", index + 1)) {
     totalLines++;

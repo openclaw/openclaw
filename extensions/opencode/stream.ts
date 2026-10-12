@@ -1,4 +1,3 @@
-// OpenCode Zen stream adapter handles provider-specific Responses wire compatibility.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   streamSimple,
@@ -207,6 +206,7 @@ function restoreEvent(event: AssistantMessageEvent, state: TransformState): Assi
       // Dynamic-record wire JSON is not prefix-compatible with restored object JSON.
       // Defer argument bytes so consumers emit one canonical payload at toolcall_end.
       restored.delta = "";
+      delete call.partialJson;
     }
   } else if (restored.type === "toolcall_end") {
     restored.toolCall = { ...restored.toolCall };

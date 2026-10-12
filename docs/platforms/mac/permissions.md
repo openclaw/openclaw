@@ -60,7 +60,7 @@ If Quick Chat still shows **Needs additional permissions: Screen Recording**:
 2. If macOS opens System Settings, enable the running OpenClaw app under **Privacy & Security -> Screen & System Audio Recording** (called **Screen Recording** on older macOS versions).
 3. Return to OpenClaw and retry the screenshot. **Dashboard → Settings → This Mac → Permissions** shows the refreshed access status.
 
-After an explicit **Grant** request, OpenClaw checks ScreenCaptureKit as well as the macOS permission preflight. This lets it recognize access when the preflight still reports an old denial. Passive status checks do not initiate this probe before you request access.
+After an explicit **Grant** request, OpenClaw checks ScreenCaptureKit as well as the macOS permission preflight. This lets it recognize access when the preflight still reports an old denial. Passive status checks do not initiate this check before you request access.
 
 If access still appears missing, quit and reopen OpenClaw from the same app path. Some macOS permission changes require an app restart before capture works. If both release and development builds are installed, grant access to the build you are actually running: approving `/Applications/OpenClaw.app` does not grant access to a development build with a different bundle identifier.
 

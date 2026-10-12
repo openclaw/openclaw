@@ -1,6 +1,7 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { InboxEntry, ReefDeliveryRejection, ReefRejectionNoticeState } from "./types.js";
 
 type ResolveAgentRouteParams = Parameters<
@@ -21,6 +22,7 @@ interface ReefRejectionNotice {
   recipient: ReefDeliveryRejection["recipient"];
   originalTextHash?: string;
   allowResend: boolean;
+  recovery: ReefDeliveryRejection["recovery"];
 }
 
 const MAX_REJECTION_TRACKED = 1_024;
@@ -30,18 +32,22 @@ const REJECTION_NOTICE_RETRY_MAX_MS = 60_000;
 
 interface ReefReceiptNotifierOptions {
   now?: () => number;
-  schedule?: (task: () => Promise<void>, delayMs: number) => void;
+  scheduler: PluginServiceSchedulerV1;
   onError?: (error: unknown, receiptId: string) => void;
-  signal?: AbortSignal;
 }
 
 interface ReefRejectionNoticeStore {
-  loadState(peer: string): ReefRejectionNoticeState | undefined;
+  loadState(
+    rejection: ReefDeliveryRejection,
+  ): ReefRejectionNoticeState | undefined | Promise<ReefRejectionNoticeState | undefined>;
   reserve(
     rejection: ReefDeliveryRejection,
     state: ReefRejectionNoticeState,
-  ): { kind: "reserved" } | { kind: "existing"; state: ReefRejectionNoticeState };
-  complete(rejection: ReefDeliveryRejection, state: ReefRejectionNoticeState): void;
+  ):
+    | { kind: "reserved" }
+    | { kind: "existing"; state: ReefRejectionNoticeState }
+    | Promise<{ kind: "reserved" } | { kind: "existing"; state: ReefRejectionNoticeState }>;
+  complete(rejection: ReefDeliveryRejection, state: ReefRejectionNoticeState): void | Promise<void>;
 }
 
 interface ReefPeerNoticeState {
@@ -53,10 +59,6 @@ interface ReefPeerNoticeState {
 interface ReefNoticePlan {
   notice: ReefRejectionNotice;
   state: ReefRejectionNoticeState;
-}
-
-function scheduleNoticeRetry(task: () => Promise<void>, delayMs: number): void {
-  setTimeout(() => void task(), delayMs).unref();
 }
 
 function rejectionNoticeRetryDelay(retryAttempt: number): number {
@@ -75,17 +77,17 @@ export class ReefReceiptNotifier {
   constructor(
     private readonly notify: (notice: ReefRejectionNotice) => Promise<void>,
     private readonly store: ReefRejectionNoticeStore,
-    private readonly options: ReefReceiptNotifierOptions = {},
+    private readonly options: ReefReceiptNotifierOptions,
   ) {}
 
   async notifyRejections(rejections: readonly ReefDeliveryRejection[]): Promise<void> {
-    this.seedRecoveredStates(rejections);
+    await this.seedRecoveredStates(rejections);
     for (const rejection of rejections) {
       await this.peerQueues.enqueue(rejection.peer, () => this.notifyRejection(rejection, 0));
     }
   }
 
-  private seedRecoveredStates(rejections: readonly ReefDeliveryRejection[]): void {
+  private async seedRecoveredStates(rejections: readonly ReefDeliveryRejection[]): Promise<void> {
     const recoveredByPeer = new Map<string, ReefDeliveryRejection[]>();
     for (const rejection of rejections) {
       if (!rejection.reservedNotice) {
@@ -96,22 +98,24 @@ export class ReefReceiptNotifier {
       recoveredByPeer.set(rejection.peer, recovered);
     }
     for (const [peer, recovered] of recoveredByPeer) {
-      let state: ReefPeerNoticeState;
-      try {
-        state = this.touchPeerState(peer);
-      } catch (error) {
-        this.reportError(error, recovered[0]!.id);
-        // Unknown durable state may contain a newer rejection. Keep this
-        // notifier stop-only for the peer until cache eviction or restart.
-        state = { resendBlocked: true };
-      }
-      for (const rejection of recovered) {
-        this.applyState(
-          state,
-          this.mergeStates(this.snapshotState(state), rejection.reservedNotice!),
-        );
-      }
-      this.rememberPeerState(peer, state);
+      await this.peerQueues.enqueue(peer, async () => {
+        let state: ReefPeerNoticeState;
+        try {
+          state = await this.touchPeerState(recovered[0]!);
+        } catch (error) {
+          this.reportError(error, recovered[0]!.id);
+          // Unknown durable state may contain a newer rejection. Keep this
+          // notifier stop-only for the peer until cache eviction or restart.
+          state = { resendBlocked: true };
+        }
+        for (const rejection of recovered) {
+          this.applyState(
+            state,
+            this.mergeStates(this.snapshotState(state), rejection.reservedNotice!),
+          );
+        }
+        this.rememberPeerState(peer, state);
+      });
     }
   }
 
@@ -127,7 +131,7 @@ export class ReefReceiptNotifier {
 
     let peerState: ReefPeerNoticeState;
     try {
-      peerState = this.touchPeerState(rejection.peer);
+      peerState = await this.touchPeerState(rejection);
     } catch (error) {
       this.reportError(error, rejection.id);
       this.scheduleNotificationRetry(rejection, retryAttempt);
@@ -142,7 +146,7 @@ export class ReefReceiptNotifier {
       peerState.resendBlocked === true,
     );
     try {
-      const reservation = this.store.reserve(rejection, plan.state);
+      const reservation = await this.store.reserve(rejection, plan.state);
       if (reservation.kind === "existing") {
         plan = this.planNotice(
           rejection,
@@ -166,7 +170,7 @@ export class ReefReceiptNotifier {
     }
 
     this.applyState(peerState, plan.state);
-    this.completeNotice(rejection, plan.state, 0);
+    await this.completeNotice(rejection, plan.state, 0);
   }
 
   private planNotice(
@@ -211,10 +215,11 @@ export class ReefReceiptNotifier {
     return this.options.now?.() ?? Date.now();
   }
 
-  private touchPeerState(peer: string): ReefPeerNoticeState {
+  private async touchPeerState(rejection: ReefDeliveryRejection): Promise<ReefPeerNoticeState> {
+    const { peer } = rejection;
     let state = this.peerStates.get(peer);
     if (!state) {
-      const persisted = this.store.loadState(peer);
+      const persisted = await this.store.loadState(rejection);
       state = persisted ? { ...persisted } : {};
     }
     this.rememberPeerState(peer, state);
@@ -237,13 +242,13 @@ export class ReefReceiptNotifier {
     }
   }
 
-  private completeNotice(
+  private async completeNotice(
     rejection: ReefDeliveryRejection,
     state: ReefRejectionNoticeState,
     retryAttempt: number,
-  ): void {
+  ): Promise<void> {
     try {
-      this.store.complete(rejection, state);
+      await this.store.complete(rejection, state);
       this.markCompleted(rejection);
     } catch (error) {
       this.reportError(error, rejection.id);
@@ -265,23 +270,23 @@ export class ReefReceiptNotifier {
     retryAttempt: number,
     task: () => Promise<void> | void,
   ): void {
-    if (this.options.signal?.aborted) {
+    if (this.options.scheduler.signal.aborted) {
       this.inFlight.delete(this.rejectionKey(rejection));
       return;
     }
-    const schedule = this.options.schedule ?? scheduleNoticeRetry;
     try {
-      schedule(
-        () =>
+      this.options.scheduler.schedule({
+        id: `receipt:${this.rejectionKey(rejection)}`,
+        run: () =>
           this.peerQueues.enqueue(rejection.peer, async () => {
-            if (this.options.signal?.aborted) {
+            if (this.options.scheduler.signal.aborted) {
               this.inFlight.delete(this.rejectionKey(rejection));
               return;
             }
             await task();
           }),
-        rejectionNoticeRetryDelay(retryAttempt),
-      );
+        delayMs: rejectionNoticeRetryDelay(retryAttempt),
+      });
     } catch (error) {
       this.inFlight.delete(this.rejectionKey(rejection));
       this.reportError(error, rejection.id);
@@ -348,6 +353,7 @@ export class ReefReceiptNotifier {
       recipient: rejection.recipient,
       ...(rejection.textHash ? { originalTextHash: rejection.textHash } : {}),
       allowResend,
+      recovery: rejection.recovery,
     };
   }
 
@@ -392,9 +398,10 @@ const REEF_DELIVERY_OVERDUE_NOTICE_MS = 10 * 60 * 1_000;
 interface ReefOverdueDeliveryStore {
   overdueOutboundDeliveries(
     olderThanMs: number,
-    now?: number,
-  ): Array<{ peer: string; id: string; sentAt: number }>;
-  markOutboundDeliveryOverdueNotified(peer: string, id: string): boolean;
+  ):
+    | Array<{ peer: string; id: string; sentAt: number }>
+    | Promise<Array<{ peer: string; id: string; sentAt: number }>>;
+  markOutboundDeliveryOverdueNotified(peer: string, id: string): boolean | Promise<boolean>;
 }
 
 /**
@@ -407,12 +414,11 @@ interface ReefOverdueDeliveryStore {
 export async function notifyOverdueReefDeliveries(params: {
   trust: ReefOverdueDeliveryStore;
   ownerNotice: (notice: ReefOwnerNotice) => Promise<void>;
-  thresholdMs?: number;
-  now?: number;
 }): Promise<void> {
-  const thresholdMs = params.thresholdMs ?? REEF_DELIVERY_OVERDUE_NOTICE_MS;
-  for (const overdue of params.trust.overdueOutboundDeliveries(thresholdMs, params.now)) {
-    const elapsedMs = (params.now ?? Date.now()) - overdue.sentAt;
+  for (const overdue of await params.trust.overdueOutboundDeliveries(
+    REEF_DELIVERY_OVERDUE_NOTICE_MS,
+  )) {
+    const elapsedMs = Date.now() - overdue.sentAt;
     const minutes = Math.max(1, Math.round(elapsedMs / 60_000));
     // Dispatch before marking: a crash in between re-sends one deduped notice
     // on the next tick, whereas marking first could silence it permanently —
@@ -431,21 +437,20 @@ export async function notifyOverdueReefDeliveries(params: {
     // "delivered after all", and a reply that races this notice corrects it
     // naturally. Accepted tradeoff: in that sliver the delay notice stands
     // uncorrected rather than risking a false delivery claim.
-    params.trust.markOutboundDeliveryOverdueNotified(overdue.peer, overdue.id);
+    await params.trust.markOutboundDeliveryOverdueNotified(overdue.peer, overdue.id);
   }
 }
 
 export function createReefOwnerNoticeHandler(params: {
   runtime: PluginRuntime;
   cfg: ResolveAgentRouteParams["cfg"];
-  accountId: string;
   handle: string;
 }): (notice: ReefOwnerNotice) => Promise<void> {
   return async (notice) => {
     const route = params.runtime.channel.routing.resolveAgentRoute({
       cfg: params.cfg,
       channel: "reef",
-      accountId: params.accountId,
+      accountId: "default",
       peer: { kind: "direct", id: notice.peer ?? params.handle },
     });
     const queued = params.runtime.system.enqueueSystemEvent(notice.text, {

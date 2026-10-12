@@ -57,7 +57,7 @@ function browserCommandGroups(
         command("doctor", "Check browser plugin readiness", [
           {
             flags: "--deep",
-            description: "Inspect native enterprise policy and run a live snapshot probe",
+            description: "Inspect native enterprise policy and run a live snapshot check",
           },
         ]),
       ],

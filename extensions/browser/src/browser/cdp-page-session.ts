@@ -4,6 +4,7 @@
 import { createHash } from "node:crypto";
 import { stripVTControlCharacters } from "node:util";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
@@ -221,9 +222,7 @@ async function waitForCdpNavigationResult(
     } else {
       stableCandidate = undefined;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, CDP_TARGET_NAVIGATION_RESULT_POLL_MS);
-    });
+    await sleepWithAbort(CDP_TARGET_NAVIGATION_RESULT_POLL_MS);
   }
   return undefined;
 }

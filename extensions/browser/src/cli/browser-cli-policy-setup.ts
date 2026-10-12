@@ -148,16 +148,12 @@ export function registerBrowserPolicySetupCommands(
         await runBrowserCliCommand(async () => {
           const parent = parentOpts(cmd);
           const requestPlan = (body: Parameters<typeof callBrowserRequest>[1]["body"]) =>
-            callBrowserRequest<NativePolicySetupPlan>(
-              parent,
-              {
-                method: "POST",
-                path: "/policy/setup/plan",
-                query: resolveBrowserProfileQuery(parent.browserProfile),
-                body,
-              },
-              { timeoutMs: 30_000 },
-            );
+            callBrowserRequest<NativePolicySetupPlan>(parent, {
+              method: "POST",
+              path: "/policy/setup/plan",
+              query: resolveBrowserProfileQuery(parent.browserProfile),
+              body,
+            });
           const inspection = await requestPlan({ operation: "inspect" });
           if (inspection.state !== "ready") {
             if (parent.json) {
@@ -284,11 +280,10 @@ export function registerBrowserPolicySetupCommands(
           method: "GET" as const,
           query: resolveBrowserProfileQuery(parent.browserProfile),
         };
-        const report = await callBrowserRequest<NativeBrowserPolicyReport>(
-          parent,
-          { ...request, path: "/policy" },
-          { timeoutMs: 30_000 },
-        );
+        const report = await callBrowserRequest<NativeBrowserPolicyReport>(parent, {
+          ...request,
+          path: "/policy",
+        });
         const status = await callBrowserRequest<BrowserStatus>(parent, { ...request, path: "/" });
         const verification = verifyNativeBrowserPolicy({
           policies,

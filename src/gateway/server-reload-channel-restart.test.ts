@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { writeProviderAuthConfig } from "../plugins/provider-auth-config.js";
@@ -40,11 +40,9 @@ async function reloadChannels(
     restartChannelAccounts: new Map(),
     activePluginChannelsAfterReload: null,
     shouldSkipChannelRestart: false,
-    skipChannelRestartLogMessage: "",
     isLifecycleReloadAborted: () => false,
     getChannelAutostartSuppression: () => null,
     channelReloadTargets: () => channels,
-    logSuppressedChannelRestart: vi.fn(),
     scheduleRecoveryRestart,
   });
 }
@@ -161,8 +159,8 @@ it("the config watcher restarts a channel that can save provider settings after 
       log,
     });
     try {
-      await withTestTimeout(watcherReady.promise, 10_000, "config watcher did not start");
       await reloader.ready;
+      await withTestTimeout(watcherReady.promise, 10_000, "config watcher did not start");
       await state.writeConfig({ ...initialConfig, commands: { ownerAllowFrom: ["telegram:2"] } });
       await withTestTimeout(
         restarted.promise,
@@ -331,11 +329,9 @@ it.each(
       restartChannelAccounts: accounts,
       activePluginChannelsAfterReload: null,
       shouldSkipChannelRestart: false,
-      skipChannelRestartLogMessage: "",
       isLifecycleReloadAborted: () => false,
       getChannelAutostartSuppression: () => null,
       channelReloadTargets: () => channels,
-      logSuppressedChannelRestart: vi.fn(),
       scheduleRecoveryRestart,
     });
     if (state === "racing") {
@@ -357,7 +353,7 @@ it.each(
     expect(starts.at(-1)).toBe("manual");
   },
 );
-it("channel reload uses the attached registry while another Gateway is active", async () => {
+it("channel reload uses the attached registry instead of the process lookup", async () => {
   const monitors: Array<{
     owner: string;
     channelId: ChannelKind;
@@ -392,7 +388,6 @@ it("channel reload uses the attached registry while another Gateway is active", 
   const current = createRegistry("A-current", ownedIds);
   const foreign = createRegistry("B", ["collision", "foreign-only"]);
   const registryOwnerA = createPluginRegistryOwner(attached);
-  const registryOwnerB = createPluginRegistryOwner(foreign);
   const ownerA = createChannelManager({
     scheduler: createTestGatewayScheduler(),
     getRuntimeConfig: () => ({}),
@@ -469,7 +464,6 @@ it("channel reload uses the attached registry while another Gateway is active", 
       }
     }
     await registryOwnerA.close();
-    await registryOwnerB.close();
     expect(monitors.every(({ abortSignal, joined }) => abortSignal.aborted && joined)).toBe(true);
   }
 });

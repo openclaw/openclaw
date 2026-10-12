@@ -180,7 +180,7 @@ describe("Codex trajectory recorder", () => {
       reasoningTokens: 2_038,
       total: 724_402,
     };
-    const hostRecorder = createTrajectoryRuntimeRecorderForTest({
+    const hostRecorder = await createTrajectoryRuntimeRecorderForTest({
       sessionId: sessionTarget.sessionId,
       sessionKey: sessionTarget.sessionKey,
       sessionTarget,

@@ -120,6 +120,7 @@ flow:
                     const mutations = projectQaToolMessages(history.messages ?? [])
                       .flatMap((message) => message.role === 'assistant' && Array.isArray(message.content) ? message.content : [])
                       .filter((item) => item.type === 'toolCall' && item.name === 'automations'
+                        && item.isError !== true
                         && !['list', 'status', 'get', 'runs'].includes(item.arguments?.action));
                     return mutations.filter((call) => call.arguments?.action === 'add').length >= 2
                       || mutations.some((call) => call.arguments?.action !== 'add')

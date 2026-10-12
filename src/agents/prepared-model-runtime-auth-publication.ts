@@ -146,14 +146,10 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     if (this.#transaction !== transaction) {
       return false;
     }
-    if (transaction.adoptedBy) {
-      this.#transaction = undefined;
-    } else if (transaction.ownerGates.size === 0) {
-      this.#transaction = undefined;
-      return true;
-    } else {
+    if (!transaction.adoptedBy && transaction.ownerGates.size > 0) {
       return false;
     }
+    this.#transaction = undefined;
     this.clearOwnerGates(transaction);
     for (const [owner, gate] of transaction.ownerGates) {
       const published =

@@ -2,6 +2,7 @@ import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateSchemaReadAdmission,
 } from "../state/openclaw-state-db-contract.js";
+import { createOpenClawStateCurrentWarmReader } from "../state/openclaw-state-db-current-reader.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   executeExistingOpenClawStateRead,
@@ -127,9 +128,8 @@ export function listUpdateRuns(
   );
 }
 
-/** Reuse decoded rows only after a fresh observation of every authoritative source byte.
+/** Read current rows on an independent warm owner; cold reads preserve every source byte.
  * The caller still evaluates admission on every invocation; no grant is cached.
- * This closure owns only rows, never a native handle, child, or temporary snapshot.
  */
 export function createUpdateRunAdmissionReader(
   input: UpdateRunListInput,
@@ -137,8 +137,18 @@ export function createUpdateRunAdmissionReader(
   openStateSchemaReadAdmission: OpenClawStateSchemaReadAdmission,
 ): () => UpdateRunRecord[] {
   const query = { ...input };
+  const readWarm = createOpenClawStateCurrentWarmReader(
+    ({ db }) => readUpdateRuns(db, query),
+    options,
+    openStateSchemaReadAdmission,
+  );
   let previous: { version: string; runs: UpdateRunRecord[] } | undefined;
   return () => {
+    const warm = readWarm();
+    if (warm.available) {
+      previous = undefined;
+      return warm.value;
+    }
     const version = readCurrentOpenClawStateDatabaseContentVersion(options);
     if (version !== undefined && previous?.version === version) {
       return structuredClone(previous.runs);
@@ -159,20 +169,7 @@ export function createUpdateRunAdmissionReader(
 export async function getUpdateRunStatusAsync(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<{ activeRun?: UpdateRunRecord; lastRun?: UpdateRunRecord }> {
-  const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(
-      options,
-      { type: "updateRuns.status" },
-      { preferIndependentWarmRead: true },
-    ),
-  );
-  if (!reply) {
-    return {};
-  }
-  if (!reply.ok || reply.type !== "updateRuns.status") {
-    throw new Error("Unexpected update run status result");
-  }
-  return reply.status;
+  return readUpdateRunStatusAsync("updateRuns.status", options);
 }
 
 export async function getUpdateRunHistoryStatusAsync(
@@ -182,18 +179,25 @@ export async function getUpdateRunHistoryStatusAsync(
   lastRun?: UpdateRunRecord;
   expiredRun?: UpdateRunRecord;
 }> {
+  return readUpdateRunStatusAsync("updateRuns.historyStatus", options);
+}
+
+async function readUpdateRunStatusAsync(
+  type: "updateRuns.status" | "updateRuns.historyStatus",
+  options: OpenClawStateDatabaseOptions,
+) {
   const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(
-      options,
-      { type: "updateRuns.historyStatus" },
-      { preferIndependentWarmRead: true },
-    ),
+    executeExistingOpenClawStateRead(options, { type }, { preferIndependentWarmRead: true }),
   );
   if (!reply) {
     return {};
   }
-  if (!reply.ok || reply.type !== "updateRuns.historyStatus") {
-    throw new Error("Unexpected update run history status result");
+  if (!reply.ok || reply.type !== type) {
+    throw new Error(
+      type === "updateRuns.status"
+        ? "Unexpected update run status result"
+        : "Unexpected update run history status result",
+    );
   }
   return reply.status;
 }

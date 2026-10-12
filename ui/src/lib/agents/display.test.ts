@@ -445,7 +445,7 @@ describe("resolveAgentAvatarUrl", () => {
     expect(isRenderableControlUiAvatarUrl("data:text/plain,avatar")).toBe(false);
   });
 
-  it("prefers a runtime avatar URL over non-URL identity avatars", () => {
+  it("uses the resolved identity absence instead of a stale roster avatar URL", () => {
     expect(
       resolveAgentAvatarUrl(
         { identity: { avatar: "A", avatarUrl: "/avatar/main" } },
@@ -455,7 +455,7 @@ describe("resolveAgentAvatarUrl", () => {
           name: "Main",
         },
       ),
-    ).toBe("/avatar/main");
+    ).toBeNull();
   });
 
   it("ignores remote http avatars so the control UI falls back to a local badge", () => {
@@ -513,7 +513,7 @@ describe("resolveAgentSkillsFilter", () => {
         {
           agents: {
             defaults: { skills: [" github ", "weather"] },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
         },
         "main",
@@ -572,7 +572,7 @@ describe("buildAgentContext", () => {
               fallbacks: ["openai/gpt-5.2-codex"],
             },
           },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       null,
@@ -591,7 +591,7 @@ describe("buildAgentContext", () => {
       {
         agents: {
           defaults: { skills: ["github", "weather"] },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       null,

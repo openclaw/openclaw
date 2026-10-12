@@ -19,6 +19,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
+import type { GatewayRestartResult } from "../daemon-cli/restart-health.types.js";
 import { registerUpdateCli } from "../update-cli.js";
 import type { LeaseScenario } from "./update-command-lease.test-support.js";
 import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
@@ -98,10 +99,11 @@ async function mockRepairManagedService(
   );
   // Restoration and failure observation read the same fixture-owned service;
   // no real Gateway listens on the fixture port.
-  const readHealth = async (): Promise<restartHealth.GatewayRestartSnapshot> => {
+  const readHealth = async (): Promise<GatewayRestartResult> => {
     const runtime = await readRuntime(process.env);
     const running = runtime.status === "running";
     return {
+      outcome: running ? "ready" : "failed",
       healthy: running,
       waitOutcome: running ? "healthy" : "stopped-free",
       staleGatewayPids: [],

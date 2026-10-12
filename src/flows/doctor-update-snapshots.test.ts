@@ -48,29 +48,16 @@ beforeEach(async () => {
 
 afterEach(() => vi.restoreAllMocks());
 
-async function snapshot(name: string, bytes: number) {
-  const directory = path.join(globalRoot, `.openclaw.package-backup-${name}.databases`);
+async function snapshot(name: string, bytes: number, separator = ".") {
+  const directory = path.join(globalRoot, `.openclaw${separator}package-backup-${name}.databases`);
   await fs.mkdir(path.join(directory, "nested"), { recursive: true });
   await fs.writeFile(path.join(directory, "nested", "state.sqlite"), Buffer.alloc(bytes));
   return directory;
 }
 
-it("reports snapshots retired under the dashed name after a cleanup I/O failure", async () => {
-  const retired = path.join(globalRoot, ".openclaw-package-backup-3-300.databases");
-  await fs.mkdir(retired);
-  await fs.writeFile(path.join(retired, "state.sqlite"), Buffer.alloc(512));
-
-  const findings = (await check()?.detect(context)) ?? [];
-  expect(findings).toHaveLength(1);
-  expect(findings[0]?.message).toContain(
-    "1 retained pre-migration database snapshot directory: 512 bytes",
-  );
-  expect(findings[0]?.message).toContain(path.basename(retired));
-});
-
-it("reports snapshot sizes and quoted removal commands without offering or performing repair", async () => {
+it("reports dotted and retired dashed snapshots with sizes and quoted commands, without repair", async () => {
   const first = await snapshot("1-100", 1024);
-  const second = await snapshot("2-200", 2048);
+  const second = await snapshot("2-200", 2048, "-");
   await fs.mkdir(path.join(globalRoot, ".openclaw.package-backup-unrelated"));
   await fs.mkdir(path.join(globalRoot, "unrelated.databases"));
   await fs.writeFile(path.join(globalRoot, ".openclaw.package-backup-file.databases"), "ignore");
@@ -115,16 +102,26 @@ it("does not report a finding without snapshot directories or outside an npm glo
   expect(await check()?.detect(context)).toEqual([]);
 });
 
-it.each(["budget", "read-error"])(
-  "warns when a %s interrupts inspection before any snapshot is found",
+it.each(["budget", "read-error", "size-budget"])(
+  "warns when %s interrupts snapshot inspection",
   async (cause) => {
     await snapshot("1-100", 1024);
     if (cause === "budget") {
       vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(201);
-    } else {
+    } else if (cause === "read-error") {
       vi.spyOn(fs, "opendir").mockRejectedValueOnce(
         Object.assign(new Error("cannot read global root"), { code: "EACCES" }),
       );
+    } else {
+      const opendir = fs.opendir.bind(fs);
+      const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+      vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
+        const directory = await opendir(...args);
+        if (String(args[0]).endsWith(".databases")) {
+          clock.mockReturnValue(201);
+        }
+        return directory;
+      });
     }
     const findings = await check()?.detect(context);
     expect(findings).toHaveLength(1);
@@ -132,9 +129,14 @@ it.each(["budget", "read-error"])(
       checkId: "core/doctor/update-snapshots",
       severity: "warning",
     });
-    expect(findings?.[0]?.message).toContain("Inspection was incomplete");
-    expect(findings?.[0]?.message).toContain(globalRoot);
-    expect(findings?.[0]?.message).toContain(".openclaw.package-backup-*.databases");
+    if (cause === "size-budget") {
+      expect(findings?.[0]?.message).toContain("at least 0 bytes");
+      expect(findings?.[0]?.message).toContain("paths and size may be partial");
+    } else {
+      expect(findings?.[0]?.message).toContain("Inspection was incomplete");
+      expect(findings?.[0]?.message).toContain(globalRoot);
+      expect(findings?.[0]?.message).toContain(".openclaw.package-backup-*.databases");
+    }
   },
 );
 
@@ -148,20 +150,4 @@ it.each([
   await contribution()?.run(ctx);
   expect(ctx.runtime.log).not.toHaveBeenCalled();
   expect(ctx.runtime.error).not.toHaveBeenCalled();
-});
-
-it("reports a lower bound when inspection exceeds its time budget", async () => {
-  await snapshot("1-100", 1024);
-  const opendir = fs.opendir.bind(fs);
-  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-  vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
-    const directory = await opendir(...args);
-    if (String(args[0]).endsWith(".databases")) {
-      clock.mockReturnValue(201);
-    }
-    return directory;
-  });
-  const findings = await check()?.detect(context);
-  expect(findings?.[0]?.message).toContain("at least 0 bytes");
-  expect(findings?.[0]?.message).toContain("paths and size may be partial");
 });

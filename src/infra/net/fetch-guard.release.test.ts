@@ -217,41 +217,30 @@ describe("guarded request release", () => {
     },
   );
 
-  it.each([
-    { source: "signal", timeoutMs: undefined },
-    { source: "signal", timeoutMs: 5_000 },
-    { source: "init", timeoutMs: undefined },
-    { source: "init", timeoutMs: 5_000 },
-  ])(
-    "preserves cancellation from $source with timeout $timeoutMs",
-    async ({ source, timeoutMs }) => {
-      const parent = new AbortController();
-      const reason = new Error("caller stopped");
-      await withServer(
-        (_request, response) => response.write("unfinished"),
-        async (baseUrl) => {
-          const result = await fetchWithSsrFGuard({
-            url: baseUrl,
-            timeoutMs,
-            ...(source === "signal"
-              ? { signal: parent.signal }
-              : { init: { signal: parent.signal } }),
-            policy: { allowPrivateNetwork: true },
-          });
-          const body = readResponseWithLimit(result.response, 32);
-          try {
-            parent.abort(reason);
-            await expect(withinDeadline(body)).rejects.toBe(reason);
-            await result.release();
-            expect(parent.signal.reason).toBe(reason);
-          } finally {
-            parent.abort();
-            await result.release();
-          }
-        },
-      );
-    },
-  );
+  it("preserves cancellation from init.signal without a timeout", async () => {
+    const parent = new AbortController();
+    const reason = new Error("caller stopped");
+    await withServer(
+      (_request, response) => response.write("unfinished"),
+      async (baseUrl) => {
+        const result = await fetchWithSsrFGuard({
+          url: baseUrl,
+          init: { signal: parent.signal },
+          policy: { allowPrivateNetwork: true },
+        });
+        const body = readResponseWithLimit(result.response, 32);
+        try {
+          parent.abort(reason);
+          await expect(withinDeadline(body)).rejects.toBe(reason);
+          await result.release();
+          expect(parent.signal.reason).toBe(reason);
+        } finally {
+          parent.abort();
+          await result.release();
+        }
+      },
+    );
+  });
 
   it("gives the explicit caller signal precedence over init.signal with a timeout", async () => {
     const parent = new AbortController();

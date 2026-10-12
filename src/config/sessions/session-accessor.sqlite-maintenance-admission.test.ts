@@ -79,19 +79,6 @@ vi.mock("./session-accessor.sqlite-worker-request.js", async (importOriginal) =>
       signal: new AbortController().signal,
     }),
 }));
-vi.mock("./session-accessor.sqlite-reclamation-commit.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-accessor.sqlite-reclamation-commit.js")>()),
-  withSqliteReclamationAuthorization: async <T>(
-    _gate: SharedArrayBuffer,
-    _database: unknown,
-    assertCurrent: () => void,
-    run: (authorize: () => void) => Promise<T>,
-  ) =>
-    await run(() => {
-      assertCurrent();
-      storage.committed = true;
-    }),
-}));
 vi.mock("./session-accessor.sqlite-reclamation-worker.js", async () => {
   const { runExclusiveSqliteTranscriptArchiveWorker: runInArchiveFifo } =
     await import("./session-accessor.sqlite-archive.js");
@@ -131,23 +118,23 @@ test("maintenance preparation yields to foreground writes and retains commit adm
     );
   const worker = new Worker(
     `const { parentPort } = require("node:worker_threads");
+     let admissions = 0;
      parentPort.on("message", (message) => {
        if (message.type === "start") {
          parentPort.postMessage({ type: "preparation" });
        } else if (message.type === "prepare") {
-         parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 1 });
+         parentPort.postMessage({ type: "admission-request", operationId: 1 });
        } else if (message.type === "continue") {
-         parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 2 });
-       } else if (message.type === "admission" && message.admissionId === 1) {
-         parentPort.postMessage({ type: "admission-release", operationId: 1, admissionId: 1 });
+         parentPort.postMessage({ type: "admission-request", operationId: 1 });
+       } else if (message.type === "admission" && ++admissions === 1) {
+         parentPort.postMessage({ type: "admission-release", operationId: 1 });
          parentPort.postMessage({ type: "validation-gap" });
-       } else if (message.type === "admission" && message.admissionId === 2) {
-         parentPort.postMessage({ type: "commit-request", operationId: 1 });
+       } else if (message.type === "admission") {
          parentPort.postMessage({ type: "commit-gap" });
        } else if (message.type === "settle") {
          parentPort.postMessage({ type: "reclaimed", operationId: 1, settled: true,
            result: { kind: "maintenance-finalize", value: {
-             archivedTranscripts: [], changedEntries: [], committedEntries: [] } } });
+             archivedTranscripts: [], committedEntryIndices: [] } } });
          parentPort.close();
        }
      });`,
@@ -167,7 +154,6 @@ test("maintenance preparation yields to foreground writes and retains commit adm
       transport: { kind: "dedicated", channel: worker },
       operationId: 1,
       completion: "exit",
-      onCommitRequest: params.onCommitRequest,
       withWriteAdmission: async (run, admission) => {
         admissions.push(admission.admissionId);
         await params.withWriteAdmission(run, admission);
@@ -182,7 +168,10 @@ test("maintenance preparation yields to foreground writes and retains commit adm
   await archiveEntered.promise;
   const finalization = runSqliteSessionReclamation({
     forceInProcess: false,
-    onWorkerResult: () => order.push("published"),
+    onWorkerResult: () => {
+      storage.committed = true;
+      order.push("published");
+    },
     plan: {
       kind: "maintenance-finalize",
       agentId: "main",

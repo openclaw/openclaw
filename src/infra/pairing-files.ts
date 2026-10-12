@@ -6,6 +6,14 @@ import { isMissingPathError } from "./errno.js";
 
 export { createAsyncLock, readJsonIfExists } from "./json-files.js";
 
+export async function archiveLegacyPairingFile(filePath: string): Promise<void> {
+  try {
+    await fs.rename(filePath, `${filePath}.migrated`);
+  } catch {
+    // Missing file or a racing second gateway process; nothing left to archive.
+  }
+}
+
 /** Resolve pending/paired JSON file locations for one pairing namespace. */
 export function resolvePairingPaths(baseDir: string | undefined, subdir: string) {
   const root = baseDir ?? resolveStateDir();

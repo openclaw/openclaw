@@ -1,5 +1,6 @@
 import fs, { open, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { buildJsonPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";

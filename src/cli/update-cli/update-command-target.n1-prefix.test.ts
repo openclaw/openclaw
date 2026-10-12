@@ -5,6 +5,8 @@ import {
   resolveBunRuntimeInfo,
   resolveNodeRuntimeInfo,
 } from "../../daemon/runtime-paths.js";
+import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 
 const state = vi.hoisted(() => ({
@@ -19,7 +21,9 @@ vi.mock("../../infra/update-global.js", async (original) => {
     createGlobalInstallEnv: async () => ({}),
   };
 });
-vi.mock("../../process/exec.js", () => ({
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
+  runCommandBuffered: async () => pkgQueryResult(),
   runCommandWithTimeout: async (argv: string[]) => {
     state.calls.push(argv);
     if (argv.includes("--version")) {
@@ -123,26 +127,42 @@ async function resolve(servicePlan: {
     typeof resolveUpdateCommandTarget
   >[1];
   const executor = { enter: vi.fn(async () => ({ assertCurrent: vi.fn() })) };
-  const target = await resolveUpdateCommandTarget(
-    { json: true, dryRun: true },
-    recovery,
-    undefined,
-    prepared,
-    executor,
-    1000,
+  const target = await withMockedPlatform("linux", () =>
+    resolveUpdateCommandTarget(
+      { json: true, dryRun: true },
+      recovery,
+      undefined,
+      prepared,
+      executor,
+      1000,
+    ),
   );
   if (!target) {
     throw new Error("Expected an admitted update target");
   }
   return target;
 }
-it("keeps writable rebind target B without a recognized service Node instead of PATH npm A", async () => {
-  const selected = await resolve({ rootRedirect: null, serviceRoot: rootA });
-  expect(selected.packageInstallTarget?.packageRoot).toBe(rootB);
-  expect(selected.packageInstallTarget?.directNodeModulesRoot).toBe(true);
-  expect(state.calls.some((argv) => argv[1] === "root")).toBe(false);
-  expect(selected.packageUpdateNodeRunner).toBe(process.versions.bun ? undefined : "/current/node");
-});
+it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
+  "selects the package root for a %s",
+  async (kind) => {
+    const selected = await resolve({
+      rootRedirect: kind === "protected redirect" ? { root: rootA, previousRoot: rootB } : null,
+      ...(kind === "writable rebind" ? { serviceRoot: rootA } : {}),
+    });
+    expect(selected.packageInstallTarget?.packageRoot).toBe(
+      kind === "writable rebind" ? rootB : rootA,
+    );
+    if (kind !== "protected redirect") {
+      expect(state.calls.some((argv) => argv[1] === "root")).toBe(kind === "unowned project");
+    }
+    if (kind === "writable rebind") {
+      expect(selected.packageInstallTarget?.directNodeModulesRoot).toBe(true);
+      expect(selected.packageUpdateNodeRunner).toBe(
+        process.versions.bun ? undefined : "/current/node",
+      );
+    }
+  },
+);
 it("rejects a Bun-driven split-root update when the recorded service Node cannot run the target", async () => {
   vi.stubGlobal("process", {
     ...process,
@@ -181,7 +201,7 @@ it("rejects a Bun-driven split-root update when the recorded service Node cannot
   expect(result).toMatchObject({
     ok: false,
     error: expect.stringContaining(
-      "requires Node >=26.1.0; selected runtime is Node 24.16.0 at /old/node",
+      "Required: openclaw@2027.1.0 Node >=26.1.0; detected: Node 24.16.0 at /old/node",
     ),
     failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
   });
@@ -189,18 +209,6 @@ it("rejects a Bun-driven split-root update when the recorded service Node cannot
     "/old/node",
   ]);
 });
-it("preserves protected-definition redirect to A", async () => {
-  expect(
-    (await resolve({ rootRedirect: { root: rootA, previousRoot: rootB } })).packageInstallTarget
-      ?.packageRoot,
-  ).toBe(rootA);
-});
-it("does not reinterpret an unowned direct project as a selected global target", async () => {
-  const selected = await resolve({ rootRedirect: null });
-  expect(selected.packageInstallTarget?.packageRoot).toBe(rootA);
-  expect(state.calls.some((argv) => argv[1] === "root")).toBe(true);
-});
-
 it.each([
   { node: "24.16.0", sqliteText: true, admitted: false },
   { node: "26.1.0", sqliteText: false, admitted: false },
@@ -249,7 +257,7 @@ it.each([
         : {
             ok: false,
             error: expect.stringContaining(
-              `requires Node >=26.1.0; selected runtime is Node ${node}`,
+              `Required: openclaw@2027.1.0 Node >=26.1.0; detected: Node ${node}`,
             ),
             failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
           },

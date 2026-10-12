@@ -1,7 +1,9 @@
 import type { WorkerTranscriptMessage } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 
-export function createWorkerImageHistory(userImage = false): WorkerTranscriptMessage[] {
-  const messages: WorkerTranscriptMessage[] = [
+type ImageHistoryMessage = Exclude<WorkerTranscriptMessage, { role: "custom" }>;
+
+export function createWorkerImageHistory(userImage = false): ImageHistoryMessage[] {
+  const messages: ImageHistoryMessage[] = [
     { role: "user", content: [{ type: "text", text: "Inspect this desktop." }], timestamp: 0 },
   ];
   for (let index = 0; index < 7; index++) {

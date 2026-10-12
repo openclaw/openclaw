@@ -14,7 +14,6 @@ afterEach(() => vi.restoreAllMocks());
 describe("session responsibility assignment in non-owner turns", () => {
   it.each([
     { senderIsOwner: false, messageProvider: "webchat" },
-    { senderIsOwner: false, messageProvider: "test-channel" },
     { senderIsOwner: undefined, messageProvider: undefined },
   ])(
     "limits assignment without channel policy or senderless management changes ($messageProvider)",

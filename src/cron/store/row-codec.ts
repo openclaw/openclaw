@@ -3,6 +3,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { operatorStandingGrantPublication } from "../../gateway/operator-approval-store.publication.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import {
   executeSqliteQuerySync,
@@ -12,7 +14,6 @@ import {
 import { normalizeSqliteNumber as normalizeNumber } from "../../infra/sqlite-number.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { hashCronJobDefinition } from "../definition-hash.js";
-import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
@@ -26,7 +27,7 @@ import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
 import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
-  deliveryFromJson,
+  decodeCronJobConfig,
   deliveryToJson,
 } from "./delivery-codec.js";
 import type {
@@ -117,7 +118,8 @@ function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number)
 function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronStoredJob | null {
   const raw: Record<string, unknown> = { ...structuredClone(job) };
   const hadDeleteAfterRun = Object.hasOwn(raw, "deleteAfterRun");
-  normalizeCronJobIdentityFields(raw);
+  raw.id = normalizeOptionalString(raw.id);
+  delete raw.jobId;
   const normalized = normalizeCronJobInput(raw, { applyDefaults: true });
   if (!normalized || getInvalidPersistedCronJobReason(normalized)) {
     return null;
@@ -155,11 +157,6 @@ export function assertCronStoreCanPersist(store: CronStoreFile): void {
   if (invalidJobs > 0) {
     throw new Error(`Cannot persist cron store with ${invalidJobs} invalid job(s)`);
   }
-}
-
-function decodeCronJobConfig(jobJson: Record<string, unknown>): Record<string, unknown> {
-  const delivery = deliveryFromJson(jobJson.delivery);
-  return delivery ? { ...jobJson, delivery } : jobJson;
 }
 
 export function rowToCronJob(
@@ -648,14 +645,16 @@ export function deleteCronJobRowInDatabase(
 
 function revokeCronJobStandingGrants(db: DatabaseSync, jobId: string): void {
   if (tableExists(db, "operator_approval_standing_grants")) {
-    executeSqliteQuerySync(
+    const revoked = executeSqliteQuerySync(
       db,
       getCronStoreKysely(db)
         .updateTable("operator_approval_standing_grants")
         .set({ revoked_at_ms: Date.now(), revoked_by: "cron-job-deleted" })
         .where("cron_job_id", "=", jobId)
-        .where("revoked_at_ms", "is", null),
+        .where("revoked_at_ms", "is", null)
+        .returningAll(),
     );
+    operatorStandingGrantPublication.stagePostimages(db, revoked.rows);
   }
 }
 

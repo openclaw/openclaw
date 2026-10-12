@@ -4,12 +4,6 @@ import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coe
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
-import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
-import {
-  managedWorktrees,
-  resolveWorktreeCleanupLimits,
-  WORKTREE_GC_INTERVAL_MS,
-} from "../agents/worktrees/service.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -38,7 +32,8 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
+import { registerSkillUsageTracking } from "../skills/workshop/skill-usage.js";
+import { pruneExpiredArtifactDownloads } from "./artifact-download-grants.js";
 import {
   abortChatRunById,
   type ChatAbortControllerEntry,
@@ -52,9 +47,11 @@ import {
   createHostThawRecovery,
   type HostThawChannelRestartOutcome,
 } from "./host-thaw-recovery.js";
-import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
-import type { ChatRunState } from "./server-chat-state.js";
-import type { ChatRunEntry } from "./server-chat.js";
+import {
+  chatAbortMarkerTimestampMs,
+  type ChatRunEntry,
+  type ChatRunState,
+} from "./server-chat-state.js";
 import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
@@ -69,11 +66,13 @@ import {
   waitForMediaCleanupDrainsToSettle,
 } from "./server-media-cleanup-lifecycle.js";
 import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-active-runs.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
 import { startSessionColdStorageMaintenance } from "./session-cold-storage-maintenance.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { checkGatewayInstallationReplacement } from "./stale-install.js";
+import { startWorktreeMaintenance } from "./worktree-maintenance.js";
 
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
@@ -82,6 +81,7 @@ const TELEMETRY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
   scheduler: GatewayScheduler;
+  clients: ReadonlySet<GatewayClient>;
   broadcast: (
     event: string,
     payload: unknown,
@@ -169,10 +169,7 @@ export function startGatewayMaintenanceTimers(params: {
     const admission = tryBeginGatewaySuspendAdmission(() => {
       invalidated = true;
     });
-    if (!admission) {
-      return { status: "retry", reason: "admission-closed" };
-    }
-    if (!admission.commit()) {
+    if (!admission?.commit()) {
       return { status: "retry", reason: "admission-closed" };
     }
     try {
@@ -252,34 +249,20 @@ export function startGatewayMaintenanceTimers(params: {
     true,
   );
 
-  const runWorktreeGc =
-    params.runWorktreeGc ??
-    (() => {
-      const cfg = params.getRuntimeConfig();
-      return managedWorktrees.gc({
-        // Chat runs avoid registry acquire/bump writes; recent session metadata substitutes for
-        // worktree activity so idle GC cannot remove a checkout still used by the session.
-        ...createManagedWorktreeOwnerPolicy(cfg),
-        limits: resolveWorktreeCleanupLimits(),
-      });
-    });
-  // Retention is hourly best-effort work; leave the first hour free for Gateway warmup.
-  schedulePeriodic("worktrees", WORKTREE_GC_INTERVAL_MS, () =>
-    runWorktreeGc()
-      .then((result) => {
-        if (!result) {
-          return;
-        }
-        if (result.outcome === "partial") {
-          params.logHealth.error(formatWorktreeGcResult(result));
-        } else if (result.outcome === "deferred") {
-          params.logHealth.info(formatWorktreeGcResult(result));
-        }
-      })
-      .catch((err: unknown) => {
-        params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);
-      }),
-  );
+  const worktreeMaintenance = startWorktreeMaintenance({
+    scheduler: params.scheduler,
+    getRuntimeConfig: params.getRuntimeConfig,
+    runGc: params.runWorktreeGc,
+    onComplete: (result) => {
+      const message = formatWorktreeGcResult(result);
+      if (result.outcome === "partial") {
+        params.logHealth.error(message);
+      } else {
+        params.logHealth.info(message);
+      }
+    },
+    onError: (message) => params.logHealth.error(`managed worktree cleanup failed: ${message}`),
+  });
 
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
@@ -346,11 +329,9 @@ export function startGatewayMaintenanceTimers(params: {
   schedulePeriodic("dedupe", 60_000, () => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = scheduler.now();
+    pruneExpiredArtifactDownloads(params.clients, now);
     params.chatRunState.toolEventRecipients.pruneExpired(now);
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
-      if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
-        return undefined;
-      }
       const keyRunId = key.slice(key.indexOf(":") + 1);
       if (keyRunId) {
         if (params.chatAbortControllers.has(keyRunId) || params.chatQueuedTurns.has(keyRunId)) {
@@ -446,24 +427,20 @@ export function startGatewayMaintenanceTimers(params: {
             observedAt: entry.projectSessionTerminalObservedAt,
           });
         }
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-        continue;
+      } else if (entry.projectSessionActive !== false) {
+        const aborted = abortChatRunById(params, {
+          runId,
+          sessionKey: entry.sessionKey,
+          stopReason: "timeout",
+        });
+        if (aborted.aborted) {
+          continue;
+        }
+        // A non-abortable expired entry (signal already aborted, frozen reply
+        // op) whose owner cleanup was lost would otherwise survive every sweep:
+        // phantom active run, dead Stop button, pinned dedupe, skipped media GC.
       }
-      if (entry.projectSessionActive === false) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-        continue;
-      }
-      const aborted = abortChatRunById(params, {
-        runId,
-        sessionKey: entry.sessionKey,
-        stopReason: "timeout",
-      });
-      // A non-abortable expired entry (signal already aborted, frozen reply
-      // op) whose owner cleanup was lost would otherwise survive every sweep:
-      // phantom active run, dead Stop button, pinned dedupe, skipped media GC.
-      if (!aborted.aborted) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-      }
+      removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;
@@ -482,15 +459,17 @@ export function startGatewayMaintenanceTimers(params: {
         continue;
       }
       if (record.abortMarker !== undefined) {
-        if (now - chatAbortMarkerTimestampMs(record.abortMarker) > ABORTED_RUN_TTL_MS) {
-          params.chatRunState.deleteAbortMarker(runId);
-          params.chatRunState.clearRun(runId);
+        if (now - chatAbortMarkerTimestampMs(record.abortMarker) <= ABORTED_RUN_TTL_MS) {
+          continue;
         }
+        params.chatRunState.deleteAbortMarker(runId);
+      } else if (now - record.lastActivityAt <= ABORTED_RUN_TTL_MS) {
         continue;
       }
-      if (now - record.lastActivityAt > ABORTED_RUN_TTL_MS) {
-        params.chatRunState.clearRun(runId);
+      while (params.chatRunState.registry.shift(runId)) {
+        // No execution or delivery owner remains to consume these registrations.
       }
+      params.chatRunState.clearRun(runId);
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();
@@ -572,6 +551,7 @@ export function startGatewayMaintenanceTimers(params: {
       restartDrainSignal.removeEventListener("abort", onRestartDrain);
       periodicTasksStopPromise = Promise.allSettled([
         scheduler.stop(),
+        worktreeMaintenance.stop(),
         sessionColdStorageMaintenance.stop(),
         stopMediaCleanup(),
       ]).then((results) => {

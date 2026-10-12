@@ -57,7 +57,7 @@ describe("workboard tools", () => {
       throw new Error("Expected Sessions board tools from the registered factory.");
     }
     for (const [name, input] of [
-      ["update", { instructions: "Revoked edit" }],
+      ["update", { scope: { includeArchived: true } }],
       ["move", { sessionKey: "agent:main:one", columnId: "working" }],
     ] as const) {
       const tool = expectDefined(
@@ -102,14 +102,39 @@ describe("workboard tools", () => {
         board: { id: "sessions", kind: "sessions" },
         sessions: [],
       });
-      await update.execute("update-one", { instructions: "Highlight approvals." });
+      const scope = { includeArchived: true, includeAutomation: true, includeHome: true };
+      expect(Value.Check(update.parameters, { scope })).toBe(true);
+      for (const field of ["includeAutomation", "includeHome"]) {
+        expect(Value.Check(update.parameters, { scope: { [field]: false } })).toBe(true);
+        expect(Value.Check(update.parameters, { scope: { [field]: "true" } })).toBe(false);
+      }
+      await update.execute("update-one", { scope });
       await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
-        sessions: { instructions: "Highlight approvals." },
+        sessions: { scope },
+      });
+      const columns = [
+        {
+          id: "stuck",
+          label: "Stuck",
+          description: "Observer health is stuck, or the run failed.",
+          match: [{ health: ["stuck"] }, { run: ["failed"] }],
+        },
+        { id: "done", label: "Done", description: "Fallback.", fallback: true },
+      ];
+      expect(Value.Check(update.parameters, { columns })).toBe(true);
+      expect(
+        Value.Check(update.parameters, {
+          columns: [{ ...columns[0], match: [] }, columns[1]],
+        }),
+      ).toBe(false);
+      await update.execute("update-any-of", { columns });
+      await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
+        sessions: { columns, scope },
       });
       await store.upsertBoard({ id: "another", kind: "sessions" });
       for (const [tool, input] of [
         [read, {}],
-        [update, { instructions: "Ambiguous target." }],
+        [update, { scope: { includeArchived: false } }],
         [move, { sessionKey: "agent:main:example", columnId: "working" }],
       ] as const) {
         await expect(tool.execute("ambiguous", input)).rejects.toThrow(
@@ -125,7 +150,7 @@ describe("workboard tools", () => {
       );
       await expect(read.execute("invalid", { boardId: 42 })).rejects.toThrow();
       await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
-        sessions: { instructions: "Highlight approvals." },
+        sessions: { scope },
       });
     } finally {
       await sessionsBoard.stop();
@@ -220,7 +245,7 @@ describe("workboard tools", () => {
       config: {
         agents: {
           defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } },
-          list: [{ id: "main", default: true, workspace: "/workspace" }],
+          entries: { main: { workspace: "/workspace" } },
         },
       },
     };

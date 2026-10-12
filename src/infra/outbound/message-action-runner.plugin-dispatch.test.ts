@@ -218,20 +218,6 @@ describe("runMessageAction plugin dispatch", () => {
       expectUncalled(handleAction, mocks.loadWebMedia);
     });
 
-    it("rejects wrong-account aliases before resolution", async () => {
-      const looksLikeId = vi.fn(() => true);
-      registerActionHubResolver({ looksLikeId });
-      await expect(
-        runDelegated(
-          "actionhub",
-          "pin",
-          { target: "room:current", messageId: "om_123" },
-          { defaultAccountId: "other" },
-        ),
-      ).rejects.toThrow(accountError);
-      expectUncalled(looksLikeId, handleAction);
-    });
-
     it("rejects directory-only external aliases before lookup", async () => {
       const looksLikeId = vi.fn(() => false);
       const resolveTarget = vi.fn(async () => ({
@@ -486,6 +472,25 @@ describe("runMessageAction plugin dispatch", () => {
         expectUncalled(nextLookup, handleAction);
       },
     );
+  });
+
+  it("reports an unsupported action for a loaded channel without action handlers", async () => {
+    setTestPlugin(
+      createChannelTestPluginBase({
+        id: "sendonly",
+        config: createAlwaysConfiguredPluginConfig({}),
+      }),
+      "sendonly",
+    );
+    await expect(
+      runMessageAction({
+        cfg: {},
+        action: "read",
+        dryRun: false,
+        conversationReadOrigin: "direct-operator",
+        params: { channel: "sendonly", target: "channel:peer", messageId: "task-1", limit: 1 },
+      }),
+    ).rejects.toThrow("Message action read not supported for channel sendonly.");
   });
 
   describe("presentation parsing", () => {

@@ -4,6 +4,7 @@ import { applyLocalSetupWorkspaceConfig } from "../commands/onboard-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import {
   executeSystemAgentOperation as executeOperation,
@@ -173,7 +174,7 @@ function setModel(options: Options) {
 }
 const verified = () => ({ ok: true as const, modelRef: model, latencyMs: 5 });
 const withModel = (primary = model): OpenClawConfig => ({
-  agents: { defaults: { model: { primary } }, entries: { main: { default: true } } },
+  agents: { defaults: { model: { primary } }, entries: { main: {} } },
 });
 function overview(defaultModel: string | undefined = model): SystemAgentOverview {
   const command = { command: "unused", found: false, error: "not found" };
@@ -252,7 +253,7 @@ function recoveryConfig(
   mockConfig.set({
     agents: {
       defaults: { model: { primary: model }, workspace: approvedWorkspace },
-      entries: { main: { default: true } },
+      entries: { main: {} },
     },
     gateway: { mode: "local" },
     wizard: { securityAcknowledgedAt },
@@ -317,79 +318,72 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-operations-setup-"));
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   vi.unstubAllEnvs();
 });
 
 describe("setup inference", () => {
-  it.each(["default", "setup"] as const)(
-    "approves and audits %s-model setup while preserving concurrent edits",
-    async (role) => {
-      mockConfig.set({
-        meta: { migrations: { utilityModelSeparation: true } },
-        agents: {
-          defaults: role === "default" ? { model: { primary: model } } : { utilityModel: model },
-          entries: { main: { default: true } },
-        },
-        gateway: { port: 18789 },
-      });
-      applySetup = vi.fn<ApplySetup>(async () =>
-        setupResult({ bootstrapPending: role === "setup" }),
-      );
-      const deps = {
-        applySetup,
-        loadOverview: async () => ({
-          ...overview(),
-          defaultModel: role === "default" ? model : undefined,
-          setupModel: role === "setup" ? model : undefined,
-        }),
-        verifyInferenceConfig: vi.fn(async () => {
-          mockConfig.set({ ...mockConfig.current(), gateway: { port: 19000 } });
-          return { ...verified(), latencyMs: 12 };
-        }),
-      };
-      const operation = { kind: "setup" as const, workspace, model, agentName: "robby" };
-      const plan = await run(operation, { approved: false, deps });
-      expectRecordFields(plan, { applied: false });
-      expect(lines.join("\n")).toContain(`Model choice: keep verified ${role} ${model}.`);
-      expect(applySetup).not.toHaveBeenCalled();
-      expect(await run(operation, { auditDetails: { rescue: true }, deps })).toEqual({
-        applied: true,
-        bootstrapPending: role === "setup",
-      });
-      expect(mockConfig.current().gateway?.port).toBe(19000);
-      expect(mockConfig.mutate).not.toHaveBeenCalled();
-      expect(applySetup).toHaveBeenCalledWith(
-        {
-          workspace,
-          firstAgent: { name: "robby" },
-          expectedInferenceRoute: expect.any(Object),
-          surface: "cli",
-          runtime,
-        },
-        { beforePersistentApply: undefined },
-      );
-      expect(lines.join("\n")).toContain("[openclaw] done: openclaw.setup");
-      expect(lines.join("\n")).toContain(
-        `${role === "default" ? "Default" : "Setup"} model: ${model} (verified and kept)`,
-      );
-      expectAuditRecord(
-        readLastAuditEntry(),
-        { operation: "openclaw.setup", summary: "Bootstrapped setup workspace" },
-        {
-          rescue: true,
-          workspace,
-          model,
-          modelSource: `live-verified ${role} model`,
-          inferenceLatencyMs: 12,
-        },
-      );
-    },
-  );
+  it("approves and audits setup-model setup while preserving concurrent edits", async () => {
+    mockConfig.set({
+      meta: { migrations: { utilityModelSeparation: true } },
+      agents: {
+        defaults: { utilityModel: model },
+        entries: { main: {} },
+      },
+      gateway: { port: 18789 },
+    });
+    const deps = {
+      applySetup,
+      loadOverview: async () => ({
+        ...overview(),
+        defaultModel: undefined,
+        setupModel: model,
+      }),
+      verifyInferenceConfig: vi.fn(async () => {
+        mockConfig.set({ ...mockConfig.current(), gateway: { port: 19000 } });
+        return { ...verified(), latencyMs: 12 };
+      }),
+    };
+    const operation = { kind: "setup" as const, workspace, model, agentName: "robby" };
+    const plan = await run(operation, { approved: false, deps });
+    expectRecordFields(plan, { applied: false });
+    expect(lines.join("\n")).toContain(`Model choice: keep verified setup ${model}.`);
+    expect(applySetup).not.toHaveBeenCalled();
+    expect(await run(operation, { auditDetails: { rescue: true }, deps })).toEqual({
+      applied: true,
+      bootstrapPending: true,
+    });
+    expect(mockConfig.current().gateway?.port).toBe(19000);
+    expect(mockConfig.mutate).not.toHaveBeenCalled();
+    expect(applySetup).toHaveBeenCalledWith(
+      {
+        workspace,
+        firstAgent: { name: "robby" },
+        expectedInferenceRoute: expect.any(Object),
+        surface: "cli",
+        runtime,
+      },
+      { beforePersistentApply: undefined },
+    );
+    expect(lines.join("\n")).toContain("[openclaw] done: openclaw.setup");
+    expect(lines.join("\n")).toContain(`Setup model: ${model} (verified and kept)`);
+    expectAuditRecord(
+      readLastAuditEntry(),
+      { operation: "openclaw.setup", summary: "Bootstrapped setup workspace" },
+      {
+        rescue: true,
+        workspace,
+        model,
+        modelSource: "live-verified setup model",
+        inferenceLatencyMs: 12,
+      },
+    );
+  });
 
   it("rejects setup without a model before workspace or Gateway writes", async () => {
-    mockConfig.set({ agents: { entries: { main: { default: true } } } });
+    mockConfig.set({ agents: { entries: { main: {} } } });
     await expect(
       setup({
         deps: {
@@ -456,7 +450,7 @@ describe("model changes", () => {
           model: { primary: previousModel, fallbacks: ["openai/gpt-5.2"] },
           systemAgent: { agentId: "main" },
         },
-        entries: { main: { default: true, workspace: "/tmp/main" } },
+        entries: { main: { workspace: "/tmp/main" } },
       },
       gateway: { port: 18789 },
       models: { providers: { openai: { baseUrl: "https://api.openai.com/v1", models: [] } } },
@@ -612,7 +606,7 @@ describe("model changes", () => {
     mockConfig.set({
       agents: {
         defaults: { model: { primary: "anthropic/global-default" } },
-        entries: { work: { default: true, model: { primary: "anthropic/work-default" } } },
+        entries: { work: { model: { primary: "anthropic/work-default" } } },
       },
     });
     const verifyInferenceConfig = vi.fn<Verify>(async ({ config }) => {
@@ -629,34 +623,9 @@ describe("model changes", () => {
 });
 
 describe("local setup recovery", () => {
-  it("resumes and completes the pending owner under its current authority", async () => {
-    const pending = pendingOwner();
-    applySetup = vi.fn<NonNullable<SystemAgentCommandDeps["applySetup"]>>(async (params) => {
-      params.assertCommitPreconditions?.((await mockConfig.read()).sourceConfig);
-      return setupResult();
-    });
-    const beforePersistentApply = vi.fn();
-    const result = await setup({ beforePersistentApply }, { workspace: undefined });
-    expect(result.applied).toBe(true);
-    expect(applySetup).toHaveBeenCalledWith(
-      expect.objectContaining({ workspace, resume: true, surface: "cli" }),
-      { beforePersistentApply },
-    );
-    expect(localOnboarding.complete).toHaveBeenCalledExactlyOnceWith({
-      configPath,
-      runId: pending.runId,
-    });
-    expect(localOnboarding.states.get(configPath)).toMatchObject({
-      status: "completed",
-      runId: pending.runId,
-    });
-    expect(beforePersistentApply).toHaveBeenCalledTimes(2);
-  });
-
   it("completes a v2026.9.4 interrupted runtime-bearing roster at its approved root", async () => {
     const pending = pendingOwner();
     const main = {
-      default: true,
       models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
     };
     const released: OpenClawConfig = {
@@ -732,49 +701,30 @@ describe("local setup recovery", () => {
     });
   });
 
-  it.each([
-    "specialist workspace",
-    "missing specialist",
-    "delegation targets",
-    "single-agent child workspace",
-  ])("keeps the team receipt pending after changing the %s", async (change) => {
-    const pending = pendingOwner();
-    const config = teamConfig(pending);
-    mockConfig.set(config);
-    await rejectsRecovery(pending, async () => {
-      if (change === "specialist workspace") {
-        config.agents.entries.writer!.workspace = `${workspace}/other`;
-      } else if (change === "missing specialist") {
-        delete config.agents.entries.writer;
-      } else if (change === "delegation targets") {
-        config.agents.entries.coordinator!.subagents.allowAgents = ["writer"];
-        config.agents.entries.coordinator!.workspace = workspace;
-      } else {
-        config.agents.entries = {
-          coordinator: { workspace: `${workspace}/coordinator`, subagents: { allowAgents: [] } },
-        };
-      }
-      mockConfig.set(config);
-      return setupResult();
-    });
-  });
-
-  it.each(["damaged roster", "replaced coordinator"])(
-    "preserves recorded team intent when retry starts with a %s",
+  it.each(["specialist workspace", "delegation targets"])(
+    "keeps the team receipt pending after changing the %s",
     async (change) => {
-      const pending = pendingOwner("coordinator");
-      const config = teamConfig(
-        pending,
-        change === "replaced coordinator" ? "replacement" : "coordinator",
-      );
-      if (change === "damaged roster") {
-        delete config.agents.entries.writer;
-        config.agents.entries.coordinator!.workspace = workspace;
-      }
+      const pending = pendingOwner();
+      const config = teamConfig(pending);
       mockConfig.set(config);
-      await rejectsRecovery(pending, async () => setupResult());
+      await rejectsRecovery(pending, async () => {
+        if (change === "specialist workspace") {
+          config.agents.entries.writer!.workspace = `${workspace}/other`;
+        } else {
+          config.agents.entries.coordinator!.subagents.allowAgents = ["writer"];
+          config.agents.entries.coordinator!.workspace = workspace;
+        }
+        mockConfig.set(config);
+        return setupResult();
+      });
     },
   );
+
+  it("preserves recorded team intent when retry starts with a replaced coordinator", async () => {
+    const pending = pendingOwner("coordinator");
+    mockConfig.set(teamConfig(pending, "replacement"));
+    await rejectsRecovery(pending, async () => setupResult());
+  });
 
   it("restores the recorded first team after activation stops before roster creation", async () => {
     const pending = pendingOwner("project-lead");

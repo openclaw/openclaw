@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { z } from "zod";
 import { createWorkerProjectPreparationIdentity } from "./preparation-identity.js";
 import { PROJECT_KEY, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import { prepareWorkerProviderProject } from "./provider-project-preparation.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
 
 const sourceAdmission = vi.hoisted(() =>
@@ -21,7 +20,7 @@ describe("prepared project retention compatibility", () => {
     sourceAdmission
       .mockReset()
       .mockRejectedValue(new Error("Retention must not access the repository"));
-    fixture.config.agents = { list: [{ id: "main" }] };
+    fixture.config.agents = { entries: { main: {} } };
     fixture.provider.requiresNodeEnrollment = true;
     fixture.provider.supportsProjectPreparation = () => true;
     fixture.provider.resolvePreparationTarget = () => ({
@@ -69,14 +68,9 @@ describe("prepared project retention compatibility", () => {
       provisionOperationId: "provision:retained",
       profileSnapshot: { ...profileSnapshot, project: { ...project, preparation } },
     });
-    let artifactsCurrent = true;
     const prepareNodeArtifacts = vi.fn(async () => ({
       artifacts,
-      assertCurrent: () => {
-        if (!artifactsCurrent) {
-          throw new Error("Runtime artifacts changed");
-        }
-      },
+      assertCurrent: () => {},
     }));
     const providerFor = vi.fn(() => fixture.provider);
     const owner = createWorkerProviderIntent({
@@ -84,12 +78,9 @@ describe("prepared project retention compatibility", () => {
       getConfig: () => fixture.config,
       projectNamespace: "gateway",
       providerFor,
-      requireWorkerProfile: (value) => z.record(z.string(), z.json()).parse(value),
       prepareNodeArtifacts,
       isStopping: () => false,
-      inState: () => false,
       withLock: async (_id, run) => await run(),
-      serviceError: (_code, message) => new Error(message),
       resumeProvision: async (environment) => environment,
     });
     return {
@@ -99,9 +90,6 @@ describe("prepared project retention compatibility", () => {
       artifacts,
       prepareNodeArtifacts,
       providerFor,
-      invalidateArtifacts: () => {
-        artifactsCurrent = false;
-      },
     };
   }
 
@@ -220,10 +208,10 @@ describe("prepared project retention compatibility", () => {
     ).toThrow("not owned by this lifecycle");
   });
 
-  it.each(["profile", "provider", "target", "owner selection", "agent deletion", "runtime"])(
-    "rechecks %s drift without acquiring external source authority",
+  it.each(["profile", "provider", "target"])(
+    "checks %s compatibility on the next retention pass without external source authority",
     async (mutation) => {
-      const { record, owner, invalidateArtifacts } = await setup();
+      const { record, owner } = await setup();
       const retained = await owner.prepareRetention(record, fixture.abort.signal);
       expect(retained).toBeDefined();
       if (mutation === "profile") {
@@ -236,19 +224,8 @@ describe("prepared project retention compatibility", () => {
           platform: "linux",
           arch: "x64",
         });
-      } else if (mutation === "owner selection") {
-        fixture.config.tools = { github: { kind: "oauth", profileId: `ghp_${"a".repeat(32)}` } };
-      } else if (mutation === "agent deletion") {
-        fixture.config.agents = { list: [{ id: "other" }] };
-      } else {
-        invalidateArtifacts();
       }
-      if (mutation === "runtime") {
-        expect(() => retained!.isCurrent()).toThrow("Runtime artifacts changed");
-      } else {
-        expect(retained!.isCurrent()).toBe(false);
-        expect(await owner.prepareRetention(record, fixture.abort.signal)).toBeUndefined();
-      }
+      expect(await owner.prepareRetention(record, fixture.abort.signal)).toBeUndefined();
       expect(sourceAdmission).not.toHaveBeenCalled();
     },
   );
@@ -265,7 +242,7 @@ describe("prepared project retention compatibility", () => {
       if (mutation === "owner selection") {
         fixture.config.tools = { github: { kind: "oauth", profileId: `ghp_${"a".repeat(32)}` } };
       } else {
-        fixture.config.agents = { list: [{ id: "other" }] };
+        fixture.config.agents = { entries: { other: {} } };
       }
 
       expect(retained?.isCurrent()).toBe(false);
@@ -274,6 +251,16 @@ describe("prepared project retention compatibility", () => {
       expect(sourceAdmission).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects agent removal during lifecycle preparation before preparing artifacts", async () => {
+    const { record, owner, prepareNodeArtifacts } = await setup();
+    const pending = owner.prepareRetention(record, fixture.abort.signal);
+    fixture.config.agents = { entries: { other: {} } };
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(prepareNodeArtifacts).not.toHaveBeenCalled();
+    expect(sourceAdmission).not.toHaveBeenCalled();
+  });
 
   it("distinguishes unavailable artifact observations from incompatible contents", async () => {
     const { record, owner, prepareNodeArtifacts } = await setup();

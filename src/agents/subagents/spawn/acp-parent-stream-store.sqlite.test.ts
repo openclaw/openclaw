@@ -1,13 +1,36 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../../state/openclaw-agent-db.js";
-import { withTestDir } from "../../../test-helpers/temp-dir.js";
-import { recordAcpParentStreamEvents } from "./acp-parent-stream-store.sqlite.js";
-import { listAcpParentStreamEventsForTest } from "./acp-parent-stream-store.sqlite.test-support.js";
+import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
+import { withTestDir as withTemporaryDir } from "../../../test-helpers/temp-dir.js";
+import { createAcpParentStreamRecorder } from "./acp-parent-stream-store.sqlite.js";
+import {
+  listAcpParentStreamEventsForTest,
+  recordAcpParentStreamEventsForTest as recordAcpParentStreamEvents,
+} from "./acp-parent-stream-store.sqlite.test-support.js";
+
+async function withTestDir(
+  options: Parameters<typeof withTemporaryDir>[0],
+  run: (stateDir: string) => Promise<void>,
+) {
+  return withTemporaryDir(options, async (stateDir) => {
+    try {
+      await run(stateDir);
+    } finally {
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
+}
 
 function seedSession(options: { agentId: string; env: NodeJS.ProcessEnv }, sessionKey: string) {
   runOpenClawAgentWriteTransaction((database) => {
@@ -37,8 +60,10 @@ function seedSession(options: { agentId: string; env: NodeJS.ProcessEnv }, sessi
 }
 
 describe("ACP parent stream SQLite store", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
   });
 
   it("orders run events and removes them with the child session", async () => {
@@ -49,7 +74,7 @@ describe("ACP parent stream SQLite store", () => {
       };
       seedSession(options, "agent:codex:acp:child");
 
-      recordAcpParentStreamEvents({
+      await recordAcpParentStreamEvents({
         ...options,
         sessionId: "session-1",
         runId: "run-1",
@@ -91,7 +116,7 @@ describe("ACP parent stream SQLite store", () => {
       const circular: Record<string, unknown> = { kind: "circular" };
       circular.self = circular;
 
-      recordAcpParentStreamEvents({
+      await recordAcpParentStreamEvents({
         ...options,
         sessionId: "session-1",
         runId: "run-1",
@@ -105,6 +130,83 @@ describe("ACP parent stream SQLite store", () => {
       expect(
         listAcpParentStreamEventsForTest({ ...options, sessionId: "session-1", runId: "run-1" }),
       ).toEqual([{ kind: "lifecycle", phase: "end" }]);
+    });
+  });
+  it("keeps captured inputs and sequence allocation in the agent writer FIFO", async () => {
+    await withTestDir({ prefix: "acp-parent-fifo-" }, async (stateDir) => {
+      const target = { agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } };
+      seedSession(target, "agent:main:acp:child");
+      const recorder = createAcpParentStreamRecorder({
+        ...target,
+        sessionId: "session-1",
+        runId: "fifo",
+      });
+      const gate = createDeferredCore();
+      const ahead = runOpenClawAgentWriteAdmission(target, () => gate.promise);
+      const events = [{ event: { kind: "first" }, createdAt: 1 }];
+      const first = recorder.record(events);
+      const between = runOpenClawAgentWriteAdmission(target, () =>
+        listAcpParentStreamEventsForTest({
+          ...target,
+          sessionId: "session-1",
+          runId: "fifo",
+        }),
+      );
+      const second = recorder.record([{ event: { kind: "second" }, createdAt: 2 }]);
+      events[0]!.event.kind = "mutated";
+      try {
+        gate.resolve();
+        await ahead;
+        expect(await first).toEqual({ ok: true, value: undefined });
+        expect(await between).toEqual([{ kind: "first" }]);
+        expect(await second).toEqual({ ok: true, value: undefined });
+        expect(
+          listAcpParentStreamEventsForTest({ ...target, sessionId: "session-1", runId: "fifo" }),
+        ).toEqual([{ kind: "first" }, { kind: "second" }]);
+      } finally {
+        gate.resolve();
+        await Promise.allSettled([ahead, first, between, second]);
+        await recorder.close();
+      }
+    });
+  });
+
+  it("returns a proven rollback with native error identity and no partial batch", async () => {
+    await withTestDir({ prefix: "acp-parent-rollback-" }, async (stateDir) => {
+      const target = { agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } };
+      seedSession(target, "agent:main:acp:child");
+      const { db } = openOpenClawAgentDatabase(target);
+      const recorder = createAcpParentStreamRecorder({
+        ...target,
+        sessionId: "session-1",
+        runId: "rollback",
+      });
+      try {
+        const result = await recorder.record([
+          { event: { kind: "first" }, createdAt: 1 },
+          { event: { kind: "second" }, createdAt: Number.NaN },
+        ]);
+        expect(result.ok).toBe(false);
+        if (result.ok) {
+          throw new Error("Expected SQLite to refuse the invalid timestamp");
+        }
+        expect(result.error).toBeInstanceOf(Error);
+        expect(result.error).toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 1299 });
+        expect(
+          listAcpParentStreamEventsForTest({
+            ...target,
+            sessionId: "session-1",
+            runId: "rollback",
+          }),
+        ).toEqual([]);
+        expect(await recorder.record([{ event: { kind: "after" }, createdAt: 3 }])).toEqual({
+          ok: true,
+          value: undefined,
+        });
+        expect(db.prepare("SELECT seq FROM acp_parent_stream_events").all()).toEqual([{ seq: 0 }]);
+      } finally {
+        await recorder.close();
+      }
     });
   });
 });

@@ -17,7 +17,6 @@ export function registerBrowserPolicyCommands(
         parent: parentOpts(command),
         method: "GET",
         path: "/policy",
-        timeoutMs: 30_000,
         print: (report) => {
           if (!("policies" in report)) {
             defaultRuntime.log(sanitizeTerminalText(`${report.state}: ${report.detail}`));

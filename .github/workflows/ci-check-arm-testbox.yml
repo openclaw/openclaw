@@ -109,7 +109,7 @@ jobs:
         run: |
           if [[ ! "$TESTBOX_EXPIRES_AT" =~ ^[0-9]+$ ]] ||
             (( $(date +%s) >= TESTBOX_EXPIRES_AT / 1000 )); then
-            echo "Testbox waited more than 10 minutes; request a fresh lease." >&2
+            echo "Testbox admission expired after 60 minutes from dispatch; stop this lease and request a fresh one." >&2
             exit 1
           fi
 
@@ -135,8 +135,6 @@ jobs:
           persist-credentials: false
       - name: Bound Testbox idle lifetime
         if: github.event_name == 'workflow_dispatch'
-        env:
-          TESTBOX_EXPIRES_AT: ${{ needs.admission.outputs.expires_at }}
         run: node scripts/ci-testbox-budget.mjs configure
 
       - name: Setup Node environment

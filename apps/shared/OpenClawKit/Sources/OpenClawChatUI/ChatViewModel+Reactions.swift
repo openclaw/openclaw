@@ -93,7 +93,7 @@ extension OpenClawChatViewModel {
             sharingRole: session.sharingRole?.rawValue,
             visibility: session.visibility?.rawValue,
             archived: session.isArchived,
-            catalog: Self.isReactionCatalogSession(self.sessionKey))
+            catalog: OpenClawChatSessionKey.catalogSource(self.sessionKey) != nil)
     }
 
     public func toggleMessageReaction(message: OpenClawChatMessage, emoji: String) async {
@@ -170,7 +170,7 @@ extension OpenClawChatViewModel {
     func syncSessionReactions(refreshMetadata: Bool = false) {
         guard !self.usesWebConversation, self.healthOK, !self.isTransportDetached,
               self.hasAppliedLiveHistory,
-              !Self.isReactionCatalogSession(self.sessionKey),
+              OpenClawChatSessionKey.catalogSource(self.sessionKey) == nil,
               let sessionID = self.reactionSessionID
         else {
             self.resetSessionReactions()
@@ -199,7 +199,7 @@ extension OpenClawChatViewModel {
               self.matchesCurrentSessionKey(
                   incoming: event.sessionKey, agentId: event.agentID, current: self.sessionKey),
               event.sessionID == self.reactionSessionID,
-              !Self.isReactionCatalogSession(self.sessionKey)
+              OpenClawChatSessionKey.catalogSource(self.sessionKey) == nil
         else { return }
         self.syncSessionReactions()
         guard let target = self.reactionState.target, self.isCurrentReactionTarget(target) else { return }
@@ -283,21 +283,6 @@ extension OpenClawChatViewModel {
                   self.isCurrentReactionTarget(target)
             else { return }
             self.errorText = error.localizedDescription
-        }
-    }
-
-    private static func isReactionCatalogSession(_ key: String) -> Bool {
-        var source = key
-        if source.hasPrefix("agent:"), let separator = source.dropFirst(6).firstIndex(of: ":"),
-           separator != source.index(source.startIndex, offsetBy: 6)
-        {
-            source = String(source[source.index(after: separator)...])
-        }
-        guard source.hasPrefix("catalog:") else { return false }
-        let parts = source.dropFirst(8).split(separator: ":", omittingEmptySubsequences: false)
-        return parts.count == 3 && parts.allSatisfy { part in
-            guard let decoded = String(part).removingPercentEncoding else { return false }
-            return !decoded.isEmpty
         }
     }
 }

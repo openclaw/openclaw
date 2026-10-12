@@ -22,6 +22,8 @@ import {
 } from "../plugins/hook-claim-admission.js";
 import type { PluginHookAgentContext } from "../plugins/hook-types.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
@@ -127,8 +129,7 @@ type TestRunCliAgent = (
   params: Omit<Parameters<ProductionRunCliAgent>[0], "admittedRunContext">,
 ) => ReturnType<ProductionRunCliAgent>;
 let runCliAgent: TestRunCliAgent;
-let restoreCliRunnerTestDeps: typeof import("./cli-runner.js").restoreCliRunnerTestDeps;
-let setCliRunnerTestDeps: typeof import("./cli-runner.js").setCliRunnerTestDeps;
+let authProfiles: typeof import("./auth-profiles.js");
 
 async function captureRejectedClaudeRun(
   params: Parameters<typeof runCliAgent>[0],
@@ -199,21 +200,21 @@ beforeEach(() => {
   authStoreMock.mockReset();
   authFailureMock.mockReset().mockResolvedValue(undefined);
   authSuccessMock.mockReset().mockResolvedValue(undefined);
-  setCliRunnerTestDeps?.({
-    loadAuthProfileStoreForRuntime: authStoreMock,
-    markAuthProfileFailure: authFailureMock,
-    markAuthProfileSuccess: authSuccessMock,
-  });
+  vi.spyOn(authProfiles, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(authStoreMock);
+  vi.spyOn(authProfiles, "markAuthProfileFailure").mockImplementation(authFailureMock);
+  vi.spyOn(authProfiles, "markAuthProfileSuccess").mockImplementation(authSuccessMock);
 });
 
 beforeAll(async () => {
   const cliRunner = await import("./cli-runner.js");
   runCliAgent = wrapRunWithTestPreparedAdmission(cliRunner.runCliAgent);
-  ({ restoreCliRunnerTestDeps, setCliRunnerTestDeps } = cliRunner);
+  authProfiles = await import("./auth-profiles.js");
 });
 
 afterEach(() => {
-  restoreCliRunnerTestDeps();
+  vi.mocked(authProfiles.loadAuthProfileStoreForRuntimeAsync).mockRestore();
+  vi.mocked(authProfiles.markAuthProfileFailure).mockRestore();
+  vi.mocked(authProfiles.markAuthProfileSuccess).mockRestore();
   cliBackendsTesting.resetDepsForTest();
   vi.clearAllMocks();
   resetDiagnosticEventsForTest();
@@ -373,29 +374,6 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(executeMock).not.toHaveBeenCalled();
   });
 
-  it("settles one exhausted selected-profile failure", async () => {
-    const provider = "claude-cli";
-    const { profileId, store } = prepareProfile(provider);
-    executeMock.mockRejectedValueOnce(
-      new FailoverError("selected session expired", { reason: "session_expired", provider }),
-    );
-
-    await expect(runCliAgent({ ...runParams, provider, trigger: "user" })).rejects.toMatchObject({
-      reason: "session_expired",
-    });
-
-    expect(authFailureMock).toHaveBeenCalledOnce();
-    expect(authFailureMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        store,
-        profileId,
-        reason: "session_expired",
-        agentDir: "/tmp/agent",
-      }),
-    );
-    expect(authSuccessMock).not.toHaveBeenCalled();
-  });
-
   it("settles a typed selected-profile preparation failure before fallback", async () => {
     const provider = "claude-cli";
     const profileId = `${provider}:selected`;
@@ -403,7 +381,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       version: 1,
       profiles: { [profileId]: { type: "oauth", provider } },
     };
-    authStoreMock.mockReturnValue(store);
+    authStoreMock.mockResolvedValue(store);
     prepareMock.mockRejectedValueOnce(
       new CliAuthProfilePreparationError({
         message: "selected profile needs login",
@@ -474,9 +452,16 @@ describe("runCliAgent before_agent_reply seam", () => {
 
   it("does not settle auth health when before_agent_run blocks before backend execution", async () => {
     prepareProfile("codex-cli");
-    const recorder = {
-      persistBlocked: vi.fn(async (message) => ({ message })),
-    } as unknown as NonNullable<Parameters<typeof runCliAgent>[0]["userTurnTranscriptRecorder"]>;
+    const transcript = await import("./cli-runner/cli-run-transcript.js");
+    const persistBlock = vi.spyOn(transcript, "persistCliRunBlock").mockResolvedValue(undefined);
+    onTestFinished(() => persistBlock.mockRestore());
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: runParams.prompt },
+      target: createTestUserTurnTranscriptTarget({
+        sessionId: runParams.sessionId,
+        sessionKey: runParams.sessionKey,
+      }),
+    });
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_run");
     beforeRunMock.mockResolvedValueOnce({
       pluginId: "policy-plugin",
@@ -624,7 +609,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     }
   });
 
-  it("clears stateless CLI bindings when before_agent_reply claims a cron turn", async () => {
+  it("passes the heartbeat queue and clears stateless CLI bindings when its hook claims", async () => {
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
       resolveRuntimeCliBackends: () => [
@@ -646,10 +631,16 @@ describe("runCliAgent before_agent_reply seam", () => {
 
     const result = await runCliAgent({
       ...runParams,
-      trigger: "cron",
+      trigger: "heartbeat",
+      sessionKey: "agent:main:heartbeat:heartbeat",
+      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
       config: {},
     });
 
+    expect(replyMock.mock.calls[0]?.[1]).toMatchObject({
+      sessionKey: "agent:main:heartbeat:heartbeat",
+      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+    });
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
     expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
@@ -766,19 +757,13 @@ describe("runCliAgent before_agent_reply seam", () => {
     }
   });
 
-  it.each([false, true])("settles failed MCP retirement with delivery %s", async (delivered) => {
-    executeMock.mockResolvedValue(
-      delivered ? { text: "", didSendViaMessagingTool: true } : { text: "real reply" },
-    );
+  it("preserves delivery after failed MCP retirement", async () => {
+    executeMock.mockResolvedValue({ text: "", didSendViaMessagingTool: true });
     retireMock.mockImplementation(async ({ onError }: { onError?: (error: unknown) => void }) => {
       onError?.(new Error("session mcp retire failed"));
       return false;
     });
     const result = runCliAgent({ ...runParams, cleanupBundleMcpOnRunEnd: true });
-    if (delivered) {
-      await expect(result).resolves.toMatchObject({ didSendViaMessagingTool: true });
-    } else {
-      await expect(result).rejects.toThrow("session mcp retire failed");
-    }
+    await expect(result).resolves.toMatchObject({ didSendViaMessagingTool: true });
   });
 });

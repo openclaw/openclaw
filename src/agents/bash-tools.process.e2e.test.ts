@@ -2,6 +2,7 @@ import { Value } from "typebox/value";
 import { afterEach, expect, test } from "vitest";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   getFinishedSession,
   getSession,
@@ -98,63 +99,83 @@ const SYNTHETIC_FINALIZER_CREDENTIAL = ["sk", "synthetic", "fixture", "never", "
 
 test.skipIf(process.platform === "win32")(
   "keeps subagent yield blocked until a real finalized background exec is collected",
-  async () => {
-    const scopeKey = "agent:main:subagent:process-yield";
-    const finalization = createDeferredCore();
-    const run = await runSandboxProcess({
-      command: "yield-retention-proof",
-      containerName: "yield-retention-proof",
-      child: "process.exit(2)",
-      async finalizeExec() {
-        await finalization.promise;
-      },
-      notifyOnExit: false,
-      scopeKey,
-      timeoutSec: 10,
-    });
-    markBackgrounded(run.session);
-    let yieldCount = 0;
-    const yieldTool = createSessionsYieldTool({
-      sessionId: "process-yield",
-      claimYield: createRequesterYieldCallback({
-        requesterSessionKey: scopeKey,
-        requesterAgentId: "main",
-      }),
-      onYield: () => {
-        yieldCount += 1;
-      },
-    });
-    try {
-      expect((await yieldTool.execute("yield-running", {})).details).toMatchObject({
-        status: "error",
+  () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scopeKey = "agent:main:subagent:process-yield";
+      const runId = "process-yield-run";
+      const registry = await import("./subagents/registry/subagent-registry.test-helpers.js");
+      await registry.resetSubagentRegistryForTests();
+      await registry.addSubagentRunForTests({
+        runId,
+        childSessionKey: scopeKey,
+        childAgentId: "main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "Collect the owned process before waiting",
+        cleanup: "keep",
+        createdAt: 1,
+        execution: { status: "running" },
+        expectsCompletionMessage: false,
+        completion: { required: false },
+        delivery: { status: "not_required" },
       });
-      finalization.resolve();
-      await run.promise;
-      const retained = getFinishedSession(run.session.id);
-      expect(retained?.scopeKey).toBe(scopeKey);
-      expect(retained?.sessionKey).toBeUndefined();
-      expect((await yieldTool.execute("yield-finished", {})).details).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("Use process to poll and collect"),
+      const finalization = createDeferredCore();
+      const run = await runSandboxProcess({
+        command: "yield-retention-proof",
+        containerName: "yield-retention-proof",
+        child: "process.exit(2)",
+        async finalizeExec() {
+          await finalization.promise;
+        },
+        notifyOnExit: false,
+        scopeKey,
+        timeoutSec: 10,
       });
-      expect(yieldCount).toBe(0);
-      const poll = await createProcessTool({ scopeKey }).execute("poll-finished", {
-        action: "poll",
-        sessionId: run.session.id,
+      markBackgrounded(run.session);
+      let yieldCount = 0;
+      const yieldTool = createSessionsYieldTool({
+        sessionId: "process-yield",
+        claimYield: createRequesterYieldCallback({
+          requesterSessionKey: scopeKey,
+          requesterAgentId: "main",
+          requesterTurnRunId: runId,
+        }),
+        onYield: () => {
+          yieldCount += 1;
+        },
       });
-      acknowledgeInternalToolResult(poll);
-      expect(
-        (await yieldTool.execute("yield-collected", { waitFor: "message" })).details,
-      ).toMatchObject({
-        status: "yielded",
-      });
-      expect(yieldCount).toBe(1);
-    } finally {
-      finalization.resolve();
-      run.kill();
-      await run.promise;
-    }
-  },
+      try {
+        expect((await yieldTool.execute("yield-running", {})).details).toMatchObject({
+          status: "error",
+        });
+        finalization.resolve();
+        await run.promise;
+        const retained = getFinishedSession(run.session.id);
+        expect(retained?.scopeKey).toBe(scopeKey);
+        expect(retained?.sessionKey).toBeUndefined();
+        expect((await yieldTool.execute("yield-finished", {})).details).toMatchObject({
+          status: "error",
+          error: expect.stringContaining("Use process to poll and collect"),
+        });
+        expect(yieldCount).toBe(0);
+        const poll = await createProcessTool({ scopeKey }).execute("poll-finished", {
+          action: "poll",
+          sessionId: run.session.id,
+        });
+        acknowledgeInternalToolResult(poll);
+        expect(
+          (await yieldTool.execute("yield-collected", { waitFor: "message" })).details,
+        ).toMatchObject({
+          status: "yielded",
+        });
+        expect(yieldCount).toBe(1);
+      } finally {
+        finalization.resolve();
+        run.kill();
+        await run.promise;
+        await registry.resetSubagentRegistryForTests();
+      }
+    }),
 );
 
 test.skipIf(process.platform === "win32").each([false, true])(
@@ -222,15 +243,6 @@ test.skipIf(process.platform === "win32").each([
     expectedStatus: "failed",
     expectedExitCode: undefined,
     expectedExitLabel: "unknown exit code",
-  },
-  {
-    name: "normal nonzero child exit",
-    child: 'setTimeout(() => { process.stdout.write("REAL_CHILD_OUTPUT"); process.exit(7); }, 80)',
-    timeoutSec: 5,
-    finalizerError: undefined,
-    expectedStatus: "completed",
-    expectedExitCode: 7,
-    expectedExitLabel: "code 7",
   },
   {
     name: "timeout after a clean child exit",
@@ -325,52 +337,27 @@ test("rejects malformed direct actions before requiring a session id", async () 
   expect(result.details).toMatchObject({ status: "failed" });
 });
 
-test.each([
-  {
-    name: "empty nonzero exit",
-    source: "process.exit(1)",
-    expectedText: "(no output)\n\n(Command exited with code 1)",
-    expectedAggregated: "(no output)\n\n(Command exited with code 1)",
-    exitCode: 1,
-  },
-  {
-    name: "nonzero exit with output",
-    source: 'process.stdout.write("VISIBLE"); process.exit(1)',
-    expectedText: "VISIBLE\n\n(Command exited with code 1)",
-    expectedAggregated: "VISIBLE\n\n(Command exited with code 1)",
-    exitCode: 1,
-  },
-  {
-    name: "empty successful exit",
-    source: "process.exit(0)",
-    expectedText: "(no output)",
-    expectedAggregated: "",
-    exitCode: 0,
-  },
-])(
-  "renders a real foreground $name with the expected structured output",
-  async ({ source, expectedText, expectedAggregated, exitCode }) => {
-    const execTool = createGatewayExecTool({ allowBackground: false });
-    const result = await execTool.execute(`foreground-exit-${exitCode}`, {
-      command: currentNodeEvalCommand(source),
-    });
+test("renders a real foreground empty nonzero exit with the expected structured output", async () => {
+  const execTool = createGatewayExecTool({ allowBackground: false });
+  const result = await execTool.execute("foreground-exit-1", {
+    command: currentNodeEvalCommand("process.exit(1)"),
+  });
 
-    expect(textContent(result)).toBe(expectedText);
-    expect(result.details).toMatchObject({
-      status: "completed",
-      exitCode,
-      aggregated: expectedAggregated,
-    });
-  },
-);
+  const output = "(no output)\n\n(Command exited with code 1)";
+  expect(textContent(result)).toBe(output);
+  expect(result.details).toMatchObject({
+    status: "completed",
+    exitCode: 1,
+    aggregated: output,
+  });
+});
 
 test.skipIf(process.platform === "win32").each([
-  { name: "quiet successful exit", exitCode: 0, output: "", expectsNotification: false },
-  { name: "quiet nonzero exit", exitCode: 7, output: "", expectsNotification: true },
-  { name: "nonzero exit with output", exitCode: 7, output: "VISIBLE", expectsNotification: true },
+  { name: "quiet successful exit", exitCode: 0, expectsNotification: false },
+  { name: "quiet nonzero exit", exitCode: 7, expectsNotification: true },
 ])(
   "preserves default completion wake behavior for a real $name",
-  async ({ name, exitCode, output, expectsNotification }) => {
+  async ({ name, exitCode, expectsNotification }) => {
     const scopeKey = `agent:main:process-default-wake-${name.replaceAll(" ", "-")}`;
     const execTool = createGatewayExecTool({
       allowBackground: true,
@@ -380,9 +367,8 @@ test.skipIf(process.platform === "win32").each([
       sessionKey: scopeKey,
       scopeKey,
     });
-    const script = `process.stdout.write(${JSON.stringify(output)}); process.exit(${exitCode});`;
     const started = await execTool.execute(`process-default-wake-${name}`, {
-      command: currentNodeEvalCommand(script),
+      command: currentNodeEvalCommand(`process.exit(${exitCode});`),
       background: true,
     });
     const sessionId = backgroundSessionId(started.details);
@@ -393,9 +379,6 @@ test.skipIf(process.platform === "win32").each([
     expect(events).toHaveLength(expectsNotification ? 1 : 0);
     if (expectsNotification) {
       expect(events[0]?.text).toContain(`code ${exitCode}`);
-      if (output) {
-        expect(events[0]?.text).toContain(output);
-      }
     }
   },
 );

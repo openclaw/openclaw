@@ -1,3 +1,4 @@
+import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 // Curated Talk home: realtime provider/model/voice pickers driven by
 // talk.catalog, above the embedded talk schema editor (see memory.ts for the
 // same curated-rows-above-schema shape). The pickers and the raw form patch the
@@ -15,6 +16,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import {
   renderDeviceTalk,
@@ -23,21 +25,9 @@ import {
 } from "./talk-device.ts";
 import { isTalkGptLiveModel, type TalkRealtimeSelection } from "./talk-schema.ts";
 
-/** One realtime provider row from talk.catalog, reduced to what the pickers use. */
-export type TalkRealtimeProviderOption = {
-  id: string;
-  label: string;
-  configured: boolean;
-  aliases: readonly string[];
-  models: readonly string[];
-  voices: readonly string[];
-  activeVoices?: readonly string[];
-  activeVoiceSelectionPolicy?: "allowlist-default";
-  voicesByModel?: Record<string, readonly string[]>;
-  /** Empty when the catalog does not declare transports for the provider. */
-  transports: readonly string[];
-  defaultModel: string | null;
-};
+registerSettingsEnglish();
+
+export type TalkRealtimeProviderOption = TalkCatalogResult["realtime"]["providers"][number];
 
 /**
  * Catalog as the page knows it. `loading`/`unavailable` keep an unread catalog
@@ -78,7 +68,7 @@ function findProviderOption(
     return undefined;
   }
   return providers.find(
-    (provider) => provider.id === providerId || provider.aliases.includes(providerId),
+    (provider) => provider.id === providerId || provider.aliases?.includes(providerId),
   );
 }
 
@@ -132,17 +122,15 @@ export function effectiveTalkValues(
 
 function renderStatusRow(props: TalkViewProps) {
   const catalog = props.catalog;
-  if (catalog.kind === "loading") {
+  if (catalog.kind !== "ready") {
     return renderSettingsRow({
       title: t("talkPage.status.title"),
-      control: renderSettingsStatus({ kind: "muted", label: t("common.loading") }),
-    });
-  }
-  if (catalog.kind === "unavailable") {
-    return renderSettingsRow({
-      title: t("talkPage.status.title"),
-      description: t("talkPage.status.unavailableHint"),
-      control: renderSettingsStatus({ kind: "muted", label: t("talkPage.status.unavailable") }),
+      description:
+        catalog.kind === "unavailable" ? t("talkPage.status.unavailableHint") : undefined,
+      control: renderSettingsStatus({
+        kind: "muted",
+        label: t(catalog.kind === "loading" ? "common.loading" : "talkPage.status.unavailable"),
+      }),
     });
   }
   return renderSettingsRow({
@@ -202,7 +190,7 @@ function renderModelRow(props: TalkViewProps) {
   if (!provider) {
     return renderConfiguredTalkValue("model", model ?? t("talkPage.model.default"));
   }
-  const known = provider.models.length
+  const known = provider.models?.length
     ? provider.models
     : provider.defaultModel
       ? [provider.defaultModel]

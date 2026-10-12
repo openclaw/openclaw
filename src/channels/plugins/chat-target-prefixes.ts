@@ -124,12 +124,9 @@ export function resolveServicePrefixedChatTarget<TService extends string, TTarge
     ...(params.extraChatPrefixes ?? []),
   ];
   return resolveServicePrefixedTarget({
-    trimmed: params.trimmed,
-    lower: params.lower,
-    servicePrefixes: params.servicePrefixes,
+    ...params,
     isChatTarget: (remainderLower) =>
       chatPrefixes.some((prefix) => remainderLower.startsWith(prefix)),
-    parseTarget: params.parseTarget,
   });
 }
 
@@ -144,39 +141,26 @@ function parseChatTargetPrefixes(
   params: ChatTargetPrefixesParams,
   throwOnInvalid: boolean,
 ): ParsedChatTarget | null {
-  for (const prefix of params.chatIdPrefixes) {
-    if (params.lower.startsWith(prefix)) {
+  for (const [kind, prefixes] of [
+    ["chat_id", params.chatIdPrefixes],
+    ["chat_guid", params.chatGuidPrefixes],
+    ["chat_identifier", params.chatIdentifierPrefixes],
+  ] as const) {
+    for (const prefix of prefixes) {
+      if (!params.lower.startsWith(prefix)) {
+        continue;
+      }
       const value = stripPrefix(params.trimmed, prefix);
-      const chatId = parseStrictInteger(value);
-      if (chatId !== undefined) {
-        return { kind: "chat_id", chatId };
+      if (kind === "chat_id") {
+        const chatId = parseStrictInteger(value);
+        if (chatId !== undefined) {
+          return { kind, chatId };
+        }
+      } else if (value) {
+        return kind === "chat_guid" ? { kind, chatGuid: value } : { kind, chatIdentifier: value };
       }
       if (throwOnInvalid) {
-        throw new Error(`Invalid chat_id: ${value}`);
-      }
-    }
-  }
-
-  for (const prefix of params.chatGuidPrefixes) {
-    if (params.lower.startsWith(prefix)) {
-      const value = stripPrefix(params.trimmed, prefix);
-      if (value) {
-        return { kind: "chat_guid", chatGuid: value };
-      }
-      if (throwOnInvalid) {
-        throw new Error("chat_guid is required");
-      }
-    }
-  }
-
-  for (const prefix of params.chatIdentifierPrefixes) {
-    if (params.lower.startsWith(prefix)) {
-      const value = stripPrefix(params.trimmed, prefix);
-      if (value) {
-        return { kind: "chat_identifier", chatIdentifier: value };
-      }
-      if (throwOnInvalid) {
-        throw new Error("chat_identifier is required");
+        throw new Error(kind === "chat_id" ? `Invalid chat_id: ${value}` : `${kind} is required`);
       }
     }
   }
@@ -229,11 +213,7 @@ export function createAllowedChatSenderMatcher(params: {
 }): (input: ChatSenderAllowParams) => boolean {
   return (input) =>
     isAllowedParsedChatSender({
-      allowFrom: input.allowFrom,
-      sender: input.sender,
-      chatId: input.chatId,
-      chatGuid: input.chatGuid,
-      chatIdentifier: input.chatIdentifier,
+      ...input,
       allowConversationTargets:
         input.allowConversationTargets ?? params.allowConversationTargets ?? false,
       normalizeSender: params.normalizeSender,
@@ -246,4 +226,21 @@ export function parseChatAllowTargetPrefixes(
   params: ChatTargetPrefixesParams,
 ): ParsedChatTarget | null {
   return parseChatTargetPrefixes(params, false);
+}
+
+/** Remove one of the known provider prefixes from a free-form target string. */
+export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
+  const trimmed = raw.trim();
+  for (const provider of providers) {
+    const prefix = `${normalizeLowercaseStringOrEmpty(provider)}:`;
+    if (normalizeLowercaseStringOrEmpty(trimmed).startsWith(prefix)) {
+      return trimmed.slice(prefix.length).trim();
+    }
+  }
+  return trimmed;
+}
+
+/** Remove generic target-kind prefixes such as `user:` or `group:`. */
+export function stripTargetKindPrefix(raw: string): string {
+  return raw.replace(/^(user|channel|group|conversation|room|dm):/i, "").trim();
 }

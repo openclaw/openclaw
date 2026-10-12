@@ -62,7 +62,14 @@ export async function acquireGatewayTestClient(
       },
       onConnectError: (error) => settle({ error }),
       onClose: (code, reason, info) => {
-        settle({ error: new Error(`${wait.closeMessage} (${code}): ${reason}`) });
+        // Name the handshake stage: an abnormal close before the connect frame is a peer
+        // drop, while one after it is a refused or interrupted handshake.
+        const stage = info
+          ? ` [${info.phase} socketOpened=${String(info.socketOpened)} connectRequestSent=${String(
+              info.connectRequestSent ?? false,
+            )}]`
+          : "";
+        settle({ error: new Error(`${wait.closeMessage} (${code}): ${reason}${stage}`) });
         options.onClose?.(code, reason, info);
       },
     });

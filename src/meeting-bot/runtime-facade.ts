@@ -1,10 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type {
-  TranscriptStartRequest,
-  TranscriptStopRequest,
-} from "../transcripts/provider-types.js";
 import { isMeetingRealtimeRouteReady } from "./meeting-modes.js";
 import type { MeetingPluginConfig } from "./plugin-config.js";
 import type {
@@ -12,7 +8,6 @@ import type {
   MeetingRuntimeFacadeConstructor,
   MeetingRuntimeFacadeOptions,
   MeetingRuntimeHookContext,
-  MeetingRuntimeOwner,
   MeetingRuntimeParams,
   MeetingRuntimeProbeResults,
   MeetingRuntimeSpeechBlockedReason,
@@ -44,7 +39,6 @@ export function createMeetingRuntimeFacade<
 ): MeetingRuntimeFacadeConstructor<Config, Transport, Mode, Health, Results> {
   type Session = MeetingPluginSession<Transport, Mode, Health>;
   type Request = MeetingPluginJoinRequest<Transport, Mode>;
-  type SessionRuntime = MeetingRuntimeOwner<Transport, Mode, Health>;
   type JoinContext = MeetingSessionRuntimeJoinContext<
     Session,
     Transport,
@@ -53,16 +47,21 @@ export function createMeetingRuntimeFacade<
     MeetingBrowserTab
   >;
 
-  return class MeetingRuntimeFacade {
+  return class MeetingRuntimeFacade extends MeetingSessionRuntime<
+    Session,
+    Request,
+    Transport,
+    Mode,
+    Health,
+    MeetingBrowserTab,
+    NonNullable<Health["manualAction"]>["reason"],
+    MeetingRuntimeSpeechBlockedReason<Health>
+  > {
     readonly #defaultAgentId: string;
-    readonly #sessions: SessionRuntime;
     readonly #requesterSessionKeys = new Map<string, string>();
 
     constructor(private readonly params: MeetingRuntimeParams<Config>) {
-      this.#defaultAgentId = normalizeAgentId(
-        params.config.realtime.agentId ?? resolveDefaultAgentId(params.fullConfig),
-      );
-      this.#sessions = new MeetingSessionRuntime({
+      super({
         logger: params.logger,
         logScope: options.platform.logScope,
         formatError: formatErrorMessage,
@@ -136,31 +135,18 @@ export function createMeetingRuntimeFacade<
           ...options.messages.durableTranscripts,
         },
       });
-    }
-
-    list(): Session[] {
-      return this.#sessions.list();
-    }
-
-    async startTranscriptSource(request: TranscriptStartRequest) {
-      return await this.#sessions.startTranscriptSource(request);
-    }
-
-    reconcileTranscriptPolicy(enabled: boolean): Promise<void> {
-      return this.#sessions.reconcileTranscriptPolicy(enabled);
-    }
-
-    async stopTranscriptSource(request: TranscriptStopRequest) {
-      return await this.#sessions.stopTranscriptSource(request);
+      this.#defaultAgentId = normalizeAgentId(
+        params.config.realtime.agentId ?? resolveDefaultAgentId(params.fullConfig),
+      );
     }
 
     ownsSession(agentId: string, sessionId: string): boolean {
       return this.list().some((session) => session.id === sessionId && session.agentId === agentId);
     }
 
-    async join(request: Request) {
+    override async join(request: Request) {
       try {
-        return await this.#sessions.join(
+        return await super.join(
           options.hooks?.normalizeJoinRequest?.(request, this.#hookContext()) ?? request,
         );
       } catch (error) {
@@ -174,35 +160,23 @@ export function createMeetingRuntimeFacade<
       }
     }
 
-    async leave(sessionId: string) {
+    override async leave(sessionId: string) {
       try {
-        return await this.#sessions.leave(sessionId);
+        return await super.leave(sessionId);
       } finally {
         this.#requesterSessionKeys.delete(sessionId);
       }
     }
 
-    async status(sessionId?: string) {
-      return await this.#sessions.status(sessionId);
-    }
-
     async statusForAgent(agentId: string, sessionId?: string) {
       if (sessionId) {
         return this.ownsSession(agentId, sessionId)
-          ? await this.#sessions.status(sessionId)
+          ? await this.status(sessionId)
           : { found: false };
       }
       const sessions = this.list().filter((session) => session.agentId === agentId);
-      await Promise.all(sessions.map((session) => this.#sessions.status(session.id)));
+      await Promise.all(sessions.map((session) => this.status(session.id)));
       return { found: true, sessions };
-    }
-
-    async transcript(sessionId: string, transcriptOptions: { sinceIndex?: number } = {}) {
-      return await this.#sessions.transcript(sessionId, transcriptOptions);
-    }
-
-    async speak(sessionId: string, instructions?: string) {
-      return await this.#sessions.speak(sessionId, instructions);
     }
 
     async setupStatus(setupOptions?: { mode?: Mode; transport?: Transport }) {
@@ -232,12 +206,12 @@ export function createMeetingRuntimeFacade<
       return {
         deleteRequesterSessionKey: (sessionId) => this.#requesterSessionKeys.delete(sessionId),
         endSession: async (sessionId, leaveOptions) => {
-          await this.#sessions.leave(sessionId, leaveOptions);
+          await super.leave(sessionId, leaveOptions);
           this.#requesterSessionKeys.delete(sessionId);
         },
         noteSession: (session, note) => this.#noteSession(session, note),
         refreshBrowserHealth: async (session, refreshOptions) =>
-          await this.#sessions.refreshBrowserHealth(session, refreshOptions),
+          await this.refreshBrowserHealth(session, refreshOptions),
         resolvedJoin: (request) => this.#resolveJoin(request),
       };
     }
@@ -248,9 +222,9 @@ export function createMeetingRuntimeFacade<
         resolveAgentId: (request) => normalizeAgentId(request.agentId ?? this.#defaultAgentId),
         list: () => this.list(),
         join: async (request) => await this.join(request),
-        isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
-        hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
-        refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
+        isReusable: (session, resolved) => this.isReusableSession(session, resolved),
+        hasHealthHandle: (sessionId) => this.hasHealthHandle(sessionId),
+        refreshHealth: (sessionId) => this.refreshHealth(sessionId),
         refreshCaptionHealth: async (session, timeoutMs) =>
           await this.#refreshBrowserHealth(session, { timeoutMs }),
       };
@@ -302,7 +276,7 @@ export function createMeetingRuntimeFacade<
             ? options.messages.joined.transcribe
             : options.messages.joined.waiting,
       );
-      this.#sessions.refreshSpeechReadiness(session);
+      this.refreshSpeechReadiness(session);
       return {};
     }
 
@@ -381,7 +355,7 @@ export function createMeetingRuntimeFacade<
     }
 
     async #refreshStatus(session: Session): Promise<void> {
-      await this.#sessions.refreshBrowserHealth(session, {
+      await this.refreshBrowserHealth(session, {
         force: true,
         readOnly: !(options.hooks?.isAwaitingAdmission?.(session) ?? false),
       });
@@ -443,7 +417,7 @@ export function createMeetingRuntimeFacade<
     async #captureTranscript(session: Session, captureOptions: { finalize?: boolean } = {}) {
       // Recovery permits caption setup but atomically refuses a different live
       // session owner, so stale sessions read their archived page buffer instead.
-      await this.#sessions.refreshCaptionHealth(session);
+      await this.refreshCaptionHealth(session);
       const tab = session.chrome?.browserTab;
       if (!tab) {
         return undefined;

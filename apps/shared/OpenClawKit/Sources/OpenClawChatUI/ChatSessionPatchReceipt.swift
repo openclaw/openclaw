@@ -5,6 +5,8 @@ public struct OpenClawChatSessionPatchReceipt: Decodable, Sendable {
         let category: String?
         let color: String?
         let pinnedAt: Double?
+        let snoozedUntil: Double?
+        let snoozedAt: Double?
         let archivedAt: Double?
         let archivedBy: OpenClawChatSessionEntry.CreatedActor?
         let archiveReason: String?
@@ -49,10 +51,9 @@ public struct OpenClawChatSessionPatchReceipt: Decodable, Sendable {
             row.archivedAt = self.entry.archivedAt
             row.archivedBy = self.entry.archivedBy
             row.archiveReason = self.entry.archiveReason
-            if row.archived == true {
-                row.pinned = false
-                row.pinnedAt = nil
-            }
+        case .snoozed:
+            row.snoozedUntil = self.entry.snoozedUntil
+            row.snoozedAt = self.entry.snoozedAt
         case .unread: return self.applyingRead(to: row)
         }
         return row

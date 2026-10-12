@@ -118,35 +118,109 @@ describe("legacy audit raw backup snapshots", () => {
     });
   });
 
-  it("reconstructs a scrub-in-progress source and sanitizes its later append", async () => {
-    await withBackupFixture(async ({ stateDir, tempDir, rawPath }) => {
-      const original = Buffer.from(`${JSON.stringify(configAuditRecord("original-value-7f3c"))}\n`);
-      const later = `${JSON.stringify(configAuditRecord("later-value-9a21"))}\n`;
-      const partial = Buffer.from(original);
-      const scrubbedBytes = Math.floor(partial.length / 2);
-      buildAuditScrubbedContent(scrubbedBytes).copy(partial);
-      await fs.writeFile(rawPath, Buffer.concat([partial, Buffer.from(later)]));
-      await writeAuditRestoreJournal(rawPath, original, { restoredBytes: 0, scrubbedBytes });
+  it.each(["claim", "raw archive"])(
+    "captures an interrupted %s move once without changing the live link pair",
+    async (destination) => {
+      await withBackupFixture(async ({ stateDir, tempDir, sourcePath, rawPath }) => {
+        const claimPath = path.join(
+          path.dirname(sourcePath),
+          ".config-audit.jsonl.doctor-importing",
+        );
+        const removedPath = destination === "claim" ? sourcePath : claimPath;
+        const retainedPath = destination === "claim" ? claimPath : rawPath;
+        const original = `${JSON.stringify(configAuditRecord("linked-value-7f3c"))}\n`;
+        await fs.writeFile(removedPath, original);
+        await fs.link(removedPath, retainedPath);
+        const before = await fs.stat(removedPath, { bigint: true });
 
-      const { snapshots } = await createLegacyAuditBackupCapture({ stateDir, tempDir });
-      const snapshotAsset = expectDefined(snapshots[0], "snapshot");
-      const snapshot = await fs.readFile(snapshotAsset.sourcePath, "utf8");
+        for (let capture = 0; capture < 2; capture += 1) {
+          const { snapshots } = await createLegacyAuditBackupCapture({ stateDir, tempDir });
+          expect(snapshots).toHaveLength(1);
+          const snapshot = expectDefined(snapshots[0], "snapshot");
+          expect(snapshot.archiveSourcePath).toBe(retainedPath);
+          expect(snapshot.skippedSourcePaths).toContain(removedPath);
+          const sanitized = await fs.readFile(snapshot.sourcePath, "utf8");
+          expect(sanitized).not.toContain("linked-value-7f3c");
+          expect(sanitized.trim().split("\n")).toHaveLength(1);
+          expect(JSON.parse(sanitized)).toMatchObject({
+            argv: ["openclaw", "config", "set", "token", "***"],
+          });
+        }
 
-      expect(snapshots).toHaveLength(1);
-      expect(snapshotAsset.archiveSourcePath).toBe(rawPath);
-      expect(snapshot).not.toContain("original-value-7f3c");
-      expect(snapshot).not.toContain("later-value-9a21");
-      expect(
-        snapshot
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line)),
-      ).toMatchObject([
-        { argv: ["openclaw", "config", "set", "token", "***"] },
-        { argv: ["openclaw", "config", "set", "token", "***"] },
-      ]);
+        for (const livePath of [removedPath, retainedPath]) {
+          expect(await fs.readFile(livePath, "utf8")).toBe(original);
+          expect(await fs.stat(livePath, { bigint: true })).toMatchObject({
+            dev: before.dev,
+            ino: before.ino,
+            nlink: 2n,
+          });
+        }
+      });
+    },
+  );
+
+  it("rejects an audit source linked to an unrelated path", async () => {
+    await withBackupFixture(async ({ stateDir, tempDir, sourcePath }) => {
+      const original = `${JSON.stringify(configAuditRecord("unrelated-value-7f3c"))}\n`;
+      const unrelatedPath = path.join(path.dirname(sourcePath), "unrelated.jsonl");
+      await fs.writeFile(sourcePath, original);
+      await fs.link(sourcePath, unrelatedPath);
+
+      await expect(createLegacyAuditBackupCapture({ stateDir, tempDir })).rejects.toThrow(
+        /hardlink/i,
+      );
+      expect(await fs.readFile(sourcePath, "utf8")).toBe(original);
+      expect(await fs.stat(unrelatedPath)).toMatchObject({ nlink: 2 });
     });
   });
+
+  it.each([false, true])(
+    "reconstructs a scrub-in-progress source and sanitizes its later append (linked journal: %s)",
+    async (linkedJournal) => {
+      await withBackupFixture(async ({ stateDir, tempDir, rawPath }) => {
+        const original = Buffer.from(
+          `${JSON.stringify(configAuditRecord("original-value-7f3c"))}\n`,
+        );
+        const later = `${JSON.stringify(configAuditRecord("later-value-9a21"))}\n`;
+        const partial = Buffer.from(original);
+        const scrubbedBytes = Math.floor(partial.length / 2);
+        buildAuditScrubbedContent(scrubbedBytes).copy(partial);
+        await fs.writeFile(rawPath, Buffer.concat([partial, Buffer.from(later)]));
+        await writeAuditRestoreJournal(rawPath, original, { restoredBytes: 0, scrubbedBytes });
+        const restorePath = `${rawPath}.doctor-scrub-restore`;
+        const stagingPath = `${rawPath}.doctor-scrub-staging`;
+        const journal = await fs.readFile(restorePath, "utf8");
+        if (linkedJournal) {
+          await fs.link(restorePath, stagingPath);
+        }
+
+        const { snapshots } = await createLegacyAuditBackupCapture({ stateDir, tempDir });
+        const snapshotAsset = expectDefined(snapshots[0], "snapshot");
+        const snapshot = await fs.readFile(snapshotAsset.sourcePath, "utf8");
+
+        expect(snapshots).toHaveLength(1);
+        expect(snapshotAsset.archiveSourcePath).toBe(rawPath);
+        expect(snapshot).not.toContain("original-value-7f3c");
+        expect(snapshot).not.toContain("later-value-9a21");
+        expect(
+          snapshot
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line)),
+        ).toMatchObject([
+          { argv: ["openclaw", "config", "set", "token", "***"] },
+          { argv: ["openclaw", "config", "set", "token", "***"] },
+        ]);
+        if (linkedJournal) {
+          for (const journalPath of [restorePath, stagingPath]) {
+            expect(snapshotAsset.skippedSourcePaths).toContain(journalPath);
+            expect(await fs.readFile(journalPath, "utf8")).toBe(journal);
+            expect(await fs.stat(journalPath)).toMatchObject({ nlink: 2 });
+          }
+        }
+      });
+    },
+  );
 
   it("ignores a stale restore journal after the raw archive is replaced", async () => {
     await withBackupFixture(async ({ stateDir, tempDir, rawPath }) => {

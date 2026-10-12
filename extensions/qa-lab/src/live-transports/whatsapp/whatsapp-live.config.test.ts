@@ -9,7 +9,7 @@ import { buildWhatsAppQaConfig } from "./whatsapp-live.config.js";
 import { whatsappConversationScenarios } from "./whatsapp-live.scenario-implementations.conversation.js";
 
 describe("WhatsApp QA broadcast config", () => {
-  it.each(["generated", "explicit", "legacy-default"] as const)(
+  it.each(["generated", "explicit"] as const)(
     "builds valid WhatsApp broadcast config from the %s roster without replacing agents",
     async (roster) => {
       await withTempHome(
@@ -25,16 +25,11 @@ describe("WhatsApp QA broadcast config", () => {
           if (roster !== "generated") {
             base.agents = {
               ...base.agents,
-              ...(roster === "explicit"
-                ? {
-                    ownership: "explicit",
-                    defaults: { ...base.agents?.defaults, systemAgent: { agentId: "main" } },
-                  }
-                : {}),
+              ownership: "explicit",
+              defaults: { ...base.agents?.defaults, systemAgent: { agentId: "main" } },
               entries: {
                 ...base.agents?.entries,
                 main: {
-                  ...(roster === "legacy-default" ? { default: true } : {}),
                   identity: { name: "Existing main agent" },
                   model: "mock-openai/custom-main",
                 },
@@ -53,7 +48,9 @@ describe("WhatsApp QA broadcast config", () => {
             sutAccountId: "sut",
           });
 
-          await fs.writeFile(path.join(home, ".openclaw", "openclaw.json"), JSON.stringify(cfg));
+          const configPath = path.join(home, ".openclaw", "openclaw.json");
+          const authored = JSON.stringify(cfg);
+          await fs.writeFile(configPath, authored);
           const snapshot = await readConfigFileSnapshot({
             pluginValidation: "core-only",
             observe: false,

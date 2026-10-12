@@ -11,13 +11,19 @@ import {
   MEMORY_INDEX_FTS_TABLE,
   rebuildMemoryChunkFts,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
-import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import {
+  runSqliteImmediateTransactionSync,
+  tableExists as admittedTableExists,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 
 const MEMORY_REINDEX_SCHEMA = "memory_reindex";
 export const MEMORY_INDEX_STATE_ID = 1;
 
 function tableExists(db: DatabaseSync, schema: string, tableName: string): boolean {
+  if (schema === "main") {
+    return admittedTableExists(db, tableName);
+  }
   const row = db
     .prepare(`SELECT 1 AS ok FROM ${schema}.sqlite_master WHERE type = 'table' AND name = ?`)
     .get(tableName);
@@ -64,32 +70,6 @@ function replaceMemoryVectorTable(db: DatabaseSync): void {
   db.exec(
     `INSERT INTO main.${tableName} (id, embedding) ` +
       `SELECT id, embedding FROM ${MEMORY_REINDEX_SCHEMA}.${tableName}`,
-  );
-}
-
-function replaceMemoryChunkFtsTable(db: DatabaseSync): void {
-  const createSql = readTableSql(db, MEMORY_REINDEX_SCHEMA, MEMORY_INDEX_FTS_TABLE);
-  db.exec(`DROP TABLE IF EXISTS main.${MEMORY_INDEX_FTS_TABLE}`);
-  if (!createSql) {
-    return;
-  }
-  db.exec(createSql);
-  rebuildMemoryChunkFts(db, MEMORY_INDEX_FTS_TABLE);
-  ensureMemoryChunkFtsTriggers(db);
-}
-
-function replaceMemoryPathFtsTable(db: DatabaseSync): void {
-  const createSql = readTableSql(db, MEMORY_REINDEX_SCHEMA, MEMORY_INDEX_PATHS_FTS_TABLE);
-  db.exec(`DROP TABLE IF EXISTS main.${MEMORY_INDEX_PATHS_FTS_TABLE}`);
-  if (!createSql) {
-    return;
-  }
-  db.exec(createSql);
-  // Bulk publication already suspends row triggers. Rebuild from the copied
-  // stable source ids so later singleton deletes remain direct rowid lookups.
-  db.exec(
-    `INSERT INTO main.${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source) ` +
-      `SELECT id, path, source FROM main.memory_index_sources`,
   );
 }
 
@@ -142,37 +122,43 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
           )
           .run(params.metaKey);
 
-        params.targetDb.exec(`
-        DELETE FROM main.memory_index_sources;
-        INSERT INTO main.memory_index_sources (id, path, source, hash, mtime, size)
-        SELECT id, path, source, hash, mtime, size
-        FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_sources;
+        params.targetDb.exec(
+          Object.entries({
+            memory_index_sources: "id, path, source, hash, mtime, size",
+            memory_index_chunks:
+              "chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at",
+            [MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE]:
+              "chunk_id, importance, triggers, project_key",
+            memory_index_chunk_provenance:
+              "chunk_id, origin_class, session_kind, observed_at, supersedes_key",
+          })
+            .map(
+              ([table, columns]) =>
+                `DELETE FROM main.${table};\n` +
+                `INSERT INTO main.${table} (${columns})\n` +
+                `SELECT ${columns} FROM ${MEMORY_REINDEX_SCHEMA}.${table};`,
+            )
+            .join("\n"),
+        );
 
-        DELETE FROM main.memory_index_chunks;
-        INSERT INTO main.memory_index_chunks (
-          chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-        )
-        SELECT
-          chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-        FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_chunks;
-
-        DELETE FROM main.${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE};
-        INSERT INTO main.${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE} (
-          chunk_id, importance, triggers, project_key
-        )
-        SELECT chunk_id, importance, triggers, project_key
-        FROM ${MEMORY_REINDEX_SCHEMA}.${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE};
-
-        DELETE FROM main.memory_index_chunk_provenance;
-        INSERT INTO main.memory_index_chunk_provenance (
-          chunk_id, origin_class, session_kind, observed_at, supersedes_key
-        )
-        SELECT chunk_id, origin_class, session_kind, observed_at, supersedes_key
-        FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_chunk_provenance;
-      `);
-
-        replaceMemoryChunkFtsTable(params.targetDb);
-        replaceMemoryPathFtsTable(params.targetDb);
+        for (const table of [MEMORY_INDEX_FTS_TABLE, MEMORY_INDEX_PATHS_FTS_TABLE]) {
+          const createSql = readTableSql(params.targetDb, MEMORY_REINDEX_SCHEMA, table);
+          params.targetDb.exec(`DROP TABLE IF EXISTS main.${table}`);
+          if (!createSql) {
+            continue;
+          }
+          params.targetDb.exec(createSql);
+          if (table === MEMORY_INDEX_FTS_TABLE) {
+            rebuildMemoryChunkFts(params.targetDb, table);
+            ensureMemoryChunkFtsTriggers(params.targetDb);
+          } else {
+            // Rebuild from the copied stable source ids while row triggers are suspended.
+            params.targetDb.exec(
+              `INSERT INTO main.${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source) ` +
+                `SELECT id, path, source FROM main.memory_index_sources`,
+            );
+          }
+        }
         if (publishesPathFts) {
           ensureMemoryPathFtsTriggers(params.targetDb);
         }

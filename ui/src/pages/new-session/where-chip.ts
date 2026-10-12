@@ -29,6 +29,7 @@ import {
   type DraftCloudProfile,
   type DraftEnvironment,
 } from "./discovery.ts";
+import { onOwnPopoverEvent } from "./new-session-runtime.ts";
 import { renderPickerLabel } from "./picker-label.ts";
 import { environmentCapabilityLabels } from "./place-facts.ts";
 
@@ -40,7 +41,7 @@ const connectDeviceIcon = strokeIcon(svg`<circle cx="12" cy="12" r="9" />
   <path d="M12 8v8M8 12h8" />`);
 
 type WhereChipState = Readonly<{
-  kind: "local" | "device" | "auto-device" | "cloud";
+  kind: "local" | "device" | "auto-device" | "cloud" | "hosted";
   label: string;
   devices: readonly DevicePlacementOption[];
   cloudProfiles: readonly DraftCloudProfile[];
@@ -49,9 +50,11 @@ type WhereChipState = Readonly<{
   operatingSystems: readonly WorkerOperatingSystem[];
   selectedOsId: string;
   autoDeviceDisabledReason?: string;
+  hostedRuntimeId?: string;
 }>;
 
 export function resolveWhereChip(params: {
+  hostedEnvironment?: { id: string; label: string };
   environments: readonly DraftEnvironment[] | null;
   cloudProfiles: readonly DraftCloudProfile[];
   cloudProfileId: string;
@@ -74,6 +77,20 @@ export function resolveWhereChip(params: {
   );
   const device = devices.find((candidate) => candidate.deviceId === params.deviceId);
   const profile = params.cloudProfiles.find((candidate) => candidate.id === params.cloudProfileId);
+  if (params.hostedEnvironment) {
+    return {
+      kind: "hosted",
+      label: params.hostedEnvironment.label,
+      hostedRuntimeId: params.hostedEnvironment.id,
+      devices,
+      cloudProfiles: params.cloudProfiles,
+      cloudMachines: [],
+      selectedMachineId: "",
+      operatingSystems: [],
+      selectedOsId: "",
+      autoDeviceDisabledReason,
+    };
+  }
   if (params.cloudProfileId) {
     const defaultOs = profile ? defaultCloudOs(profile) : "";
     const selectedOsId = params.os || defaultOs;
@@ -169,7 +186,15 @@ function renderEnvironmentHeading(
 }
 
 export function renderWhereChip(params: {
-  idPrefix?: string;
+  hostedEnvironments?: readonly {
+    id: string;
+    label: string;
+    disabledReason?: string;
+    model?: string;
+  }[];
+  onSelectHostedEnvironment?: (id: string) => void;
+  hostDisabledReason?: string;
+  hostedLoading?: boolean;
   autoPlacementMode?: "least-busy" | "eligible-order";
   state: WhereChipState;
   gatewayName: string;
@@ -204,15 +229,17 @@ export function renderWhereChip(params: {
     params.state.cloudProfiles.find((profile) => profile.id === params.cloudProfileId),
   );
   const icon =
-    params.state.kind === "cloud"
-      ? cloudPresentation.icon
-      : params.state.kind === "local"
-        ? icons.home
-        : params.state.kind === "auto-device"
-          ? devicePoolIcon
-          : environmentDeviceIcon(
-              params.state.devices.find((device) => device.deviceId === params.deviceId),
-            );
+    params.state.kind === "hosted"
+      ? icons.cloud
+      : params.state.kind === "cloud"
+        ? cloudPresentation.icon
+        : params.state.kind === "local"
+          ? icons.home
+          : params.state.kind === "auto-device"
+            ? devicePoolIcon
+            : environmentDeviceIcon(
+                params.state.devices.find((device) => device.deviceId === params.deviceId),
+              );
   const localName = params.gatewayName.trim() || t("newSession.local");
   const label = params.state.kind === "local" ? localName : params.state.label;
   const configurationSummary =
@@ -241,6 +268,10 @@ export function renderWhereChip(params: {
       ),
     )
     .toSorted((a, b) => Number(b.selectable) - Number(a.selectable));
+  const hosted = (params.hostedEnvironments ?? []).filter((entry) =>
+    matches(entry.label, entry.id, t("newSession.hosted")),
+  );
+  const showHostedSetup = matches("OpenAI Agents API", t("newSession.hosted"));
   const cloudProfiles = params.isAdmin
     ? params.state.cloudProfiles.filter((profile) =>
         matches(
@@ -275,33 +306,10 @@ export function renderWhereChip(params: {
   const busy = params.submitting || params.pendingPlacement;
   const showDeviceSkeletons = params.catalogLoading && devices.length === 0;
   const showCloudSkeletons = params.isAdmin && params.catalogLoading && cloudProfiles.length === 0;
-  let cleanupScrollFade: (() => void) | undefined;
-  const bindScrollFade = (element: Element | undefined) => {
-    cleanupScrollFade?.();
-    if (!(element instanceof HTMLElement)) {
-      return;
-    }
-    const update = () => {
-      const overflow = element.scrollHeight - element.clientHeight;
-      element.toggleAttribute("data-fade-top", overflow > 1 && element.scrollTop > 1);
-      element.toggleAttribute("data-fade-bottom", overflow > 1 && element.scrollTop < overflow - 1);
-    };
-    const resize = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
-    resize?.observe(element);
-    const content = new MutationObserver(update);
-    content.observe(element, { childList: true, subtree: true, characterData: true });
-    element.addEventListener("scroll", update, { passive: true });
-    cleanupScrollFade = () => {
-      resize?.disconnect();
-      content.disconnect();
-      element.removeEventListener("scroll", update);
-    };
-    update();
-  };
   return html`
     <span class="new-session-page__select new-session-page__select--where">
       <button
-        id=${(params.idPrefix ?? "new-session") + "-where-trigger"}
+        id="new-session-where-trigger"
         type="button"
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
@@ -313,6 +321,7 @@ export function renderWhereChip(params: {
             : nothing
         }
         data-cloud-profile=${params.cloudProfileId || nothing}
+        data-hosted-runtime=${params.state.hostedRuntimeId || nothing}
         data-machine-class=${params.machineClass || nothing}
         data-os=${params.os || nothing}
         data-device-id=${params.deviceId || nothing}
@@ -328,30 +337,19 @@ export function renderWhereChip(params: {
     <wa-popover
       ${ref(syncPopoverLabel)}
       class="new-session-page__select new-session-page__where-popover new-session-page__picker-popover"
-      for=${(params.idPrefix ?? "new-session") + "-where-trigger"}
+      for="new-session-where-trigger"
       placement="bottom-start"
       without-arrow
-      @wa-show=${(event: Event) => {
-        if (event.target !== event.currentTarget) {
-          return;
-        }
+      @wa-show=${onOwnPopoverEvent((event) => {
         if (event.currentTarget instanceof WaPopover) {
           // Let the positioning owner recompute the scroll budget on open and resize.
           event.currentTarget.popup.autoSize = "vertical";
           event.currentTarget.popup.autoSizePadding = 8;
         }
         params.onPopoverShow();
-      }}
-      @wa-hide=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          params.onPopoverHide();
-        }
-      }}
-      @wa-after-hide=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          params.onPopoverAfterHide();
-        }
-      }}
+      })}
+      @wa-hide=${onOwnPopoverEvent(() => params.onPopoverHide())}
+      @wa-after-hide=${onOwnPopoverEvent(() => params.onPopoverAfterHide())}
     >
       <div class="new-session-page__environment-layout">
         <div class="new-session-page__picker-root new-session-page__environment-picker">
@@ -371,7 +369,7 @@ export function renderWhereChip(params: {
               }}
             />
           </label>
-          <div ${ref(bindScrollFade)} class="new-session-page__environment-list">
+          <div class="new-session-page__environment-list">
             ${
               showLocal || devices.length || showAuto
                 ? renderEnvironmentHeading(
@@ -429,6 +427,8 @@ export function renderWhereChip(params: {
                       summary: t("newSession.runsOnGateway"),
                       compact: true,
                       checked: params.state.kind === "local",
+                      disabled: Boolean(params.hostDisabledReason),
+                      title: params.hostDisabledReason,
                       onSelect: () => params.onSelectDevice(""),
                     },
                     busy,
@@ -467,6 +467,41 @@ export function renderWhereChip(params: {
               },
             )}
             ${showDeviceSkeletons ? renderEnvironmentSkeletons("devices") : nothing}
+            ${hosted.length || showHostedSetup ? html`<div class="new-session-page__environment-heading"><span>${t("newSession.hosted")}</span></div>` : nothing}
+            ${hosted.map((entry) =>
+              renderSessionMenuItem(
+                {
+                  value: `runtime:${entry.id}`,
+                  label: entry.label,
+                  icon: icons.cloud,
+                  compact: true,
+                  summary: t("newSession.hostedHint"),
+                  selectedSummary: entry.model,
+                  checked: params.state.hostedRuntimeId === entry.id,
+                  disabled: Boolean(entry.disabledReason),
+                  title: entry.disabledReason,
+                  onSelect: () => params.onSelectHostedEnvironment?.(entry.id),
+                },
+                busy,
+              ),
+            )}
+            ${
+              showHostedSetup && params.hostedLoading
+                ? html`<div role="status" class="new-session-page__environment-empty">
+                    ${t("common.loading")}
+                  </div>`
+                : showHostedSetup && !hosted.some((entry) => entry.id === "agentsapi")
+                  ? html`<a
+                      class="session-menu__item new-session-page__environment-option"
+                      href="https://docs.openclaw.ai/plugins/agentsapi"
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-description=${t("newSession.hostedSetupHint")}
+                      ><span class="session-menu__icon">${icons.info}</span
+                      ><span class="session-menu__text">${t("newSession.hostedSetup")}</span></a
+                    >`
+                  : nothing
+            }
             ${
               cloudProfiles.length || showMissingCloud || showCloudSkeletons
                 ? renderEnvironmentHeading(
@@ -514,6 +549,8 @@ export function renderWhereChip(params: {
               !showLocal &&
               devices.length === 0 &&
               cloudProfiles.length === 0 &&
+              hosted.length === 0 &&
+              !showHostedSetup &&
               !showMissingCloud &&
               !showDeviceSkeletons &&
               !showCloudSkeletons

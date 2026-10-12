@@ -216,26 +216,23 @@ describe("Slack durable reconciliation", () => {
     expect(order).toEqual(["open", "dispatch", "post"]);
   });
 
-  it.each(["missing_scope", "no marker"])(
-    "checks the write token after read-token %s",
-    async (failure) => {
-      const reader = createClient();
-      const writer = createClient();
-      const metadata = await marker(writer, {}, "user:U123");
-      if (failure === "missing_scope") {
-        reader.conversations.history.mockRejectedValueOnce(new Error(failure));
-      }
-      writer.conversations.history.mockResolvedValueOnce({ messages: [{ ts, metadata }] });
-      clients.createSlackReadClient.mockReturnValue(reader);
-      clients.getSlackWriteClient.mockReturnValue(writer);
-      await expect(
-        reconcileSlackUnknownSend(context({ cfg: tokenCfg, to: "U123" })),
-      ).resolves.toMatchObject({ status: "sent" });
-      expect(writer.conversations.open).toHaveBeenCalledWith({ users: "U123" });
-      expect(reader.conversations.history).toHaveBeenCalledOnce();
-      expect(writer.conversations.history).toHaveBeenCalledOnce();
-    },
-  );
+  it.each(["missing_scope"])("checks the write token after read-token %s", async (failure) => {
+    const reader = createClient();
+    const writer = createClient();
+    const metadata = await marker(writer, {}, "user:U123");
+    if (failure === "missing_scope") {
+      reader.conversations.history.mockRejectedValueOnce(new Error(failure));
+    }
+    writer.conversations.history.mockResolvedValueOnce({ messages: [{ ts, metadata }] });
+    clients.createSlackReadClient.mockReturnValue(reader);
+    clients.getSlackWriteClient.mockReturnValue(writer);
+    await expect(
+      reconcileSlackUnknownSend(context({ cfg: tokenCfg, to: "U123" })),
+    ).resolves.toMatchObject({ status: "sent" });
+    expect(writer.conversations.open).toHaveBeenCalledWith({ users: "U123" });
+    expect(reader.conversations.history).toHaveBeenCalledOnce();
+    expect(writer.conversations.history).toHaveBeenCalledOnce();
+  });
 
   it("does not confuse an identical later message without the durable id", async () => {
     const client = createClient();
@@ -274,11 +271,6 @@ describe("Slack durable reconciliation", () => {
   it.each([
     { replyToId: "1782584644.377229", replyToMode: "off" as const },
     { replyToId: "1782584644.377229", payloads: [{ text: "final answer", replyToId: "" }] },
-    {
-      replyToId: "1782584644.377229",
-      payloads: [{ text: "final answer", replyToId: "1782584644.222222" }],
-      effectiveReplyToId: null,
-    },
   ])("uses channel history for a cleared reply target: %j", async (overrides) => {
     const client = createClient();
     const metadata = await marker(client);

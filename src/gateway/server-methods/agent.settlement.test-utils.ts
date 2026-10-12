@@ -295,7 +295,7 @@ export function registerYieldedRequesterSettlementCase(
     await withPluginSubagentTestState(
       "openclaw-gateway-yield-settlement-race-",
       async ({ stateDir: root }) => {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         const requesterSessionKey = "agent:main:main";
         const childSessionKey = "agent:main:subagent:settlement-orchestrator";
         const workerSessionKey = "agent:main:subagent:settlement-worker";
@@ -307,7 +307,9 @@ export function registerYieldedRequesterSettlementCase(
         const completion = createDeferred<AgentWaitResult>();
         const previousWait = createDeferred<AgentWaitResult>();
         const announce = mocks.registryAnnounce.mockResolvedValue("delivered");
-        let continuedAtDispatch: ReturnType<typeof getSubagentRunByChildSessionKey> | undefined;
+        let continuedAtDispatch:
+          | Awaited<ReturnType<typeof getSubagentRunByChildSessionKey>>
+          | undefined;
         const executionWork = new AsyncWorkScope();
         const context = makeContext();
         context.trackExecution = (run) => executionWork.track(run);
@@ -371,7 +373,7 @@ export function registerYieldedRequesterSettlementCase(
           cleanup: "keep",
           expectsCompletionMessage: true,
         });
-        addSubagentRunForTests({
+        await addSubagentRunForTests({
           runId: workerRunId,
           childSessionKey: workerSessionKey,
           requesterSessionKey: childSessionKey,
@@ -393,7 +395,9 @@ export function registerYieldedRequesterSettlementCase(
         });
         mockSpawnedChildSessionEntry(childSessionKey, root);
         mocks.agentCommand.mockImplementation(async () => {
-          continuedAtDispatch = structuredClone(getSubagentRunByChildSessionKey(childSessionKey));
+          continuedAtDispatch = structuredClone(
+            await getSubagentRunByChildSessionKey(childSessionKey),
+          );
           completion.resolve({
             status: "ok",
             startedAt: Date.now(),
@@ -402,7 +406,7 @@ export function registerYieldedRequesterSettlementCase(
           });
           return { payloads: [{ text: result }], meta: { durationMs: 1 } };
         });
-        expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey)?.execution, {
+        expectRecordFields((await getSubagentRunByChildSessionKey(childSessionKey))?.execution, {
           status: "running",
           endedAt: undefined,
         });
@@ -441,7 +445,7 @@ export function registerYieldedRequesterSettlementCase(
           pauseReason: undefined,
         });
         await racePromiseWithAbortSignal(cleanup.cleanupCompleted, signal);
-        expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey), {
+        expectRecordFields(await getSubagentRunByChildSessionKey(childSessionKey), {
           runId: nextRunId,
           cleanupCompletedAt: expect.any(Number),
         });
@@ -455,7 +459,7 @@ export function registerYieldedRequesterSettlementCase(
           data: { phase: "end", endedAt: Date.now(), yielded: true },
         });
         await Promise.resolve();
-        expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey), {
+        expectRecordFields(await getSubagentRunByChildSessionKey(childSessionKey), {
           runId: nextRunId,
           cleanupCompletedAt: expect.any(Number),
         });

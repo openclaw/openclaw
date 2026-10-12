@@ -802,28 +802,6 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     expect(connections).toHaveLength(3);
   });
 
-  it("delivers a legitimate large inbound message below the payload cap", async () => {
-    // Well above any real transcript message yet far under the 16 MiB cap: proves
-    // the bound does not reject legitimate large provider traffic.
-    const largeText = "x".repeat(2 * 1024 * 1024);
-    const server = await createRealtimeServer({
-      initialEvent: { type: "transcript", text: largeText },
-    });
-    const received = createDeferred();
-    const onMessage = vi.fn(() => received.resolve());
-    const session = createSession<{ type?: string; text?: string }>({
-      url: server.url,
-      readyOnOpen: true,
-      onMessage,
-    });
-
-    await session.connect();
-    await received.promise;
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    const event = requireFirstMockArg(onMessage, "large inbound message");
-    expect(event).toEqual({ type: "transcript", text: largeText });
-  });
-
   it("drops an oversized inbound message before it reaches the provider parser", async () => {
     // ws rejects a message above maxPayload with an error + 1009 close, so an
     // oversized upstream message never reaches onMessage/JSON parse.

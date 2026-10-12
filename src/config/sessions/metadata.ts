@@ -90,7 +90,6 @@ const mergeSessionOrigin = (
   return Object.keys(merged).length > 0 ? merged : undefined;
 };
 
-/** Derives session origin metadata from an inbound message context. */
 export function deriveSessionOrigin(
   ctx: MsgContext,
   opts?: { skipSystemEventOrigin?: boolean },

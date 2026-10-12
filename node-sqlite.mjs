@@ -163,7 +163,7 @@ export function nodeRuntimeFailure(version, probe) {
     return `${label}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix`;
   }
   if (probe.error || !probe.text || !probe.blob || !probe.json) {
-    return `${label}: node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix.`;
+    return `${label}: node:sqlite NUL round-trip capability check failed; use 24.16+/26.1+ or a build with the fix.`;
   }
   if (!probe.version || !isSqliteWalResetSafeVersion(probe.version)) {
     return `${label}: SQLite ${probe.version ?? "unknown"} is not WAL-reset-safe; use SQLite 3.51.3+, 3.50.7+, or 3.44.6+ on its patched release line.`;
@@ -178,7 +178,7 @@ export function nodeRuntimeFailure(version, probe) {
 
 export function nodeRuntimeNote(version, probe) {
   return !nodeRuntimeFailure(version, probe) && !isSupportedOpenClawNodeVersion(version)
-    ? `Node ${version}: unsupported version, capability probe passed. Supported releases: 24.16+/26.1+.`
+    ? `Node ${version}: unsupported version, capability check passed. Supported releases: 24.16+/26.1+.`
     : null;
 }
 

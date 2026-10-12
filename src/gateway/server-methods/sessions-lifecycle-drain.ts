@@ -33,17 +33,21 @@ import { waitForChatAbortControllerRemoval } from "../chat-abort-lifecycle-inter
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import type { AgentTerminalSessionDrain } from "../terminal/session-manager.types.js";
 import {
-  reserveWorkerInferenceSessionDrain,
+  getWorkerInferenceSessionControl,
   type AcceptedWorkerInferenceSessionDrain,
   type WorkerInferenceSessionDrain,
 } from "../worker-environments/inference-control-internal.js";
-import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
-import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import type {
+  WorkerSessionPlacementStore,
+  WorkerSessionPlacementRecord,
+} from "../worker-environments/placement-store.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "../worker-environments/placement-workspace-result.js";
+import type { WorkerWorkspacePendingResult } from "../worker-environments/placement-workspace-result.types.js";
 import {
-  prepareSessionWorkerPlacementArchiveCheck,
-  prepareSessionWorkerPlacementMutationCheck,
+  prepareSessionWorkerPlacementArchiveCheckAsync,
+  prepareSessionWorkerPlacementMutationCheckAsync,
   prepareSessionWorkerPlacementStop,
+  readSessionWorkerPlacementAsync,
 } from "../worker-environments/session-placement-lifecycle.js";
 import { hasGatewaySessionAbortOwner } from "./chat-abort-authorization.js";
 import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
@@ -92,13 +96,7 @@ function hasAuthoritativeSessionWork(
     resolveReplyOperationsForSession(params).length > 0 ||
     Boolean(sessionId && isEmbeddedAgentRunInProgress(sessionId)) ||
     hasSessionLifecycleQueueWork(queueTarget) ||
-    hasGatewaySessionAbortOwner({
-      context: params.context,
-      sessionKeys: params.sessionKeys,
-      sessionId,
-      agentId: params.agentId,
-      defaultAgentId: params.defaultAgentId,
-    }) ||
+    hasGatewaySessionAbortOwner(params) ||
     Boolean(
       sessionId &&
       params.context.workerSessionPlacementService?.getMany([sessionId]).get(sessionId)?.turnClaim,
@@ -120,7 +118,6 @@ export async function prepareSessionLifecycleDrain(
     sessionId: params.sessionId,
   };
   const workerService = params.context.workerEnvironmentService;
-  const workerControl = asWorkerInferenceControl(workerService);
   let workerDrain: AcceptedWorkerInferenceSessionDrain | undefined;
   let workerDrained: Promise<void> | undefined;
   let terminalDrain: AgentTerminalSessionDrain | undefined;
@@ -143,7 +140,7 @@ export async function prepareSessionLifecycleDrain(
     }
   };
   try {
-    const prepared = await runExclusiveSessionLifecycleMutation({
+    const prepared = await runExclusiveSessionLifecycleMutation("drain", {
       scope: params.storePath,
       identities: params.lifecycleIdentities,
       run: async () => {
@@ -158,7 +155,9 @@ export async function prepareSessionLifecycleDrain(
           reason: createAgentRunDirectAbortError(),
         });
         if (params.sessionId) {
-          const reservation = reserveWorkerInferenceSessionDrain(workerService, params.sessionId);
+          const reservation = getWorkerInferenceSessionControl(workerService)?.reserveSessionDrain(
+            params.sessionId,
+          );
           try {
             workerDrain = reservation?.accept();
           } catch (error) {
@@ -172,9 +171,6 @@ export async function prepareSessionLifecycleDrain(
               }
             }
             throw error;
-          }
-          if (!workerDrain && workerControl?.hasInferenceForSession(params.sessionId) === true) {
-            throw new Error("Worker inference drain is unavailable");
           }
           if (workerDrain) {
             workerDrained = workerDrain.drained;
@@ -207,6 +203,8 @@ export async function prepareSessionLifecycleDrain(
           abortOrigin: "rpc",
           stopReason: params.action,
           requester: { isAdmin: true },
+          assertCurrent: () => params.authorize?.(),
+          stopEmbeddedRun: true,
           includeProtectedRuns: true,
           onControllerTargets: (targets) => {
             controllerDrain = waitForChatAbortControllerRemoval({
@@ -215,7 +213,7 @@ export async function prepareSessionLifecycleDrain(
               timeoutMs,
             });
           },
-          onAuthorizedAfterQueuedAbort: () => {
+          onAuthorizedBeforeEmbeddedAbort: () => {
             const cleared = clearSessionLifecycleQueues({
               ...queueTarget,
               assertCurrent: () => params.authorize?.(),
@@ -227,7 +225,8 @@ export async function prepareSessionLifecycleDrain(
                 aborted = operation.abortByUser() || aborted;
               }
             }
-            if (params.sessionId) {
+            // Destructive lifecycle drain also owns global work; session Stop does not.
+            if (params.sessionId && params.sessionKey === "global") {
               aborted = abortEmbeddedAgentRun(params.sessionId) || aborted;
             }
             return aborted;
@@ -244,10 +243,24 @@ export async function prepareSessionLifecycleDrain(
     }
 
     params.authorize?.();
+    const placementService: LifecyclePlacementService | undefined =
+      params.context.workerSessionPlacementService;
+    let placement: WorkerSessionPlacementRecord | undefined;
     if (params.sessionId) {
-      const placements = params.context.workerSessionPlacementService;
-      const placement = placements?.getMany([params.sessionId]).get(params.sessionId);
-      const pending = placements?.listPendingWorkspaceResults?.(params.sessionId)[0];
+      const preparedPlacement = await placementService?.prepareRuntimeRefresh?.(params.sessionId);
+      let pending: WorkerWorkspacePendingResult | undefined;
+      try {
+        pending = preparedPlacement
+          ? preparedPlacement.pendingResult
+          : (await placementService?.listPendingWorkspaceResultsAsync?.(params.sessionId))?.[0];
+        placement = preparedPlacement
+          ? preparedPlacement.placement
+          : await readSessionWorkerPlacementAsync(params);
+        params.authorize?.();
+        preparedPlacement?.assertCurrent();
+      } finally {
+        preparedPlacement?.release();
+      }
       if (
         pending &&
         pending.workspaceAcceptedAtMs === null &&
@@ -287,11 +300,6 @@ export async function prepareSessionLifecycleDrain(
     const embeddedWork = params.sessionId
       ? waitForEmbeddedAgentRunEnd(params.sessionId, timeoutMs)
       : Promise.resolve(true);
-    const placementService: LifecyclePlacementService | undefined =
-      params.context.workerSessionPlacementService;
-    const placement = params.sessionId
-      ? placementService?.getMany([params.sessionId]).get(params.sessionId)
-      : undefined;
     const placementWork = placement?.turnClaim
       ? placementService?.waitForTurnClaimRelease
         ? placementService
@@ -299,14 +307,10 @@ export async function prepareSessionLifecycleDrain(
             .then(() => true)
         : Promise.resolve(false)
       : Promise.resolve(true);
-    const workerWork = workerDrained
-      ? withTimeout(workerDrained, timeoutMs, "worker inference lifecycle drain").then(() => true)
-      : Promise.resolve(true);
-    const terminalWork = terminalDrain
-      ? withTimeout(terminalDrain.drained, timeoutMs, "agent terminal lifecycle drain").then(
-          () => true,
-        )
-      : Promise.resolve(true);
+    const waitForDrain = (work: Promise<void> | undefined, label: string) =>
+      work ? withTimeout(work, timeoutMs, label).then(() => true) : Promise.resolve(true);
+    const workerWork = waitForDrain(workerDrained, "worker inference lifecycle drain");
+    const terminalWork = waitForDrain(terminalDrain?.drained, "agent terminal lifecycle drain");
     const drains = await Promise.all([
       prepared.controllerDrain,
       replyWork,
@@ -327,8 +331,8 @@ export async function prepareSessionLifecycleDrain(
     const placementTarget = { context: params.context, sessionId: params.sessionId };
     const assertPlacementCurrent =
       params.action === "archive"
-        ? prepareSessionWorkerPlacementArchiveCheck(placementTarget).assertCurrent
-        : prepareSessionWorkerPlacementMutationCheck(placementTarget);
+        ? (await prepareSessionWorkerPlacementArchiveCheckAsync(placementTarget)).assertCurrent
+        : await prepareSessionWorkerPlacementMutationCheckAsync(placementTarget);
     return {
       // Only the caller's active mutation may replace this mutex-free ingress lease.
       handoffToMutation: () => releaseAdmissions(),

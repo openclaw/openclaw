@@ -1,15 +1,19 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { preserveHumanNotesBlock, renderMarkdownFence, renderWikiMarkdown } from "./markdown.js";
 import {
   setImportedSourceEntry,
-  shouldSkipImportedSourceWrite,
   type MemoryWikiImportedSourceGroup,
+  type MemoryWikiImportedSourceState,
 } from "./source-sync-state.js";
-import { readExistingWikiPage, writeGuardedVaultPage } from "./vault-page-write.js";
+import {
+  readExistingWikiPage,
+  readWikiPageStat,
+  writeGuardedVaultPage,
+} from "./vault-page-write.js";
 
-type ImportedSourceState = Parameters<typeof shouldSkipImportedSourceWrite>[0]["state"];
 export function renderImportedSourcePage(params: {
   frontmatter: Record<string, unknown> & { title: string };
   sourceHeading: string;
@@ -40,27 +44,27 @@ export async function writeImportedSourcePage(params: {
   vaultRoot: string;
   syncKey: string;
   sourcePath: string;
-  sourceContent?: string;
   sourceUpdatedAtMs: number;
   sourceSize: number;
   renderFingerprint: string;
   pagePath: string;
   group: MemoryWikiImportedSourceGroup;
-  state: ImportedSourceState;
+  state: MemoryWikiImportedSourceState;
   prepareWrite?: () => Promise<unknown>;
   buildRendered: (raw: string, updatedAt: string) => string;
 }): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
-  const shouldSkip = await shouldSkipImportedSourceWrite({
-    vaultRoot: params.vaultRoot,
-    syncKey: params.syncKey,
-    expectedPagePath: params.pagePath,
-    expectedSourcePath: params.sourcePath,
-    sourceUpdatedAtMs: params.sourceUpdatedAtMs,
-    sourceSize: params.sourceSize,
-    renderFingerprint: params.renderFingerprint,
-    state: params.state,
-  });
-  if (shouldSkip) {
+  const previous = params.state.entries[params.syncKey];
+  if (
+    previous?.pagePath === params.pagePath &&
+    previous.sourcePath === params.sourcePath &&
+    previous.sourceUpdatedAtMs === params.sourceUpdatedAtMs &&
+    previous.sourceSize === params.sourceSize &&
+    previous.renderFingerprint === params.renderFingerprint &&
+    (await fs.access(path.join(params.vaultRoot, params.pagePath)).then(
+      () => true,
+      () => false,
+    ))
+  ) {
     return { pagePath: params.pagePath, changed: false, created: false };
   }
 
@@ -68,18 +72,10 @@ export async function writeImportedSourcePage(params: {
   // unchanged import polls from validating and rereading every retained page.
   await params.prepareWrite?.();
   const vault = await fsRoot(params.vaultRoot);
-  const pageStat = await vault.stat(params.pagePath).catch((error: unknown) => {
-    if (
-      error instanceof FsSafeError &&
-      (error.code === "not-found" || error.code === "path-alias")
-    ) {
-      return null;
-    }
-    throw error;
-  });
+  const pageStat = await readWikiPageStat(vault, params.pagePath);
   const created = !pageStat;
   const updatedAt = timestampMsToIsoString(params.sourceUpdatedAtMs) ?? new Date().toISOString();
-  const raw = params.sourceContent ?? (await fs.readFile(params.sourcePath, "utf8"));
+  const raw = await fs.readFile(params.sourcePath, "utf8");
   const rendered = params.buildRendered(raw, updatedAt);
   const existing = pageStat
     ? await readExistingWikiPage(

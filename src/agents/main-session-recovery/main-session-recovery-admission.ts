@@ -73,7 +73,7 @@ export async function runWithMainSessionRecoveryAdmission<T>(params: {
           if (!shouldContinue()) {
             return false;
           }
-          // Interrupted capacity waits may stop, but an in-flight RPC must
+          // Interrupted preparation may stop, but an in-flight RPC must
           // settle before lifecycle replacement can release this owner.
           dispatchStarted = true;
           return true;

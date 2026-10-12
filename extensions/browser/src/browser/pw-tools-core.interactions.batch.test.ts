@@ -163,32 +163,6 @@ describe("executeActViaPlaywright batches", () => {
     expect(JSON.stringify(result)).not.toContain(text);
   });
 
-  it("aborts remaining actions after a same-URL reload", async () => {
-    locator.click.mockImplementationOnce(async () => {
-      setPageUrl("https://example.com");
-    });
-
-    const result = await batch({
-      actions: [
-        { kind: "click", ref: "1" },
-        { kind: "hover", ref: "2" },
-      ],
-    });
-
-    expect(result).toEqual({
-      targetId: "tab-1",
-      results: [{ ok: true, navigated: true, url: "https://example.com" }],
-      aborted: {
-        reason: "navigation",
-        afterAction: 1,
-        url: "https://example.com",
-        skipped: 1,
-      },
-    });
-    expect(locator.hover).not.toHaveBeenCalled();
-    expect(page.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
-  });
-
   it("aborts when a navigation commits after an action settles but before the next dispatch", async () => {
     let closedChecks = 0;
     page.isClosed.mockImplementation(() => {
@@ -306,38 +280,25 @@ describe("executeActViaPlaywright batches", () => {
     });
   });
 
-  it.each([
-    { innerStopOnError: false, outerStopOnError: undefined },
-    { innerStopOnError: undefined, outerStopOnError: false },
-  ])(
-    "reports nested failure with inner stop=$innerStopOnError and outer stop=$outerStopOnError",
-    async ({ innerStopOnError, outerStopOnError }) => {
-      locator.fill.mockRejectedValueOnce(new Error("not editable"));
-
-      const result = await batch({
-        targetId: "tab-1",
-        stopOnError: outerStopOnError,
-        actions: [
-          {
-            kind: "batch",
-            stopOnError: innerStopOnError,
-            actions: [
-              { kind: "type", ref: "1", text: "value" },
-              { kind: "hover", ref: "2" },
-            ],
-          },
-          { kind: "press", key: "Enter" },
-        ],
-      });
-
-      expect(result.results).toEqual([
-        { ok: false, error: "not editable" },
-        ...(outerStopOnError === false ? [{ ok: true }] : []),
-      ]);
-      expect(locator.hover).toHaveBeenCalledTimes(innerStopOnError === false ? 1 : 0);
-      expect(page.keyboard.press).toHaveBeenCalledTimes(outerStopOnError === false ? 1 : 0);
-    },
-  );
+  it("reports a nested failure after inner continue-on-error actions", async () => {
+    locator.fill.mockRejectedValueOnce(new Error("not editable"));
+    const result = await batch({
+      actions: [
+        {
+          kind: "batch",
+          stopOnError: false,
+          actions: [
+            { kind: "type", ref: "1", text: "value" },
+            { kind: "hover", ref: "2" },
+          ],
+        },
+        { kind: "press", key: "Enter" },
+      ],
+    });
+    expect(result.results).toEqual([{ ok: false, error: "not editable" }]);
+    expect(locator.hover).toHaveBeenCalledOnce();
+    expect(page.keyboard.press).not.toHaveBeenCalled();
+  });
 
   it("reports the first nested failure after all continue-on-error actions run", async () => {
     locator.fill.mockRejectedValueOnce(new Error("first failure"));
@@ -351,7 +312,7 @@ describe("executeActViaPlaywright batches", () => {
           actions: [
             { kind: "type", ref: "1", text: "value" },
             { kind: "hover", ref: "2" },
-            { kind: "press", key: "Enter" },
+            { kind: "press", key: "Enter", delayMs: Number.NaN },
           ],
         },
       ],
@@ -362,61 +323,30 @@ describe("executeActViaPlaywright batches", () => {
       results: [{ ok: false, error: "first failure" }],
     });
     expect(locator.hover).toHaveBeenCalledOnce();
-    expect(page.keyboard.press).toHaveBeenCalledOnce();
+    expect(page.keyboard.press).toHaveBeenCalledExactlyOnceWith("Enter", { delay: 0 });
   });
 
-  it.each([
-    { reason: "navigation", nested: false, stopOnError: false },
-    { reason: "closed", nested: true, stopOnError: undefined },
-  ])(
-    "preserves failure and $reason abort details (nested=$nested, stop=$stopOnError)",
-    async ({ reason, nested, stopOnError }) => {
-      locator.fill.mockRejectedValueOnce(new Error("action failed"));
-      locator.click.mockImplementationOnce(async () => {
-        if (reason === "navigation") {
-          setPageUrl("https://example.com/next");
-        } else {
-          setPageClosed(true);
-        }
-        if (!nested) {
-          throw new Error("action failed");
-        }
-      });
-
-      const result = await batch({
-        stopOnError,
-        actions: [
-          nested
-            ? {
-                kind: "batch",
-                stopOnError: false,
-                actions: [
-                  { kind: "type", ref: "1", text: "value" },
-                  { kind: "click", ref: "2" },
-                  { kind: "hover", ref: "3" },
-                ],
-              }
-            : { kind: "click", ref: "1" },
-          { kind: "press", key: "Enter" },
-        ],
-      });
-      const url = reason === "navigation" ? "https://example.com/next" : "https://example.com";
-
-      expect(result).toEqual({
-        targetId: "tab-1",
-        results: [
-          {
-            ok: false,
-            error: "action failed",
-            ...(reason === "navigation" ? { navigated: true, url } : {}),
-          },
-        ],
-        aborted: { reason, afterAction: 1, url, skipped: 1 },
-      });
-      expect(locator.hover).not.toHaveBeenCalled();
-      expect(page.keyboard.press).not.toHaveBeenCalled();
-    },
-  );
+  it("preserves failure and aborts after a same-URL reload", async () => {
+    locator.click.mockImplementationOnce(async () => {
+      setPageUrl("https://example.com");
+      throw new Error("action failed");
+    });
+    const result = await batch({
+      stopOnError: false,
+      actions: [
+        { kind: "click", ref: "1" },
+        { kind: "press", key: "Enter" },
+      ],
+    });
+    expect(result).toEqual({
+      targetId: "tab-1",
+      results: [{ ok: false, error: "action failed", navigated: true, url: "https://example.com" }],
+      aborted: { reason: "navigation", afterAction: 1, url: "https://example.com", skipped: 1 },
+    });
+    expect(locator.hover).not.toHaveBeenCalled();
+    expect(page.keyboard.press).not.toHaveBeenCalled();
+    expect(page.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
+  });
 
   it.each([
     new SsrFBlockedError("browser navigation blocked by policy"),

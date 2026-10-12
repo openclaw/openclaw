@@ -60,9 +60,7 @@ export function createRelayDebugger({ policy, requireAutomationAllowed }) {
     record.cleaning = cleaning;
     void cleaning
       .finally(() => {
-        if (record.cleaning === cleaning) {
-          record.cleaning = undefined;
-        }
+        record.cleaning = undefined;
       })
       .catch(() => {});
     return cleaning;
@@ -102,10 +100,9 @@ export function createRelayDebugger({ policy, requireAutomationAllowed }) {
       if (!record?.epoch || record.retired || record.owner !== isCurrent) {
         throw new Error("Debugger is not attached");
       }
-      const native = record.native;
       return () => {
         assertCurrent();
-        if (record.retired || attachments.get(tabId) !== record || record.native !== native) {
+        if (record.retired || attachments.get(tabId) !== record) {
           throw new Error("Debugger attachment retired");
         }
       };
@@ -198,9 +195,7 @@ export function createRelayDebugger({ policy, requireAutomationAllowed }) {
         }
         throw error;
       } finally {
-        if (record.pending === pending) {
-          record.pending = undefined;
-        }
+        record.pending = undefined;
       }
     }
     const owner = {

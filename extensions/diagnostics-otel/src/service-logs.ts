@@ -18,23 +18,11 @@ import {
   LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS,
   MAX_OTEL_LOG_BODY_CHARS,
 } from "./service-constants.js";
-import {
-  normalizeOtelLogString,
-  type OtelContentCapturePolicy,
-} from "./service-content-normalization.js";
+import { normalizeOtelLogString } from "./service-content-normalization.js";
 import { observeOtlpExporterHealth, type ExporterHealthUpdate } from "./service-exporter-health.js";
 import { errorCategory, formatError } from "./service-exporter.js";
-import {
-  addTraceAttributes,
-  contextForTrustedTraceContext,
-  normalizedTrustedTraceContext,
-} from "./service-trace-context.js";
-import type {
-  BuiltOtelLogRecord,
-  OtelHttpAgentFactory,
-  OtelHttpAgentOptions,
-  OtelLogger,
-} from "./service-types.js";
+import { contextForTraceContext, normalizedTrustedTraceContext } from "./service-trace-context.js";
+import type { OtelHttpAgentFactory, OtelHttpAgentOptions, OtelLogger } from "./service-types.js";
 
 const LOG_SEVERITY_MAP: Record<string, SeverityNumber> = {
   TRACE: 1 as SeverityNumber,
@@ -46,12 +34,11 @@ const LOG_SEVERITY_MAP: Record<string, SeverityNumber> = {
 };
 
 export function createDiagnosticsLogExporter(params: {
-  contentCapturePolicy: OtelContentCapturePolicy;
+  captureContent: boolean;
   emitExporterEvent: (event: ExporterHealthUpdate) => void;
   flushIntervalMs?: number;
   headers?: Record<string, string>;
   logger: OtelLogger;
-  logsEnabled: boolean;
   logsToOtlp: boolean;
   logsToStdout: boolean;
   logHttpAgentOptions?: OtelHttpAgentFactory | OtelHttpAgentOptions;
@@ -60,12 +47,11 @@ export function createDiagnosticsLogExporter(params: {
   serviceName: string;
 }) {
   const {
-    contentCapturePolicy,
+    captureContent,
     emitExporterEvent,
     flushIntervalMs,
     headers,
     logger,
-    logsEnabled,
     logsToOtlp,
     logsToStdout,
     logHttpAgentOptions,
@@ -74,193 +60,141 @@ export function createDiagnosticsLogExporter(params: {
     serviceName,
   } = params;
   let logProvider: LoggerProvider | null = null;
-  let recordLogRecord:
-    | ((
-        evt: Extract<DiagnosticEventPayload, { type: "log.record" }>,
-        metadata: DiagnosticEventMetadata,
-      ) => void)
-    | undefined;
-  let recordSecurityEvent:
-    | ((
-        evt: Extract<DiagnosticEventPayload, { type: "security.event" }>,
-        metadata: DiagnosticEventMetadata,
-      ) => void)
-    | undefined;
-  if (logsEnabled) {
-    let logRecordExportFailureLastReportedAt = Number.NEGATIVE_INFINITY;
-    let otelLogger: { emit: (logRecord: LogRecord) => void } | undefined;
-    const activeTransports: ExporterHealthUpdate["transport"][] = [
-      ...(logsToOtlp ? (["otlp-http-protobuf"] as const) : []),
-      ...(logsToStdout ? (["stdout"] as const) : []),
-    ];
-    if (logsToOtlp) {
-      const logExporter = observeOtlpExporterHealth(
-        new OTLPLogExporter({
-          ...(logUrl ? { url: logUrl } : {}),
-          ...(headers ? { headers } : {}),
-          ...(logHttpAgentOptions ? { httpAgentOptions: logHttpAgentOptions } : {}),
-        }),
-        { emitExporterEvent, signal: "logs" },
-      );
-      const logProcessor = new BatchLogRecordProcessor({
-        exporter: logExporter,
-        ...(typeof flushIntervalMs === "number"
-          ? { scheduledDelayMillis: Math.max(1000, flushIntervalMs) }
-          : {}),
-      });
-      logProvider = new LoggerProvider({
-        resource,
-        processors: [logProcessor],
-      });
-      otelLogger = logProvider.getLogger("openclaw");
+  if (!logsToOtlp && !logsToStdout) {
+    return { logProvider, recordLogEvent: undefined };
+  }
+  let logRecordExportFailureLastReportedAt = Number.NEGATIVE_INFINITY;
+  let otelLogger: { emit: (logRecord: LogRecord) => void } | undefined;
+  const activeTransports: ExporterHealthUpdate["transport"][] = [
+    ...(logsToOtlp ? (["otlp-http-protobuf"] as const) : []),
+    ...(logsToStdout ? (["stdout"] as const) : []),
+  ];
+  if (logsToOtlp) {
+    const logExporter = observeOtlpExporterHealth(
+      new OTLPLogExporter({
+        ...(logUrl ? { url: logUrl } : {}),
+        ...(headers ? { headers } : {}),
+        ...(logHttpAgentOptions ? { httpAgentOptions: logHttpAgentOptions } : {}),
+      }),
+      { emitExporterEvent, signal: "logs" },
+    );
+    const logProcessor = new BatchLogRecordProcessor({
+      exporter: logExporter,
+      ...(typeof flushIntervalMs === "number"
+        ? { scheduledDelayMillis: Math.max(1000, flushIntervalMs) }
+        : {}),
+    });
+    logProvider = new LoggerProvider({
+      resource,
+      processors: [logProcessor],
+    });
+    otelLogger = logProvider.getLogger("openclaw");
+  }
+
+  const reportLogExportFailure = (
+    err: unknown,
+    label: "log record" | "security event",
+    transport: ExporterHealthUpdate["transport"],
+  ) => {
+    emitExporterEvent({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport,
+      status: "failure",
+      reason: "emit_failed",
+      errorCategory: errorCategory(err),
+    });
+    const now = Date.now();
+    if (
+      now - logRecordExportFailureLastReportedAt >=
+      LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS
+    ) {
+      logRecordExportFailureLastReportedAt = now;
+      logger.error(`diagnostics-otel: ${label} export failed: ${formatError(err)}`);
     }
-
-    const reportLogExportFailure = (
-      err: unknown,
-      label: "log record" | "security event",
-      transport: ExporterHealthUpdate["transport"],
-    ) => {
-      emitExporterEvent({
-        exporter: "diagnostics-otel",
-        signal: "logs",
-        transport,
-        status: "failure",
-        reason: "emit_failed",
-        errorCategory: errorCategory(err),
-      });
-      const now = Date.now();
-      if (
-        now - logRecordExportFailureLastReportedAt >=
-        LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS
-      ) {
-        logRecordExportFailureLastReportedAt = now;
-        logger.error(`diagnostics-otel: ${label} export failed: ${formatError(err)}`);
-      }
-    };
-    const reportLogExportRecovery = (transport: ExporterHealthUpdate["transport"]) => {
-      emitExporterEvent({
-        exporter: "diagnostics-otel",
-        signal: "logs",
-        transport,
-        status: "recovered",
-        reason: "emit_failed",
-      });
-    };
-    const reportLogPreparationFailure = (err: unknown, label: "log record" | "security event") => {
-      for (const transport of activeTransports) {
-        reportLogExportFailure(err, label, transport);
-      }
-    };
-
-    const emitLogRecord = (
-      { logRecord, traceContext }: BuiltOtelLogRecord,
-      label: "log record" | "security event",
-    ) => {
-      if (logsToOtlp) {
-        try {
-          otelLogger?.emit(logRecord);
-          reportLogExportRecovery("otlp-http-protobuf");
-        } catch (error) {
-          reportLogExportFailure(error, label, "otlp-http-protobuf");
-        }
-      }
-      if (logsToStdout) {
-        try {
-          writeStdoutDiagnosticLogRecord({
-            logRecord,
-            serviceName,
-            ...(traceContext ? { traceContext } : {}),
-          });
-          reportLogExportRecovery("stdout");
-        } catch (error) {
-          reportLogExportFailure(error, label, "stdout");
-        }
-      }
-    };
-
-    const buildDiagnosticLogRecord = (
-      evt: Extract<DiagnosticEventPayload, { type: "log.record" }>,
-      metadata: DiagnosticEventMetadata,
-    ): BuiltOtelLogRecord => {
-      const logLevelName = evt.level || "INFO";
-      const severityNumber = LOG_SEVERITY_MAP[logLevelName] ?? (9 as SeverityNumber);
-      const body = contentCapturePolicy.logBodies
-        ? normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS)
-        : "log";
+  };
+  const recordLogEvent = (
+    evt: Extract<DiagnosticEventPayload, { type: "log.record" | "security.event" }>,
+    metadata: DiagnosticEventMetadata,
+  ) => {
+    if (evt.type === "security.event" && !metadata.trusted) {
+      return;
+    }
+    const label = evt.type === "log.record" ? "log record" : "security event";
+    try {
       const attributes = Object.create(null) as Record<string, string | number | boolean>;
-      assignOtelLogAttribute(attributes, "openclaw.log.level", logLevelName);
-      if (evt.loggerName) {
-        assignOtelLogAttribute(attributes, "openclaw.logger", evt.loggerName);
-      }
-      if (evt.loggerParents?.length) {
-        assignOtelLogAttribute(attributes, "openclaw.logger.parents", evt.loggerParents.join("."));
-      }
-      assignOtelLogEventAttributes(attributes, evt.attributes);
-      if (evt.code?.line) {
-        assignOtelLogAttribute(attributes, "code.lineno", evt.code.line);
-      }
-      if (evt.code?.functionName) {
-        assignOtelLogAttribute(attributes, "code.function", evt.code.functionName);
+      let severityText: string;
+      let body: string;
+      if (evt.type === "log.record") {
+        severityText = evt.level || "INFO";
+        body = captureContent
+          ? normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS)
+          : "log";
+        assignOtelLogAttribute(attributes, "openclaw.log.level", severityText);
+        if (evt.loggerName) {
+          assignOtelLogAttribute(attributes, "openclaw.logger", evt.loggerName);
+        }
+        if (evt.loggerParents?.length) {
+          assignOtelLogAttribute(
+            attributes,
+            "openclaw.logger.parents",
+            evt.loggerParents.join("."),
+          );
+        }
+        assignOtelLogEventAttributes(attributes, evt.attributes);
+        if (evt.code?.line) {
+          assignOtelLogAttribute(attributes, "code.lineno", evt.code.line);
+        }
+        if (evt.code?.functionName) {
+          assignOtelLogAttribute(attributes, "code.function", evt.code.functionName);
+        }
+      } else {
+        severityText = securitySeverityText(evt.severity);
+        body = "openclaw.security.event";
+        assignOtelSecurityAttributes(attributes, evt);
       }
       const traceContext = normalizedTrustedTraceContext(evt, metadata);
-      addTraceAttributes(attributes, traceContext);
-
+      if (evt.type === "log.record" && traceContext?.traceFlags) {
+        attributes["openclaw.traceFlags"] = traceContext.traceFlags;
+      }
       const logRecord: LogRecord = {
         body,
-        severityText: logLevelName,
-        severityNumber,
-        attributes: redactOtelAttributes(attributes),
-        timestamp: evt.ts,
-      };
-      const logContext = contextForTrustedTraceContext(evt, metadata);
-      if (logContext) {
-        logRecord.context = logContext;
-      }
-      return { logRecord, ...(traceContext ? { traceContext } : {}) };
-    };
-
-    const buildSecurityLogRecord = (
-      evt: Extract<DiagnosticEventPayload, { type: "security.event" }>,
-      metadata: DiagnosticEventMetadata,
-    ): BuiltOtelLogRecord => {
-      const severityText = securitySeverityText(evt.severity);
-      const attributes = Object.create(null) as Record<string, string | number | boolean>;
-      assignOtelSecurityAttributes(attributes, evt);
-
-      const traceContext = normalizedTrustedTraceContext(evt, metadata);
-      const logRecord: LogRecord = {
-        body: "openclaw.security.event",
         severityText,
         severityNumber: LOG_SEVERITY_MAP[severityText] ?? (9 as SeverityNumber),
         attributes: redactOtelAttributes(attributes),
         timestamp: evt.ts,
       };
-      const logContext = contextForTrustedTraceContext(evt, metadata);
+      const logContext = contextForTraceContext(traceContext);
       if (logContext) {
         logRecord.context = logContext;
       }
-      return { logRecord, ...(traceContext ? { traceContext } : {}) };
-    };
-
-    recordLogRecord = (evt, metadata) => {
-      try {
-        const record = buildDiagnosticLogRecord(evt, metadata);
-        emitLogRecord(record, "log record");
-      } catch (err) {
-        reportLogPreparationFailure(err, "log record");
+      for (const transport of activeTransports) {
+        try {
+          if (transport === "otlp-http-protobuf") {
+            otelLogger?.emit(logRecord);
+          } else {
+            writeStdoutDiagnosticLogRecord({
+              logRecord,
+              serviceName,
+              ...(traceContext ? { traceContext } : {}),
+            });
+          }
+          emitExporterEvent({
+            exporter: "diagnostics-otel",
+            signal: "logs",
+            transport,
+            status: "recovered",
+            reason: "emit_failed",
+          });
+        } catch (error) {
+          reportLogExportFailure(error, label, transport);
+        }
       }
-    };
-    recordSecurityEvent = (evt, metadata) => {
-      if (!metadata.trusted) {
-        return;
+    } catch (err) {
+      for (const transport of activeTransports) {
+        reportLogExportFailure(err, label, transport);
       }
-      try {
-        const record = buildSecurityLogRecord(evt, metadata);
-        emitLogRecord(record, "security event");
-      } catch (err) {
-        reportLogPreparationFailure(err, "security event");
-      }
-    };
-  }
-  return { logProvider, recordLogRecord, recordSecurityEvent };
+    }
+  };
+  return { logProvider, recordLogEvent };
 }

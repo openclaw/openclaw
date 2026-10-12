@@ -85,6 +85,11 @@ export class CronService implements CronServiceContract {
     lifecycleOps.stop(this.state);
   }
 
+  /** Joins stopped timer generations from outside their callbacks. */
+  async waitForIdle(): Promise<void> {
+    await this.state.schedulerDrain;
+  }
+
   pauseScheduling() {
     lifecycleOps.pauseScheduling(this.state);
   }
@@ -254,7 +259,13 @@ export class CronService implements CronServiceContract {
       : this.state.deps.defaultAgentId;
   }
 
-  wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string }) {
+  wake(opts: {
+    mode: CronWakeMode;
+    text: string;
+    sessionKey?: string;
+    agentId?: string;
+    commitGuard?: () => void;
+  }) {
     return runOps.wakeNow(this.state, opts);
   }
 }

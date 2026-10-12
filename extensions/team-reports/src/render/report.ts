@@ -143,7 +143,7 @@ export function renderReportPage(
   workSessions: ReadonlyMap<string, PersonWorkSessions> = new Map(),
 ): string {
   const entry = { ...report.period, status: report.status, generatedAtMs: report.generatedAtMs };
-  const open = isOpen(ctx, entry);
+  const open = isOpen(entry);
   const period = report.period.period;
   const path = href(ctx.basePath, period, report.period.key);
   const incomplete =

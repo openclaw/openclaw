@@ -1,14 +1,12 @@
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
+import type { GatewayStartupTrace } from "./server-startup-trace.js";
 
 const GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS = 250;
-
-type StartupTrace = {
-  measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
-};
 
 type GatewayHandlerPrewarmItem = {
   name: string;
@@ -116,7 +114,7 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
 export function scheduleGatewayHandlerPrewarm(params: {
   scheduler: GatewayScheduler;
   getConfig: () => OpenClawConfig;
-  startupTrace?: StartupTrace;
+  startupTrace?: Pick<GatewayStartupTrace, "measure">;
   log: { warn: (msg: string) => void };
   items?: readonly GatewayHandlerPrewarmItem[];
   waitForPostReadyWork?: () => Promise<void>;
@@ -184,4 +182,33 @@ export function scheduleGatewayHandlerPrewarm(params: {
       return idleTask?.stop();
     },
   };
+}
+
+export function scheduleGatewayPrewarm(
+  params: Parameters<typeof scheduleGatewayHandlerPrewarm>[0],
+): GatewayIdleTaskHandle[] {
+  return [
+    scheduleGatewayHandlerPrewarm(params),
+    scheduleGatewayIdleTask({
+      id: "startup:dependency-template-prewarm",
+      scheduler: params.scheduler,
+      delayMs: 0,
+      retryDelayMs: GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS,
+      isClosing: () => false,
+      isBusy: () => false,
+      run: async (signal) => {
+        await racePromiseWithAbortSignal(
+          params.waitForPostReadyWork?.() ?? Promise.resolve(),
+          signal,
+        );
+        signal.throwIfAborted();
+        const { prewarmLocalWorkspaceTemplates } =
+          await import("./worker-environments/local-workspace-prewarm.js");
+        signal.throwIfAborted();
+        await prewarmLocalWorkspaceTemplates({ getConfig: params.getConfig, signal });
+      },
+      log: params.log,
+      errorMessage: "post-ready sandbox dependency prewarm failed",
+    }),
+  ];
 }

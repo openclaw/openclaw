@@ -1,7 +1,8 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { readCodeModeSkill, type CodeModeSkill } from "./code-mode-skills.js";
-import { buildLexicalIndex, scoreLexical, tokenizeDocument } from "./tool-search-ranking.js";
+import { getTextLexicalIndex } from "./tool-search-index.js";
+import { scoreLexical, tokenizeDocument } from "./tool-search-ranking.js";
 import { ToolInputError } from "./tools/common.js";
 
 export type InstalledSkill = CodeModeSkill & {
@@ -22,15 +23,6 @@ const MAX_BODY_BYTES = 16 * 1024;
 const MAX_INDEX_BODY_BYTES = 4 * 1024 * 1024;
 const READ_CONCURRENCY = 4;
 
-function buildMetadataIndex(skills: readonly InstalledSkill[]) {
-  return buildLexicalIndex(
-    skills.map((skill) => ({
-      value: skill,
-      terms: tokenizeDocument(`${skill.name} ${skill.description}`),
-    })),
-  );
-}
-
 function assertCatalogCurrent(skills: readonly InstalledSkill[], signal?: AbortSignal) {
   signal?.throwIfAborted();
   for (const skill of skills) {
@@ -44,7 +36,7 @@ function assertBodyReadable(canReadInstructions: () => boolean) {
   }
 }
 
-async function buildIndex(
+async function prepareBodyView(
   skills: readonly InstalledSkill[],
   canReadInstructions: () => boolean,
   signal?: AbortSignal,
@@ -56,33 +48,26 @@ async function buildIndex(
     MAX_BODY_BYTES,
     Math.floor(MAX_INDEX_BODY_BYTES / Math.max(1, selected.length)),
   );
-  const documents: Array<{ value: InstalledSkill; terms: string[] }> = [];
+  const documents: Array<{ value: InstalledSkill; content: string }> = [];
   let truncatedBodies = 0;
   for (let offset = 0; offset < selected.length; offset += READ_CONCURRENCY) {
     const batch = await Promise.allSettled(
       selected.slice(offset, offset + READ_CONCURRENCY).map(async (skill) => {
+        signal?.throwIfAborted();
+        skill.assertCurrent?.();
+        assertBodyReadable(canReadInstructions);
         try {
-          signal?.throwIfAborted();
-          skill.assertCurrent?.();
-          assertBodyReadable(canReadInstructions);
           const body = await readSearchBody(skill, bodyBytes, signal);
-          signal?.throwIfAborted();
-          skill.assertCurrent?.();
-          assertBodyReadable(canReadInstructions);
-          if (!body) {
-            return undefined;
-          }
-          if (body.truncated) {
-            truncatedBodies += 1;
-          }
-          return { value: skill, terms: tokenizeDocument(body.content) };
+          truncatedBodies += body?.truncated ? 1 : 0;
+          return body && { value: skill, content: body.content };
         } catch {
-          // Unreadable bodies retain metadata. Revocation and cancellation must
-          // propagate instead of becoming partial search coverage.
+          // Unreadable bodies retain metadata.
+          return undefined;
+        } finally {
+          // Revocation and cancellation must not become partial search coverage.
           signal?.throwIfAborted();
           skill.assertCurrent?.();
           assertBodyReadable(canReadInstructions);
-          return undefined;
         }
       }),
     );
@@ -99,8 +84,8 @@ async function buildIndex(
   assertCatalogCurrent(skills, signal);
   assertBodyReadable(canReadInstructions);
   return {
-    metadata: buildMetadataIndex(skills),
-    bodies: buildLexicalIndex(documents),
+    bodies: getTextLexicalIndex(documents.map(({ content }) => content)),
+    skills: documents.map(({ value }) => value),
     coverage: {
       bodyIndexed: documents.length,
       metadataOnly: skills.length - documents.length,
@@ -131,12 +116,32 @@ async function readSearchBody(skill: InstalledSkill, maxBytes: number, signal?: 
   if (skill.reader) {
     return undefined;
   }
-  const { buffer } = await readLocalFileSafely({ filePath: skill.source.filePath, maxBytes });
-  return { content: buffer.toString("utf8"), truncated: false };
+  const opened = await openLocalFileSafely({ filePath: skill.source.filePath });
+  try {
+    // One extra byte detects truncation without reading the rest of the file.
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      signal?.throwIfAborted();
+      const { bytesRead } = await opened.handle.read(buffer, total, buffer.length - total, total);
+      if (bytesRead === 0) {
+        break;
+      }
+      total += bytesRead;
+    }
+    return {
+      content: buffer.subarray(0, Math.min(total, maxBytes)).toString("utf8"),
+      truncated: total > maxBytes,
+    };
+  } finally {
+    await opened.handle.close();
+  }
 }
 
-const indexes = new WeakMap<readonly InstalledSkill[], Awaited<ReturnType<typeof buildIndex>>>();
-const pendingIndexes = new WeakMap<readonly InstalledSkill[], Promise<void>>();
+const bodyViews = new WeakMap<
+  readonly InstalledSkill[],
+  Promise<Awaited<ReturnType<typeof prepareBodyView>> | void>
+>();
 
 /** Search only the prepared, eligible catalog. No filesystem or marketplace discovery. */
 export async function searchInstalledSkills(
@@ -159,53 +164,48 @@ export async function searchInstalledSkills(
   }
   assertCatalogCurrent(skills, signal);
   const includeBodies = canReadInstructions();
-  let index = indexes.get(skills);
+  let index: Awaited<ReturnType<typeof prepareBodyView>> | void = undefined;
   if (includeBodies) {
     while (!index) {
-      const pending = pendingIndexes.get(skills);
+      const pending = bodyViews.get(skills);
       if (pending) {
-        await racePromiseWithAbortSignal(pending, signal);
-        assertCatalogCurrent(skills, signal);
-        assertBodyReadable(canReadInstructions);
-        index = indexes.get(skills);
-        continue;
-      }
-      // One caller owns the bounded reads. Other callers can cancel their wait
-      // independently or build afresh after a cancelled owner's reads have joined.
-      const build = buildIndex(skills, canReadInstructions, signal);
-      pendingIndexes.set(
-        skills,
-        build.then(
-          () => undefined,
-          () => undefined,
-        ),
-      );
-      try {
+        index = await racePromiseWithAbortSignal(pending, signal);
+      } else {
+        // Reads belong to this run; only positional postings are shared by content.
+        // Waiters can cancel independently or retry after failed reads have joined.
+        const build = prepareBodyView(skills, canReadInstructions, signal);
+        bodyViews.set(
+          skills,
+          build.catch(() => {
+            bodyViews.delete(skills);
+          }),
+        );
         index = await build;
-        assertBodyReadable(canReadInstructions);
-        indexes.set(skills, index);
-      } finally {
-        pendingIndexes.delete(skills);
       }
+      assertCatalogCurrent(skills, signal);
+      assertBodyReadable(canReadInstructions);
     }
   }
   // Tool-intent expansions (web, cron, etc.) do not belong to skill matching.
   const terms = [...new Set(tokenizeDocument(needle))].map((term) => ({ term, weight: 1 }));
   const scores = new Map<InstalledSkill, number>();
   for (const { value, score } of scoreLexical(
-    index?.metadata ?? buildMetadataIndex(skills),
+    getTextLexicalIndex(skills.map((skill) => `${skill.name} ${skill.description}`)),
     terms,
   )) {
-    scores.set(value, score * 2);
+    scores.set(skills[value]!, score * 2);
   }
   if (includeBodies && index) {
     assertBodyReadable(canReadInstructions);
     for (const { value, score } of scoreLexical(index.bodies, terms)) {
-      scores.set(value, (scores.get(value) ?? 0) + score);
+      const skill = index.skills[value]!;
+      scores.set(skill, (scores.get(skill) ?? 0) + score);
     }
   }
   const ranked = [...scores].map(([value, score]) => ({ value, score }));
-  const exact = skills.find((skill) => skill.name.toLowerCase() === needle.toLowerCase());
+  const exact =
+    skills.find((skill) => skill.name === needle) ??
+    skills.find((skill) => skill.name.toLowerCase() === needle.toLowerCase());
   if (exact && !ranked.some(({ value }) => value === exact)) {
     ranked.push({ value: exact, score: 0 });
   }
@@ -253,7 +253,9 @@ export async function readInstalledSkill(
   signal?.throwIfAborted();
   const skill = skills.find((entry) => entry.name === name);
   if (!skill) {
-    throw new ToolInputError(`Unknown installed skill ${JSON.stringify(name)}.`);
+    throw new ToolInputError(
+      `Skill ${JSON.stringify(name)} is not available to this agent. Search the available skills instead.`,
+    );
   }
   skill.assertCurrent?.();
   const content =

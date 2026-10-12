@@ -38,10 +38,7 @@ export function resolveControlUiServerQueueMode(
   if (sources.configNeedsApply) {
     return effectiveMode;
   }
-  if (sources.sessionMetadataLoaded === false && !effectiveMode) {
-    return undefined;
-  }
-  if (!config && !effectiveMode) {
+  if (!effectiveMode && (sources.sessionMetadataLoaded === false || !config)) {
     return undefined;
   }
   return configuredMode ?? effectiveMode ?? "steer";

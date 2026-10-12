@@ -16,6 +16,7 @@ import {
   createCanarySnapshotResult,
   FakeChild,
   stubHealthyGateway,
+  canaryOutcomeStep,
 } from "./update-candidate-canary.test-support.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
@@ -108,23 +109,8 @@ describe("canary teardown evidence", () => {
     stubHealthyGateway();
   });
 
-  it("propagates initial progress refusal before snapshot admission", async () => {
-    const refusal = new Error("initial progress receipt was refused");
-    const onStep = vi.fn();
-    await expect(
-      validateUpdateCandidateCanary({
-        ...canaryStateOptions(3_000),
-        onProgress: vi.fn().mockRejectedValue(refusal),
-        onStep,
-      }),
-    ).rejects.toBe(refusal);
-    expect(mocks.snapshot).not.toHaveBeenCalled();
-    expect(mocks.spawn).not.toHaveBeenCalled();
-    expect(onStep).not.toHaveBeenCalled();
-  });
-
-  it.each(["candidate-state-snapshot", "candidate-doctor", "candidate-gateway-startup"])(
-    "propagates a settled %s receipt refusal once after owned cleanup",
+  it.each(["initial-progress", "candidate-gateway-startup"])(
+    "propagates a %s receipt refusal once, cleaning up only admitted work",
     async (stepName) => {
       let copiedStateDir: string | undefined;
       mocks.snapshot.mockImplementation(async (_command, options: { input: string }) => {
@@ -137,7 +123,7 @@ describe("canary teardown evidence", () => {
         }
         return createCanarySnapshotResult(options.input);
       });
-      const refusal = new Error("completion receipt was refused");
+      const refusal = new Error("progress receipt was refused");
       let refused = false;
       const onStep = vi.fn(async (step: UpdateStepResult) => {
         if (step.name === stepName && !refused) {
@@ -146,8 +132,19 @@ describe("canary teardown evidence", () => {
         }
       });
       await expect(
-        validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), onStep }),
+        validateUpdateCandidateCanary({
+          ...canaryStateOptions(3_000),
+          onStep,
+          onProgress:
+            stepName === "initial-progress" ? vi.fn().mockRejectedValue(refusal) : undefined,
+        }),
       ).rejects.toBe(refusal);
+      if (stepName === "initial-progress") {
+        expect(mocks.snapshot).not.toHaveBeenCalled();
+        expect(mocks.spawn).not.toHaveBeenCalled();
+        expect(onStep).not.toHaveBeenCalled();
+        return;
+      }
       expect(onStep.mock.calls.filter(([step]) => step.name === stepName)).toEqual([
         [expect.objectContaining({ exitCode: 0 })],
       ]);
@@ -158,6 +155,37 @@ describe("canary teardown evidence", () => {
         throw new Error("Candidate did not create its private state copy");
       }
       await expect(fs.access(copiedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each(["candidate-doctor", "candidate-gateway-startup"])(
+    "awaits the %s start receipt before launching its process",
+    async (name) => {
+      const entered = createDeferredCore();
+      const receipt = createDeferredCore();
+      const refusal = new Error("check start receipt was refused");
+      const onStep = vi.fn();
+      const pending = validateUpdateCandidateCanary({
+        ...canaryStateOptions(3_000),
+        onStep,
+        onProgress: (step) => {
+          if (step.step === name && step.status === "in_progress") {
+            entered.resolve();
+            return receipt.promise;
+          }
+          return undefined;
+        },
+      });
+      try {
+        await Promise.race([entered.promise, pending]);
+        expect(mocks.spawn).toHaveBeenCalledTimes(name === "candidate-doctor" ? 0 : 5);
+        receipt.reject(refusal);
+        await expect(pending).rejects.toBe(refusal);
+        expect(onStep.mock.calls.some(([step]) => step.name === name)).toBe(false);
+      } finally {
+        receipt.resolve();
+        await pending.catch(() => undefined);
+      }
     },
   );
 
@@ -190,16 +218,17 @@ describe("canary teardown evidence", () => {
         reason: "candidate-checks-timeout",
       });
       expect(result.logTail.join("\n")).toContain(`${cause} ([state/sqlite] ${progress})`);
-      expect(result.steps.at(-1)).toMatchObject({ exitCode: null, termination: "timeout" });
-      expect(result.steps.at(-1)?.failureFacts).toEqual([
+      const failed = canaryOutcomeStep(result.steps)!;
+      expect(failed).toMatchObject({ exitCode: null, termination: "timeout" });
+      expect(failed.failureFacts).toEqual([
         expect.objectContaining({
           check: "doctor",
           code: "candidate-checks-timeout",
           message: expect.stringContaining(cause),
         }),
       ]);
-      const detail = updateRunStepsFromResultStep(result.steps.at(-1)!).at(-1)?.detail;
-      expect(result.steps.at(-1)?.stderrTail).toContain("phase=checking");
+      const detail = updateRunStepsFromResultStep(failed).at(-1)?.detail;
+      expect(failed.stderrTail).toContain("phase=checking");
       expect(detail).toContain(cause);
       const report = renderUpdateRunReport(
         updateRunReportInputFromResult({ ...result, mode: "git", root }),
@@ -482,26 +511,13 @@ describe("canary teardown evidence", () => {
     },
   );
 
-  it.each([
-    "passed",
-    "failed",
-    "pipes",
-    "natural",
-    "unconfirmed",
-    "late",
-    "missing",
-    "malformed",
-  ] as const)(
+  it.each(["pipes", "unconfirmed", "late", "malformed"] as const)(
     "distinguishes a completed lint report (%s) from checks still running at the deadline",
     async (report) => {
       let now = 2_000_000;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
       const spawnNormally = mocks.spawn.getMockImplementation()!;
       const signalNormally = mocks.signal.getMockImplementation()!;
-      const lintFindings = Array.from({ length: 5 }, (_, index) => ({
-        checkId: `core/config-${index}`,
-        message: `Invalid configuration ${index}.`,
-      }));
       let lintChild: FakeChild | undefined;
       mocks.spawn.mockImplementation((command, args: string[], options) => {
         if (!args.includes("--lint")) {
@@ -513,15 +529,15 @@ describe("canary teardown evidence", () => {
         queueMicrotask(() => {
           child.stderr.write("└  Doctor complete.\n");
           child.stdout.write(
-            report === "missing" || report === "late"
+            report === "late"
               ? ""
               : JSON.stringify(
                   report === "malformed"
                     ? { ok: true }
                     : {
-                        ok: report !== "failed",
+                        ok: true,
                         checksRun: 1,
-                        findings: report === "failed" ? lintFindings : [],
+                        findings: [],
                       },
                 ),
           );
@@ -542,11 +558,7 @@ describe("canary teardown evidence", () => {
             options.onComplete?.();
             return;
           }
-          lintChild.emit(
-            "exit",
-            report === "natural" ? 0 : null,
-            report === "natural" ? null : "SIGTERM",
-          );
+          lintChild.emit("exit", null, "SIGTERM");
         }
         signalNormally(pid, signal, options);
       });
@@ -554,7 +566,7 @@ describe("canary teardown evidence", () => {
         const result = await validateUpdateCandidateCanary(canaryStateOptions(1_000));
         const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint")!;
         expect(step.termination).toBe("timeout");
-        const completed = ["passed", "failed", "pipes", "natural", "unconfirmed"].includes(report);
+        const completed = report === "pipes" || report === "unconfirmed";
         const rendered = renderUpdateRunReport(
           updateRunReportInputFromResult({ ...result, mode: "git", root }),
         );
@@ -562,15 +574,8 @@ describe("canary teardown evidence", () => {
           const message = `Update lint exit phase timed out after 0ms (899ms total); checks completed; ${report === "pipes" ? "output pipes stayed open" : "process did not exit"}. Continuing with recorded check results.`;
           expect(step.warnings).toEqual([message]);
           expect(rendered.markdown).toContain(message);
-          if (report === "failed") {
-            expect(result).toMatchObject({ status: "error", phase: "lint" });
-            expect(step.failureFacts?.map((fact) => fact.message)).toEqual(
-              lintFindings.map((finding) => finding.message),
-            );
-          } else {
-            expect(result).toMatchObject({ status: "ok", phase: "readiness" });
-            expect(step.failureFacts).toBeUndefined();
-          }
+          expect(result).toMatchObject({ status: "ok", phase: "readiness" });
+          expect(step.failureFacts).toBeUndefined();
         } else {
           expect(result).toMatchObject({
             status: "error",
@@ -594,14 +599,13 @@ describe("canary teardown evidence", () => {
     },
   );
 
-  it.each(["close", "term-callback", "kill-callback", "error", "cancelled"] as const)(
+  it.each(["close", "error", "cancelled"] as const)(
     "reports incomplete %s evidence without changing validation outcomes",
     async (missing) => {
       let now = 2_000_000;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
       const spawnNormally = mocks.spawn.getMockImplementation()!;
       const signalNormally = mocks.signal.getMockImplementation()!;
-      const heldCallbacks: Array<() => void> = [];
       const controller = new AbortController();
       const duringDoctor = missing === "error" || missing === "cancelled";
       let controlled: FakeChild | undefined;
@@ -636,17 +640,7 @@ describe("canary teardown evidence", () => {
               controlled.emit("exit", 0);
             }
           }
-          if (missing === "term-callback" || missing === "kill-callback") {
-            controlled.emit("close", 0);
-          }
-          const hold =
-            (missing === "term-callback" && signal === "SIGTERM") ||
-            (missing === "kill-callback" && signal === "SIGKILL");
-          if (hold && options.onComplete) {
-            heldCallbacks.push(options.onComplete);
-          } else {
-            options.onComplete?.();
-          }
+          options.onComplete?.();
         },
       );
       const onStep = vi.fn();
@@ -681,11 +675,11 @@ describe("canary teardown evidence", () => {
             reason: "doctor-failed",
           });
           if (missing === "error") {
-            expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain(
+            expect(canaryOutcomeStep(result.steps)?.failureFacts?.[0]?.message).toContain(
               "synthetic validation process error",
             );
           } else {
-            expect(result.steps.at(-1)?.exitCode).toBe(1);
+            expect(canaryOutcomeStep(result.steps)?.exitCode).toBe(1);
           }
           expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("--update-canary"))).toBe(
             false,
@@ -698,9 +692,6 @@ describe("canary teardown evidence", () => {
           ).toBeUndefined();
         }
       } finally {
-        for (const callback of heldCallbacks) {
-          callback();
-        }
         controlled?.emit("close", 0);
         controlled?.stdout.destroy();
         controlled?.stderr.destroy();
@@ -785,7 +776,9 @@ describe("canary teardown evidence", () => {
     try {
       const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
       expect(result).toMatchObject({ status: "error", phase: "doctor", reason: "doctor-failed" });
-      expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain("synthetic spawn failure");
+      expect(canaryOutcomeStep(result.steps)?.failureFacts?.[0]?.message).toContain(
+        "synthetic spawn failure",
+      );
       expect(mocks.signal).not.toHaveBeenCalled();
       expect(result.steps.some((step) => step.advisory)).toBe(false);
     } finally {

@@ -7,10 +7,11 @@ childProcess.spawn = function (command, args, options) {
   if (args?.length !== 1 || !args[0].endsWith("/triage-mock-openai.mjs")) {
     return spawn.call(this, command, args, options);
   }
+  // "pending" stays alive but closes stdout, so its banner can never arrive.
   const startup =
     mode === "exited"
       ? "process.exit(42)"
-      : "setInterval(() => {}, 1000); await new Promise(() => {})";
+      : 'import { closeSync } from "node:fs"; closeSync(1); setInterval(() => {}, 1000); await new Promise(() => {})';
   const child = spawn.call(
     this,
     command,

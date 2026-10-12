@@ -203,8 +203,9 @@ suite.define(() => {
         await search.press("Escape");
         await expect.poll(() => picker.getAttribute("open")).toBeNull();
         await trigger.click();
-        await expect.poll(() => alpha.isVisible()).toBe(true);
-        expect(await openai.getAttribute("aria-expanded")).toBe("true");
+        await expect.poll(() => alpha.isVisible()).toBe(false);
+        expect(await openai.getAttribute("aria-expanded")).toBe("false");
+        expect(await search.inputValue()).toBe("");
         await search.fill("shared");
         await search.press("ArrowDown");
         await search.press("Enter");

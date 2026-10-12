@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   refreshRemoteBinsForConnectedNodes: vi.fn(),
   registerSkillsChangeListener: vi.fn(),
   closeSkillsWatchers: vi.fn(),
+  detachSkillsWatchers: vi.fn(),
   startCronMaintenance: vi.fn(),
   skillsChangeUnsub: vi.fn(),
   ensureContextWindowCacheLoaded: vi.fn(),
@@ -53,9 +54,11 @@ vi.mock("../skills/runtime/remote.js", () => ({
   refreshRemoteBinsForConnectedNodes: mocks.refreshRemoteBinsForConnectedNodes,
 }));
 
+// mock-isolation: Real watcher lifecycle is covered in server-startup-early.skills-watchers.test.ts.
 vi.mock("../skills/runtime/refresh.js", () => ({
   registerSkillsChangeListener: mocks.registerSkillsChangeListener,
   closeSkillsWatchers: mocks.closeSkillsWatchers,
+  detachSkillsWatchers: mocks.detachSkillsWatchers,
 }));
 
 vi.mock("../cron/maintenance.js", () => ({
@@ -78,11 +81,12 @@ const log = {
 function earlyRuntimeInput(
   overrides: Partial<StartGatewayEarlyRuntimeInput> = {},
 ): StartGatewayEarlyRuntimeInput {
-  const maintenanceState = createGatewayMaintenanceStateForTest({
-    healthSummary: {} as never,
-    healthVersion: 0,
-    presenceVersion: 0,
-  });
+  const { runDeliveryQueueMediaGc: _runDeliveryQueueMediaGc, ...maintenanceState } =
+    createGatewayMaintenanceStateForTest({
+      healthSummary: {} as never,
+      healthVersion: 0,
+      presenceVersion: 0,
+    });
   const scheduler = overrides.scheduler ?? createTestGatewayScheduler();
   onTestFinished(() => scheduler.stop());
   return {
@@ -101,7 +105,8 @@ function earlyRuntimeInput(
       getServices: () => null,
       setServices: () => {},
     }).currentClaim(),
-    ...maintenanceState,
+    maintenance: maintenanceState,
+    broadcast: maintenanceState.broadcast,
     scheduler,
     getRuntimeConfig: () => ({}) as never,
     ...overrides,
@@ -118,6 +123,7 @@ describe("startGatewayEarlyRuntime", () => {
     mocks.refreshRemoteBinsForConnectedNodes.mockReset();
     mocks.registerSkillsChangeListener.mockReset();
     mocks.closeSkillsWatchers.mockReset();
+    mocks.detachSkillsWatchers.mockReset();
     mocks.startCronMaintenance.mockReset();
     mocks.registerSkillsChangeListener.mockReturnValue(mocks.skillsChangeUnsub);
     mocks.skillsChangeUnsub.mockReset();
@@ -193,6 +199,7 @@ describe("startGatewayEarlyRuntime", () => {
     await earlyRuntime.skillsChangeUnsub();
     expect(mocks.skillsChangeUnsub).toHaveBeenCalledTimes(1);
     expect(mocks.closeSkillsWatchers).toHaveBeenCalledTimes(1);
+    expect(mocks.detachSkillsWatchers).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

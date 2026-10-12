@@ -2,7 +2,6 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
-  SpeechProviderConfig,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
@@ -30,18 +29,9 @@ const OPENAI_SPEECH_RESPONSE_FORMATS = ["mp3", "opus", "wav"] as const;
 
 type OpenAiSpeechResponseFormat = (typeof OPENAI_SPEECH_RESPONSE_FORMATS)[number];
 
-type OpenAITtsProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  model: string;
-  voice: string;
-  speed?: number;
-  instructions?: string;
-  responseFormat?: OpenAiSpeechResponseFormat;
-  extraBody?: Record<string, unknown>;
-};
-
-function resolveOpenAISpeechApiKey(config: OpenAITtsProviderConfig): string | undefined {
+function resolveOpenAISpeechApiKey(
+  config: Partial<Pick<ReturnType<typeof normalizeOpenAIProviderConfig>, "apiKey">>,
+): string | undefined {
   return (
     normalizeOptionalString(config.apiKey) ?? normalizeOptionalString(process.env.OPENAI_API_KEY)
   );
@@ -100,46 +90,32 @@ function normalizeOpenAISpeechSpeed(value: unknown, baseUrl?: string): number | 
 }
 
 function normalizeOpenAIProviderConfig(
-  rawConfig: Record<string, unknown>,
-): OpenAITtsProviderConfig {
-  const raw = resolveOpenAIProviderConfigRecord(rawConfig);
-  const extraBody = readExtraBody(raw?.extraBody) ?? readExtraBody(raw?.extra_body);
-  const baseUrl = normalizeOpenAITtsBaseUrl(
-    normalizeOptionalString(raw?.baseUrl) ??
-      normalizeOptionalString(process.env.OPENAI_TTS_BASE_URL) ??
-      DEFAULT_OPENAI_BASE_URL,
-  );
+  config: Record<string, unknown>,
+  source: "raw" | "resolved" = "raw",
+) {
+  const raw = source === "raw" ? resolveOpenAIProviderConfigRecord(config) : config;
+  const configuredBaseUrl = normalizeOptionalString(raw?.baseUrl);
+  const defaultBaseUrl =
+    normalizeOptionalString(process.env.OPENAI_TTS_BASE_URL) ?? DEFAULT_OPENAI_BASE_URL;
+  const baseUrl =
+    source === "raw"
+      ? normalizeOpenAITtsBaseUrl(configuredBaseUrl ?? defaultBaseUrl)
+      : (configuredBaseUrl ?? normalizeOpenAITtsBaseUrl(defaultBaseUrl));
   return {
-    apiKey: normalizeResolvedSecretInputString({
-      value: raw?.apiKey,
-      path: "tts.providers.openai.apiKey",
-    }),
+    apiKey:
+      source === "raw"
+        ? normalizeResolvedSecretInputString({
+            value: raw?.apiKey,
+            path: "tts.providers.openai.apiKey",
+          })
+        : normalizeOptionalString(raw?.apiKey),
     baseUrl,
     model: normalizeOptionalString(raw?.model) ?? "gpt-4o-mini-tts",
     voice: normalizeOptionalString(raw?.voice) ?? "coral",
     speed: normalizeOpenAISpeechSpeed(raw?.speed, baseUrl),
     instructions: normalizeOptionalString(raw?.instructions),
     responseFormat: normalizeOpenAISpeechResponseFormat(raw?.responseFormat),
-    extraBody,
-  };
-}
-
-function readOpenAIProviderConfig(config: SpeechProviderConfig): OpenAITtsProviderConfig {
-  const normalized = normalizeOpenAIProviderConfig({});
-  return {
-    apiKey: normalizeOptionalString(config.apiKey) ?? normalized.apiKey,
-    baseUrl: normalizeOptionalString(config.baseUrl) ?? normalized.baseUrl,
-    model: normalizeOptionalString(config.model) ?? normalized.model,
-    voice: normalizeOptionalString(config.voice) ?? normalized.voice,
-    speed:
-      normalizeOpenAISpeechSpeed(
-        config.speed,
-        normalizeOptionalString(config.baseUrl) ?? normalized.baseUrl,
-      ) ?? normalized.speed,
-    instructions: normalizeOptionalString(config.instructions) ?? normalized.instructions,
-    responseFormat:
-      normalizeOpenAISpeechResponseFormat(config.responseFormat) ?? normalized.responseFormat,
-    extraBody: readExtraBody(config.extraBody) ?? readExtraBody(config.extra_body),
+    extraBody: readExtraBody(raw?.extraBody) ?? readExtraBody(raw?.extra_body),
   };
 }
 
@@ -191,7 +167,7 @@ async function resolveOpenAITtsRequest(
   req: SpeechSynthesisRequest,
   responseFormatOverride?: "pcm",
 ): Promise<Parameters<typeof openaiTTS>[0]> {
-  const config = readOpenAIProviderConfig(req.providerConfig);
+  const config = normalizeOpenAIProviderConfig(req.providerConfig, "resolved");
   const model = normalizeOptionalString(req.providerOverrides?.model) ?? config.model;
   const voice = normalizeOptionalString(req.providerOverrides?.voice) ?? config.voice;
   const speed =
@@ -264,7 +240,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     }),
     listVoices: async () => OPENAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ providerConfig }) =>
-      Boolean(resolveOpenAISpeechApiKey(readOpenAIProviderConfig(providerConfig))),
+      Boolean(resolveOpenAISpeechApiKey(normalizeOpenAIProviderConfig(providerConfig, "resolved"))),
     synthesize: async (req) => {
       const params = await resolveOpenAITtsRequest(req);
       const audioBuffer = await openaiTTS(params);

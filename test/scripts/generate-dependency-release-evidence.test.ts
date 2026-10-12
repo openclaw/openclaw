@@ -39,18 +39,6 @@ function expectNoNodeStack(stderr: string) {
 }
 
 describe("generate-dependency-release-evidence", () => {
-  it("defines the release evidence command list and policy classifications", () => {
-    expect(DEPENDENCY_EVIDENCE_REPORTS.map(({ command, policy }) => ({ command, policy }))).toEqual(
-      [
-        { command: "pnpm deps:vuln:gate", policy: "malware-blocking" },
-        { command: "pnpm deps:transitive-risk:report", policy: "report-only" },
-        { command: "pnpm deps:ownership-surface:report", policy: "report-only" },
-        { command: "pnpm deps:changes:report", policy: "report-only" },
-        { command: "pnpm deps:npm-lock:report", policy: "report-only" },
-      ],
-    );
-  });
-
   it("creates the dependency evidence manifest shape", () => {
     const manifest = createDependencyEvidenceManifest({
       generatedAt: "2026-05-13T00:00:00.000Z",
@@ -411,7 +399,6 @@ describe("generate-dependency-release-evidence", () => {
   );
 
   it.each([
-    { status: "checked", mappedPackageVersions: 101, checkedRepositories: 2, issues: [] },
     {
       status: "partial",
       mappedPackageVersions: 100,

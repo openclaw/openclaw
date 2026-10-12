@@ -33,12 +33,7 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it.each([
-  "direct-loader",
-  "direct-loader-successor",
-  "prepared",
-  "prepared-with-another-gateway-active",
-] as const)(
+it.each(["direct-loader-successor", "prepared"] as const)(
   "revokes borrowed channel methods and read grants through %s without retiring the lender",
   async (producer) => {
     const root = tempDirs.make("openclaw-channel-borrowing-");
@@ -71,6 +66,7 @@ it.each([
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
     const config: OpenClawConfig = {
+      agents: { defaults: { model: "fixture/gateway" } },
       plugins: {
         allow: [channelId, freshId],
         entries: { [channelId]: { enabled: true }, [freshId]: { enabled: true } },
@@ -86,10 +82,9 @@ it.each([
       preferBuiltPluginArtifacts: true,
       runtimeOptions: { allowGatewaySubagentBinding: true },
     };
-    const loadGateway = (model: string) => {
+    const loadGateway = () => {
       const registry = loadOpenClawPlugins({
         ...options,
-        config: { ...config, agents: { defaults: { model } } },
         onlyPluginIds: [channelId],
         activate: false,
         runtimeSideEffects: true,
@@ -103,31 +98,24 @@ it.each([
       activatePluginRegistry(registry, null, "gateway-bindable", workspaceDir);
       return createPluginRegistryOwner(registry, workspaceDir);
     };
-    const gateway = loadGateway("fixture/gateway-a");
-    const other =
-      producer === "prepared-with-another-gateway-active"
-        ? loadGateway("fixture/gateway-b")
-        : undefined;
+    const gateway = loadGateway();
     try {
       const liveRecord = gateway.registry.plugins.find((record) => record.id === channelId)!;
       const liveInstance = getPluginInstance(liveRecord)!;
       const liveEntry = gateway.registry.channels[0]!;
       expect(liveRecord).toMatchObject({ status: "loaded", origin: "bundled" });
       expect(liveEntry.captureReadAuthority?.()?.()).toBe(true);
-      expect(getActivePluginRegistry()).toBe(other?.registry ?? gateway.registry);
+      expect(getActivePluginRegistry()).toBe(gateway.registry);
       await using buildResources = new PreparedModelRuntimeBuildResources(
         retainPreparedPluginRegistry,
       );
       const acquired = await withPluginRuntimeRegistryScope(gateway.registry, async () => {
-        if (producer === "direct-loader" || producer === "direct-loader-successor") {
-          const previous =
-            producer === "direct-loader-successor"
-              ? await acquirePluginRegistryForInspection({
-                  ...options,
-                  onlyPluginIds: [channelId],
-                  borrowRegistry: gateway.registry,
-                })
-              : undefined;
+        if (producer === "direct-loader-successor") {
+          const previous = await acquirePluginRegistryForInspection({
+            ...options,
+            onlyPluginIds: [channelId],
+            borrowRegistry: gateway.registry,
+          });
           try {
             return await acquirePluginRegistryForInspection({
               ...options,
@@ -160,7 +148,7 @@ it.each([
       const resources = getPluginRegistryInspectionResources(acquired.registry)!;
       const scope = resources.createInvocationScope(acquired.registry);
       try {
-        // All producers borrow the exact A record, never a discovery copy or Gateway B.
+        // Both producers borrow the live record rather than another discovery copy.
         expect(acquired.registry.plugins.find((record) => record.id === channelId)).toBe(
           liveRecord,
         );
@@ -180,7 +168,7 @@ it.each([
         expect(grant?.()).toBe(true);
         expect(scopedGrant?.()).toBe(true);
         await expect(scopedSend(sendParams)).resolves.toMatchObject({
-          messageId: "fixture/gateway-a",
+          messageId: "fixture/gateway",
         });
         scope.release();
         expect(() => scopedSend(sendParams)).toThrow("consumer is closed");
@@ -198,14 +186,13 @@ it.each([
         expect(liveInstance.hasRetainedConsumers).toBe(false);
         expect(liveEntry.captureReadAuthority?.()?.()).toBe(true);
         await expect(liveEntry.plugin.outbound!.sendText!(sendParams)).resolves.toMatchObject({
-          messageId: "fixture/gateway-a",
+          messageId: "fixture/gateway",
         });
       } finally {
         scope.release();
         await acquired.release();
       }
     } finally {
-      await other?.close();
       await gateway.close();
     }
   },

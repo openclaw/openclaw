@@ -44,10 +44,12 @@ extension OpenClawChatViewModel {
             !$0.value.isComplete && $0.value.activity?.isVisible != false
         }
         for (id, call) in priorActive where currentActive[id] == nil {
-            self.onToolActivity?(id, call.name, false, self.sessionKey)
+            let name = ToolDisplayRegistry.displayCall(name: call.name, args: call.args).name ?? call.name
+            self.onToolActivity?(id, name, false, self.sessionKey)
         }
         for (id, call) in currentActive where priorActive[id] == nil {
-            self.onToolActivity?(id, call.name, true, self.sessionKey)
+            let name = ToolDisplayRegistry.displayCall(name: call.name, args: call.args).name ?? call.name
+            self.onToolActivity?(id, name, true, self.sessionKey)
         }
         return self.turnToolCallsById.values.sorted {
             if $0.isComplete != $1.isComplete { return !$0.isComplete }

@@ -1,5 +1,5 @@
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { isCronTimeoutErrorText } from "../execution-error-constants.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
 import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
@@ -9,15 +9,17 @@ import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type {
   CronJob,
   CronDeliveryTrace,
+  CronFailureNotificationDetail,
   CronResolvedDeliveryState,
   CronRunErrorClassification,
   CronRunStatus,
+  CronTriggerEvalOutcome,
 } from "../types.js";
-import { autoDisableCronJob } from "./auto-disable.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   errorBackoffMs,
-  isJobEnabled,
+  HEARTBEAT_SKIP_DISABLED,
+  resolveNextRunAtMsOrDisable,
 } from "./jobs-scheduling.js";
 import type {
   CronJobPolicyContext,
@@ -25,8 +27,6 @@ import type {
   CronSystemEventEnqueueResult,
   DeferredCronNotifications,
 } from "./state.js";
-import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
-import { HEARTBEAT_SKIP_DISABLED } from "./timer-execution-timeout.js";
 
 /** Default max retries for cron jobs on transient errors (#24355). */
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
@@ -50,27 +50,6 @@ type QueuedSystemEventHandle = {
   accepted: boolean;
   remove?: () => boolean | void;
 };
-
-/** Rejects outcome-generated schedule timestamps before they can persist or arm a timer. */
-export function resolveNextRunAtMsOrDisable(params: {
-  state: CronJobPolicyContext;
-  job: CronJob;
-  candidate: unknown;
-  deferredNotifications: DeferredCronNotifications;
-}): number | undefined {
-  const nextRunAtMs = asDateTimestampMs(params.candidate);
-  if (nextRunAtMs !== undefined && nextRunAtMs > 0) {
-    return nextRunAtMs;
-  }
-  autoDisableCronJob({
-    job: params.job,
-    reason: "schedule-errors",
-    atMs: params.state.deps.nowMs(),
-    consecutiveErrors: 1,
-    deferredNotifications: params.deferredNotifications,
-  });
-  return undefined;
-}
 
 /** Persists non-busy trigger evaluation state without touching payload-run history. */
 export function applyTriggerEvaluationState(
@@ -143,6 +122,26 @@ export function resolveCronNextRunWithLowerBound(params: {
     candidate: Math.max(params.naturalNext, params.lowerBoundMs),
     deferredNotifications: params.deferredNotifications,
   });
+}
+
+/**
+ * True when a scheduled quick re-run targets a provider outage, so the failure alert and
+ * owner repair wait for it. Provider transport failures (DNS, refused connections, request
+ * timeouts) classify as `timeout`. Failures the job owns are not held: its scripts, command
+ * payloads, and cron's own execution watchdog usually need the owner repair promptly.
+ */
+export function holdsFailureNotificationForRetry(
+  job: CronJob,
+  result: { error?: string; failureNotificationDetail?: CronFailureNotificationDetail },
+  category: CronRetryOn | undefined,
+): boolean {
+  if (category === undefined || result.failureNotificationDetail?.kind === "script-failure") {
+    return false;
+  }
+  return (
+    category !== "timeout" ||
+    (job.payload.kind !== "command" && !isCronTimeoutErrorText(result.error))
+  );
 }
 
 export function resolveTransientCronRetryDecision(params: {
@@ -262,31 +261,6 @@ export function shouldRetryDisabledHeartbeatOneShot(
     job.wakeMode === "now" &&
     result.status === "skipped" &&
     result.error === HEARTBEAT_SKIP_DISABLED
-  );
-}
-
-export function isScheduledTerminalOneShotRetry(
-  job: CronJob,
-  lastRunStatus: CronRunStatus,
-  lastRun: unknown,
-  nextRun: unknown,
-): boolean {
-  if (
-    !isJobEnabled(job) ||
-    typeof nextRun !== "number" ||
-    typeof lastRun !== "number" ||
-    nextRun <= lastRun
-  ) {
-    return false;
-  }
-  if (lastRunStatus === "error") {
-    return true;
-  }
-  return (
-    lastRunStatus === "skipped" &&
-    job.sessionTarget === "main" &&
-    job.wakeMode === "now" &&
-    job.state.lastError === HEARTBEAT_SKIP_DISABLED
   );
 }
 

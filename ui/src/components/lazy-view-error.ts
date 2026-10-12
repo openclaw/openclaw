@@ -4,6 +4,14 @@ import { formatUiError } from "../lib/format-error.ts";
 import { icon } from "./icons.ts";
 import { renderLoadingState } from "./loading-state.ts";
 
+export function renderAgentStartupState() {
+  return html`<section class="agent-startup-state" role="status" aria-live="polite">
+    <span class="btn__spinner" aria-hidden="true"></span>
+    <div>${t("agentStartup.title")}</div>
+    <div>${t("agentStartup.description")}</div>
+  </section>`;
+}
+
 type LazyElementState =
   | { status: "loading"; element: { label: string } }
   | { status: "error"; element: { label: string }; error: unknown; stale: boolean };
@@ -140,7 +148,14 @@ export function renderPanelErrorState({
       <div class="lazy-view-error__title">${title}</div>
       <div class="lazy-view-error__subtitle">${subtitle}</div>
       ${actions ? html`<div class="lazy-view-error__actions">${actions}</div>` : nothing}
-      ${detail ? html`<code class="lazy-view-error__detail">${detail}</code>` : nothing}
+      ${
+        detail
+          ? html`<details class="lazy-view-error__details">
+              <summary>${t("chat.details")}</summary>
+              <code class="lazy-view-error__detail">${detail}</code>
+            </details>`
+          : nothing
+      }
     </div>
   `;
 }

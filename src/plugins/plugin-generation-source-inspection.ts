@@ -12,12 +12,12 @@ import { visitPluginSourceReferences } from "./plugin-source-references.js";
 /** Acquire the same literal module inputs as execution, without evaluating plugin code. */
 export function inspectPluginSourceDependencies(
   entries: readonly { rootDir: string; entryFile: string }[],
+  dependencyLookupBoundary?: Parameters<typeof capturePluginGenerationArtifact>[5],
 ) {
   const files = new Set<string>();
   const packageRoots = new Set<string>();
   const unresolved: Array<{ source: string; specifier: string }> = [];
   const references: Array<{ source: string; specifier: string; target: string }> = [];
-  const checks: Array<() => void> = [];
   const seenEntries = new Set<string>();
   for (const entry of entries) {
     const source = fs.realpathSync(entry.entryFile);
@@ -27,7 +27,14 @@ export function inspectPluginSourceDependencies(
     seenEntries.add(source);
     const root = fs.realpathSync(entry.rootDir);
     // This scope grants source acquisition only. No module evaluation or registration runs here.
-    const artifact = capturePluginGenerationArtifact(root, source, (run) => run());
+    const artifact = capturePluginGenerationArtifact(
+      root,
+      source,
+      (run) => run(),
+      undefined,
+      undefined,
+      dependencyLookupBoundary,
+    );
     try {
       const pending = [artifact.resolve(source)];
       const visited = new Set<string>();
@@ -59,7 +66,7 @@ export function inspectPluginSourceDependencies(
               path.isAbsolute(specifier) ||
               specifier.startsWith("file:");
             try {
-              const conditions = ["node", kind];
+              const conditions = ["node", "module-sync", kind];
               const result = artifact.captureModule(captured, specifier, conditions);
               const target =
                 result && "target" in result
@@ -115,8 +122,6 @@ export function inspectPluginSourceDependencies(
           packageRoots.add(original);
         }
       }
-      artifact.assertSourceCurrent();
-      checks.push(artifact.assertSourceCurrent);
     } finally {
       artifact.dispose();
     }
@@ -128,11 +133,6 @@ export function inspectPluginSourceDependencies(
     ),
     unresolved,
     references,
-    assertSourceCurrent: () => {
-      for (const check of checks) {
-        check();
-      }
-    },
   };
 }
 
@@ -142,7 +142,6 @@ export function inspectPluginGenerationSources(
 ) {
   const bySource = new Map<string, string>();
   const digests = new Map<string, string>();
-  const checks: Array<() => void> = [];
   for (const entry of entries) {
     if (digests.has(entry.pluginId)) {
       continue;
@@ -154,7 +153,6 @@ export function inspectPluginGenerationSources(
       try {
         digest = artifact.sourceDigest;
         bySource.set(key, digest);
-        checks.push(artifact.assertSourceCurrent);
       } finally {
         artifact.dispose();
       }
@@ -163,10 +161,5 @@ export function inspectPluginGenerationSources(
   }
   return {
     sourceDigests: Object.fromEntries(digests),
-    assertSourceCurrent: () => {
-      for (const check of checks) {
-        check();
-      }
-    },
   };
 }

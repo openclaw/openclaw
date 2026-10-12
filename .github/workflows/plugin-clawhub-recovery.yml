@@ -1,0 +1,128 @@
+name: Plugin ClawHub Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      original_child_run_id:
+        description: Original Plugin ClawHub Release run ID
+        required: true
+        type: string
+      original_child_run_attempt:
+        description: Original Plugin ClawHub Release run attempt
+        required: true
+        default: "1"
+        type: string
+      reason:
+        description: Recovery reason recorded by ClawHub
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.21.0"
+
+jobs:
+  recover:
+    name: Recover exact sealed ClawHub attempts
+    environment: clawhub-plugin-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout trusted recovery tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Download sealed recovery manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: openclaw-clawhub-recovery-manifest-${{ inputs.original_child_run_id }}-${{ inputs.original_child_run_attempt }}
+          path: ${{ runner.temp }}/clawhub-recovery
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.original_child_run_id }}
+
+      - name: Resolve exact child and parent attempts
+        id: attempts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHILD_RUN_ID: ${{ inputs.original_child_run_id }}
+          CHILD_RUN_ATTEMPT: ${{ inputs.original_child_run_attempt }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CHILD_RUN_ID/attempts/$CHILD_RUN_ATTEMPT" \
+            > "$RUNNER_TEMP/clawhub-recovery/child-run.json"
+          parent_run_id="$(jq -r '.identity.parentRunId' "$RUNNER_TEMP/clawhub-recovery/recovery-manifest.json")"
+          parent_run_attempt="$(jq -r '.identity.parentRunAttempt' "$RUNNER_TEMP/clawhub-recovery/recovery-manifest.json")"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$parent_run_id/attempts/$parent_run_attempt" \
+            > "$RUNNER_TEMP/clawhub-recovery/parent-run.json"
+          {
+            echo "parent_run_id=$parent_run_id"
+            echo "parent_run_attempt=$parent_run_attempt"
+            jq -r '"parent_ref=" + .head_branch, "parent_sha=" + .head_sha, "parent_status=" + .status, "parent_conclusion=" + (.conclusion // "")' \
+              "$RUNNER_TEMP/clawhub-recovery/parent-run.json"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate original sealed authority and exact recovery roster
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIER_SHA: ${{ github.workflow_sha }}
+          PARENT_RUN_ID: ${{ steps.attempts.outputs.parent_run_id }}
+          PARENT_RUN_ATTEMPT: ${{ steps.attempts.outputs.parent_run_attempt }}
+          PARENT_REF: ${{ steps.attempts.outputs.parent_ref }}
+          PARENT_SHA: ${{ steps.attempts.outputs.parent_sha }}
+          PARENT_STATUS: ${{ steps.attempts.outputs.parent_status }}
+          PARENT_CONCLUSION: ${{ steps.attempts.outputs.parent_conclusion }}
+          PARENT_STATE_POLICY: recovery-producer
+          VERIFY_PUBLICATION: "false"
+          RECOVERY_MANIFEST: ${{ runner.temp }}/clawhub-recovery/recovery-manifest.json
+        run: node scripts/clawhub-postpublish.mjs
+
+      - name: Recover every non-public exact attempt
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+          RECOVERY_REASON: ${{ inputs.reason }}
+        run: |
+          node scripts/plugin-clawhub-recovery.mjs execute \
+            --manifest "$RUNNER_TEMP/clawhub-recovery/recovery-manifest.json" \
+            --run-json "$RUNNER_TEMP/clawhub-recovery/child-run.json" \
+            --reason "$RECOVERY_REASON" \
+            --output "$RUNNER_TEMP/clawhub-recovery/result.json"
+
+      - name: Reconcile the complete original package roster
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIER_SHA: ${{ github.workflow_sha }}
+          PARENT_RUN_ID: ${{ steps.attempts.outputs.parent_run_id }}
+          PARENT_RUN_ATTEMPT: ${{ steps.attempts.outputs.parent_run_attempt }}
+          PARENT_REF: ${{ steps.attempts.outputs.parent_ref }}
+          PARENT_SHA: ${{ steps.attempts.outputs.parent_sha }}
+          PARENT_STATUS: ${{ steps.attempts.outputs.parent_status }}
+          PARENT_CONCLUSION: ${{ steps.attempts.outputs.parent_conclusion }}
+          PARENT_STATE_POLICY: recovery-producer
+          RECOVERY_MANIFEST: ${{ runner.temp }}/clawhub-recovery/recovery-manifest.json
+        run: node scripts/clawhub-postpublish.mjs
+
+      - name: Retain recovery and full-roster evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: clawhub-recovery-${{ inputs.original_child_run_id }}-${{ inputs.original_child_run_attempt }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/clawhub-recovery/recovery-manifest.json
+            ${{ runner.temp }}/clawhub-recovery/result.json
+            ${{ runner.temp }}/clawhub-postpublish/evidence.json
+          if-no-files-found: warn
+          retention-days: 30

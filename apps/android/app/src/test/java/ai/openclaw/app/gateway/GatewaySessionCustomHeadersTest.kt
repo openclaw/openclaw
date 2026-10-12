@@ -226,7 +226,7 @@ class GatewaySessionCustomHeadersTest {
         token = "shared-token",
         bootstrapToken = "never-http-bootstrap",
         password = null,
-        tls = tls?.let { GatewayTlsParams(required = true, expectedFingerprint = it.second, allowTOFU = false, stableId = endpoint.stableId) },
+        tls = tls?.let { GatewayTlsParams(expectedFingerprint = it.second) },
         options =
           GatewayConnectOptions(
             role = "operator",
@@ -499,7 +499,6 @@ class GatewaySessionCustomHeadersTest {
         .Builder()
         .addInterceptor(
           GatewayPreparingPlaybackInterceptor(
-            policy = GatewayPlaybackRetryPolicy(maxElapsedMs = 100L, initialDelayMs = 0L, maxDelayMs = 0L),
             nowMs = { nowMs++ },
             sleepMs = {},
           ),
@@ -537,9 +536,8 @@ class GatewaySessionCustomHeadersTest {
         .Builder()
         .addInterceptor(
           GatewayPreparingPlaybackInterceptor(
-            policy = GatewayPlaybackRetryPolicy(maxElapsedMs = 2L, initialDelayMs = 1L, maxDelayMs = 1L),
             nowMs = { nowMs },
-            sleepMs = { delayMs -> nowMs += delayMs + 1L },
+            sleepMs = { nowMs = 120_001L },
           ),
         ).build()
 
@@ -563,7 +561,7 @@ class GatewaySessionCustomHeadersTest {
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefsBacking)
     val stableId = "manual|gateway.example|443"
     val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 443)
-    val tls = GatewayTlsParams(required = true, expectedFingerprint = "aa".repeat(32), allowTOFU = false, stableId = stableId)
+    val tls = GatewayTlsParams(expectedFingerprint = "aa".repeat(32))
 
     prefs.saveGatewayCustomHeaders(stableId, mapOf("CF-Access-Client-Id" to "client-id"))
     securePrefsBacking
@@ -1235,7 +1233,6 @@ class GatewaySessionCustomHeadersTest {
             .newBuilder()
             .addInterceptor(
               GatewayPreparingPlaybackInterceptor(
-                policy = GatewayPlaybackRetryPolicy(initialDelayMs = 1),
                 sleepMs = { valid.set(false) },
               ),
             ).build()
@@ -1312,7 +1309,7 @@ class GatewaySessionCustomHeadersTest {
           permissions = emptyMap(),
           client = GatewayClientInfo("openclaw-android-test", "Android Test", "test", "android", "node", "test", "android", "test"),
         ),
-      tls = GatewayTlsParams(required = true, expectedFingerprint = "aa".repeat(32), allowTOFU = false, stableId = endpoint.stableId),
+      tls = GatewayTlsParams(expectedFingerprint = "aa".repeat(32)),
     )
   }
 

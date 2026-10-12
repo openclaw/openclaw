@@ -88,7 +88,11 @@ function createGuardedSource(
 const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
   ...["discord", "slack", "telegram", "imessage", "whatsapp", "signal"].flatMap((pluginId) => {
     const relativePaths =
-      pluginId === "signal" ? ["src/shared.ts", "runtime-api.ts"] : ["src/shared.ts"];
+      pluginId === "signal"
+        ? ["src/shared.ts", "runtime-api.ts"]
+        : pluginId === "telegram"
+          ? ["src/channel.ts", "src/setup-plugin.ts"]
+          : ["src/shared.ts"];
     return relativePaths.map((relativePath) =>
       createGuardedSource(pluginId, relativePath, [
         new RegExp(`["']openclaw/plugin-sdk/${pluginId}["']`),
@@ -229,6 +233,7 @@ function readSource(path: string): string {
   if (cached !== undefined) {
     return cached;
   }
+  expect(fs.existsSync(fullPath), `Missing guardrail source: ${path}`).toBe(true);
   const text = fs.readFileSync(fullPath, "utf8");
   sourceTextCache.set(fullPath, text);
   return text;

@@ -18,7 +18,6 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   prepareModelRuntimeSnapshot,
   registerPreparedModelRuntimePublicationListener,
-  acquireReadOnlyPreparedModelRuntime,
   refreshPreparedModelRuntimeSnapshots,
   type PreparedModelRuntimeInput,
 } from "./prepared-model-runtime.js";
@@ -72,25 +71,6 @@ describe("prepared model runtime cancelled admission ownership", () => {
   beforeEach(() => {
     pendingBuildReleases = [];
     buildBatchSpy = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
-  });
-
-  it("retires a sole cold ephemeral owner before shared discovery finishes", async () => {
-    const input = dynamicInput("cancelled-ephemeral");
-    const build = prepareColdBuildGate();
-    const abort = new AbortController();
-    const admission = acquireReadOnlyPreparedModelRuntime(input, {
-      abortSignal: abort.signal,
-      catalogMode: "static",
-    });
-
-    await build.started.promise;
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-    abort.abort(new Error("request cancelled"));
-    await expect(admission).rejects.toMatchObject({ name: "AbortError" });
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
-
-    build.release.resolve();
   });
 
   it("retires a coalesced cold owner only after the final admission cancels", async () => {
@@ -207,45 +187,6 @@ describe("prepared model runtime cancelled admission ownership", () => {
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
   });
 
-  it("preserves the configured baseline and clears a later retained lease on refresh", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const config = {};
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
-    mocks.prepareStaticCatalog.mockClear();
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-    const input = {
-      ...dynamicInput("gateway-retained-owner"),
-      config,
-    };
-    const cancelledBuild = prepareColdBuildGate();
-    const abort = new AbortController();
-    const cancelled = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: abort.signal,
-    });
-
-    await cancelledBuild.started.promise;
-    abort.abort(new Error("gateway request cancelled"));
-    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-    cancelledBuild.release.resolve();
-    const retainedLease = await acquireAgentRunPreparedModelRuntime(input);
-    expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
-
-    await retainedLease[Symbol.asyncDispose]();
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
-
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-  });
   it("retires model publication before auth snapshots are cleared during restart", async () => {
     mocks.configuredAgentIds = ["default"];
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });

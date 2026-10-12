@@ -25,7 +25,7 @@ export type ParsedRegistryNpmSpec = {
   selectorIsPrerelease: boolean;
 };
 
-function parseRegistryNpmSpecInternal(
+export function parseRegistryNpmSpecResult(
   rawSpec: string,
 ): { ok: true; parsed: ParsedRegistryNpmSpec } | { ok: false; error: string } {
   const spec = rawSpec.trim();
@@ -63,37 +63,29 @@ function parseRegistryNpmSpecInternal(
       error: "unsupported npm spec: expected <name> or <name>@<version> from the npm registry",
     };
   }
-  if (!hasSelector) {
-    return {
-      ok: true,
-      parsed: {
-        name,
-        raw: spec,
-        selectorKind: "none",
-        selectorIsPrerelease: false,
-      },
-    };
-  }
-  if (!selector) {
-    return { ok: false, error: "unsupported npm spec: missing version/tag after @" };
-  }
-  if (/[\\/]/.test(selector)) {
-    return { ok: false, error: "unsupported npm spec: invalid version/tag" };
-  }
-  const exactVersion = validSemver(selector);
-  if (!exactVersion && !DIST_TAG_RE.test(selector)) {
-    return {
-      ok: false,
-      error: "unsupported npm spec: use an exact version or dist-tag (ranges are not allowed)",
-    };
+  let exactVersion: string | null = null;
+  if (hasSelector) {
+    if (!selector) {
+      return { ok: false, error: "unsupported npm spec: missing version/tag after @" };
+    }
+    if (/[\\/]/.test(selector)) {
+      return { ok: false, error: "unsupported npm spec: invalid version/tag" };
+    }
+    exactVersion = validSemver(selector);
+    if (!exactVersion && !DIST_TAG_RE.test(selector)) {
+      return {
+        ok: false,
+        error: "unsupported npm spec: use an exact version or dist-tag (ranges are not allowed)",
+      };
+    }
   }
   return {
     ok: true,
     parsed: {
       name,
       raw: spec,
-      selector,
-      selectorKind: exactVersion ? "exact-version" : "tag",
+      ...(hasSelector ? { selector } : {}),
+      selectorKind: !hasSelector ? "none" : exactVersion ? "exact-version" : "tag",
       selectorIsPrerelease:
         exactVersion !== null &&
         parseSemverPrerelease(exactVersion) !== null &&
@@ -104,13 +96,13 @@ function parseRegistryNpmSpecInternal(
 
 /** Parses a registry-only npm package spec into package name and optional selector metadata. */
 export function parseRegistryNpmSpec(rawSpec: string): ParsedRegistryNpmSpec | null {
-  const parsed = parseRegistryNpmSpecInternal(rawSpec);
+  const parsed = parseRegistryNpmSpecResult(rawSpec);
   return parsed.ok ? parsed.parsed : null;
 }
 
 /** Validates a registry-only npm spec and returns a user-facing error when rejected. */
 export function validateRegistryNpmSpec(rawSpec: string): string | null {
-  const parsed = parseRegistryNpmSpecInternal(rawSpec);
+  const parsed = parseRegistryNpmSpecResult(rawSpec);
   return parsed.ok ? null : parsed.error;
 }
 

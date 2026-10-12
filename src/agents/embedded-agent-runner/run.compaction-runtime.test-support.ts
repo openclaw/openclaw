@@ -18,6 +18,7 @@ type RecoveryKind = "overflow" | "timeout";
 type AuthorityLoss = "closed" | "replaced" | "writer-replaced";
 type FixtureOptions = {
   oversized?: boolean;
+  replyAdmission?: boolean;
   inMemory?: boolean;
   detached?: boolean;
   historicalTurns?: number;
@@ -59,6 +60,11 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     await import("../../context-engine/runtime-settings.js");
   const { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } =
     await import("../../context-engine/host-compat.js");
+
+  const { admitReplyTurn } = await import("../../auto-reply/reply/reply-turn-admission.js");
+  const { waitForReplyRunSuccessorAdmission } =
+    await import("../../auto-reply/reply/reply-run-registry.js");
+  let replyOperation: PreparedEmbeddedRunInput["runParams"]["replyOperation"];
 
   const memoryManager = options.inMemory ? SessionManager.inMemory(state.workspaceDir) : undefined;
   const sessionId = memoryManager?.getSessionId() ?? randomUUID();
@@ -104,27 +110,29 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
   }
   if (options.historicalTurns) {
-    const history = memoryManager ?? SessionManager.open(target, state.workspaceDir);
+    const history = memoryManager ?? (await SessionManager.openAsync(target, state.workspaceDir));
     for (let index = 0; index < options.historicalTurns; index += 1) {
-      history.appendMessage(makeAgentUserMessage({ content: `Archived request ${index}` }));
-      history.appendMessage(
+      await history.appendMessageAsync(
+        makeAgentUserMessage({ content: `Archived request ${index}` }),
+      );
+      await history.appendMessageAsync(
         makeAgentAssistantMessage({
           content: [{ type: "toolCall", id: `archived-${index}`, name: "read", arguments: {} }],
           stopReason: "toolUse",
         }),
       );
-      history.appendMessage({
+      await history.appendMessageAsync({
         ...toolResult,
         toolCallId: `archived-${index}`,
         content: [{ type: "text", text: "archived output ".repeat(12_000) }],
       });
-      history.appendResetBoundary("new");
+      await history.appendResetBoundaryAsync("new");
     }
   }
   let recentUserId: string | undefined;
   for (const message of messages) {
     const messageId = memoryManager
-      ? memoryManager.appendMessage(message)
+      ? await memoryManager.appendMessageAsync(message)
       : (await appendTranscriptMessage(target, { cwd: state.workspaceDir, message })).messageId;
     if (message === recentUser) {
       recentUserId = messageId;
@@ -163,6 +171,10 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     }
     controller.abort(callerError);
     await Promise.allSettled(work);
+    if (replyOperation) {
+      replyOperation.complete();
+      await waitForReplyRunSuccessorAdmission(target.sessionKey, null);
+    }
     try {
       await drain();
     } finally {
@@ -188,7 +200,8 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       workspaceDir: state.workspaceDir,
       prompt: "continue",
       timeoutMs: 30_000,
-      config: { agents: { defaults: { compaction: { timeoutSeconds: 1 } } } },
+      // Ordinary lifecycle proofs use the production window, not a disk-speed deadline.
+      config: {},
       abortSignal: controller.signal,
       admittedRunContext,
       sessionPersistence: options.detached ? "detached" : undefined,
@@ -202,6 +215,19 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     } else {
       expect(writerFence?.expectedWriterRunId).toBe(runId);
       runParams.sessionTarget = { ...target, ...writerFence };
+    }
+    if (options.replyAdmission) {
+      const reply = await admitReplyTurn({
+        ...target,
+        kind: "visible",
+        resetTriggered: false,
+        upstreamAbortSignal: controller.signal,
+      });
+      if (reply.status !== "owned") {
+        throw new Error("Fixture requires retained reply admission");
+      }
+      replyOperation = reply.operation;
+      runParams.replyOperation = replyOperation;
     }
     const sessionPromptState = await createEmbeddedRunSessionPromptState({
       runParams,
@@ -217,10 +243,13 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         forgetActiveSessionForShutdown(accepted.sessionId);
       }
     };
-    const openWriter = () =>
-      memoryManager ?? SessionManager.open({ ...target, ...writerFence }, state.workspaceDir);
-    const commitCompaction = () => {
-      openWriter().appendCompaction("Summary of earlier topic", firstKeptEntryId, 4_097);
+    const openWriter = async () =>
+      memoryManager ??
+      (await SessionManager.openAsync({ ...target, ...writerFence }, state.workspaceDir));
+    const commitCompaction = async () => {
+      await (
+        await openWriter()
+      ).appendCompactionAsync("Summary of earlier topic", firstKeptEntryId, 4_097);
       return {
         ok: true,
         compacted: true,
@@ -361,7 +390,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       await drain();
       // Reopen independently: a cached manager can hide a durable append or leaf change.
       await closeOpenClawAgentDatabaseByPathAsync(target.storePath, target.agentId);
-      const manager = memoryManager ?? SessionManager.open(target, state.workspaceDir);
+      const manager = memoryManager ?? (await SessionManager.openAsync(target, state.workspaceDir));
       const events = memoryManager
         ? memoryManager.getEntries()
         : await loadTranscriptEvents(target);
@@ -426,6 +455,8 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     return {
       compact,
       maintain,
+      target,
+      replyOperation,
       beforeHook,
       afterHook,
       updates,

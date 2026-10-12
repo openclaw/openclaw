@@ -3,6 +3,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, it, vi } from "vitest";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
+import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
   assistantMessage,
   bindProductionHarnessHostCapabilitiesForTest,
@@ -10,7 +11,6 @@ import {
   createParams,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
-  fastWait,
   runCodexAppServerAttempt,
   setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
@@ -100,10 +100,12 @@ it("hands off durable notes once on resume without replaying transient context",
     },
     { persistedThreads: [threadId] },
   );
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const run = runCodexAppServerAttempt(params);
-  await Promise.race([harness.waitForMethod("turn/start"), run]);
+  await run.waitForTurnAccepted();
   await harness.completeTurn({ threadId, turnId: "turn-1" });
   await run;
+  await nativeHookRelayUnregisterQueue.flush();
   const request = harness.requests.find((item) => item.method === "turn/start");
   const input = JSON.stringify(request?.params);
   expect(input).toContain("Imported durable result: inbox cleared");
@@ -121,9 +123,11 @@ it("hands off durable notes once on resume without replaying transient context",
   });
   nextParams.sessionTarget = params.sessionTarget;
   const next = runCodexAppServerAttempt(nextParams);
-  await Promise.race([vi.waitFor(() => expect(turnNumber).toBe(2), fastWait), next]);
+  await next.waitForTurnAccepted();
+  expect(turnNumber).toBe(2);
   await harness.completeTurn({ threadId, turnId: "turn-2" });
   await next;
+  await nativeHookRelayUnregisterQueue.flush();
   const nextRequest = harness.requests.findLast((item) => item.method === "turn/start");
   expect(JSON.stringify(nextRequest?.params)).not.toContain("Imported durable result");
 });
@@ -131,10 +135,6 @@ it("hands off durable notes once on resume without replaying transient context",
 it("does not replay covered history on the same thread after local message-tool completion", async () => {
   const sessionFile = path.join(tempDir, "local-source-reply-session.jsonl");
   const workspaceDir = path.join(tempDir, "local-source-reply-workspace");
-  const startedAt = Date.now();
-  vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(startedAt);
-
   const messageTool = createRuntimeDynamicTool("message");
   messageTool.parameters = {
     type: "object",
@@ -185,10 +185,13 @@ it("does not replay covered history on the same thread after local message-tool 
   );
   let closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
   try {
+    // Keep the history timestamps and attempt deadlines on the same controlled clock.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const first = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await first.waitForTurnAccepted();
     await harness.completeTurn({ threadId, turnId: "turn-1" });
-    await first;
+    expect((await first).terminal).toEqual({ kind: "ok" });
+    await nativeHookRelayUnregisterQueue.flush();
     const originalBinding = await readCodexAppServerBinding(sessionFile);
     expect(originalBinding).toMatchObject({ threadId });
     const originalCutoff = Date.parse(originalBinding!.historyCoveredThrough!);
@@ -217,7 +220,8 @@ it("does not replay covered history on the same thread after local message-tool 
     params.prompt = "Send the inventory summary.";
     closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
     const terminal = runCodexAppServerAttempt(params);
-    await Promise.race([vi.waitFor(() => expect(turnNumber).toBe(2), fastWait), terminal]);
+    await terminal.waitForTurnAccepted();
+    expect(turnNumber).toBe(2);
     const terminalRequest = harness.requests.findLast((item) => item.method === "turn/start");
     expect(terminalRequest?.params).toMatchObject({ threadId });
     expect(JSON.stringify(terminalRequest?.params)).toContain("The old inventory contains cobalt");
@@ -244,10 +248,13 @@ it("does not replay covered history on the same thread after local message-tool 
       method: "turn/completed",
       params: { threadId, turn: { id: "turn-2", status: "interrupted", items: [] } },
     });
-    await terminal;
+    expect((await terminal).terminal).toEqual({ kind: "ok" });
+    await nativeHookRelayUnregisterQueue.flush();
     const binding = await readCodexAppServerBinding(sessionFile);
     const coveredThrough = Date.parse(binding?.historyCoveredThrough ?? "");
     expect(binding).toMatchObject({ threadId });
+    expect(Number.isFinite(coveredThrough)).toBe(true);
+    expect(coveredThrough).toBeGreaterThan(originalCutoff);
     closeHostCapabilities();
 
     vi.setSystemTime(Date.now() + 1_000);
@@ -266,9 +273,11 @@ it("does not replay covered history on the same thread after local message-tool 
     params.prompt = "Use the corrected inventory.";
     closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
     const next = runCodexAppServerAttempt(params);
-    await Promise.race([vi.waitFor(() => expect(turnNumber).toBe(3), fastWait), next]);
+    await next.waitForTurnAccepted();
+    expect(turnNumber).toBe(3);
     await harness.completeTurn({ threadId, turnId: "turn-3" });
-    await next;
+    expect((await next).terminal).toEqual({ kind: "ok" });
+    await nativeHookRelayUnregisterQueue.flush();
     const nextRequest = harness.requests.findLast((item) => item.method === "turn/start");
     expect(nextRequest?.params).toMatchObject({ threadId });
     const nextInput = JSON.stringify(nextRequest?.params);
@@ -277,8 +286,6 @@ it("does not replay covered history on the same thread after local message-tool 
     expect(nextInput).not.toContain("The old inventory contains cobalt widgets.");
     expect(nextInput).not.toContain("The cobalt inventory is recorded.");
     expect(threadNumber).toBe(1);
-    expect(Number.isFinite(coveredThrough)).toBe(true);
-    expect(coveredThrough).toBeGreaterThan(originalCutoff);
   } finally {
     closeHostCapabilities();
     harness.close();

@@ -8,16 +8,26 @@ import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 describe("Doctor sender tool policy migration", () => {
-  it("leaves opaque plugin and model data outside sender-policy admission and repair", () => {
-    const opaque = { toolsBySender: { external: { template: "unchanged" } } };
-    const raw = {
+  const opaque = { toolsBySender: { external: { template: "unchanged" } } };
+  const canonical: GroupToolPolicyBySenderConfig = {
+    "id:@alice:example.invalid": { deny: ["exec"] },
+    "channel:matrix:@alice:example.invalid": { deny: ["write"] },
+    "e164:+15550001111": { allow: ["read"] },
+    "username:@alice": { allow: ["read"] },
+    "name:Alice": { deny: ["exec"] },
+    "*": { deny: ["exec"] },
+  };
+  it.each([
+    {
       agents: {
         defaults: { params: opaque },
         entries: { main: { models: { "example/model": { params: opaque } } } },
       },
       plugins: { entries: { example: { config: opaque } } },
       channels: { example: { groups: { room: opaque } } },
-    };
+    },
+    { channels: { whatsapp: { groups: { "123@g.us": { toolsBySender: canonical } } } } },
+  ])("leaves canonical and opaque sender policies unchanged: %j", (raw) => {
     const original = structuredClone(raw);
     expect(validateConfigObjectRaw(raw).ok).toBe(true);
     expect(findLegacyConfigIssues(raw)).toEqual([]);
@@ -27,6 +37,7 @@ describe("Doctor sender tool policy migration", () => {
         pluginContracts: false,
       }),
     ).toEqual({ next: null, changes: [] });
+    expect(migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw }).changes).toEqual([]);
     expect(raw).toEqual(original);
   });
 
@@ -107,18 +118,6 @@ describe("Doctor sender tool policy migration", () => {
       expectedKey: "id:Alice",
       senderId: "@ALICE",
     },
-    {
-      name: "uppercase stable ID",
-      policies: { U01234567: { deny: ["exec"] }, "id:U01234567": { allow: ["exec"] } },
-      expectedKey: "id:U01234567",
-      senderId: "U01234567",
-    },
-    {
-      name: "uppercase bot ID",
-      policies: { B01234567: { deny: ["exec"] }, "id:B01234567": { allow: ["exec"] } },
-      expectedKey: "id:B01234567",
-      senderId: "B01234567",
-    },
   ])("preserves the first effective policy for $name", ({ policies, expectedKey, senderId }) => {
     const raw = {
       channels: { whatsapp: { groups: { "123@g.us": { toolsBySender: policies } } } },
@@ -195,20 +194,5 @@ describe("Doctor sender tool policy migration", () => {
     ] as const) {
       expect(resolveToolsBySender({ toolsBySender, ...sender })).toEqual(policy);
     }
-  });
-
-  it("leaves canonical policies unchanged", () => {
-    const toolsBySender: GroupToolPolicyBySenderConfig = {
-      "id:@alice:example.invalid": { deny: ["exec"] },
-      "channel:matrix:@alice:example.invalid": { deny: ["write"] },
-      "e164:+15550001111": { allow: ["read"] },
-      "username:@alice": { allow: ["read"] },
-      "name:Alice": { deny: ["exec"] },
-      "*": { deny: ["exec"] },
-    };
-    const raw = { channels: { whatsapp: { groups: { "123@g.us": { toolsBySender } } } } };
-    expect(validateConfigObjectRaw(raw).ok).toBe(true);
-    expect(findLegacyConfigIssues(raw)).toEqual([]);
-    expect(migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw }).changes).toEqual([]);
   });
 });

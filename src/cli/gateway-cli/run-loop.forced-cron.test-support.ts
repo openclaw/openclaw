@@ -57,7 +57,7 @@ const cron = new CronService({
     }),
 });
 
-await runGatewayLoop({
+const code = await runGatewayLoop({
   ownsProcessLifecycle: true,
   start: async () => {
     starts += 1;
@@ -105,8 +105,7 @@ await runGatewayLoop({
           close: async () => {
             cron.stop();
             await drainGatewayCron({
-              exitWatchersStop: Promise.resolve(),
-              streamWatchersStop: Promise.resolve(),
+              settlements: [cron.waitForIdle()],
               logger: { warn: (...args) => assert.fail(JSON.stringify(args)) },
             });
             trace("close-completed");
@@ -118,12 +117,7 @@ await runGatewayLoop({
       },
     };
   },
-  runtime: {
-    log() {},
-    error: console.error,
-    exit: (code) => {
-      trace(`exit:${code}`);
-      process.exit(code);
-    },
-  },
 });
+trace(`exit:${code}`);
+process.disconnect?.();
+process.exitCode = code;

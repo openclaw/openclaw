@@ -1,12 +1,26 @@
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { createEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.handlers.types.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
-import { createThinkingTagStreamState } from "./embedded-agent-utils.js";
+import {
+  createAssistantStreamBlockState,
+  createThinkingTagStreamState,
+} from "./embedded-agent-utils.js";
 import { collectAgentInternalEventMedia } from "./internal-events.js";
 
 export function createEmbeddedAgentSubscribeState(
-  params: SubscribeEmbeddedAgentSessionParams,
+  params: Pick<
+    SubscribeEmbeddedAgentSessionParams,
+    | "reasoningMode"
+    | "thinkingLevel"
+    | "internalEvents"
+    | "blockReplyBreak"
+    | "onBlockReply"
+    | "streamReasoningInNonStreamModes"
+    | "onReasoningStream"
+    | "onBeforeTerminalDelivery"
+    | "deferTerminalDelivery"
+    | "initialReplayState"
+  >,
 ): EmbeddedAgentSubscribeState {
   const reasoningMode = params.reasoningMode ?? "off";
   const canShowReasoning = params.thinkingLevel !== "off";
@@ -41,7 +55,7 @@ export function createEmbeddedAgentSubscribeState(
     thinkingTagStream: createThinkingTagStreamState(),
     deltaBufferIsCommentary: false,
     hasFlushedPartialText: false,
-    partialBlockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
+    partialBlockState: createAssistantStreamBlockState(),
     lastAssistantAudioDirectiveCount: 0,
     assistantStream: undefined,
     lastStreamedReasoning: undefined,

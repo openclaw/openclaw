@@ -13,7 +13,6 @@ import {
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
 import { parseAccountSelector } from "../commands/channels/account-selector.js";
 import { parseChannelSelector } from "../commands/channels/channel-selector.js";
@@ -29,16 +28,11 @@ import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js"
 import { getScopedChannelsCommandSecretTargets } from "./command-secret-targets.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 
-function parseLimit(value: unknown): number | null {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined) {
-    throw new Error("--limit must be a positive integer.");
-  }
-  return parsed;
-}
+const DIRECTORY_LIST_LABELS = {
+  listPeers: ["Peers", "No peers found", "directory peers"],
+  listGroups: ["Groups", "No groups found", "directory groups"],
+  listGroupMembers: ["Group Members", "No group members found", "group members listing"],
+} as const;
 
 function formatDirectoryTable(
   entries: Array<{ id: string; name?: string | undefined }>,
@@ -180,56 +174,54 @@ export function registerDirectoryCli(program: Command) {
     return { cfg: effectiveConfig, channelId, accountId, plugin };
   };
 
-  const runDirectoryList = async (params: {
+  const runDirectoryList = async (
     opts: {
       channel?: string;
       account?: string;
       query?: string;
       limit?: unknown;
       json?: unknown;
-    };
-    action: "listPeers" | "listGroups" | "listGroupMembers";
-    groupId?: unknown;
-    unsupported: string;
-    title: string;
-    emptyMessage: string;
-  }) => {
-    const limit = parseLimit(params.opts.limit);
-    const groupId = normalizeStringifiedOptionalString(params.groupId) ?? "";
-    if (params.action === "listGroupMembers" && !groupId) {
+      groupId?: unknown;
+    },
+    action: keyof typeof DIRECTORY_LIST_LABELS,
+  ) => {
+    const [title, emptyMessage, unsupported] = DIRECTORY_LIST_LABELS[action];
+    const limit =
+      opts.limit === undefined || opts.limit === null
+        ? null
+        : parseStrictPositiveInteger(opts.limit);
+    if (limit === undefined) {
+      throw new Error("--limit must be a positive integer.");
+    }
+    const groupId = normalizeStringifiedOptionalString(opts.groupId) ?? "";
+    if (action === "listGroupMembers" && !groupId) {
       throw new Error("Missing --group-id");
     }
-    const resolved = await resolve(params.opts);
+    const resolved = await resolve(opts);
     if (!resolved) {
       return;
     }
     const { cfg, channelId, accountId, plugin } = resolved;
     const lookupOptions = { cfg, accountId, limit, runtime: defaultRuntime };
-    let result: ChannelDirectoryEntry[];
-    if (params.action === "listGroupMembers") {
-      const fn = plugin.directory?.listGroupMembers;
-      if (!fn) {
-        throw new Error(`Channel ${channelId} does not support ${params.unsupported}`);
-      }
-      result = await fn({ ...lookupOptions, groupId });
-    } else {
-      const fn =
-        params.action === "listPeers"
-          ? (plugin.directory?.listPeersLive ?? plugin.directory?.listPeers)
-          : (plugin.directory?.listGroupsLive ?? plugin.directory?.listGroups);
-      if (!fn) {
-        throw new Error(`Channel ${channelId} does not support ${params.unsupported}`);
-      }
-      result = await fn({ ...lookupOptions, query: params.opts.query ?? null });
+    const lookup =
+      action === "listGroupMembers"
+        ? plugin.directory?.listGroupMembers?.bind(undefined, { ...lookupOptions, groupId })
+        : (action === "listPeers"
+            ? (plugin.directory?.listPeersLive ?? plugin.directory?.listPeers)
+            : (plugin.directory?.listGroupsLive ?? plugin.directory?.listGroups)
+          )?.bind(undefined, { ...lookupOptions, query: opts.query ?? null });
+    if (!lookup) {
+      throw new Error(`Channel ${channelId} does not support ${unsupported}`);
     }
-    if (params.opts.json) {
+    const result = await lookup();
+    if (opts.json) {
       defaultRuntime.writeJson(result);
       return;
     }
     printDirectoryList({
-      title: params.title,
-      emptyMessage: `${params.emptyMessage} for ${
-        params.action === "listGroupMembers"
+      title,
+      emptyMessage: `${emptyMessage} for ${
+        action === "listGroupMembers"
           ? `group ${JSON.stringify(sanitizeTerminalText(groupId))}, `
           : ""
       }${formatDirectoryScope(channelId, accountId)}.`,
@@ -299,24 +291,14 @@ export function registerDirectoryCli(program: Command) {
 
   const peers = directory.command("peers").description("Peer directory (contacts/users)");
   const groups = directory.command("groups").description("Group directory");
-  for (const [command, action, kind, title] of [
-    [peers, "listPeers", "peers", "Peers"],
-    [groups, "listGroups", "groups", "Groups"],
+  for (const [command, action, kind] of [
+    [peers, "listPeers", "peers"],
+    [groups, "listGroups", "groups"],
   ] as const) {
     withChannel(command.command("list").description(`List ${kind}`))
       .option("--query <text>", "Optional search query")
       .option("--limit <n>", "Limit results")
-      .action((opts) =>
-        runDirectoryAction(opts, () =>
-          runDirectoryList({
-            opts,
-            action,
-            unsupported: `directory ${kind}`,
-            title,
-            emptyMessage: `No ${kind} found`,
-          }),
-        ),
-      );
+      .action((opts) => runDirectoryAction(opts, () => runDirectoryList(opts, action)));
   }
 
   withChannel(
@@ -326,16 +308,5 @@ export function registerDirectoryCli(program: Command) {
       .requiredOption("--group-id <id>", "Group id"),
   )
     .option("--limit <n>", "Limit results")
-    .action((opts) =>
-      runDirectoryAction(opts, () =>
-        runDirectoryList({
-          opts,
-          action: "listGroupMembers",
-          groupId: opts.groupId,
-          unsupported: "group members listing",
-          title: "Group Members",
-          emptyMessage: "No group members found",
-        }),
-      ),
-    );
+    .action((opts) => runDirectoryAction(opts, () => runDirectoryList(opts, "listGroupMembers")));
 }

@@ -14,7 +14,7 @@ import {
   dispatchReplyFromConfig,
   globalBeforeAll0,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import type { InternalGetReplyFromConfig } from "./get-reply.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 

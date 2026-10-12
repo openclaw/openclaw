@@ -82,7 +82,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
       bridgeCalls.push(call);
       return call;
     });
-    const { createCodeModeRunOwner, createPendingBridgeStates } =
+    const { createCodeModeRunOwner, createPendingBridgeStates, waitForPendingBridgeSettlement } =
       await import("./code-mode-state.js");
     const spawn = vi.fn(async () => ({
       content: [],
@@ -117,7 +117,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
         .digest("hex")}`,
       queuedLaunch: { request: {}, timeoutMs: 1, schedulerGroupKey: "group", maxConcurrent: 1 },
     };
-    lookup.mockReturnValue(reservation);
+    lookup.mockResolvedValue(reservation);
 
     function createRun() {
       const catalogRef = createToolSearchCatalogRef();
@@ -151,7 +151,6 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
         owner,
         dispatch: (pendingRequests = requests) =>
           createPendingBridgeStates(pendingRequests, {
-            config: limits,
             inbox: owner.inbox,
             results: owner.results,
             runtime,
@@ -176,7 +175,10 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
         run.ctx.toolExecutionAllow = ["skill_workshop"];
       }
       const pending = run.dispatch();
-      await Promise.all(pending.map((entry) => entry.promise));
+      await waitForPendingBridgeSettlement(pending, {
+        kind: "draining",
+        requiredRequestIds: pending.map((entry) => entry.id),
+      });
       expect(pending.every((entry) => !entry.reply.take().ok)).toBe(true);
       expect(load).not.toHaveBeenCalled();
     }
@@ -203,7 +205,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
       if (kind === "owner" || kind === "catalog") {
         expect(run.owner.signal.aborted).toBe(true);
         for (const entry of pending) {
-          expect(await entry.promise).toBeUndefined();
+          await waitForPendingBridgeSettlement([entry], { kind: "awaiting" });
           expect(() => entry.reply.take()).toThrow("unavailable");
         }
       }
@@ -212,7 +214,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     // The cancellation race settles first; join the original work before checking effects.
     for (const { kind, pending } of closedRuns) {
       for (const entry of pending) {
-        await entry.promise;
+        await waitForPendingBridgeSettlement([entry], { kind: "awaiting" });
         if (kind === "owner" || kind === "catalog") {
           expect(() => entry.reply.take()).toThrow("unavailable");
         } else {
@@ -220,7 +222,10 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
         }
       }
     }
-    await Promise.all(live.map((entry) => entry.promise));
+    await waitForPendingBridgeSettlement(live, {
+      kind: "draining",
+      requiredRequestIds: live.map((entry) => entry.id),
+    });
     expect(live.map((entry) => entry.reply.take())).toEqual([
       { id: "live-note", ok: true, json: JSON.stringify({ ok: true }) },
     ]);

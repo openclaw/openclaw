@@ -30,6 +30,14 @@ before sharding; completed module identities and final counts prove coverage.
 Event intervals are not scheduler-admission times; repeated environment/prepare
 durations must not be summed into wall time.
 These receipts do not establish transform-cache hits.
+The Bun UI runtime policy requests ordinary JavaScriptCore collection after
+256 MiB of allocation per collection cycle. This is an earlier collection
+trigger, not a limit on the live heap. It applies to the existing UI process
+tree and cache warmer; Node execution, test coverage, shard count, and worker
+limits retain their existing policy. UI fixtures must provide the application
+context required by mounted Solid components: repeated missing-context errors
+expose reactive graphs to Vitest's error serializer and can cause large transient
+allocations even when post-collection snapshots show no retained UI leak.
 Tooling stripes install Go only when their selected files include the docs
 translation test; historical whole-config plans retain their existing setup.
 The workflow pins the runner's Go version so frozen targets cannot select a
@@ -55,7 +63,7 @@ test selections. Targets without that capability retain their original flat
 fields or projected legacy `groups` JSON. Workflow tests keep the complete
 generated output under half of the cap. The smaller
 fast/check lanes remain capped at 12; Windows is capped at two
-and Android at four for normal same-repository Blacksmith first attempts, two otherwise. Compact whole-config batches run
+and Android at four for canonical Blacksmith push and PR first attempts, including forks; the GitHub override, retries, manual dispatches, schedules, and noncanonical repositories retain two. Compact whole-config batches run
 with a 120-minute batch timeout, while include-pattern groups share the same
 bounded job budget.
 

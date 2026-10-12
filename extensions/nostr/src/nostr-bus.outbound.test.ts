@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getPublicKey } from "nostr-tools";
+import { getPublicKey, SimplePool } from "nostr-tools";
 import { decrypt } from "nostr-tools/nip04";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
@@ -14,7 +14,9 @@ import {
   createPluginRuntimeMock,
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { nostrPlugin } from "./channel.js";
 import { getActiveNostrBuses } from "./gateway.js";
 import { startNostrBus } from "./nostr-bus.js";
@@ -26,6 +28,18 @@ import {
   buildResolvedNostrAccount,
   createConfiguredNostrCfg,
 } from "./test-fixtures.js";
+
+type EffectAuthority = ReturnType<
+  typeof import("openclaw/plugin-sdk/fetch-runtime").captureEffectAuthority
+>;
+const effectInput = vi.hoisted(() => ({ current: undefined as EffectAuthority | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => effectInput.current ?? actual.captureEffectAuthority(),
+  };
+});
 
 // Keep existing state persistence isolation; transport, signatures and NIP-04 are real.
 vi.mock("./nostr-state-store.js", () => ({
@@ -48,18 +62,17 @@ async function relay(options: Parameters<typeof createNostrRelayFixture>[0] = {}
   return result;
 }
 
-async function startBus(urls: string[], onError?: Parameters<typeof startNostrBus>[0]["onError"]) {
+async function startBus(urls: string[]) {
   const bus = await startNostrBus({
     privateKey: TEST_HEX_PRIVATE_KEY,
     relays: urls,
     onMessage: async () => {},
-    onError,
   });
   stops.push(() => bus.close());
   return bus;
 }
 
-async function startRegisteredAccount(urls: string[], surface: "message" | "outbound") {
+async function startRegisteredAccount(urls: string[]) {
   const cfg = createConfiguredNostrCfg({ relays: urls });
   const abort = new AbortController();
   const context = createStartAccountContext({
@@ -72,10 +85,9 @@ async function startRegisteredAccount(urls: string[], surface: "message" | "outb
   });
   context.channelRuntime = getNostrRuntime().channel;
   const start = nostrPlugin.gateway?.startAccount;
-  const send =
-    surface === "message" ? nostrPlugin.message?.send?.text : nostrPlugin.outbound?.sendText;
+  const send = nostrPlugin.message?.send?.text;
   if (!start || !send) {
-    throw new Error(`Nostr ${surface} registration is missing`);
+    throw new Error("Nostr message registration is missing");
   }
   const task = start(context);
   stops.push(async () => {
@@ -118,6 +130,7 @@ describe("Nostr outbound relay failover", () => {
   });
 
   afterEach(async () => {
+    effectInput.current = undefined;
     for (const entry of relays) {
       entry.releaseUpgrades();
     }
@@ -140,6 +153,86 @@ describe("Nostr outbound relay failover", () => {
     }
   });
 
+  it.each([false, true])(
+    "prepares relay publication without retrying refusal (allowed=%s)",
+    async (allowed) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const received = createDeferred<void>();
+      const first = await relay({
+        holdAcknowledgements: true,
+        onEvent: () => received.resolve(),
+      });
+      const second = await relay();
+      const bus = await startBus([first.url, second.url]);
+      const refusal = new Error("message use refused");
+      let handedOff = false;
+      let publicationsAtHandoff = 0;
+      const connections = vi.spyOn(SimplePool.prototype, "ensureRelay");
+      let publish:
+        | MockInstance<Awaited<ReturnType<SimplePool["ensureRelay"]>>["publish"]>
+        | undefined;
+      let initiations = 0;
+      const initiate = async <T>(effect: () => T | Promise<T>): Promise<T> => {
+        initiations++;
+        preparing.resolve();
+        await prepared.promise;
+        if (!allowed) {
+          throw refusal;
+        }
+        try {
+          const result = effect();
+          publicationsAtHandoff = publish?.mock.calls.length ?? 0;
+          return result;
+        } finally {
+          handedOff = true;
+        }
+      };
+      effectInput.current = { active: true, run: (run) => run(), initiate };
+      const completion = bus.sendDm(RECIPIENT_PUBKEY, "prepared relay publish");
+      try {
+        await awaitGateBeforeSettlement(
+          preparing.promise,
+          Promise.race([completion, received.promise]),
+          "Relay skipped preparation",
+        );
+        const connectionIndex = connections.mock.calls.findLastIndex(
+          ([url]) => new URL(url).href === new URL(first.url).href,
+        );
+        const connection = connections.mock.results[connectionIndex];
+        if (connection?.type !== "return") {
+          throw new Error("No Nostr relay connection was prepared");
+        }
+        publish = vi.spyOn(await connection.value, "publish");
+        expect(first.events).toEqual([]);
+        expect(publish).not.toHaveBeenCalled();
+        prepared.resolve();
+        if (!allowed) {
+          await expect(completion).rejects.toBe(refusal);
+          expect(first.events).toEqual([]);
+        } else {
+          await awaitGateBeforeSettlement(received.promise, completion, "Relay did not publish");
+          expect(handedOff).toBe(true);
+          expect(first.acknowledgements).toEqual([]);
+          first.acknowledgeAll();
+          await expect(completion).resolves.toBe(first.events[0]!.id);
+        }
+        expect(initiations).toBe(1);
+        expect(publicationsAtHandoff).toBe(allowed ? 1 : 0);
+        expect(publish).toHaveBeenCalledTimes(allowed ? 1 : 0);
+        expect(first.events).toHaveLength(allowed ? 1 : 0);
+        expect(second.events).toEqual([]);
+      } finally {
+        prepared.resolve();
+        first.acknowledgeAll();
+        await first.close();
+        await completion.catch(() => {});
+        publish?.mockRestore();
+        connections.mockRestore();
+      }
+    },
+  );
+
   it("accepts a real positive OK even when its reason starts with connection failure", async () => {
     const first = await relay({ reason: PREFIX_ACK_REASON });
     const second = await relay();
@@ -152,39 +245,6 @@ describe("Nostr outbound relay failover", () => {
     expect(second.events).toEqual([]);
     expect(first.events[0]).toMatchObject({ id, kind: 4, tags: [["p", RECIPIENT_PUBKEY]] });
     expect(decrypt(RECIPIENT_KEY, bus.publicKey, first.events[0]!.content)).toBe("hello");
-  });
-
-  it.each([
-    { failure: "negative OK", rejectUpgrade: false },
-    { failure: "HTTP upgrade refusal", rejectUpgrade: true },
-  ])("tries the next relay after a real $failure", async ({ rejectUpgrade }) => {
-    const order: string[] = [];
-    const first = await relay({ accepted: false, reason: PREFIX_ACK_REASON, rejectUpgrade });
-    const second = await relay({ onEvent: () => order.push("second-event") });
-    const errors: Error[] = [];
-    const bus = await startBus([first.url, second.url], (error, context) => {
-      if (context === `publish to ${first.url}`) {
-        errors.push(error);
-        order.push("first-publish-error");
-      }
-    });
-
-    const id = await bus.sendDm(RECIPIENT_PUBKEY, "hello");
-
-    expect(order).toEqual(["first-publish-error", "second-event"]);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]?.message).toContain("connection failure:");
-    expect(first.upgradeAttempts()).toBeGreaterThan(0);
-    expect(second.events).toHaveLength(1);
-    expect(second.events[0]?.id).toBe(id);
-    expect(second.acknowledgements).toEqual([["OK", id, true, "saved"]]);
-    expect(decrypt(RECIPIENT_KEY, bus.publicKey, second.events[0]!.content)).toBe("hello");
-    if (rejectUpgrade) {
-      expect(first.events).toEqual([]);
-    } else {
-      expect(first.events).toEqual(second.events);
-      expect(first.acknowledgements).toEqual([["OK", id, false, PREFIX_ACK_REASON]]);
-    }
   });
 
   it("preserves real failures when every relay rejects", async () => {
@@ -203,11 +263,12 @@ describe("Nostr outbound relay failover", () => {
     ]);
   });
 
-  describe.each(["message", "outbound"] as const)("registered %s sender", (surface) => {
-    it("preserves normal fallback and dispatch accounting", async () => {
-      const first = await relay({ accepted: false });
+  describe("registered message sender", () => {
+    it("falls back past connection and publish failures, accounting only for EVENT handoffs", async () => {
+      const refused = await relay({ rejectUpgrade: true });
+      const first = await relay({ accepted: false, reason: PREFIX_ACK_REASON });
       const second = await relay();
-      const send = await startRegisteredAccount([first.url, second.url], surface);
+      const send = await startRegisteredAccount([refused.url, first.url, second.url]);
       const onPlatformSendDispatch = vi.fn(async () => {});
 
       const result = await send("ordinary fallback", {
@@ -215,52 +276,49 @@ describe("Nostr outbound relay failover", () => {
         onPlatformSendDispatch,
       });
 
+      expect(refused.upgradeAttempts()).toBeGreaterThan(0);
+      expect(refused.events).toEqual([]);
       expect(first.events).toHaveLength(1);
       expect(second.events).toEqual(first.events);
       expect(result).toMatchObject({ messageId: second.events[0]!.id });
+      expect(result.receipt.parts[0]?.kind).toBe("text");
+      expect(first.acknowledgements).toEqual([["OK", result.messageId, false, PREFIX_ACK_REASON]]);
+      expect(second.acknowledgements).toEqual([["OK", result.messageId, true, "saved"]]);
+      expect(
+        decrypt(RECIPIENT_KEY, getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES), second.events[0]!.content),
+      ).toBe("ordinary fallback");
       expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
     });
 
-    it("blocks fallback after cancellation while a relay response is pending", async () => {
-      const first = await relay({ accepted: false, holdAcknowledgements: true });
-      const second = await relay();
-      const send = await startRegisteredAccount([first.url, second.url], surface);
-      const caller = new AbortController();
-      const canceled = new Error("Nostr delivery canceled");
-      const settled = send("canceled during relay response", {
-        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-      }).catch((error: unknown) => error);
-      await vi.waitFor(() => expect(first.events).toHaveLength(1));
+    it.each([false, true])(
+      "settles an in-flight acknowledgement after cancellation (accepted=%s)",
+      async (accepted) => {
+        const first = await relay({ accepted, holdAcknowledgements: true });
+        const second = await relay();
+        const send = await startRegisteredAccount([first.url, second.url]);
+        const caller = new AbortController();
+        const canceled = new Error("Nostr delivery canceled");
+        const settled = send("canceled during relay response", {
+          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+        }).catch((error: unknown) => error);
+        await vi.waitFor(() => expect(first.events).toHaveLength(1));
 
-      caller.abort(canceled);
-      first.acknowledgeAll();
-      const outcome = await settled;
+        caller.abort(canceled);
+        first.acknowledgeAll();
+        const outcome = await settled;
 
-      expect(second.events).toEqual([]);
-      expect(outcome).toBe(canceled);
-    });
-
-    it("preserves an accepted result when cancellation occurs while awaiting its response", async () => {
-      const first = await relay({ holdAcknowledgements: true });
-      const second = await relay();
-      const send = await startRegisteredAccount([first.url, second.url], surface);
-      const caller = new AbortController();
-      const sending = send("accepted before cancellation", {
-        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-      });
-      await vi.waitFor(() => expect(first.events).toHaveLength(1));
-
-      caller.abort(new Error("Nostr delivery canceled"));
-      first.acknowledgeAll();
-      const outcome = await sending;
-
-      expect(outcome).toMatchObject({ messageId: first.events[0]!.id });
-      expect(second.events).toEqual([]);
-    });
+        expect(second.events).toEqual([]);
+        if (accepted) {
+          expect(outcome).toMatchObject({ messageId: first.events[0]!.id });
+        } else {
+          expect(outcome).toBe(canceled);
+        }
+      },
+    );
 
     it("isolates concurrent callers across a shared connection wait", async () => {
       const first = await relay({ holdUpgrades: true });
-      const send = await startRegisteredAccount([first.url], surface);
+      const send = await startRegisteredAccount([first.url]);
       const caller = new AbortController();
       const canceled = new Error("Nostr delivery canceled during connection");
       const withdrawn = send("withdrawn", {
@@ -281,46 +339,33 @@ describe("Nostr outbound relay failover", () => {
       ).toBe("still current");
     });
 
-    it("rechecks authority after asynchronous dispatch accounting", async () => {
-      const first = await relay();
-      const second = await relay();
-      const send = await startRegisteredAccount([first.url, second.url], surface);
-      const caller = new AbortController();
-      const canceled = new Error("Nostr delivery canceled during dispatch refresh");
+    it.each(["cancellation", "failure"])(
+      "stops before handoff on dispatch accounting %s",
+      async (outcome) => {
+        const first = await relay();
+        const second = await relay();
+        const send = await startRegisteredAccount([first.url, second.url]);
+        const caller = new AbortController();
+        const failure = new Error("Dispatch custody refresh failed");
+        const onPlatformSendDispatch = vi.fn(async () => {
+          await Promise.resolve();
+          if (outcome === "failure") {
+            throw failure;
+          }
+          caller.abort(failure);
+        });
 
-      await expect(
-        send("canceled before handoff", {
-          onPlatformSendDispatch: async () => {
-            await Promise.resolve();
-            caller.abort(canceled);
-          },
-          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-        }),
-      ).rejects.toBe(canceled);
+        await expect(
+          send("canceled before handoff", {
+            onPlatformSendDispatch,
+            assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+          }),
+        ).rejects.toBe(failure);
 
-      expect(first.events).toEqual([]);
-      expect(second.events).toEqual([]);
-    });
-
-    it("does not treat a dispatch accounting failure as a relay failure", async () => {
-      const first = await relay();
-      const second = await relay();
-      const send = await startRegisteredAccount([first.url, second.url], surface);
-      const failure = new Error("Dispatch custody refresh failed");
-      const onPlatformSendDispatch = vi.fn(async () => {
-        throw failure;
-      });
-
-      await expect(
-        send("not handed off", {
-          assertDirectAdapterHandoff: () => {},
-          onPlatformSendDispatch,
-        }),
-      ).rejects.toBe(failure);
-
-      expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
-      expect(first.events).toEqual([]);
-      expect(second.events).toEqual([]);
-    });
+        expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+        expect(first.events).toEqual([]);
+        expect(second.events).toEqual([]);
+      },
+    );
   });
 });

@@ -21,10 +21,7 @@ import {
   assertExecApprovalMutationPersistenceCurrent,
   type ExecApprovalMutationPersistence,
 } from "./exec-approval-recovery.js";
-import {
-  prepareExecApprovalSettlement,
-  prepareExecApprovalStorageFailure,
-} from "./exec-approval-results.js";
+import { prepareExecApprovalSettlement } from "./exec-approval-results.js";
 import type {
   OperatorApprovalRecord,
   OperatorApprovalKind,
@@ -104,7 +101,19 @@ export abstract class ExecApprovalLifecycle<TPayload> {
 
   protected emitLifecycle(event: OperatorApprovalLifecycleEvent): void {
     try {
-      this.recordLifecyclePublication(event, this.options.onLifecycle !== undefined);
+      const { record } = event;
+      const entry = this.pending.get(record.id);
+      if (this.options.onLifecycle !== undefined && event.phase === "terminal" && entry) {
+        entry.terminalPublication = {
+          kind: record.kind,
+          runtimeEpoch: record.runtimeEpoch,
+          status: record.status,
+          decision: record.decision,
+          terminalReason: record.terminalReason,
+          resolvedAtMs: record.resolvedAtMs,
+          updatedAtMs: record.updatedAtMs,
+        };
+      }
       this.options.onLifecycle?.(event);
     } catch {
       // Stream fanout is observational. It must never change approval truth or
@@ -142,7 +151,16 @@ export abstract class ExecApprovalLifecycle<TPayload> {
   }
 
   protected settleLocalStorageFailure(recordId: string): void {
-    this.settleLocalEntry(prepareExecApprovalStorageFailure(recordId, Date.now()));
+    this.settleLocalEntry({
+      recordId,
+      decision: "deny",
+      resolvedAtMs: Date.now(),
+      resolvedBy: "storage-error",
+      resolverKind: "system",
+      status: "denied",
+      terminalReason: "storage-corrupt",
+      retainForManagerLifetime: true,
+    });
   }
 
   protected settleLocalFromStore(
@@ -155,20 +173,19 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     const liveRecord = entry?.record;
     const uncertainty = entry?.uncertainVerdict;
     let observedSource: ExecApprovalResolutionSource = "operator";
-    if (localResolutionSource === undefined && uncertainty) {
+    if (
+      localResolutionSource === undefined &&
+      uncertainty?.autoReview &&
+      record.status === "allowed" &&
+      record.decision === "allow-once"
+    ) {
       if (
-        uncertainty.autoReview &&
-        record.status === "allowed" &&
-        record.decision === "allow-once"
+        uncertainty.autoReview.committedResolutionKey === getOperatorApprovalResolutionKey(record)
       ) {
-        if (
-          uncertainty.autoReview.committedResolutionKey === getOperatorApprovalResolutionKey(record)
-        ) {
-          observedSource = "auto-review";
-        } else if (record.resolver?.kind === "runtime") {
-          // Runtime IDs are shared by operator and auto-review callers, including null IDs.
-          return false;
-        }
+        observedSource = "auto-review";
+      } else if (record.resolver?.kind === "runtime") {
+        // Runtime IDs are shared by operator and auto-review callers, including null IDs.
+        return false;
       }
     }
     const settlement = prepareExecApprovalSettlement({
@@ -200,7 +217,17 @@ export abstract class ExecApprovalLifecycle<TPayload> {
   async reconcileDurableTerminal(record: OperatorApprovalRecord): Promise<boolean> {
     await this.waitForMutations(record.id);
     this.settleLocalFromStore(record);
-    return this.wasTerminalPublished(record);
+    const published = this.pending.get(record.id)?.terminalPublication;
+    return (
+      published !== undefined &&
+      published.kind === record.kind &&
+      published.runtimeEpoch === record.runtimeEpoch &&
+      published.status === record.status &&
+      published.decision === record.decision &&
+      published.terminalReason === record.terminalReason &&
+      published.resolvedAtMs === record.resolvedAtMs &&
+      published.updatedAtMs === record.updatedAtMs
+    );
   }
 
   protected reportError(
@@ -304,41 +331,6 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     return waited;
   }
 
-  /** Keep publication identity with the waiter, including durable storage-repair outcomes. */
-  protected recordLifecyclePublication(
-    event: OperatorApprovalLifecycleEvent,
-    hasPublisher: boolean,
-  ): void {
-    const entry = this.pending.get(event.record.id);
-    if (!hasPublisher || event.phase !== "terminal" || !entry) {
-      return;
-    }
-    const record = event.record;
-    entry.terminalPublication = {
-      kind: record.kind,
-      runtimeEpoch: record.runtimeEpoch,
-      status: record.status,
-      decision: record.decision,
-      terminalReason: record.terminalReason,
-      resolvedAtMs: record.resolvedAtMs,
-      updatedAtMs: record.updatedAtMs,
-    };
-  }
-
-  protected wasTerminalPublished(record: OperatorApprovalRecord): boolean {
-    const published = this.pending.get(record.id)?.terminalPublication;
-    return (
-      published !== undefined &&
-      published.kind === record.kind &&
-      published.runtimeEpoch === record.runtimeEpoch &&
-      published.status === record.status &&
-      published.decision === record.decision &&
-      published.terminalReason === record.terminalReason &&
-      published.resolvedAtMs === record.resolvedAtMs &&
-      published.updatedAtMs === record.updatedAtMs
-    );
-  }
-
   protected canUseRetainedBinding(): boolean {
     return !this.retired || getAsyncWorkSignal() === this.work.signal;
   }
@@ -415,13 +407,10 @@ export abstract class ExecApprovalLifecycle<TPayload> {
   protected observeEntry<T>(entry: PendingEntry<TPayload>, completion: Promise<T>): Promise<T> {
     const signal = getAsyncWorkSignal();
     return new Promise<T>((resolve, reject) => {
-      let settled = false;
       const finish = (settle: () => void) => {
-        if (settled) {
+        if (!this.observers.delete(onClose)) {
           return;
         }
-        settled = true;
-        this.observers.delete(onClose);
         signal?.removeEventListener("abort", onClose);
         settle();
       };
@@ -710,22 +699,16 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     } = {},
   ): ExecApprovalIdLookupResult {
     const rawExact = this.getLocalSnapshot(input);
-    if (rawExact) {
-      return (opts.includeResolved || rawExact.resolvedAtMs === undefined) &&
-        (opts.filter?.(rawExact) ?? true)
-        ? { kind: "exact", id: input }
-        : { kind: "none" };
-    }
-    const normalized = input.trim();
-    if (!normalized) {
-      return { kind: "none" };
-    }
-    const exact = this.getLocalSnapshot(normalized);
+    const normalized = rawExact ? input : input.trim();
+    const exact = rawExact ?? (normalized ? this.getLocalSnapshot(normalized) : null);
     if (exact) {
       return (opts.includeResolved || exact.resolvedAtMs === undefined) &&
         (opts.filter?.(exact) ?? true)
         ? { kind: "exact", id: normalized }
         : { kind: "none" };
+    }
+    if (!normalized) {
+      return { kind: "none" };
     }
     const lowerPrefix = normalizeLowercaseStringOrEmpty(normalized);
     const candidates = new Map(

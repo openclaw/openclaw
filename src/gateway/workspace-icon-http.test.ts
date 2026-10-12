@@ -204,7 +204,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
     state = await createOpenClawTestState({ scenario: "minimal" });
     cfg = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { workspace: state.workspaceDir },
       },
     };
@@ -351,11 +351,14 @@ describe("handleWorkspaceIconHttpRequest", () => {
     { label: "a workspace with no icon", hasWorkspace: true },
   ] as const;
 
-  it.each(absent)("answers an uncacheable 404 for $label", async ({ hasWorkspace }) => {
+  it.each(absent)("briefly caches an authenticated 404 for $label", async ({ hasWorkspace }) => {
     seedSession(hasWorkspace ? await makeWorkspace({}) : undefined);
     const response = await fetch(iconRoute("agent:main:one"));
     expect(response.status).toBe(404);
-    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("cache-control")).toBe(
+      hasWorkspace ? "private, max-age=60" : "no-store",
+    );
+    expect(response.headers.get("vary")).toBe("Authorization, Cookie");
   });
 
   it("serves a cold canonical session through its main alias without chat startup", async () => {

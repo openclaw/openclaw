@@ -131,6 +131,7 @@ export async function createFixture(
   const load = vi.fn<Load>(async () => snapshot);
   const subscriptions = createControlUiSessionPullRequestSubscriptions({
     scheduler,
+    getSessionRowProjection: () => getSessionRowProjection(context),
     broadcastToConnIds: connections.broadcastToConnIds,
     isConnectionActive: connections.isConnectionActive,
     prepareRead: async (connId, session) => {

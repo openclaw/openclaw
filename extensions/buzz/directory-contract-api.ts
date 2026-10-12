@@ -1,4 +1,3 @@
-// Buzz API module exposes deterministic config-backed directory contracts.
 import {
   listBuzzDirectoryGroupsFromConfig,
   listBuzzDirectoryPeersFromConfig,

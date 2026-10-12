@@ -7,7 +7,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { sessionReadHandlers } from "./server-methods/sessions-read.js";
+import { sessionMaintenanceHandlers } from "./server-methods/sessions-maintenance.js";
 import {
   getSessionColdStorageMaintenanceStatus,
   requestGatewaySessionColdStorageMaintenance,
@@ -17,8 +17,16 @@ import {
 const { sweep, inventory } = vi.hoisted(() => ({ sweep: vi.fn(), inventory: vi.fn() }));
 vi.mock("../config/sessions/session-cold-storage.js", () => ({
   runSessionColdStorageMaintenance: sweep,
+}));
+
+vi.mock("../config/sessions/session-cold-storage-status.js", () => ({
   getSessionColdStorageStatus: inventory,
 }));
+vi.mock("../config/sessions.js", () => ({
+  runSessionsCleanup: vi.fn(),
+  serializeSessionCleanupResult: vi.fn(),
+}));
+vi.mock("./server-methods/session-change-event.js", () => ({ emitSessionsChanged: vi.fn() }));
 
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: GatewayScheduler;
@@ -151,7 +159,7 @@ it("acknowledges Run now before worker completion and exposes committed progress
     },
   );
   const respond = vi.fn();
-  const request = sessionReadHandlers["sessions.storage.run"]!({
+  const request = sessionMaintenanceHandlers["sessions.storage.run"]!({
     params: {},
     context: { getRuntimeConfig },
     respond,
@@ -171,7 +179,7 @@ it("acknowledges Run now before worker completion and exposes committed progress
     completion.reject(new Error("second batch failed"));
     await running;
     respond.mockClear();
-    await sessionReadHandlers["sessions.storage.status"]!({
+    await sessionMaintenanceHandlers["sessions.storage.status"]!({
       params: {},
       context: { getRuntimeConfig },
       respond,
@@ -193,26 +201,29 @@ it("acknowledges Run now before worker completion and exposes committed progress
   }
 });
 
-it("does not accept Run now if request authority expires during inventory", async () => {
-  config = { session: { maintenance: { coldStorage: { enabled: true } } } };
-  let current = true;
-  inventory.mockImplementation(async () => {
-    current = false;
-    return [];
-  });
-  const respond = vi.fn();
-  await sessionReadHandlers["sessions.storage.run"]!({
-    params: {},
-    context: { getRuntimeConfig },
-    respond,
-    hasCurrentClientAuthority: () => current,
-  } as never);
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      message: expect.stringContaining("no longer authorized"),
-    }),
-  );
-  expect(sweep).not.toHaveBeenCalled();
-});
+it.each(["sessions.storage.status", "sessions.storage.run"] as const)(
+  "%s rejects expired request authority after inventory",
+  async (method) => {
+    config = { session: { maintenance: { coldStorage: { enabled: true } } } };
+    let current = true;
+    inventory.mockImplementation(async () => {
+      current = false;
+      return [];
+    });
+    const respond = vi.fn();
+    await sessionMaintenanceHandlers[method]!({
+      params: {},
+      context: { getRuntimeConfig },
+      respond,
+      hasCurrentClientAuthority: () => current,
+    } as never);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("no longer authorized"),
+      }),
+    );
+    expect(sweep).not.toHaveBeenCalled();
+  },
+);

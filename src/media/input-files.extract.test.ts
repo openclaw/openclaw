@@ -11,6 +11,46 @@ import {
   resolveInputFileLimits,
 } from "./input-files.js";
 
+describe("named attachment text decoding", () => {
+  it.each(["latin1", "utf8"] as const)(
+    "keeps characters in a named %s text attachment",
+    async (encoding) => {
+      const text = "Café notes: résumé et météo pour demain.";
+      const buffer = Buffer.from(text, encoding);
+      const classification = await classifyAttachmentBytes({ buffer, name: "notes.txt" });
+      const result = await extractFileContentFromBuffer({
+        buffer,
+        filename: "notes.txt",
+        classification,
+        limits: resolveInputFileLimits(),
+      });
+
+      expect(result.text).toBe(text);
+    },
+  );
+
+  it.each([
+    { declaredMime: "text/plain; charset=windows-1251" },
+    { additionalMimeHints: ["text/plain; charset=windows-1251"] },
+  ])("keeps an explicit charset ahead of inferred legacy text: %j", async (mimeHints) => {
+    const buffer = Buffer.from("Café notes: résumé et météo pour demain.", "latin1");
+    const classification = await classifyAttachmentBytes({
+      buffer,
+      name: "notes.txt",
+      ...mimeHints,
+    });
+    const result = await extractFileContentFromBuffer({
+      buffer,
+      filename: "notes.txt",
+      classification,
+      charset: "windows-1251",
+      limits: resolveInputFileLimits(),
+    });
+
+    expect(result.text).toBe(new TextDecoder("windows-1251").decode(buffer));
+  });
+});
+
 describe("extractFileContentFromSource", () => {
   it("preserves the encoding used to recognize otherwise untyped text", async () => {
     const text = "Café notes: résumé et météo pour demain.";

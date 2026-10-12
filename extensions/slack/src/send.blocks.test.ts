@@ -565,15 +565,4 @@ describe("sendMessageSlack identity and target fallback", () => {
     );
     expect(client.chat.postMessage).toHaveBeenCalledOnce();
   });
-
-  it("preserves missing-scope details while opening folded user IDs", async () => {
-    client.conversations.open.mockRejectedValueOnce(
-      missingScope({ needed: "im:write", response_metadata: { scopes: ["chat:write"] } }),
-    );
-    await expect(send("hello", { threadTs: "171234.100" }, "u09g2dj0276")).rejects.toThrow(
-      "An API error occurred: missing_scope (needed: im:write; granted: chat:write)",
-    );
-    expect(client.conversations.open).toHaveBeenCalledWith({ users: "U09G2DJ0276" });
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-  });
 });

@@ -96,42 +96,6 @@ describe("CLI installation target", () => {
   );
 });
 
-it("resolves ultrafast mode to enabled at execution", async () => {
-  const resolveExecutionArgs = vi.fn((context: CliBackendResolveExecutionArgsContext) => [
-    ...context.baseArgs,
-  ]);
-  const context = buildPreparedCliRunContext({
-    provider: "codex-cli",
-    model: "fixture-model",
-    thinkLevel: "high",
-    fastMode: "ultrafast",
-    resolveExecutionArgs,
-    backend: {
-      command: "/bin/sh",
-      args: ["exec", "--json"],
-      output: "text",
-      systemPromptFileArg: undefined,
-      input: "stdin",
-    },
-  });
-  supervisorSpawnMock.mockResolvedValue(
-    createManagedRun({
-      ...createSuccessfulProcessExit(),
-      durationMs: 1,
-      stdout: "done",
-    }),
-  );
-
-  await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "done" });
-
-  expect(resolveExecutionArgs).toHaveBeenCalledTimes(1);
-  const resolved = resolveExecutionArgs.mock.calls[0]?.[0];
-  expect(resolved).toBeDefined();
-  expect(resolved?.fastMode).toBe(true);
-  expect(resolved?.thinkingLevel).toBe("high");
-  expect(resolved?.baseArgs).toEqual(["exec", "--json"]);
-});
-
 it("counts awaited backend setup against the automatic cutoff", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(1000);

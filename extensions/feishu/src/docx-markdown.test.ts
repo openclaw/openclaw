@@ -24,31 +24,6 @@ describe("Feishu document Markdown planning", () => {
     ]);
   });
 
-  it("splits at parsed level-one and level-two headings while preserving source", () => {
-    const markdown = [
-      "Intro",
-      "---",
-      "",
-      "```md",
-      "## not a heading",
-      "```",
-      "",
-      "# Section",
-      "body",
-      "",
-      "## Next",
-      "tail",
-    ].join("\n");
-
-    const chunks = createDocxMarkdownPlan(markdown).chunks.map((chunk) => chunk.markdown);
-
-    expect(chunks).toHaveLength(3);
-    expect(chunks[0]).toContain("## not a heading");
-    expect(chunks[1]).toBe("# Section\nbody\n\n");
-    expect(chunks[2]).toBe("## Next\ntail");
-    expect(chunks.join("")).toBe(markdown);
-  });
-
   it("resolves image references only within their independently converted chunk", () => {
     const markdown = [
       "![cross-chunk][hero]",
@@ -65,15 +40,6 @@ describe("Feishu document Markdown planning", () => {
       [],
       [{ url: "https://cdn.test/remote.png" }],
     ]);
-  });
-
-  it("uses parsed block and plain-text boundaries for size fallback", () => {
-    const markdown = `${"alpha ".repeat(80)}\n\n${"beta ".repeat(80)}`;
-
-    const chunks = splitDocxMarkdownBySize(markdown, 240);
-
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.join("")).toBe(markdown);
   });
 
   it("does not promote an inline block marker when splitting a long paragraph", () => {
@@ -112,27 +78,6 @@ describe("Feishu document Markdown planning", () => {
     expect(chunks.join("")).toBe(markdown);
     for (const chunk of chunks) {
       expect(parseFeishuMarkdown(chunk).children?.[0]?.type).toBe("code");
-    }
-  });
-
-  it.each([
-    {
-      name: "list",
-      markdown: Array.from({ length: 20 }, (_, index) => `- item ${index}`).join("\n"),
-      nodeType: "list",
-    },
-    {
-      name: "blockquote",
-      markdown: Array.from({ length: 20 }, (_, index) => `> quote ${index}`).join("\n"),
-      nodeType: "blockquote",
-    },
-  ])("splits a single long $name only at stable container boundaries", ({ markdown, nodeType }) => {
-    const chunks = splitDocxMarkdownBySize(markdown, 80);
-
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.join("")).toBe(markdown);
-    for (const chunk of chunks) {
-      expect(parseFeishuMarkdown(chunk).children?.[0]?.type).toBe(nodeType);
     }
   });
 

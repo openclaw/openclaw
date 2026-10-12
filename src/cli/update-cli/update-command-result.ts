@@ -27,7 +27,7 @@ import {
   createUpdateFailureFact,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
-import { FreeBsdPkgOwnershipError } from "../../infra/update-freebsd-pkg-ownership.js";
+import { normalizeUpdateFailureResult } from "../../infra/update-failure-result.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
 import {
@@ -37,11 +37,15 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
-import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
+import {
+  resolveUpdateRunVerifiedServingVersion,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
 import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { mutateRun } from "../../infra/update-run-write.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { SystemPackageOwnershipError } from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isVerifiedUpdateRollback, type UpdateRecoveryStep } from "../../shared/update-outcome.js";
@@ -172,6 +176,27 @@ export function recordServiceReconciliationWarnings(
   }
 }
 
+/** Timing is diagnostic only: a lost history write never changes the update outcome. */
+export function recordServiceTimedStep(
+  result: UpdateRunResult,
+  step: UpdateStepResult,
+  run: UpdateCommandOptions["run"],
+): void {
+  result.steps.push(step);
+  if (!run) {
+    return;
+  }
+  const endedAtMs = Date.now();
+  const startedAtMs = Math.max(0, endedAtMs - step.durationMs);
+  try {
+    for (const row of updateRunStepsFromResultStep(step)) {
+      recordUpdateRunStep(run.runId, { ...row, startedAtMs, endedAtMs }, { env: run.env });
+    }
+  } catch {
+    // The result step still reports the measured phase.
+  }
+}
+
 export function prepareUpdateServiceResult(
   params: Pick<
     FinishUpdateParams,
@@ -248,7 +273,7 @@ export function createUpdateCommandFailureResult(
   const { failure, admission, phase, ...result } = params;
   const { cause, detail } = failure;
   const preMutationFailure = cause instanceof UpdatePreMutationError;
-  const pkgOwnershipFailure = cause instanceof FreeBsdPkgOwnershipError;
+  const pkgOwnershipFailure = cause instanceof SystemPackageOwnershipError;
   const admissionFailure =
     admission === true && cause instanceof GatewayServiceUpdateOwnershipError;
   const reason =
@@ -340,7 +365,10 @@ export async function withUpdateAdmissionReporting<T>(
   try {
     return await admit();
   } catch (error) {
-    if (error instanceof UpdateRunAdmissionBusyError) {
+    if (
+      error instanceof UpdateRunAdmissionBusyError ||
+      (error instanceof SystemPackageOwnershipError && error.owned)
+    ) {
       const result = {
         status: "skipped",
         mode,
@@ -363,12 +391,12 @@ export async function withUpdateAdmissionReporting<T>(
     }
     if (
       !(error instanceof GatewayServiceUpdateOwnershipError) &&
-      !(error instanceof FreeBsdPkgOwnershipError)
+      !(error instanceof SystemPackageOwnershipError)
     ) {
       throw error;
     }
     const message =
-      error instanceof FreeBsdPkgOwnershipError
+      error instanceof SystemPackageOwnershipError
         ? error.message
         : `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`;
     if (opts.json) {
@@ -399,6 +427,7 @@ export class UpdateCommandFailure extends Error {
     options?: ErrorOptions & { automaticTriage?: TriageFailureContext },
   ) {
     super(detail ?? result.reason ?? "Update failed", options);
+    this.result = normalizeUpdateFailureResult(result, options?.cause);
     this.name = "UpdateCommandFailure";
     this.automaticTriage = options?.automaticTriage;
   }
@@ -411,6 +440,10 @@ export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
       {
         ...result,
         status: "error",
+        reason:
+          result.status === "error"
+            ? (result.reason ?? "update-recovery-pending")
+            : "update-recovery-pending",
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       },
       1,
@@ -567,11 +600,9 @@ export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {
       throw err;
     }
     const message = `Failed to write update.run restart sentinel: ${String(err)}`;
-    if (params.jsonMode) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(theme.warn(message));
-    }
+    defaultRuntime[params.jsonMode ? "error" : "log"](
+      params.jsonMode ? message : theme.warn(message),
+    );
   }
 }
 
@@ -588,11 +619,9 @@ export async function markControlPlaneUpdateRestartSentinelFailureBestEffort(par
     await markControlPlaneUpdateRestartSentinelFailure(params.reason, params.meta, params.env);
   } catch (err) {
     const message = `Failed to mark update.run restart sentinel failed: ${String(err)}`;
-    if (params.jsonMode) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(theme.warn(message));
-    }
+    defaultRuntime[params.jsonMode ? "error" : "log"](
+      params.jsonMode ? message : theme.warn(message),
+    );
   }
 }
 
@@ -619,6 +648,10 @@ export function recordUpdateResultNextAction(
       restart: params.coreAlreadyCurrent ? params.opts.restart : undefined,
       serviceRunning: verification.serviceRunning,
       runningVersion: verification.runningVersion,
+      verifiedServingVersion: resolveUpdateRunVerifiedServingVersion(
+        verification,
+        steps.findLast((step) => step.step === "gateway recovery verification"),
+      ),
       verificationFailure: failedVerification?.failureFacts?.length
         ? failedVerification.failureFacts.map(formatUpdateFailureFact).join("; ")
         : failedVerification?.detail,

@@ -352,7 +352,7 @@ module.exports = { stateMigrations: [{
 }] };\n`,
     );
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       plugins: { load: { paths: [pluginRoot] }, entries: { [pluginId]: { enabled: true } } },
     };
     const env = {

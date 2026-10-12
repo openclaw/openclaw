@@ -8,6 +8,7 @@ import type { Identifier } from "@babel/types";
 import { stringifyNonErrorCause } from "@openclaw/normalization-core/error-coercion";
 import { isPathInside } from "../infra/path-guards.js";
 import { createJiti } from "./jiti-factory.js";
+import { useNodeModuleHooks } from "./native-module-require.js";
 
 const require = createRequire(import.meta.url);
 
@@ -21,8 +22,19 @@ export type PluginSourceFile = {
   generated?: true;
 };
 
+export type PluginSourceBuild = {
+  directory: string;
+  include: (additions: readonly string[]) => void;
+  resolve: (source: string, mode?: PluginSourceLoadMode, nativeFormat?: string | null) => string;
+  sourceForOutput: (file: string) => PluginSourceFile | undefined;
+  dispose: () => void;
+};
+
 /** Compile captured source into a private namespace; native files stay with their capture owner. */
-export function buildPluginTypeScriptSource(root: string) {
+export function buildPluginTypeScriptSource(root: string): PluginSourceBuild {
+  if (!useNodeModuleHooks()) {
+    throw new Error("Plugin source builds require Node module hooks");
+  }
   const directory = fs.mkdtempSync(path.join(path.dirname(root), ".source-"));
   const outputs = new Map<string, string>();
   const formats = new Map<string, "module" | "commonjs">();

@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { Agent } from "undici/index.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { auditTelegramGroupMembership } from "./audit.js";

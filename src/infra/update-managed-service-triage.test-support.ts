@@ -179,11 +179,22 @@ fs.readFileSync = function(file, ...args) {
       common +
       `
 const args = process.argv.slice(2);
+if (args.length === 2 && args[0] === '--system' && args[1] === 'is-system-running') {
+  event('system-manager-probe', {state:'running'});
+  process.stdout.write('running\\n');
+  return;
+}
 const action = args.find(x => ['show','start','stop','restart','reset-failed'].includes(x));
+if (!action) {
+  event('unexpected-native', {command:'systemctl',args});
+  console.error('Unexpected synthetic systemctl invocation: '+JSON.stringify(args));
+  process.exitCode=97;
+  return;
+}
 const name = args[args.indexOf(action)+1];
 const scope = JSON.parse(fs.readFileSync(scopeFile,'utf8'));
 let primary = JSON.parse(fs.readFileSync(primaryFile,'utf8'));
-event(action, {name});
+event(action ?? 'probe', {name, args});
 if (action === 'show') {
   // A stopped scope retains its cgroup until its registered processes have exited.
   const populated = !scope.active && name.endsWith('.scope') && fs.readdirSync(root+'/members').some(member => {
@@ -351,6 +362,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
         PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
       }),
       nodeExecArgv,
+      runtimeArgs: [],
       action: mode === "startup" ? "triage" : "update",
       failure: mode === "startup" ? { ...failure, kind: "gateway-startup" } : undefined,
       parentPid,

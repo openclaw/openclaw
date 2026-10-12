@@ -1,7 +1,14 @@
 import { types as utilTypes } from "node:util";
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { SCHEMA_MAP_KEYS } from "./schema-walk.js";
+import {
+  MAX_TOOL_SCHEMA_DEPTH,
+  inheritToolSchemaTruncation,
+  reportToolSchemaTruncation,
+  toolSchemaChildPosition,
+  wasToolSchemaTruncated,
+  type ToolSchemaPosition,
+} from "./tool-schema-depth.js";
 import type { PreparedToolSchemaNormalization } from "./tool-schema-normalization-cache.js";
 
 /** JSON-safe schema value used when projecting runtime tool parameters. */
@@ -29,29 +36,46 @@ function isNonFiniteNumberValue(value: unknown): boolean {
   return !Number.isFinite(Number.prototype.valueOf.call(value));
 }
 
-function serializeToolInputSchema(
+function projectToolInputSchema(
   value: unknown,
   path: string,
   captureJson?: (text: string) => void,
+  toolName?: string,
 ): RuntimeToolInputSchemaProjection {
   const nonFiniteNumber = {
     path: null as string | null,
   };
-  const ancestors: object[] = [];
-  const pathLengths: number[] = [];
+  const ancestors: Array<{
+    value: object;
+    pathLength: number;
+    position: ToolSchemaPosition | undefined;
+  }> = [];
   const segments = [path];
   let isRoot = true;
+  let truncated = false;
   let text: string | undefined;
   try {
-    text = JSON.stringify(value, function (this: object, key, entry) {
+    text = JSON.stringify(value, function (this: object, key, sourceEntry) {
+      let entry = sourceEntry;
+      // Native serialization owns getter/toJSON evaluation; classify only the value it produced.
+      while (ancestors.length > 0 && ancestors[ancestors.length - 1]?.value !== this) {
+        const parent = ancestors.pop();
+        if (parent) {
+          segments.length = parent.pathLength;
+        }
+      }
+      const position: ToolSchemaPosition | undefined = isRoot
+        ? { kind: "schema", depth: 0 }
+        : toolSchemaChildPosition(ancestors[ancestors.length - 1]?.position, this, key, entry);
+      if (position?.kind === "schema" && wasToolSchemaTruncated(entry)) {
+        truncated = true;
+      }
+      if (position?.kind === "schema" && position.depth > MAX_TOOL_SCHEMA_DEPTH) {
+        truncated = true;
+        entry = {};
+      }
       const invalidNumber = nonFiniteNumber.path === null && isNonFiniteNumberValue(entry);
       if (invalidNumber || (entry && typeof entry === "object")) {
-        // The replacer's holder identifies when native JSON traversal returns to a parent.
-        // Keep only that ancestor path, including objects returned by toJSON.
-        while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) {
-          ancestors.pop();
-          segments.length = expectDefined(pathLengths.pop(), "schema ancestor path length");
-        }
         const prefixLength = segments.length;
         if (!isRoot) {
           if (Array.isArray(this)) {
@@ -64,8 +88,7 @@ function serializeToolInputSchema(
           nonFiniteNumber.path = segments.join("");
           segments.length = prefixLength;
         } else {
-          ancestors.push(entry);
-          pathLengths.push(prefixLength);
+          ancestors.push({ value: entry, pathLength: prefixLength, position });
         }
       }
       isRoot = false;
@@ -81,11 +104,28 @@ function serializeToolInputSchema(
       violations: [`${violationPath} is not JSON-serializable`],
     };
   }
-  const schema = JSON.parse(text) as RuntimeToolInputSchemaJson;
+  if (truncated) {
+    reportToolSchemaTruncation(value, toolName);
+  }
+  const schema = inheritToolSchemaTruncation(
+    undefined,
+    JSON.parse(text) as RuntimeToolInputSchemaJson,
+    truncated,
+  );
   captureJson?.(text);
+  const violations: string[] = [];
+  if (!isJsonObject(schema)) {
+    violations.push(`${path} must be a JSON object schema`);
+  } else if (schema.type !== undefined && schema.type !== "object") {
+    violations.push(`${path}.type must be "object"`);
+  }
+  // Valid schemas need no diagnostic strings; reuse this call's path while walking the JSON copy.
+  if (!inspectJsonSchema(schema, [path], violations)) {
+    return { schema: {}, violations: [`${path} is not a JSON value`] };
+  }
   return {
     schema,
-    violations: [],
+    violations,
   };
 }
 
@@ -116,8 +156,7 @@ function inspectJsonSchema(
       violations.push(`${path.join("")}.${key}`);
     }
   }
-  for (const key of Object.keys(schema)) {
-    const value = schema[key];
+  for (const [key, value] of Object.entries(schema)) {
     if (typeof value === "number" && !Number.isFinite(value)) {
       return false;
     }
@@ -126,11 +165,7 @@ function inspectJsonSchema(
     }
     path.push(".", key);
     if (SCHEMA_MAP_KEYS.has(key) && isJsonObject(value)) {
-      for (const schemaName of Object.keys(value)) {
-        const childSchema = value[schemaName];
-        if (childSchema === undefined) {
-          return false;
-        }
+      for (const [schemaName, childSchema] of Object.entries(value)) {
         path.push(".", schemaName);
         const valid = inspectJsonSchema(childSchema, path, violations);
         path.length -= 2;
@@ -150,48 +185,33 @@ function inspectJsonSchema(
 export function projectRuntimeToolInputSchema(
   schema: unknown,
   path = "parameters",
+  toolName?: string,
 ): RuntimeToolInputSchemaProjection {
-  return projectToolInputSchema(schema, path);
+  return projectToolInputSchema(schema, path, undefined, toolName);
 }
 
 /** Package-private preparation; public projections never carry normalization provenance. */
 export function prepareRuntimeToolInputSchema(
   schema: unknown,
   path: string,
+  toolName?: string,
 ): {
   projection: RuntimeToolInputSchemaProjection;
   normalization?: PreparedToolSchemaNormalization;
 } {
   let inputJson: string | undefined;
-  const projection = projectToolInputSchema(schema, path, (text) => {
-    inputJson = text;
-  });
+  const projection = projectToolInputSchema(
+    schema,
+    path,
+    (text) => {
+      inputJson = text;
+    },
+    toolName,
+  );
   return {
     projection,
     ...(schema && typeof schema === "object" && inputJson && projection.violations.length === 0
       ? { normalization: { source: schema, inputJson } }
       : {}),
-  };
-}
-
-function projectToolInputSchema(
-  schema: unknown,
-  path: string,
-  captureJson?: (text: string) => void,
-): RuntimeToolInputSchemaProjection {
-  const projection = serializeToolInputSchema(schema, path, captureJson);
-  const violations = [...projection.violations];
-  if (!isJsonObject(projection.schema)) {
-    violations.push(`${path} must be a JSON object schema`);
-  } else if (projection.schema.type !== undefined && projection.schema.type !== "object") {
-    violations.push(`${path}.type must be "object"`);
-  }
-  // Valid schemas need no diagnostic strings; reuse this call's path while walking the JSON copy.
-  if (!inspectJsonSchema(projection.schema, [path], violations)) {
-    return { schema: {}, violations: [`${path} is not a JSON value`] };
-  }
-  return {
-    schema: projection.schema,
-    violations,
   };
 }

@@ -193,3 +193,10 @@ export function createRecoveryLog(): RecoveryLogger & {
 export function asDeliverFn(deliver: ReturnType<typeof vi.fn>): DeliverFn {
   return deliver as DeliverFn;
 }
+
+export const RECOVERY_SUMMARY = {
+  empty: { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 },
+  failed: { recovered: 0, failed: 1, skippedMaxRetries: 0, deferredBackoff: 0 },
+  recovered: { recovered: 1, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 },
+  recoveredWithDeferred: { recovered: 1, failed: 0, skippedMaxRetries: 0, deferredBackoff: 1 },
+} as const;

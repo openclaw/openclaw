@@ -31,7 +31,7 @@ import {
   replyRunRegistry,
   requireBlockReplyHandler,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -262,7 +262,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     let mutationRan = false;
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("patch", {
           scope: "/tmp/mock-sessions.json",
           identities: [sessionKey, sessionId],
           prepare: async () => {
@@ -303,6 +303,97 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     }
   });
 
+  it.each(["deletion", "upstream cancellation"] as const)(
+    "holds queued session-event resolver work through %s",
+    async (stop) => {
+      setNoAbort();
+      const sessionKey = "agent:main:discord:channel:event-resolver-race";
+      const sessionId = "event-resolver-session";
+      const upstreamAbort = new AbortController();
+      const storePath = "/tmp/mock-sessions.json";
+      sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+      const predecessor = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      const resolverEntered = createDeferred();
+      const resolverGate = createDeferred();
+      const mutationPrepared = createDeferred();
+      const dispatcher = createDispatcher();
+      const externalLifecycleRequest = new AsyncResource("external-event-resolver-lifecycle");
+      let resolverFinished = false;
+      let resolverSignal: AbortSignal | undefined;
+      let mutationRan = false;
+      let mutationObservedSettledResolver = false;
+      let mutation: Promise<void> | undefined;
+      const dispatch = dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          To: "discord:channel:event-resolver-race",
+          AccountId: "default",
+          SessionKey: sessionKey,
+          InternalTurnSource: "event",
+          Body: "the background process completed",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: {
+          abortSignal: upstreamAbort.signal,
+          queueModeOverride: "followup",
+          turnAdoptionLifecycle: { admission: "exclusive", onAdopted() {} },
+          internalEventExecution: { onStarted() {}, onTerminal() {} },
+        },
+        replyResolver: async (_ctx, opts) => {
+          resolverSignal = opts?.abortSignal;
+          resolverEntered.resolve();
+          await resolverGate.promise;
+          resolverFinished = true;
+          return { text: "stale late event reply" };
+        },
+      });
+      try {
+        await resolverEntered.promise;
+        predecessor.complete();
+        expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(true);
+        if (stop === "upstream cancellation") {
+          upstreamAbort.abort();
+          expect(resolverSignal?.aborted).toBe(true);
+        }
+        mutation = externalLifecycleRequest.runInAsyncScope(() =>
+          runExclusiveSessionLifecycleMutation("delete", {
+            scope: storePath,
+            identities: [sessionKey, sessionId],
+            prepare: async () => {
+              const draining = interruptSessionWorkAdmissions({
+                scope: storePath,
+                identities: [sessionKey, sessionId],
+              });
+              mutationPrepared.resolve();
+              await draining;
+            },
+            run: async () => {
+              mutationRan = true;
+              mutationObservedSettledResolver = resolverFinished;
+            },
+          }),
+        );
+        await mutationPrepared.promise;
+        expect(mutationRan).toBe(false);
+        expect(resolverSignal?.aborted).toBe(true);
+        resolverGate.resolve();
+        await mutation;
+        const result = await dispatch;
+        expect(mutationObservedSettledResolver).toBe(true);
+        expect(result.queuedFinal).toBe(false);
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(false);
+      } finally {
+        predecessor.complete();
+        resolverGate.resolve();
+        await Promise.allSettled([dispatch, mutation]);
+        externalLifecycleRequest.emitDestroy();
+      }
+    },
+  );
+
   describe("delivery settlement", () => {
     beforeEach(() => {
       // Keep the delivery cases on their original non-ACP, Discord-only fixture.
@@ -310,7 +401,6 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       mocks.tryFastAbortFromMessage.mockReset();
       setNoAbort();
       hookMocks.runner.runReplyDispatch.mockReset().mockResolvedValue(undefined);
-      sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({ existing: undefined });
       sessionStoreMocks.updateSessionEntry.mockClear();
       acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
         resolveSessionAsync: async () => ({ kind: "none" as const }),

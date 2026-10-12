@@ -79,7 +79,12 @@ async function createCatalogHarness(agentDir: string, resources: CatalogResource
     return transport.client;
   });
   let config: OpenClawConfig = {
-    agents: { list: ["main", "other"].map((id) => ({ id, agentDir, workspace: agentDir })) },
+    agents: {
+      entries: {
+        main: { agentDir, workspace: agentDir },
+        other: { agentDir, workspace: agentDir },
+      },
+    },
   };
   const pluginConfig = {
     appServer: {
@@ -168,6 +173,24 @@ async function createCatalogHarness(agentDir: string, resources: CatalogResource
     },
     requests,
   };
+}
+
+function blockedState(threadId: string) {
+  const started = createDeferred<void>();
+  const allowed = createDeferred<void>();
+  const values = new Map<string, StoredCodexCatalogEntry>();
+  const state: CodexCatalogState = {
+    entries: vi.fn(async () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 }))),
+    register: async (key, value) => {
+      if (value.kind === "row" && value.row.threadId === threadId) {
+        started.resolve();
+        await allowed.promise;
+      }
+      values.set(key, structuredClone(value));
+    },
+    delete: async (key) => values.delete(key),
+  };
+  return { state, writeStarted: started, writeAllowed: allowed };
 }
 
 type CatalogLogRecord = Extract<DiagnosticEventPayload, { type: "log.record" }>;
@@ -288,12 +311,14 @@ describe("resident catalog hydration request lifetime", () => {
     });
   });
 
-  it("shares cold hydration with a pinned caller and releases only the hydration lease", async () => {
+  it("shares same-home hydration across agents and releases only the hydration lease", async () => {
     await h.control.withPinnedConnection(async (pinned) => {
       expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(2);
       const pending = observeHydration(pinned.initialize());
       const frame = await h.frame(0);
-      const joined = observeHydration(h.control.initialize());
+      const joined = observeHydration(h.factory.forRequest("other").initialize());
+      await nextTurn();
+      expect(h.requests.mock.calls.filter(([method]) => method === "thread/list")).toHaveLength(1);
       expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(3);
       const listed = pinned.listPage({ limit: 10 });
       void listed.catch(() => undefined);
@@ -309,25 +334,6 @@ describe("resident catalog hydration request lifetime", () => {
     });
     expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(1);
     await expect(h.companion.request("model/list", {})).resolves.toEqual({ data: [] });
-  });
-
-  it("shares one cold native request across different agents in the same home", async () => {
-    const first = observeHydration(h.control.initialize());
-    const frame = await h.frame(0);
-    const control = h.factory.forRequest("other");
-    const joined = observeHydration(control.initialize());
-    const listed = control.listPage({ limit: 10 });
-    void listed.catch(() => undefined);
-    await nextTurn();
-    expect(h.requests.mock.calls.filter(([method]) => method === "thread/list")).toHaveLength(1);
-    h.reply(frame, "shared");
-    await Promise.all([first, joined]);
-    expect((await listed).sessions).toMatchObject([{ threadId: "shared" }]);
-    expect((await control.listPage({ limit: 10 })).sessions).toMatchObject([
-      { threadId: "shared" },
-    ]);
-    expect(h.frames).toHaveLength(1);
-    expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(1);
   });
 
   it("times out the shared initializer without closing its companion or reviving expired callers", async () => {
@@ -451,20 +457,7 @@ describe("resident catalog hydration request lifetime", () => {
   it("keeps node updates deferred through catalog persistence and disconnect before reconnecting", async () => {
     releaseLeasedSharedCodexAppServerClient(h.companion);
     resources.companion = undefined;
-    const writeStarted = createDeferred<void>();
-    const writeAllowed = createDeferred<void>();
-    const values = new Map<string, StoredCodexCatalogEntry>();
-    const state: CodexCatalogState = {
-      entries: async () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
-      register: async (key, value) => {
-        if (value.kind === "row" && value.row.threadId === "retained-thread") {
-          writeStarted.resolve();
-          await writeAllowed.promise;
-        }
-        values.set(key, structuredClone(value));
-      },
-      delete: async (key) => values.delete(key),
-    };
+    const { state, writeStarted, writeAllowed } = blockedState("retained-thread");
     const factory = h.newFactory(REQUEST_TIMEOUT_MS, state);
     const command = createCodexSessionCatalogNodeHostCommands(factory).find(
       (candidate) => candidate.command === CODEX_APP_SERVER_THREADS_LIST_COMMAND,
@@ -502,83 +495,6 @@ describe("resident catalog hydration request lifetime", () => {
     } finally {
       writeAllowed.resolve();
       await factory.stop();
-    }
-  });
-
-  it.each([false, true])("bounds same-home retirement waits (expired: %s)", async (expired) => {
-    const writeStarted = createDeferred<void>();
-    const writeAllowed = createDeferred<void>();
-    const values = new Map<string, StoredCodexCatalogEntry>();
-    const state: CodexCatalogState = {
-      entries: vi.fn(async () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 }))),
-      register: async (key, value) => {
-        if (value.kind === "row" && value.row.threadId === "retired-prefix") {
-          writeStarted.resolve();
-          await writeAllowed.promise;
-        }
-        values.set(key, structuredClone(value));
-      },
-      delete: async (key) => values.delete(key),
-    };
-    const control = h.newFactory(REQUEST_TIMEOUT_MS, state).forRequest("main");
-    const first = observeHydration(control.initialize());
-    const prefix = await h.frame(0);
-    prefix.transport.send({
-      id: prefix.id,
-      result: { ...page("retired-prefix"), nextCursor: "old-tail" },
-    });
-    await writeStarted.promise;
-    const retired = await h.frame(1);
-    let retiredReplied = false;
-    try {
-      h.replaceConfig();
-      const delivered = vi.fn();
-      const listed = control.listPage({}).then((result) => {
-        delivered(result);
-        return result;
-      });
-      const rejected = vi.fn();
-      void listed.catch(rejected);
-      await nextTurn();
-      expect(delivered).not.toHaveBeenCalled();
-      expect(state.entries).toHaveBeenCalledOnce();
-      if (expired) {
-        await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
-        expect(rejected).toHaveBeenCalledWith(
-          expect.objectContaining({ code: "APP_SERVER_UNAVAILABLE" }),
-        );
-        expect(state.entries).toHaveBeenCalledOnce();
-      }
-      writeAllowed.resolve();
-      await nextTurn();
-      expect(delivered).not.toHaveBeenCalled();
-      const current = observeHydration(control.initialize());
-      h.reply(await h.frame(2), "current-thread");
-      await current;
-      if (expired) {
-        expect(delivered).not.toHaveBeenCalled();
-      } else {
-        expect((await listed).sessions).toMatchObject([{ threadId: "current-thread" }]);
-      }
-      const beforeRetiredReply = await state.entries();
-      expect(
-        beforeRetiredReply.flatMap(({ value }) =>
-          value.kind === "row" ? [value.row.threadId] : [],
-        ),
-      ).toEqual(["current-thread"]);
-      h.reply(retired, "stale-thread");
-      retiredReplied = true;
-      await expect(first).rejects.toThrow(
-        expired ? /thread\/list timed out/ : /closed|configuration changed/,
-      );
-      expect(await state.entries()).toEqual(beforeRetiredReply);
-      expect((await control.listPage({})).sessions).toMatchObject([{ threadId: "current-thread" }]);
-    } finally {
-      writeAllowed.resolve();
-      if (!retiredReplied) {
-        h.reply(retired, "stale-thread");
-      }
-      await first.catch(() => undefined);
     }
   });
 

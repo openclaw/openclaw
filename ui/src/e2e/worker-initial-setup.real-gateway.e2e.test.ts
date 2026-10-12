@@ -173,7 +173,7 @@ suite.define(() => {
               timestamp: Date.now(),
             }),
           );
-          createWorkerSessionPlacementGate(placements).updateAckCursors({
+          await createWorkerSessionPlacementGate(placements).updateAckCursors({
             claim: request.turnClaim,
             transcriptSeq: launched.length * 2,
             liveSeq: launched.length,
@@ -273,11 +273,13 @@ suite.define(() => {
             await composer.fill("Browser input held for setup");
             await page.getByRole("button", { name: "Send message", exact: true }).click();
             await expect
-              .poll(() => listSessionPendingInputs(scope).items.length, { timeout: 15000 })
+              .poll(async () => (await listSessionPendingInputs(scope)).items.length, {
+                timeout: 15000,
+              })
               .toBe(1);
             expect(launched).toEqual([]);
             await expect.poll(() => setupWaiters.length, { timeout: 30000 }).toBe(1);
-            expect(listSessionPendingInputs(scope).items).toHaveLength(1);
+            expect((await listSessionPendingInputs(scope)).items).toHaveLength(1);
             await page.getByText("Received · waiting for worker setup", { exact: true }).waitFor();
             await page.screenshot({
               path: path.join(suite.artifactDir, "01-held-during-setup.png"),
@@ -285,21 +287,6 @@ suite.define(() => {
             const tool = createSessionsSendTool({
               agentSessionKey: "agent:main:main",
               expectedTargetSessionId: sessionId,
-              callGateway: async (request) =>
-                await page.evaluate(
-                  async ({ method, params }) => {
-                    const app = document.querySelector("openclaw-app") as HTMLElement & {
-                      runtime: {
-                        context: { gateway: { snapshot: { client: GatewayBrowserClient } } };
-                      };
-                    };
-                    return await app.runtime.context.gateway.snapshot.client.request(
-                      method,
-                      params,
-                    );
-                  },
-                  { method: request.method, params: request.params },
-                ),
             });
             const sent = await tool.execute("setup-send", {
               sessionKey,
@@ -307,16 +294,42 @@ suite.define(() => {
               timeoutSeconds: 0,
             });
             expect(sent.details).toMatchObject({ status: "accepted", targetDisposition: "queued" });
-            await expect.poll(() => listSessionPendingInputs(scope).items.length).toBe(2);
+            await expect
+              .poll(async () => (await listSessionPendingInputs(scope)).items.length)
+              .toBe(2);
             expect(launched).toEqual([]);
-            expect(
-              listSessionPendingInputs(scope).items.every((input) => input.state === "queued"),
-            ).toBe(true);
+            const heldInputs = (await listSessionPendingInputs(scope)).items;
+            expect(heldInputs.every((input) => input.state === "queued")).toBe(true);
             release.resolve();
             await dispatchOperation;
-            await expect.poll(() => launched.length, { timeout: 30_000 }).toBe(2);
+            const outcomes = await page.evaluate(
+              async (runIds) => {
+                const app = document.querySelector("openclaw-app") as HTMLElement & {
+                  runtime: {
+                    context: { gateway: { snapshot: { client: GatewayBrowserClient } } };
+                  };
+                };
+                return await Promise.all(
+                  runIds.map((runId) =>
+                    app.runtime.context.gateway.snapshot.client.request(
+                      "agent.wait",
+                      { runId, timeoutMs: 30_000 },
+                      { timeoutMs: 30_000 },
+                    ),
+                  ),
+                );
+              },
+              heldInputs.map((input) => input.runId),
+            );
+            for (const outcome of outcomes) {
+              expect(outcome).toMatchObject({ status: "ok" });
+            }
+            expect(launched).toHaveLength(2);
             expect(new Set(launched).size).toBe(2);
-            await expect.poll(() => listSessionPendingInputs(scope).items.length).toBe(0);
+            expect(new Set(launched)).toEqual(new Set(heldInputs.map((input) => input.runId)));
+            await expect
+              .poll(async () => (await listSessionPendingInputs(scope)).items.length)
+              .toBe(0);
             await page
               .getByRole("paragraph")
               .filter({ hasText: /^Worker reply 2$/ })

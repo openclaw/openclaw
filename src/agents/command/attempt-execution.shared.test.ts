@@ -1,5 +1,9 @@
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -42,6 +46,7 @@ describe("persistAgentSession", () => {
       if (existing) {
         await seed(entry);
       }
+      const sql = observeHostDataSql();
       const persisted = await write({
         shouldPersist: () => true,
         creation: {
@@ -49,7 +54,8 @@ describe("persistAgentSession", () => {
           actor: { type: "human", source: "profile", id: "sandbox-creator" },
           sandbox: "required",
         },
-      });
+      }).finally(sql.restore);
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
       const stored = read();
       expect(stored).toEqual(persisted);
       expect(sessionStore[sessionKey]).toEqual(stored);

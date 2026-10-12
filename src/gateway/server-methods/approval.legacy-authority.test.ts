@@ -1,7 +1,8 @@
-import { afterEach, expect, it, vi, type TestContext } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
@@ -22,9 +23,13 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it.for(["list", "revoke"] as const)(
-  "rechecks grant %s RPC authority after storage settles",
-  async (operation, test) => {
+it.for([
+  { operation: "list", stage: "settlement" },
+  { operation: "revoke", stage: "settlement" },
+  { operation: "revoke", stage: "commit" },
+] as const)(
+  "rechecks grant $operation RPC authority at $stage",
+  async ({ operation, stage }, test) => {
     const fixture = await createExecApprovalFixture(test);
     await fixture.run(async () => {
       const client = createClient({ deviceId: "grant-reviewer", scopes: ["operator.admin"] });
@@ -46,45 +51,26 @@ it.for(["list", "revoke"] as const)(
         vi.spyOn(approvalStore, "revokeCronStandingGrant").mockImplementationOnce(
           async (params) => {
             const result = await revoke({ ...params, databaseOptions: fixture.databaseOptions });
-            client.invalidated = true;
+            if (stage === "settlement") {
+              client.invalidated = true;
+            }
             return result;
           },
         );
+      }
+      if (stage === "commit") {
+        probe.admission(workerAdmission, (request, grant, admit) => {
+          if (request.stage === "commit") {
+            client.invalidated = true;
+          }
+          return admit(request, grant);
+        });
       }
       await expect(invocation.invoke()).rejects.toThrow(/authority/i);
       expect(invocation.respond).not.toHaveBeenCalled();
     });
   },
 );
-
-it("refuses grant revocation when the RPC authority changes at worker commit", async (test) => {
-  const fixture = await createExecApprovalFixture(test);
-  await fixture.run(async () => {
-    const client = createClient({ deviceId: "grant-commit-reviewer", scopes: ["operator.admin"] });
-    const invocation = createApprovalInvocation({
-      handlers: fixture.handlers,
-      method: "exec.approval.grants.revoke",
-      body: { grantId: "missing" },
-      client,
-    });
-    const revoke = approvalStore.revokeCronStandingGrant;
-    vi.spyOn(approvalStore, "revokeCronStandingGrant").mockImplementationOnce((params) =>
-      revoke({ ...params, databaseOptions: fixture.databaseOptions }),
-    );
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            client.invalidated = true;
-          }
-          return admit(request, grant);
-        }, attachment),
-    );
-    await expect(invocation.invoke()).rejects.toThrow(/authority/i);
-    expect(invocation.respond).not.toHaveBeenCalled();
-  });
-});
 
 type LegacyReadMethod = "exec.approval.get" | "exec.approval.list" | "plugin.approval.list";
 
@@ -144,32 +130,32 @@ async function proveLegacyResponseAuthority<TPayload>(
   expect(settled).toBe(false);
 }
 
-it.for(["exec.approval.get", "exec.approval.list"] as const)(
+it.for(["exec.approval.get", "exec.approval.list", "plugin.approval.list"] as const)(
   "rechecks authority after the lookup helper returns for %s",
   async (method, test) => {
+    if (method === "plugin.approval.list") {
+      const fixture = await createPreparedTestApprovalManager<PluginApprovalRequestPayload>(test, {
+        approvalKind: "plugin",
+      });
+      await fixture.run(() =>
+        proveLegacyResponseAuthority(
+          { ...fixture, handlers: createPluginApprovalHandlers(fixture.manager) },
+          {
+            title: "Private plugin approval",
+            description: "Synthetic plugin approval",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+          method,
+        ),
+      );
+      return;
+    }
     const fixture = await createExecApprovalFixture(test);
     await fixture.run(() =>
       proveLegacyResponseAuthority(fixture, { command: "echo private approval" }, method),
     );
   },
 );
-
-it("rechecks authority after the lookup helper returns for plugin.approval.list", async (test) => {
-  const fixture = await createPreparedTestApprovalManager<PluginApprovalRequestPayload>(test, {
-    approvalKind: "plugin",
-  });
-  await fixture.run(() =>
-    proveLegacyResponseAuthority(
-      { ...fixture, handlers: createPluginApprovalHandlers(fixture.manager) },
-      {
-        title: "Private plugin approval",
-        description: "Synthetic plugin approval",
-        allowedDecisions: ["allow-once", "deny"],
-      },
-      "plugin.approval.list",
-    ),
-  );
-});
 
 async function proveLegacyAuthority<
   TPayload extends ExecApprovalRequestPayload | PluginApprovalRequestPayload,
@@ -226,22 +212,18 @@ async function proveLegacyAuthority<
       return resolve(...args);
     });
   } else {
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "transaction") {
-            connection.abort();
-            stages.push("transport-retired");
-          } else if (request.stage === "commit") {
-            stages.push("verdict-commit");
-            if (revoke) {
-              invalidateGatewayDeviceRevocation(invocation.context, "legacy-reviewer", "operator");
-            }
-          }
-          return admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction") {
+        connection.abort();
+        stages.push("transport-retired");
+      } else if (request.stage === "commit") {
+        stages.push("verdict-commit");
+        if (revoke) {
+          invalidateGatewayDeviceRevocation(invocation.context, "legacy-reviewer", "operator");
+        }
+      }
+      return admit(request, grant);
+    });
   }
   const response = await invocation.invoke();
   expect(stages).toEqual(["transport-retired", autoReview ? "sdk-verdict" : "verdict-commit"]);
@@ -268,62 +250,59 @@ async function proveLegacyAuthority<
   }
 }
 
-it.for([false, true])(
-  "retains exec RPC authority after disconnect (revoked: %s)",
-  async (revoke, test: TestContext) => {
+it.for([
+  { kind: "exec", revoke: true },
+  { kind: "plugin", revoke: false },
+  { kind: "auto-review", revoke: false },
+  { kind: "auto-review", revoke: true },
+] as const)(
+  "retains $kind verdict authority after disconnect (revoked: $revoke)",
+  async ({ kind, revoke }, test) => {
+    if (kind === "plugin") {
+      const fixture = await createPreparedTestApprovalManager<PluginApprovalRequestPayload>(test, {
+        approvalKind: "plugin",
+      });
+      await fixture.run(() =>
+        proveLegacyAuthority(
+          { ...fixture, handlers: createPluginApprovalHandlers(fixture.manager) },
+          {
+            title: "Synthetic action",
+            description: "Approve a synthetic plugin operation",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+          "plugin",
+          revoke,
+        ),
+      );
+      return;
+    }
     const fixture = await createExecApprovalFixture(test);
-    await fixture.run(() =>
-      proveLegacyAuthority(fixture, { command: "echo legacy" }, "exec", revoke),
-    );
-  },
-);
-
-it.for([false, true])(
-  "retains plugin RPC authority after disconnect (revoked: %s)",
-  async (revoke, test: TestContext) => {
-    const fixture = await createPreparedTestApprovalManager<PluginApprovalRequestPayload>(test, {
-      approvalKind: "plugin",
-    });
-    await fixture.run(() =>
-      proveLegacyAuthority(
-        { ...fixture, handlers: createPluginApprovalHandlers(fixture.manager) },
-        {
-          title: "Synthetic action",
-          description: "Approve a synthetic plugin operation",
-          allowedDecisions: ["allow-once", "deny"],
-        },
-        "plugin",
-        revoke,
-      ),
-    );
-  },
-);
-
-it.for([false, true])(
-  "retains auto-review through the opaque SDK guard (revoked: %s)",
-  async (revoke, test) => {
-    const fixture = await createExecApprovalFixture(test);
+    const autoReview = kind === "auto-review";
     await fixture.run(() =>
       proveLegacyAuthority(
         fixture,
         {
           command: "echo legacy",
-          commandArgv: ["echo", "legacy"],
-          host: "node",
-          nodeId: "synthetic-node",
-          agentId: "main",
-          sessionKey: "agent:main:legacy",
-          systemRunPlan: {
-            argv: ["echo", "legacy"],
-            cwd: "/tmp",
-            commandText: "echo legacy",
-            agentId: "main",
-            sessionKey: "agent:main:legacy",
-          },
+          ...(autoReview
+            ? {
+                commandArgv: ["echo", "legacy"],
+                host: "node",
+                nodeId: "synthetic-node",
+                agentId: "main",
+                sessionKey: "agent:main:legacy",
+                systemRunPlan: {
+                  argv: ["echo", "legacy"],
+                  cwd: "/tmp",
+                  commandText: "echo legacy",
+                  agentId: "main",
+                  sessionKey: "agent:main:legacy",
+                },
+              }
+            : {}),
         },
         "exec",
         revoke,
-        true,
+        autoReview,
       ),
     );
   },
@@ -361,26 +340,22 @@ it.for([false, true])(
       });
       vi.spyOn(Date, "now").mockReturnValue(record.expiresAtMs);
       const stages: string[] = [];
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "transaction") {
-              connection.abort();
-              stages.push("transport-retired");
-            } else if (request.stage === "commit") {
-              stages.push("expiry-commit");
-              if (revoke) {
-                invalidateGatewayDeviceRevocation(
-                  invocation.context,
-                  "legacy-expiry-reviewer",
-                  "operator",
-                );
-              }
-            }
-            return admit(request, grant);
-          }, attachment),
-      );
+      probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === "transaction") {
+          connection.abort();
+          stages.push("transport-retired");
+        } else if (request.stage === "commit") {
+          stages.push("expiry-commit");
+          if (revoke) {
+            invalidateGatewayDeviceRevocation(
+              invocation.context,
+              "legacy-expiry-reviewer",
+              "operator",
+            );
+          }
+        }
+        return admit(request, grant);
+      });
       if (revoke) {
         await expect(invocation.invoke()).rejects.toThrow(/authority/u);
         expect(

@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type RequestListener, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
@@ -17,6 +18,10 @@ import {
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
 import {
+  normalizeResponsesInput,
+  resolveMockSubagentTurn,
+} from "../../../../extensions/qa-lab/test-api.js";
+import {
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
   updateSessionEntry,
@@ -25,19 +30,26 @@ import {
   connectGatewayClient,
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import {
+  deliveryQueueEntriesQuery,
+  inflateDeliveryQueueRow,
+} from "../../../../src/infra/delivery-queue-sqlite-bound.js";
+import { executeSqliteQuerySync } from "../../../../src/infra/kysely-sync.js";
+import { OUTBOUND_EXECUTABLE_QUEUE_NAMES } from "../../../../src/infra/outbound/delivery-queue-namespaces.js";
+import { projectOutboundDelivery } from "../../../../src/infra/outbound/delivery-queue-projection.js";
+import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
-import { stopChildProcess } from "../../../helpers/stop-child-process.js";
 
 const MODEL = "mock-openai/progress-fixture";
 const FINAL_MARKER = "TOOL-PROGRESS-FINAL";
 const HEADLINE = "Checking the requested work";
 // Draft progress uses compact tool rows; the Slack Block Kit card uses plain
 // "Exec — detail" rows; native Slack uses task_update chunks.
-const toolRow = /🛠️ (?:Exec|Bash)\b/u;
+const toolRow = /\b(?:Exec|Bash)\b/u;
 const slackCardToolRow = /\b(?:Exec|Bash) — /u;
 const nativeToolTitle = /^(?:Exec|Bash)\b/u;
-const failedToolRow = /🛠️ (?:Exec|Bash): failed\b/u;
+const failedToolRow = /\b(?:Exec|Bash): failed\b/u;
 type WireWrite = {
   at: number;
   method: string;
@@ -366,39 +378,6 @@ async function startPresentationApi(
   };
 }
 
-function isCompletionUserText(text: string): boolean {
-  return (
-    text.includes("Internal task completion event") ||
-    text.includes("[Subagent Context] Every subagent in this batch has now settled")
-  );
-}
-
-function readCurrentProviderUserText(body: Record<string, unknown>): string {
-  // Ignore trailing context carriers, but a protected task completion is
-  // itself a new request. Older prompts cannot override a newer user turn.
-  const userTexts = Array.isArray(body.input)
-    ? body.input
-        .map(asRecord)
-        .filter((item) => item.role === "user")
-        .map((item) =>
-          Array.isArray(item.content)
-            ? item.content.map((part) => readStringValue(asRecord(part).text) ?? "").join("\n")
-            : (readStringValue(item.content) ?? ""),
-        )
-    : [];
-  const currentText =
-    userTexts.findLast(
-      (text) =>
-        text.trim() &&
-        (isCompletionUserText(text) ||
-          !(
-            text.includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>") &&
-            text.trimEnd().endsWith("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>")
-          )),
-    ) ?? "";
-  return currentText;
-}
-
 function sendCompletionResponse(response: ServerResponse, marker: string, sequence: number) {
   const item = {
     type: "message",
@@ -665,7 +644,16 @@ describe("channel progress presentation through an isolated Gateway", () => {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    cleanups.push(() => stopChildProcess(provider, 5_000));
+    const providerExited = once(provider, "exit");
+    void providerExited.catch(() => {});
+    cleanups.push(async () => {
+      if (provider.pid) {
+        if (provider.exitCode === null && provider.signalCode === null) {
+          provider.kill("SIGTERM");
+        }
+        await providerExited;
+      }
+    });
     let providerOutput = "";
     let providerError: Error | undefined;
     provider.on("error", (error) => {
@@ -737,7 +725,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       headers: inbound.providerHeaders,
       body: JSON.stringify(inbound.providerBody),
     });
-    expect(injected.ok).toBe(true);
+    expect(injected.ok, await injected.clone().text()).toBe(true);
     if (adapter.manifest.provider !== "slack") {
       throw new Error("expected Slack fixture");
     }
@@ -775,11 +763,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
     const remainingMessages = [...api.messages.values()].map((message) => message.text);
     expect(remainingMessages).toEqual([finalText]);
     const modelRequests = (await fs.readFile(requestLog, "utf8")).trim().split("\n").map(parseBody);
-    const toolResultCounts = modelRequests.map(
-      (request) =>
-        (Array.isArray(request.messages) ? request.messages : [])
-          .map(asRecord)
-          .filter((message) => message.role === "tool").length,
+    // The shared provider log also records requests outside Chat Completions.
+    const toolResultCounts = modelRequests.flatMap((request) =>
+      Array.isArray(request.messages)
+        ? [request.messages.map(asRecord).filter((message) => message.role === "tool").length]
+        : [],
     );
     expect(toolResultCounts).toEqual([0, 1, 2]);
     const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
@@ -891,8 +879,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
         }
         const raw = Buffer.concat(buffers).toString("utf8");
         const body = parseBody(raw);
-        const currentText = readCurrentProviderUserText(body);
-        const completion = isCompletionUserText(currentText);
+        const turn = resolveMockSubagentTurn(normalizeResponsesInput(body.input));
+        const currentText = turn?.text ?? "";
+        const completion = turn?.kind === "completion" || turn?.kind === "settled";
         providerRequests.push({
           model: body.model,
           requester: currentText.includes("Subagent terminal reply QA check:"),
@@ -1280,8 +1269,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
           buffers.push(Buffer.from(chunk));
         }
         const raw = Buffer.concat(buffers).toString("utf8");
-        const currentText = readCurrentProviderUserText(parseBody(raw));
-        const completion = isCompletionUserText(currentText);
+        const turn = resolveMockSubagentTurn(normalizeResponsesInput(parseBody(raw).input));
+        const currentText = turn?.text ?? "";
+        const completion = turn?.kind === "completion" || turn?.kind === "settled";
         const worker =
           !completion && /Subagent terminal reply QA worker:\s*visible/i.test(currentText);
         const requester =
@@ -1494,8 +1484,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
       body: JSON.stringify(inbound.providerBody),
     });
     expect(injected.ok, await injected.text()).toBe(true);
-    const { loadUnfinishedDeliveries } =
-      await import("../../../../src/infra/outbound/delivery-queue-storage.js");
     const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
     if (!stateDir) {
       throw new Error("isolated Gateway state directory missing");
@@ -1522,7 +1510,22 @@ describe("channel progress presentation through an isolated Gateway", () => {
               lastError: run.delivery.lastError,
             }
           : undefined;
-      const pendingRows = await loadUnfinishedDeliveries(stateDir);
+      // The child Gateway cannot invalidate this process's physical-database queue cache.
+      // Read committed rows directly, retaining the canonical filters and projection.
+      const pendingRows = withOpenClawStateDatabaseReadOnly(
+        (database) =>
+          executeSqliteQuerySync(
+            database.db,
+            deliveryQueueEntriesQuery(database, OUTBOUND_EXECUTABLE_QUEUE_NAMES, "unfinished")
+              .select("queue_name")
+              .orderBy("enqueued_at", "asc")
+              .orderBy("id", "asc"),
+          ).rows.flatMap((row) => {
+            const entry = inflateDeliveryQueueRow(row);
+            return entry ? [projectOutboundDelivery(row.queue_name, entry)] : [];
+          }),
+        { env: gateway.runtimeEnv },
+      );
       queueRows = pendingRows.map(({ id, channel, to, recoveryState, lastError }) => ({
         id,
         channel,
@@ -1796,7 +1799,15 @@ describe("channel progress presentation through an isolated Gateway", () => {
       expect(progressText).toContain(HEADLINE);
       const slackCard = channel === "slack" && !native && !compact;
       const expectedToolRow = slackCard ? slackCardToolRow : toolRow;
-      if (!tools) {
+      if (!tools && channel === "discord") {
+        // Quiet progress retains bounded operation status without command details.
+        const updates = progressWrites.map(({ body }) => body.content);
+        const running = `${HEADLINE}\n\nExec: running`;
+        expect(updates).toContain(running);
+        for (const update of updates) {
+          expect([HEADLINE, running, `${HEADLINE}\n\nLast activity: Exec`]).toContain(update);
+        }
+      } else if (!tools) {
         expect(progressText).not.toMatch(expectedToolRow);
       } else if (channel !== "slack" || !native) {
         expect(progressText).toMatch(expectedToolRow);

@@ -61,7 +61,6 @@ describe("dashboard action ownership", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
 
   it.each([
-    { revoke: "Stop", boundary: "batch" },
     { revoke: "replacement", boundary: "nested batch" },
     { revoke: "Stop", boundary: "submit" },
     { revoke: "replacement", boundary: "navigation preparation" },

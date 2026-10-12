@@ -1,8 +1,10 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { getSkillsSourceVersion } from "./refresh-state.js";
+import { pathWatchers } from "./refresh-watch-registry.js";
 import {
   createSkillsWatcherMock,
   useSkillsWatcherFixture,
@@ -48,26 +50,93 @@ it("invalidates before joined retirement, retries once, and restores availabilit
   expect(events.mock.calls.filter(([event]) => event.reason === "watch-available")).toHaveLength(1);
 });
 
-it("does not automatically loop after its one recovery attempt fails", async () => {
-  const params = { workspaceDir: fixture.workspaceDir };
-  const root = path.join(params.workspaceDir, "skills");
-  refresh.ensureSkillsWatcher(params);
+it("settles a deeper subscriber's scope update when replacement startup fails", async () => {
+  const workspaceDir = fixture.workspaceDir;
+  const root = await fixture.createFixtureDirectory("shared-source");
+  refresh.ensureSkillsWatcher({
+    workspaceDir,
+    sourcePlan: {
+      ...resolveWorkspaceSkillSourcePlan(workspaceDir, { workspaceOnly: true }),
+      roots: [{ dir: root, source: "openclaw-extra", tier: "extra" }],
+    },
+  });
   await observer.readyAll();
   const original = observer.forRoot(root);
-  original.fail(new Error("first"));
+  original.fail(new Error("first scan failed"));
   await original.close();
   await waitForSkillsWatcherTurn();
   await observer.started();
   const retry = observer.forRoot(root);
-  retry.fail(new Error("second"));
-  await waitForSkillsWatcherTurn();
+  const state = pathWatchers.get(root)!;
+  const initialDepth = state.depth;
+  const refreshScope = state.refreshScope;
+  // Bound a broken recursive retry so the regression fails instead of starving the event loop.
+  const scopeUpdates = vi
+    .spyOn(state, "refreshScope")
+    .mockResolvedValue(undefined)
+    .mockImplementationOnce(refreshScope);
+  const peer = await fixture.createFixtureDirectory("peer");
+  refresh.ensureSkillsWatcher({
+    workspaceDir: peer,
+    sourcePlan: {
+      ...resolveWorkspaceSkillSourcePlan(peer, { workspaceOnly: true }),
+      roots: [{ dir: root, source: "openclaw-workspace", tier: "workspace" }],
+    },
+  });
+  expect(state.depth).toBeGreaterThan(initialDepth);
+  expect(scopeUpdates).toHaveBeenCalledOnce();
+  retry.fail(new Error("replacement scan failed"));
+  await scopeUpdates.mock.results[0]!.value;
+  expect(scopeUpdates).toHaveBeenCalledOnce();
+  expect(state.failed).toBe(true);
   expect(observer.forRoot(root, true)).toBe(retry);
   expect(retry.close).not.toHaveBeenCalled();
-  refresh.ensureSkillsWatcher(params);
-  await retry.close();
-  await waitForSkillsWatcherTurn();
+});
+
+it("withholds deeper coverage while resolving the expanded scope", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+  const workspaceDir = fixture.workspaceDir;
+  const root = await fixture.createFixtureDirectory("shared-source");
+  const sourcePlan = resolveWorkspaceSkillSourcePlan(workspaceDir, { workspaceOnly: true });
+  refresh.ensureSkillsWatcher({
+    workspaceDir,
+    sourcePlan: {
+      ...sourcePlan,
+      roots: [{ dir: root, source: "openclaw-extra", tier: "extra" }],
+    },
+  });
   await observer.readyAll();
-  expect(refresh.reconcileSkillsWatcherCoverage(params)).toBe(true);
+  const observed = observer.forRoot(root);
+  const scopeUpdates = vi.spyOn(observed.subscription, "setScopes");
+  const updates = vi.spyOn(pathWatchers.get(root)!, "refreshScope");
+  const planning = await import("./refresh-observation-source.js");
+  const original = vi.mocked(planning.skillsObservationScope).getMockImplementation()!;
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  vi.mocked(planning.skillsObservationScope).mockImplementationOnce(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return original(...args);
+  });
+  const deeper = {
+    workspaceDir,
+    sourcePlan: {
+      ...sourcePlan,
+      roots: [{ dir: root, source: "openclaw-workspace", tier: "workspace" as const }],
+    },
+  };
+  try {
+    expect(refresh.reconcileSkillsWatcherCoverage(deeper)).toBe(false);
+    await entered.promise;
+    expect(refresh.reconcileSkillsWatcherCoverage(deeper)).toBe(false);
+    expect(scopeUpdates).not.toHaveBeenCalled();
+    release.resolve();
+    await updates.mock.results[0]!.value;
+    expect(scopeUpdates).toHaveBeenCalledOnce();
+    expect(refresh.reconcileSkillsWatcherCoverage(deeper)).toBe(true);
+  } finally {
+    release.resolve();
+  }
 });
 
 it.each(["unsubscribe", "shutdown", "re-ensure"] as const)(

@@ -24,13 +24,8 @@ import { logWarn } from "../logger.js";
 import { extractImageContentFromSource, type InputImageSource } from "../media/input-files.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import {
-  mergeAssistantText,
-  mergePendingAssistantText,
+  createAssistantTextStream,
   resolveAssistantResultText,
-  resolveAssistantTextCompletion,
-  resolveAssistantTextInput,
-  resolveAssistantTextStreamDelta,
-  type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -59,12 +54,12 @@ import {
   isGatewayRequestContextError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import {
   validateOpenAiSamplingParams,
+  resolveOpenAiStreamParams,
   resolveResponseFormat,
   resolveStopSequences,
 } from "./openai-compat-errors.js";
@@ -506,9 +501,6 @@ export async function handleOpenAiHttpRequest(
     ...opts,
     pathname: "/v1/chat/completions",
     requiredOperatorMethod: "chat.send",
-    // Compat HTTP uses a different scope model from generic HTTP helpers:
-    // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes: opts.maxBodyBytes ?? limits.maxBodyBytes,
   });
   if (handled === false) {
@@ -548,12 +540,6 @@ export async function handleOpenAiHttpRequest(
   const streamIncludeUsage = stream && payload.stream_options?.include_usage === true;
   const model = payload.model ?? "openclaw";
   const user = payload.user;
-  const maxTokens = payload.max_completion_tokens ?? payload.max_tokens ?? undefined;
-  const temperature = payload.temperature ?? undefined;
-  const topP = payload.top_p ?? undefined;
-  const frequencyPenalty = payload.frequency_penalty ?? undefined;
-  const presencePenalty = payload.presence_penalty ?? undefined;
-  const seed = payload.seed ?? undefined;
   let responseFormat: Record<string, unknown> | undefined;
   try {
     responseFormat = resolveResponseFormat(payload.response_format);
@@ -579,26 +565,16 @@ export async function handleOpenAiHttpRequest(
     sendInvalidRequest(res, samplingError);
     return true;
   }
-  const streamParams =
-    maxTokens !== undefined ||
-    temperature !== undefined ||
-    topP !== undefined ||
-    responseFormat !== undefined ||
-    frequencyPenalty !== undefined ||
-    presencePenalty !== undefined ||
-    seed !== undefined ||
-    stop !== undefined
-      ? {
-          ...(maxTokens !== undefined ? { maxTokens } : {}),
-          ...(temperature !== undefined ? { temperature } : {}),
-          ...(topP !== undefined ? { topP } : {}),
-          ...(responseFormat !== undefined ? { responseFormat } : {}),
-          ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
-          ...(presencePenalty !== undefined ? { presencePenalty } : {}),
-          ...(seed !== undefined ? { seed } : {}),
-          ...(stop !== undefined ? { stop } : {}),
-        }
-      : undefined;
+  const streamParams = resolveOpenAiStreamParams({
+    maxTokens: payload.max_completion_tokens ?? payload.max_tokens ?? undefined,
+    temperature: payload.temperature ?? undefined,
+    topP: payload.top_p ?? undefined,
+    responseFormat,
+    frequencyPenalty: payload.frequency_penalty ?? undefined,
+    presencePenalty: payload.presence_penalty ?? undefined,
+    seed: payload.seed ?? undefined,
+    stop,
+  });
 
   let agentId: string;
   let sessionKey: string;
@@ -609,8 +585,6 @@ export async function handleOpenAiHttpRequest(
       model,
       user,
       sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: true,
     }));
   } catch (err) {
     if (isGatewayRequestContextError(err)) {
@@ -797,15 +771,12 @@ export async function handleOpenAiHttpRequest(
 
   setSseHeaders(res);
 
-  let assistantText: AssistantTextSnapshot = { text: "" };
-  let streamedAssistantText = assistantText;
-  let pendingAssistantText: AssistantTextSnapshot | undefined;
+  const textStream = createAssistantTextStream(Boolean(toolChoice.constraint));
   let finalResultText: string | undefined;
   let finalFinishReason: "stop" | "length" = "stop";
   let finalToolCalls: ReturnType<typeof readOpenAiHttpRunTerminal>["pendingToolCalls"];
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeScheduled = false;
-  let resultResolved = false;
   let closed = false;
   let observedTerminalLifecycle = false;
   let terminalStreamError: { message: string; type: string; code?: string } | undefined;
@@ -815,10 +786,7 @@ export async function handleOpenAiHttpRequest(
     if (closed || finalizeScheduled) {
       return;
     }
-    if (!resultResolved) {
-      return;
-    }
-    if (streamIncludeUsage && !finalUsage) {
+    if (!finalUsage) {
       return;
     }
     // Agent text_end flushes run in a microtask. Keep the stream subscribed
@@ -832,21 +800,18 @@ export async function handleOpenAiHttpRequest(
         finishStreamWithError(terminalStreamError);
         return;
       }
-      const text = resolveAssistantTextCompletion({
-        assistantText,
-        pending: pendingAssistantText,
-        resultText: finalResultText,
-        streamedText: streamedAssistantText.text,
-        fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
-      });
-      if (!text.startsWith(streamedAssistantText.text)) {
+      const text = textStream.complete(
+        finalResultText,
+        finalToolCalls ? "" : "No response from OpenClaw.",
+      );
+      if (!text.startsWith(textStream.streamedText)) {
         finishStreamWithError({
           message: "Assistant output cannot be represented as an append-only response stream.",
           type: "api_error",
         });
         return;
       }
-      const content = text.slice(streamedAssistantText.text.length);
+      const content = text.slice(textStream.streamedText.length);
       if (content) {
         writeChatCompletionChoice(res, streamIdentity, { content });
       }
@@ -878,37 +843,14 @@ export async function handleOpenAiHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const input = resolveAssistantTextInput(evt.data);
-      if (!input) {
-        return;
-      }
-      // Once a provisional replacement begins, even its terminal text echo
-      // stays held until the run result selects the authoritative output.
-      if (input.replaceable || pendingAssistantText) {
-        pendingAssistantText = mergePendingAssistantText(
-          pendingAssistantText ?? assistantText,
-          input,
-        );
-        return;
-      }
-
-      const previous = assistantText;
-      const merged = mergeAssistantText(previous, input, "append-only");
-      assistantText = merged;
-      // Hold prose until the run proves the requested client-tool call exists.
-      if (toolChoice.constraint) {
-        return;
-      }
-      // SSE cannot retract bytes already delivered, even for an item correction.
-      const content = resolveAssistantTextStreamDelta(previous, merged, streamedAssistantText);
-      if (content === undefined) {
+      const { delta: content, replacement } = textStream.update(evt.data);
+      if (replacement === "unrepresentable") {
         terminalStreamError ??= {
           message: "Assistant output cannot be represented as an append-only response stream.",
           type: "api_error",
         };
         return;
       }
-      streamedAssistantText = assistantText;
       if (!content) {
         return;
       }
@@ -961,7 +903,6 @@ export async function handleOpenAiHttpRequest(
   void (async () => {
     try {
       const result = await runAgentCommand();
-      resultResolved = true;
 
       if (closed) {
         return;
@@ -999,7 +940,6 @@ export async function handleOpenAiHttpRequest(
         stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
       requestFinalize();
     } catch (err) {
-      resultResolved = true;
       if (closed || abortController.signal.aborted) {
         return;
       }

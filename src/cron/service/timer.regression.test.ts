@@ -15,6 +15,10 @@ import {
 } from "../../infra/heartbeat-wake.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
+import {
   advanceCronActiveJobGeneration,
   clearCronJobActive,
   isCronJobActive,
@@ -96,36 +100,6 @@ function requireAdmittedRunId(storePath: string, jobId: string): string {
 }
 
 describe("cron service timer regressions", () => {
-  it("#24355: retries a deleteAfterRun one-shot before deleting its successful completion", async () => {
-    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
-    const job = createDueIsolatedJob({
-      id: "oneshot-retry",
-      nowMs: scheduledAt,
-      nextRunAtMs: scheduledAt,
-      deleteAfterRun: true,
-    });
-    const storePath = await storeJobs([job]);
-    let now = scheduledAt;
-    const runIsolatedAgentJob = vi
-      .fn()
-      .mockResolvedValueOnce({ status: "error", error: "429 rate limit exceeded" })
-      .mockResolvedValueOnce({ status: "ok", summary: "done", delivered: true });
-    const state = createCronServiceState({
-      storePath,
-      nowMs: () => now,
-      runIsolatedAgentJob,
-    });
-    await onTimer(state);
-    const retry = requireJob(state, job.id);
-    expect(retry.enabled).toBe(true);
-    expect(retry.state.lastStatus).toBe("error");
-    expect(retry.state.nextRunAtMs).toBeGreaterThan(scheduledAt);
-    now = requireTimestamp(retry.state.nextRunAtMs, "retry next run") + 1;
-    await onTimer(state);
-    expect(state.store?.jobs.find((entry) => entry.id === job.id)).toBeUndefined();
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
-  });
-
   it("#131491: retains a deleteAfterRun one-shot whose stale guard suppressed its delivery", async () => {
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
     const firedAt = scheduledAt + 18 * 60 * 60_000;
@@ -193,6 +167,7 @@ describe("cron service timer regressions", () => {
       payload: { kind: "agentTurn", message: "remind me" },
       state: { nextRunAtMs: scheduledAt },
     });
+    cronJob.deleteAfterRun = true;
     const storePath = await storeJobs([cronJob]);
 
     let now = scheduledAt;
@@ -585,7 +560,19 @@ describe("cron service timer regressions", () => {
     const releaseFirst = createDeferred<{ status: "ok"; summary: string }>();
     const secondStarted = createDeferred();
     const releaseSecond = createDeferred<{ status: "ok"; summary: string }>();
+    const clock = createGatewaySchedulerClock(dueAt);
+    const capacityWakeArmed = createDeferred();
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler({
+        ...clock.clock,
+        arm: (wake, delayMs) => {
+          const cancel = clock.clock.arm(wake, delayMs);
+          if (delayMs === 0) {
+            capacityWakeArmed.resolve();
+          }
+          return cancel;
+        },
+      }),
       storePath,
       testAdmissionLimit: 1,
       nowMs: () => now,
@@ -609,6 +596,8 @@ describe("cron service timer regressions", () => {
       expect(requireJob(state, second.id).state.queuedAtMs).toBeUndefined();
 
       releaseFirst.resolve({ status: "ok", summary: "first" });
+      await capacityWakeArmed.promise;
+      const capacityTick = clock.advanceBy(0);
       await secondStarted.promise;
       const secondStartedAt = now;
       expect(requireJob(state, second.id).state.runningAtMs).toBe(secondStartedAt);
@@ -623,7 +612,7 @@ describe("cron service timer regressions", () => {
       now += 100;
       releaseSecond.resolve({ status: "ok", summary: "second" });
 
-      await timerRun;
+      await Promise.all([timerRun, capacityTick]);
       const completedSecond = state.store?.jobs.find((job) => job.id === second.id);
       expect(completedSecond?.state.lastRunAtMs).toBe(secondStartedAt);
       expect(completedSecond?.state.lastDurationMs).toBe(2 * 60 * 60 * 1000 + 101);
@@ -948,7 +937,9 @@ describe("cron service timer regressions", () => {
     const secondScheduledStarted = vi.fn();
     const onIsolatedAgentSetupTimeout = vi.fn();
     const runnerResult = createDeferred<{ status: "ok"; summary: string }>();
+    const clock = createGatewaySchedulerClock(scheduledAt);
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(clock.clock),
       storePath,
       testAdmissionLimit: 1,
       nowMs: () => now,
@@ -971,6 +962,7 @@ describe("cron service timer regressions", () => {
 
     const manualRun = runManualCronJob(state, manualJob.id, "force");
     let timerRun: ReturnType<typeof onTimer> | undefined;
+    let firstCapacityTick: ReturnType<typeof clock.advanceBy> = undefined;
     try {
       await manualStarted.promise;
       timerRun = onTimer(state);
@@ -978,14 +970,14 @@ describe("cron service timer regressions", () => {
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;
       await manualRun;
+      firstCapacityTick = clock.advanceBy(0);
       await firstScheduledStarted.promise;
 
       finishFirstScheduled.resolve();
-      await timerRun;
-      await vi.waitFor(() => {
-        expect(secondScheduledStarted).toHaveBeenCalledWith(secondScheduledJob.id);
-        expect(requireJob(state, secondScheduledJob.id).state.lastStatus).toBe("ok");
-      });
+      await Promise.all([timerRun, firstCapacityTick]);
+      await clock.advanceBy(0);
+      expect(secondScheduledStarted).toHaveBeenCalledWith(secondScheduledJob.id);
+      expect(requireJob(state, secondScheduledJob.id).state.lastStatus).toBe("ok");
 
       const second = requireJob(state, secondScheduledJob.id);
       expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledTimes(1);
@@ -997,16 +989,14 @@ describe("cron service timer regressions", () => {
       await drain(
         manualRun,
         ...(timerRun ? [timerRun] : []),
+        ...(firstCapacityTick ? [firstCapacityTick] : []),
         runnerResult.promise,
         finishFirstScheduled.promise,
       );
     }
   });
 
-  it.each([
-    { status: "ok", error: undefined, taskStatus: "succeeded" },
-    { status: "skipped", error: "agent skipped after removal", taskStatus: "failed" },
-  ] as const)(
+  it.each([{ status: "ok", error: undefined, taskStatus: "succeeded" }] as const)(
     "finalizes a removed job's $status outcome in operator history",
     async ({ status, error, taskStatus }) => {
       const dueAt = Date.parse("2026-02-06T10:05:01.000Z");

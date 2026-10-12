@@ -124,11 +124,10 @@ export async function continueClaudeSession(
       });
       history = loadedHistory;
       const config = currentClaudeSessionCatalogConfig(api);
-      const adoptingAgentId = agentId;
       // Adopt onto the model this agent actually routes to the CLI backend; the
       // packaged default may not be routed or allowed in an existing config.
       const model =
-        resolveClaudeCliRoutedModelId(config, adoptingAgentId) ??
+        resolveClaudeCliRoutedModelId(config, agentId) ??
         CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
       const marker = {
         sourceThreadId: threadId,
@@ -137,7 +136,7 @@ export async function continueClaudeSession(
       const created = await api.runtime.agent.session.createSessionEntry({
         cfg: config,
         key: adoptedSessionKey(hostId, threadId),
-        agentId: adoptingAgentId,
+        agentId,
         recoverMatchingInitialEntry: true,
         ...(record.name ? { displayName: record.name } : {}),
         ...(record.cwd ? { spawnedCwd: record.cwd } : {}),

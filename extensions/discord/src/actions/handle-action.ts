@@ -41,14 +41,6 @@ import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 
 const providerId = "discord";
 
-function withCurrentSourceReplyRoute<T>(result: AgentToolResult<T>): AgentToolResult<T> {
-  const details = asOptionalRecord(result.details) ?? {};
-  return {
-    ...result,
-    details: { ...details, sourceReplyRoute: "current-source" } as T,
-  };
-}
-
 function readCurrentDiscordTarget(
   toolContext: Pick<ChannelMessageActionContext, "toolContext">["toolContext"],
 ): string | undefined {
@@ -124,19 +116,9 @@ async function dispatchDiscordMessageAction(
     ...(ctx.progressSnapshot ? { progressSnapshot: ctx.progressSnapshot } : {}),
     ...readPolicyOptions,
   } as const;
-  const runAction = ({
-    action: runtimeAction,
-    ...payload
-  }: {
-    action: string;
-    [key: string]: unknown;
-  }) =>
-    handleDiscordAction(
-      { action: runtimeAction, accountId: accountId ?? undefined, ...payload },
-      cfg,
-      actionOptions,
-    );
-  const notifyVisibleOutbound = (
+  const runAction = (payload: { action: string; [key: string]: unknown }) =>
+    handleDiscordAction({ accountId, ...payload }, cfg, actionOptions);
+  const completeOutbound = (
     result: AgentToolResult<unknown>,
     to: string,
     fallbackSessionKey?: string,
@@ -145,7 +127,7 @@ async function dispatchDiscordMessageAction(
     // Resolved failures are not delivery receipts; clearing room history would
     // otherwise permanently discard context without any visible reply.
     if (details?.ok !== true) {
-      return;
+      return result;
     }
     discordInboundEventDelivery.notify({
       sessionKey: ctx.sessionKey ?? fallbackSessionKey ?? undefined,
@@ -153,16 +135,7 @@ async function dispatchDiscordMessageAction(
       accountId,
       inboundEventKind: ctx.inboundEventKind,
     });
-  };
-  const withAdoptedThreadReplyRoute = (
-    result: AgentToolResult<unknown>,
-    to: string,
-    fallbackSessionKey?: string,
-  ) => {
-    const details = asOptionalRecord(result.details);
-    // Only a positive runtime receipt may suppress the source fallback. A
-    // resolved failure must leave the turn eligible for visible error delivery.
-    if (details?.ok !== true) {
+    if (action !== "send" && action !== "upload-file" && action !== "thread-reply") {
       return result;
     }
     let target;
@@ -181,7 +154,7 @@ async function dispatchDiscordMessageAction(
         threadId: target.id,
       })
     ) {
-      return withCurrentSourceReplyRoute(result);
+      return { ...result, details: { ...details, sourceReplyRoute: "current-source" } };
     }
     return result;
   };
@@ -288,8 +261,7 @@ async function dispatchDiscordMessageAction(
       __sessionKey: sessionKey ?? undefined,
       __agentId: agentId ?? undefined,
     });
-    notifyVisibleOutbound(result, to, sessionKey);
-    return withAdoptedThreadReplyRoute(result, to, sessionKey);
+    return completeOutbound(result, to, sessionKey);
   }
 
   if (action === "react") {
@@ -400,8 +372,7 @@ async function dispatchDiscordMessageAction(
         threadId,
       });
     }
-    notifyVisibleOutbound(result, resolveChannelId());
-    return result;
+    return completeOutbound(result, resolveChannelId());
   }
 
   if (action === "sticker") {
@@ -418,8 +389,7 @@ async function dispatchDiscordMessageAction(
       content: readStringParam(params, "message", { trim: false }),
       ...(readBooleanParam(params, "silent") === true ? { silent: true } : {}),
     });
-    notifyVisibleOutbound(result, to);
-    return result;
+    return completeOutbound(result, to);
   }
 
   if (action === "set-presence") {
@@ -442,8 +412,7 @@ async function dispatchDiscordMessageAction(
   if (adminResult !== undefined) {
     if (action === "thread-reply") {
       const threadId = readStringParam(params, "threadId") ?? readTarget();
-      notifyVisibleOutbound(adminResult, threadId);
-      return withAdoptedThreadReplyRoute(adminResult, threadId);
+      return completeOutbound(adminResult, threadId);
     }
     return adminResult;
   }

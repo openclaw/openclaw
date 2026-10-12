@@ -1,6 +1,9 @@
-import { type FSWatcher, readFileSync, watch } from "node:fs";
+import { readFileSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
+import { root } from "@openclaw/fs-safe/root";
+import { watch, type WatchSubscription } from "@openclaw/fs-safe/watch";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
 import { createDedupeCache } from "../../infra/dedupe.js";
@@ -11,7 +14,11 @@ import type { UsageBarTemplate } from "./translator.js";
 
 type UsageTemplateConfig = string | Record<string, unknown> | undefined;
 
-type CacheEntry = { template: UsageBarTemplate | undefined; watcher?: FSWatcher };
+type CacheEntry = {
+  template: UsageBarTemplate | undefined;
+  watcher?: Promise<WatchSubscription | undefined>;
+  abort: AbortController;
+};
 const fileCache = new Map<string, CacheEntry>();
 const MAX_CACHED_TEMPLATE_FILES = 64;
 const MAX_WARNED_TEMPLATE_OVERRIDES = 256;
@@ -45,54 +52,50 @@ function hasOutputPieces(output: unknown): boolean {
   return isPlainObject(surfaces) && Object.values(surfaces).some(hasPieces);
 }
 
-function isEmptyTemplate(value: unknown): boolean {
-  if (!isPlainObject(value)) {
-    return false;
-  }
-  if (Object.keys(value).length === 0) {
-    return true;
-  }
-  if (Array.isArray(value.segments)) {
-    return value.segments.length === 0;
-  }
-  const output = value.output;
-  return isPlainObject(output) && !hasOutputPieces(output);
-}
-
-function isUsableTemplate(value: unknown): value is UsageBarTemplate {
-  if (!isPlainObject(value)) {
-    return false;
-  }
-  if (hasOutputPieces(value.output) || hasPieces(value.segments)) {
-    return true;
-  }
-  const surfaces = value.surfaces;
-  return (
-    isPlainObject(surfaces) &&
-    Object.values(surfaces).some((surface) => isPlainObject(surface) && hasPieces(surface.segments))
-  );
-}
-
 type InvalidTemplateReason = "invalid-json" | "unreadable" | "unsupported-shape";
 type TemplateReadResult = { template?: UsageBarTemplate; reason?: InvalidTemplateReason };
 
-function warnInvalidUsageTemplate(source: "inline" | "file", reason: string, path?: string): void {
-  const key = `${source}:${reason}:${path ?? ""}`;
-  if (warnedTemplateOverrides.check(key)) {
-    return;
+function resolveTemplateOrWarn(
+  result: TemplateReadResult,
+  source: "inline" | "file",
+  path?: string,
+): UsageBarTemplate | undefined {
+  const reason = result.reason;
+  if (reason && !warnedTemplateOverrides.check(`${source}:${reason}:${path ?? ""}`)) {
+    usageTemplateLog.warn("configured usage template could not be used; using built-in footer", {
+      source,
+      reason,
+      ...(path ? { path } : {}),
+    });
   }
-  usageTemplateLog.warn("configured usage template could not be used; using built-in footer", {
-    source,
-    reason,
-    ...(path ? { path } : {}),
-  });
+  return result.template;
 }
 
 function parseTemplate(value: unknown): TemplateReadResult {
-  if (isUsableTemplate(value)) {
-    return { template: value };
+  if (isPlainObject(value)) {
+    const usable = hasOutputPieces(value.output) || hasPieces(value.segments);
+    const surfaces = usable ? undefined : value.surfaces;
+    if (
+      usable ||
+      (isPlainObject(surfaces) &&
+        Object.values(surfaces).some(
+          (surface) => isPlainObject(surface) && hasPieces(surface.segments),
+        ))
+    ) {
+      return { template: value };
+    }
+    if (Object.keys(value).length === 0) {
+      return {};
+    }
+    if (Array.isArray(value.segments)) {
+      return value.segments.length === 0 ? {} : { reason: "unsupported-shape" };
+    }
+    const output = value.output;
+    if (isPlainObject(output) && !hasOutputPieces(output)) {
+      return {};
+    }
   }
-  return isEmptyTemplate(value) ? {} : { reason: "unsupported-shape" };
+  return { reason: "unsupported-shape" };
 }
 
 function readTemplateFile(path: string): TemplateReadResult {
@@ -113,48 +116,51 @@ function readTemplateFile(path: string): TemplateReadResult {
 }
 
 function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
-  const result = readTemplateFile(path);
-  if (result.reason) {
-    warnInvalidUsageTemplate("file", result.reason, path);
-  }
+  const template = resolveTemplateOrWarn(readTemplateFile(path), "file", path);
   // Evict before allocating a watcher, but preserve other entries on same-path retries.
   if (!fileCache.has(path) && fileCache.size >= MAX_CACHED_TEMPLATE_FILES) {
     const oldestKey = fileCache.keys().next().value;
     if (oldestKey !== undefined) {
-      fileCache.get(oldestKey)?.watcher?.close();
+      fileCache.get(oldestKey)?.abort.abort();
       fileCache.delete(oldestKey);
     }
   }
-  const entry: CacheEntry = { template: result.template };
-  // The next load rereads the path and installs a fresh watcher.
-  const invalidate = () => {
-    entry.watcher?.close();
-    entry.watcher = undefined;
-    entry.template = undefined;
-  };
+  const entry: CacheEntry = { template, abort: new AbortController() };
   if (entry.template) {
-    try {
-      const watcher = watch(path, { persistent: false }, (eventType) => {
-        // A late event from an invalidated watcher must not repopulate a template it no longer tracks.
-        if (entry.watcher !== watcher) {
-          return;
-        }
-        // Atomic saves rename a new file over the path, leaving this watcher on the old inode.
-        if (eventType === "rename") {
-          invalidate();
-          return;
-        }
-        const next = readTemplateFile(path);
-        if (next.reason) {
-          warnInvalidUsageTemplate("file", next.reason, path);
-        }
-        entry.template = next.template;
+    entry.watcher = (async () => {
+      // Preserve configured symlink targets, including links in parent directories.
+      const canonical = await realpath(path);
+      const authority = await root(dirname(canonical), { hardlinks: "allow" });
+      if (entry.abort.signal.aborted) {
+        return undefined;
+      }
+      const watcher = watch(authority, {
+        mode: "auto",
+        persistent: false,
+        scopes: [{ path: basename(canonical), kind: "entry" }],
+        signal: entry.abort.signal,
+        onInvalidate: () => {
+          const next = resolveTemplateOrWarn(readTemplateFile(path), "file", path);
+          if (JSON.stringify(next) !== JSON.stringify(entry.template)) {
+            entry.template = next;
+          }
+        },
+        onHealth: (health) => {
+          if (health.state === "unavailable") {
+            entry.abort.abort();
+            entry.watcher = undefined;
+            entry.template = undefined;
+          }
+        },
       });
-      watcher.on("error", invalidate);
-      entry.watcher = watcher;
-    } catch {
-      // Cache remains valid without live refresh.
-    }
+      await watcher.ready;
+      return watcher;
+    })().catch(() => {
+      entry.abort.abort();
+      entry.watcher = undefined;
+      entry.template = undefined;
+      return undefined;
+    });
   }
   fileCache.set(path, entry);
   return entry.template;
@@ -165,11 +171,7 @@ export function loadUsageBarTemplate(configured: UsageTemplateConfig): UsageBarT
     return DEFAULT_USAGE_BAR_TEMPLATE;
   }
   if (typeof configured === "object") {
-    const result = parseTemplate(configured);
-    if (result.reason) {
-      warnInvalidUsageTemplate("inline", result.reason);
-    }
-    return result.template ?? DEFAULT_USAGE_BAR_TEMPLATE;
+    return resolveTemplateOrWarn(parseTemplate(configured), "inline") ?? DEFAULT_USAGE_BAR_TEMPLATE;
   }
   const path = expandPath(configured);
   const cached = fileCache.get(path);
@@ -180,12 +182,14 @@ export function loadUsageBarTemplate(configured: UsageTemplateConfig): UsageBarT
   );
 }
 
-function clearUsageBarTemplateCacheForTest(): void {
-  for (const entry of fileCache.values()) {
-    entry.watcher?.close();
-  }
+async function clearUsageBarTemplateCacheForTest(): Promise<void> {
+  const entries = [...fileCache.values()];
   fileCache.clear();
   warnedTemplateOverrides.clear();
+  for (const entry of entries) {
+    entry.abort.abort();
+  }
+  await Promise.all(entries.map(async (entry) => (await entry.watcher)?.close()));
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

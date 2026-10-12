@@ -1,18 +1,27 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONFIG_AUDIT_MAX_ENTRIES,
   CONFIG_AUDIT_SCOPE,
   type ConfigAuditRecord,
 } from "../../config/io.audit.js";
+import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { createSqliteAuditRecordStore } from "../../infra/sqlite-audit-record-store.js";
-import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import * as stateReader from "../../state/openclaw-state-db-readonly.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import type { OpenClawStateReadReply } from "../../state/openclaw-state-read.types.js";
 import {
   SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
   SYSTEM_AGENT_AUDIT_SCOPE,
   type SystemAgentAuditEntry,
 } from "../../system-agent/audit.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { listSystemChanges, SYSTEM_CHANGE_MAX_RAW_SCAN_PER_SCOPE } from "./system-changes.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import {
+  listSystemChanges,
+  SYSTEM_CHANGE_MAX_RAW_SCAN_PER_SCOPE,
+  systemChangesHandlers,
+} from "./system-changes.js";
 
 function configRecord(
   value: Partial<Extract<ConfigAuditRecord, { event: "config.write" }>> & {
@@ -46,16 +55,65 @@ function createAuditStores(env: NodeJS.ProcessEnv) {
 }
 
 describe("openclaw.changes.list", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabase();
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    await closeOpenClawStateDatabaseAsync();
   });
+
+  it.each(["revoked", "rejected"] as const)(
+    "does not disclose a delayed %s read",
+    async (outcome) => {
+      await withTestDir({ prefix: "openclaw-system-changes-delayed-" }, async (stateDir) => {
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        const read = createDeferredCore<OpenClawStateReadReply | undefined>();
+        vi.spyOn(stateReader, "executeExistingOpenClawStateRead")
+          .mockReturnValueOnce(read.promise)
+          .mockResolvedValue({
+            ok: true,
+            sourceAdmitted: true,
+            type: "diagnostic.latest",
+            entries: [],
+          });
+        let current = true;
+        const respond = vi.fn();
+        const pending = systemChangesHandlers["openclaw.changes.list"]!({
+          req: { type: "req", id: "changes", method: "openclaw.changes.list" },
+          params: {},
+          respond,
+          client: null,
+          isWebchatConnect: () => false,
+          context: createDirectChatContext(),
+          hasCurrentClientAuthority: () => current,
+        });
+        expect(respond).not.toHaveBeenCalled();
+        if (outcome === "revoked") {
+          current = false;
+          read.resolve({ ok: true, sourceAdmitted: true, type: "diagnostic.latest", entries: [] });
+        } else {
+          read.reject(new Error("audit reader refused"));
+        }
+        await pending;
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            message:
+              outcome === "revoked"
+                ? "Gateway requester authority changed"
+                : "audit reader refused",
+          }),
+        );
+      });
+    },
+  );
 
   it("merges journals, collapses matching writes, and skips non-history records", async () => {
     await withTestDir({ prefix: "openclaw-system-changes-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const { systemStore, configStore } = createAuditStores(env);
 
-      systemStore.register(
+      systemStore.upsert(
         "operation",
         {
           timestamp: "2026-07-18T12:00:04.000Z",
@@ -66,7 +124,7 @@ describe("openclaw.changes.list", () => {
         },
         4_000,
       );
-      configStore.register(
+      configStore.upsert(
         "external",
         {
           event: "config.external",
@@ -79,7 +137,7 @@ describe("openclaw.changes.list", () => {
         } as unknown as ConfigAuditRecord,
         1_000,
       );
-      configStore.register(
+      configStore.upsert(
         "doctor-write",
         configRecord({
           ts: "2026-07-18T12:00:02.000Z",
@@ -90,7 +148,7 @@ describe("openclaw.changes.list", () => {
         }),
         2_000,
       );
-      configStore.register(
+      configStore.upsert(
         "matching-write",
         configRecord({
           ts: "2026-07-18T12:00:03.000Z",
@@ -101,7 +159,7 @@ describe("openclaw.changes.list", () => {
         }),
         3_000,
       );
-      configStore.register(
+      configStore.upsert(
         "repeated-cli-transition",
         configRecord({
           ts: "2026-07-18T12:00:05.000Z",
@@ -112,7 +170,7 @@ describe("openclaw.changes.list", () => {
         }),
         2_000,
       );
-      configStore.register(
+      configStore.upsert(
         "failed",
         configRecord({
           ts: "2026-07-18T12:00:05.500Z",
@@ -122,7 +180,7 @@ describe("openclaw.changes.list", () => {
         }),
         3_000,
       );
-      configStore.register(
+      configStore.upsert(
         "observe",
         {
           event: "config.observe",
@@ -131,7 +189,21 @@ describe("openclaw.changes.list", () => {
         6_000,
       );
 
-      expect(listSystemChanges({ limit: 50 }, { env })).toEqual({
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
+      const singleQueries = vi.spyOn(sqliteQueries, "executeSqliteQueryTakeFirstSync");
+      const respond = vi.fn();
+      await systemChangesHandlers["openclaw.changes.list"]!({
+        req: { type: "req", id: "changes", method: "openclaw.changes.list" },
+        params: { limit: 50 },
+        respond,
+        client: null,
+        isWebchatConnect: () => false,
+        context: createDirectChatContext(),
+      });
+      expect(queries).not.toHaveBeenCalled();
+      expect(singleQueries).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
         entries: [
           // Canonical order is store insertion (createdAt desc), not display
           // time: the operation registered last surfaces first even though its
@@ -172,7 +244,7 @@ describe("openclaw.changes.list", () => {
         maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
         env,
       });
-      store.register(
+      store.upsert(
         "doctor",
         configRecord({
           ts: "2026-07-18T12:00:03.000Z",
@@ -181,7 +253,7 @@ describe("openclaw.changes.list", () => {
           nextHash: "b",
         }),
       );
-      store.register(
+      store.upsert(
         "config",
         configRecord({
           ts: "2026-07-18T12:00:02.000Z",
@@ -190,7 +262,7 @@ describe("openclaw.changes.list", () => {
           nextHash: "c",
         }),
       );
-      store.register(
+      store.upsert(
         "unknown",
         configRecord({
           ts: "2026-07-18T12:00:01.000Z",
@@ -200,7 +272,7 @@ describe("openclaw.changes.list", () => {
         }),
       );
 
-      expect(listSystemChanges({}, { env }).entries.map((entry) => entry.source)).toEqual([
+      expect((await listSystemChanges({}, { env })).entries.map((entry) => entry.source)).toEqual([
         "unknown",
         "cli",
         "doctor",
@@ -212,7 +284,7 @@ describe("openclaw.changes.list", () => {
     await withTestDir({ prefix: "openclaw-system-changes-collapse-cursor-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const { systemStore, configStore } = createAuditStores(env);
-      configStore.register(
+      configStore.upsert(
         "matching-write",
         configRecord({
           ts: "2026-07-18T12:00:01.000Z",
@@ -223,7 +295,7 @@ describe("openclaw.changes.list", () => {
         }),
         1_000,
       );
-      configStore.register(
+      configStore.upsert(
         "intervening-write-one",
         configRecord({
           ts: "2026-07-18T12:00:02.000Z",
@@ -234,7 +306,7 @@ describe("openclaw.changes.list", () => {
         }),
         2_000,
       );
-      configStore.register(
+      configStore.upsert(
         "intervening-write-two",
         configRecord({
           ts: "2026-07-18T12:00:03.000Z",
@@ -245,7 +317,7 @@ describe("openclaw.changes.list", () => {
         }),
         3_000,
       );
-      systemStore.register(
+      systemStore.upsert(
         "operation",
         {
           timestamp: "2026-07-18T12:00:04.000Z",
@@ -257,18 +329,18 @@ describe("openclaw.changes.list", () => {
         4_000,
       );
 
-      const first = listSystemChanges({ limit: 1 }, { env });
+      const first = await listSystemChanges({ limit: 1 }, { env });
       expect(first.entries).toEqual([
         expect.objectContaining({
           kind: "operation",
           summary: "Set config gateway.port",
         }),
       ]);
-      const second = listSystemChanges({ limit: 1, beforeCursor: first.nextCursor }, { env });
+      const second = await listSystemChanges({ limit: 1, beforeCursor: first.nextCursor }, { env });
       expect(second.entries).toEqual([
         expect.objectContaining({ changedPaths: ["gateway.mode"], source: "cli" }),
       ]);
-      const third = listSystemChanges({ limit: 1, beforeCursor: second.nextCursor }, { env });
+      const third = await listSystemChanges({ limit: 1, beforeCursor: second.nextCursor }, { env });
       expect(third.entries).toEqual([
         expect.objectContaining({ changedPaths: ["gateway.bind"], source: "cli" }),
       ]);
@@ -288,7 +360,7 @@ describe("openclaw.changes.list", () => {
     await withTestDir({ prefix: "openclaw-system-changes-pending-window-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const { systemStore, configStore } = createAuditStores(env);
-      configStore.register(
+      configStore.upsert(
         "old-matching-transition",
         configRecord({
           ts: "2026-07-18T11:58:00.000Z",
@@ -299,7 +371,7 @@ describe("openclaw.changes.list", () => {
         }),
         1_000,
       );
-      configStore.register(
+      configStore.upsert(
         "intervening-write-one",
         configRecord({
           ts: "2026-07-18T12:00:02.000Z",
@@ -310,7 +382,7 @@ describe("openclaw.changes.list", () => {
         }),
         2_000,
       );
-      configStore.register(
+      configStore.upsert(
         "intervening-write-two",
         configRecord({
           ts: "2026-07-18T12:00:03.000Z",
@@ -321,7 +393,7 @@ describe("openclaw.changes.list", () => {
         }),
         3_000,
       );
-      systemStore.register(
+      systemStore.upsert(
         "operation",
         {
           timestamp: "2026-07-18T12:00:04.000Z",
@@ -336,7 +408,7 @@ describe("openclaw.changes.list", () => {
       const pages = [];
       let cursor: string | undefined;
       do {
-        const page = listSystemChanges(
+        const page = await listSystemChanges(
           { limit: 1, ...(cursor ? { beforeCursor: cursor } : {}) },
           { env },
         );
@@ -354,48 +426,13 @@ describe("openclaw.changes.list", () => {
     });
   });
 
-  it("does not collapse a repeated transition outside the operation window", async () => {
-    await withTestDir({ prefix: "openclaw-system-changes-collapse-window-" }, async (stateDir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const { systemStore, configStore } = createAuditStores(env);
-      configStore.register(
-        "old-transition",
-        configRecord({
-          ts: "2026-07-18T11:58:00.000Z",
-          origin: "system-agent",
-          previousHash: "a",
-          nextHash: "b",
-          changedPaths: ["gateway.bind"],
-        }),
-        1_000,
-      );
-      systemStore.register(
-        "operation",
-        {
-          timestamp: "2026-07-18T12:00:04.000Z",
-          operation: "config.set",
-          summary: "Set config gateway.port",
-          configHashBefore: "a",
-          configHashAfter: "b",
-        },
-        121_000,
-      );
-
-      const result = listSystemChanges({ limit: 50 }, { env });
-      expect(result.entries).toEqual([
-        expect.objectContaining({ kind: "operation", summary: "Set config gateway.port" }),
-        expect.objectContaining({ kind: "config-write", changedPaths: ["gateway.bind"] }),
-      ]);
-    });
-  });
-
   it("prefers an in-window match over an older repeated transition", async () => {
     await withTestDir(
       { prefix: "openclaw-system-changes-repeated-transition-" },
       async (stateDir) => {
         const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
         const { systemStore, configStore } = createAuditStores(env);
-        configStore.register(
+        configStore.upsert(
           "old-transition",
           configRecord({
             ts: "2026-07-18T12:00:01.000Z",
@@ -406,7 +443,7 @@ describe("openclaw.changes.list", () => {
           }),
           1_000,
         );
-        configStore.register(
+        configStore.upsert(
           "current-transition",
           configRecord({
             ts: "2026-07-18T12:00:02.000Z",
@@ -417,7 +454,7 @@ describe("openclaw.changes.list", () => {
           }),
           2_000,
         );
-        configStore.register(
+        configStore.upsert(
           "newer-cli-write",
           configRecord({
             ts: "2026-07-18T12:00:03.000Z",
@@ -428,7 +465,7 @@ describe("openclaw.changes.list", () => {
           }),
           3_000,
         );
-        systemStore.register(
+        systemStore.upsert(
           "operation",
           {
             timestamp: "2026-07-18T12:00:04.000Z",
@@ -440,15 +477,21 @@ describe("openclaw.changes.list", () => {
           4_000,
         );
 
-        const first = listSystemChanges({ limit: 1 }, { env });
+        const first = await listSystemChanges({ limit: 1 }, { env });
         expect(first.entries).toEqual([
           expect.objectContaining({ kind: "operation", changedPaths: ["current.path"] }),
         ]);
-        const second = listSystemChanges({ limit: 1, beforeCursor: first.nextCursor }, { env });
+        const second = await listSystemChanges(
+          { limit: 1, beforeCursor: first.nextCursor },
+          { env },
+        );
         expect(second.entries).toEqual([
           expect.objectContaining({ source: "cli", changedPaths: ["gateway.bind"] }),
         ]);
-        const third = listSystemChanges({ limit: 1, beforeCursor: second.nextCursor }, { env });
+        const third = await listSystemChanges(
+          { limit: 1, beforeCursor: second.nextCursor },
+          { env },
+        );
         expect(third.entries).toEqual([
           expect.objectContaining({ kind: "config-write", changedPaths: ["old.path"] }),
         ]);
@@ -470,7 +513,7 @@ describe("openclaw.changes.list", () => {
         ["two", "b", "c"],
         ["three", "c", "d"],
       ] as const) {
-        store.register(
+        store.upsert(
           key,
           configRecord({
             ts: "2026-07-18T12:00:00.000Z",
@@ -483,11 +526,11 @@ describe("openclaw.changes.list", () => {
         );
       }
 
-      const first = listSystemChanges({ limit: 2 }, { env });
+      const first = await listSystemChanges({ limit: 2 }, { env });
       expect(first.entries.map((entry) => entry.changedPaths?.[0])).toEqual(["three", "two"]);
       expect(first.nextCursor).toEqual(expect.any(String));
 
-      store.register(
+      store.upsert(
         "new-after-first-page",
         configRecord({
           ts: "2026-07-18T12:00:01.000Z",
@@ -498,7 +541,7 @@ describe("openclaw.changes.list", () => {
         }),
         2_000,
       );
-      const second = listSystemChanges({ limit: 2, beforeCursor: first.nextCursor }, { env });
+      const second = await listSystemChanges({ limit: 2, beforeCursor: first.nextCursor }, { env });
       expect(second.entries.map((entry) => entry.changedPaths?.[0])).toEqual(["one"]);
       expect(second.nextCursor).toBeUndefined();
     });
@@ -508,7 +551,7 @@ describe("openclaw.changes.list", () => {
     await withTestDir({ prefix: "openclaw-system-changes-frozen-heads-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const { systemStore, configStore } = createAuditStores(env);
-      systemStore.register(
+      systemStore.upsert(
         "older-operation",
         {
           timestamp: "2026-07-18T12:00:01.000Z",
@@ -517,7 +560,7 @@ describe("openclaw.changes.list", () => {
         },
         1_000,
       );
-      systemStore.register(
+      systemStore.upsert(
         "newer-operation",
         {
           timestamp: "2026-07-18T12:00:02.000Z",
@@ -527,13 +570,13 @@ describe("openclaw.changes.list", () => {
         2_000,
       );
 
-      const first = listSystemChanges({ limit: 1 }, { env });
+      const first = await listSystemChanges({ limit: 1 }, { env });
       expect(first.entries).toEqual([
         expect.objectContaining({ summary: "Updated configuration" }),
       ]);
       expect(first.nextCursor).toEqual(expect.any(String));
 
-      configStore.register(
+      configStore.upsert(
         "inserted-between-pages",
         configRecord({
           ts: "2026-07-18T12:00:03.000Z",
@@ -545,63 +588,16 @@ describe("openclaw.changes.list", () => {
         3_000,
       );
 
-      const second = listSystemChanges({ limit: 1, beforeCursor: first.nextCursor }, { env });
+      const second = await listSystemChanges({ limit: 1, beforeCursor: first.nextCursor }, { env });
       expect(second.entries).toEqual([
         expect.objectContaining({ summary: "Repaired configuration" }),
       ]);
       expect(second.entries.some((entry) => entry.changedPaths?.includes("gateway.port"))).toBe(
         false,
       );
-      expect(listSystemChanges({ limit: 50 }, { env }).entries).toContainEqual(
+      expect((await listSystemChanges({ limit: 50 }, { env })).entries).toContainEqual(
         expect.objectContaining({ changedPaths: ["gateway.port"] }),
       );
-    });
-  });
-
-  it("uses store insertion order when a producer clock moves backwards", async () => {
-    await withTestDir({ prefix: "openclaw-system-changes-insertion-order-" }, async (stateDir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const store = createSqliteAuditRecordStore<ConfigAuditRecord>({
-        scope: CONFIG_AUDIT_SCOPE,
-        maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-        env,
-      });
-      for (const [key, ts, before, after, createdAt] of [
-        ["one", "2026-07-18T09:00:00.000Z", "a", "b", 1_000],
-        ["two", "2026-07-18T11:00:00.000Z", "b", "c", 2_000],
-        ["three", "2026-07-18T10:00:00.000Z", "c", "d", 3_000],
-      ] as const) {
-        store.register(
-          key,
-          configRecord({
-            ts,
-            origin: "config-rpc",
-            previousHash: before,
-            nextHash: after,
-            changedPaths: [key],
-          }),
-          createdAt,
-        );
-      }
-
-      const pages = [];
-      let cursor: string | undefined;
-      do {
-        const page = listSystemChanges(
-          { limit: 1, ...(cursor ? { beforeCursor: cursor } : {}) },
-          { env },
-        );
-        pages.push(...page.entries);
-        cursor = page.nextCursor;
-      } while (cursor);
-
-      expect(pages.map((entry) => entry.changedPaths?.[0])).toEqual(["three", "two", "one"]);
-      expect(pages.map((entry) => entry.at)).toEqual([
-        Date.parse("2026-07-18T10:00:00.000Z"),
-        Date.parse("2026-07-18T11:00:00.000Z"),
-        Date.parse("2026-07-18T09:00:00.000Z"),
-      ]);
-      expect(pages.map((entry) => entry.id)).toEqual([...new Set(pages.map((entry) => entry.id))]);
     });
   });
 
@@ -614,7 +610,7 @@ describe("openclaw.changes.list", () => {
         env,
       });
       for (let index = 0; index < SYSTEM_CHANGE_MAX_RAW_SCAN_PER_SCOPE + 250; index += 1) {
-        configStore.register(
+        configStore.upsert(
           `ineligible-${index}`,
           index % 2 === 0
             ? ({ event: "config.observe", ts: "2026-07-18T12:00:00.000Z" } as ConfigAuditRecord)
@@ -630,12 +626,12 @@ describe("openclaw.changes.list", () => {
 
       const firstCalls: Array<{ limit: number; beforeSequence?: number }> = [];
       let firstRawRows = 0;
-      const first = listSystemChanges(
+      const first = await listSystemChanges(
         { limit: 50 },
         {
           env,
           configStore: {
-            latest(params) {
+            async latest(params) {
               firstCalls.push(params);
               const entries = configStore.latest(params);
               firstRawRows += entries.length;
@@ -657,12 +653,12 @@ describe("openclaw.changes.list", () => {
 
       const secondCalls: Array<{ limit: number; beforeSequence?: number }> = [];
       let secondRawRows = 0;
-      const second = listSystemChanges(
+      const second = await listSystemChanges(
         { limit: 50, beforeCursor: first.nextCursor },
         {
           env,
           configStore: {
-            latest(params) {
+            async latest(params) {
               secondCalls.push(params);
               const entries = configStore.latest(params);
               secondRawRows += entries.length;
