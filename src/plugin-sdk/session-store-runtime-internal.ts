@@ -62,10 +62,16 @@ export function toSessionAccessScope(params: SessionStoreReadParams): SessionAcc
 
 export function projectPluginSessionEntry(entry: InternalSessionEntry): SessionEntry {
   const publicEntry = projectPublicSessionEntry(entry);
+  const baseline = publicEntry.sessionDiffBaseline;
   return {
     ...publicEntry,
     ...(entry.restartRecoveryRuns
       ? { restartRecoveryRuns: entry.restartRecoveryRuns.map((run) => ({ ...run })) }
+      : {}),
+    // Stored baselines share one frozen record per checkout file across every parsed row.
+    // Plugin results are owned, so detach them here the way restartRecoveryRuns is detached.
+    ...(baseline?.files
+      ? { sessionDiffBaseline: { ...baseline, files: structuredClone(baseline.files) } }
       : {}),
   };
 }

@@ -229,3 +229,21 @@ describe("plugin session writer claim projection", () => {
     });
   });
 });
+
+it("hands plugin callers detached baseline records they can still mutate", () => {
+  const shared = Object.freeze({ fingerprint: "aaa", path: "src/a.ts" });
+  const entry = {
+    sessionDiffBaseline: { files: [shared], root: "/repo", sessionId: "s1", version: 1 },
+    sessionId: "session-baseline",
+    updatedAt: 10,
+  } as unknown as InternalSessionEntry;
+
+  const projected = projectPluginSessionEntry(entry);
+  const file = projected.sessionDiffBaseline?.files?.[0];
+  expect(file).toEqual({ fingerprint: "aaa", path: "src/a.ts" });
+  // The stored record stays shared and frozen; the owned result must not be either.
+  expect(file).not.toBe(shared);
+  expect(Object.isFrozen(file)).toBe(false);
+  (file as { fingerprint: string }).fingerprint = "zzz";
+  expect(shared.fingerprint).toBe("aaa");
+});

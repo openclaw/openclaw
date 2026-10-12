@@ -755,6 +755,9 @@ const config = {
     "src/gateway/board-view-ticket.ts": ["exports"],
     // Focused startup tests consume this explicit seam; production imports only the bootstrap.
     "src/gateway/server-startup-bootstrap.ts": ["exports"],
+    // Focused interning tests consume the record primitive and table-size seam to prove the
+    // bounded LRU; production imports only the entry-level internSessionEntryDiffBaseline.
+    "src/config/sessions/session-diff-baseline-intern.ts": ["exports"],
     // Registry facades retain direct registration/reset compatibility seams used by focused
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],
