@@ -31,8 +31,9 @@ Use the phase-specific hooks for new plugins:
 - `before_model_resolve`: receives only the current prompt and attachment
   metadata. Return `providerOverride`, `modelOverride`, or `fallbacksOverride`.
   When provided, `fallbacksOverride` replaces the fallback chain for this run;
-  `[]` disables model fallback, so a failed primary fails the run. Omit it to
-  preserve configured fallback behavior.
+  `[]` disables model fallback, so a failed primary fails the run. A value that
+  is not an array of strings is treated as `[]`. Omit it to preserve configured
+  fallback behavior.
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.
