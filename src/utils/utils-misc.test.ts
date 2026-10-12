@@ -64,6 +64,17 @@ describe("splitShellArgs", () => {
     expect(splitShellArgs(String.raw`echo "\$HOME"`)).toEqual(["echo", "$HOME"]);
   });
 
+  it("preserves empty quoted arguments and their word boundaries", () => {
+    expect(splitShellArgs(`program '' "" next`)).toEqual(["program", "", "", "next"]);
+    expect(splitShellArgs(`program ""#literal ''suffix prefix''`)).toEqual([
+      "program",
+      "#literal",
+      "suffix",
+      "prefix",
+    ]);
+    expect(splitShellArgs(`program "" # comment`)).toEqual(["program", ""]);
+  });
+
   it("returns null for unterminated quotes", () => {
     expect(splitShellArgs(`echo "oops`)).toBeNull();
     expect(splitShellArgs(`echo 'oops`)).toBeNull();
@@ -78,6 +89,8 @@ describe("splitShellArgs", () => {
 
 describe("splitCommandArgs", () => {
   it.each([
+    { input: `program '' "" next`, expected: ["program", "next"] },
+    { input: `'' ""`, expected: [] },
     {
       input: String.raw`program some\path 'a"b' #literal`,
       expected: ["program", String.raw`some\path`, 'a"b', "#literal"],
