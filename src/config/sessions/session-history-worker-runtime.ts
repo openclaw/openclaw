@@ -370,7 +370,9 @@ export async function readSessionHistoryPageInWorker(
         capturedRequest.kind === "recent-page" &&
         capturedRequest.params.exactArchivePath !== undefined;
       const readOnly =
-        capturedRequest.kind === "active-accounting" || capturedRequest.kind === "bounded-tail"
+        capturedRequest.kind === "history-event-page" ||
+        capturedRequest.kind === "active-accounting" ||
+        capturedRequest.kind === "bounded-tail"
           ? true
           : capturedRequest.kind === "artifacts"
             ? capturedRequest.params.query.kind === "image-page"
