@@ -50,7 +50,7 @@ export async function mutateSubagentRunForKill(
     cancellationControl: SubagentCancellationControl;
     suppressTaskDelivery?: boolean;
     commands?: ReturnType<typeof captureSubagentCommands>;
-    beforeSessionKill?: () => boolean;
+    beforeSessionKill?: () => boolean | Promise<boolean>;
     isCurrent: (entry: SubagentRunRecord, requirePreparedSession?: boolean) => boolean;
     withdrawQueuedReservation: () => void;
     refreshDescendants: () => Promise<number>;
@@ -351,7 +351,7 @@ export async function mutateSubagentRunForKill(
       const execution = captureExecution()?.execution;
       const alreadyAborted = execution?.controller.signal.aborted;
       try {
-        if (params.beforeSessionKill?.() === false) {
+        if ((await params.beforeSessionKill?.()) === false) {
           admission = "declined";
           return;
         }

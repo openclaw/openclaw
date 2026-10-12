@@ -165,7 +165,6 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       }
       for (const [reason, stale] of [
         ["session", { sessionId: "replaced-session" }],
-        ["branch", { expectedLeafEntryId: null }],
         ["permissions", { expectedPermissionMode: "guarded" }],
         ["tools", { expectedToolOverrides: { webSearch: false } }],
       ] as const) {

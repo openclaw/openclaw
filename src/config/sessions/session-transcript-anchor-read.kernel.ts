@@ -3,6 +3,7 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { readActivePathEntryRelationFromProjection } from "./session-accessor.sqlite-active-events.js";
 import type { SessionTranscriptWriteScope } from "./session-accessor.sqlite-contract.js";
 import {
   readExactSessionEntryRow,
@@ -40,6 +41,7 @@ import type { InternalSessionEntry } from "./types.js";
 
 export type SessionTranscriptAnchorSelection = {
   entryIds: readonly string[];
+  activePathEntryId?: string | null;
   afterSeq?: number;
   /** Payload selection stays in the history lane and shares the anchor snapshot. */
   includeMessagesForRunId?: string;
@@ -215,8 +217,17 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         return anchors.get(entryId);
       };
       const selected = selection.entryIds.flatMap((entryId) => readAnchor(entryId) ?? []);
+      const activePath =
+        selection.activePathEntryId !== undefined && currentProjection
+          ? {
+              activePathRelation: readActivePathEntryRelationFromProjection(
+                currentProjection,
+                selection.activePathEntryId,
+              ),
+            }
+          : {};
       if (selection.afterSeq === undefined) {
-        return { anchors: selected, ...validated, ...sessionFacts, ...header };
+        return { anchors: selected, ...activePath, ...validated, ...sessionFacts, ...header };
       }
       const rows = loadTranscriptEventRowsAfterSeqInDatabase(
         database,
@@ -265,6 +276,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       return readAnchors(projection);
     }
     if (
+      selection.activePathEntryId !== undefined ||
       (selection.replayValidation && selection.entryIds.length > 0) ||
       selection.includeMessagesForRunId !== undefined
     ) {
