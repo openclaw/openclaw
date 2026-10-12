@@ -213,6 +213,16 @@ it("bounds saved-session reads while projecting configured models and runtime ch
           authProfileOverrideSource: "user",
         },
       );
+      const siblingSessionKey = "agent:main:catalog-sibling";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: siblingSessionKey },
+        {
+          sessionId: "catalog-sibling",
+          updatedAt: 1,
+          authProfileOverride: "openai:fixture",
+          authProfileOverrideSource: "user",
+        },
+      );
       const pluginRegistry = createEmptyPluginRegistry();
       const loadNativeCatalog = vi.fn(async () => catalog);
       pluginRegistry.agentHarnesses.push({
@@ -345,6 +355,14 @@ it("bounds saved-session reads while projecting configured models and runtime ch
         expect(warmReadsPerRequest).toBeLessThanOrEqual(2);
         expect(prepareProjection).toHaveBeenCalledOnce();
 
+        params.sessionKey = siblingSessionKey;
+        expect(await read()).toMatchObject({
+          models: result?.models,
+          accountSelection: result?.accountSelection,
+        });
+        expect(prepareProjection).toHaveBeenCalledOnce();
+        params.sessionKey = sessionKey;
+
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           {
@@ -369,6 +387,12 @@ it("bounds saved-session reads while projecting configured models and runtime ch
         }
         expect(prepareProjection).toHaveBeenCalledTimes(2);
         expect(await read()).toEqual(changed[0]);
+        expect(prepareProjection).toHaveBeenCalledTimes(2);
+        params.sessionKey = siblingSessionKey;
+        expect(await read()).toMatchObject({
+          models: result?.models,
+          accountSelection: result?.accountSelection,
+        });
         expect(prepareProjection).toHaveBeenCalledTimes(2);
       } finally {
         sessionRead.mockRestore();
