@@ -34,8 +34,8 @@ describe("before_agent_reply runner boundary", () => {
   it.each(["settled", "failed", "revoked"] as const)(
     "settles attribution before observer or reply-claim effects (%s)",
     async (outcome) => {
-      const entered = createDeferred<void>();
-      const baseline = createDeferred<void>();
+      const entered = createDeferred();
+      const baseline = createDeferred();
       let active = true;
       const beforeDispatch = vi.fn(async () => undefined);
       const afterDispatch = vi.fn(async (result) => result);
