@@ -13,7 +13,6 @@ import { prepareSqliteSnapshotFromLiveOwner } from "./sqlite-live-snapshot.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
   adoptPreparedLocation,
-  adoptRetainedPreparedLocation,
   removeTempDirectory,
   removeTempDirectoryAsync,
   retainSnapshotTempDirectory,
@@ -160,7 +159,7 @@ export function startSqliteReadOnlyLocationAsync(
                 "SQLite snapshot producer returned an allocation without its prepared location",
               );
             }
-            return adoptRetainedPreparedLocation(reply.location, reply.directory, requireCleanup);
+            return adoptPreparedLocation(reply.location, reply.directory, requireCleanup);
           }),
           startClose: () => task.startClose(),
         };

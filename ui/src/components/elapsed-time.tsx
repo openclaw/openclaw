@@ -11,7 +11,7 @@ type ElapsedTimeProps = {
   singleUnit: boolean;
 };
 
-export const ElapsedTime = defineSolidBridge<ElapsedTimeProps>(
+defineSolidBridge<ElapsedTimeProps>(
   "openclaw-elapsed-time",
   (props) => {
     const [tick, setTick] = createSignal(0);
