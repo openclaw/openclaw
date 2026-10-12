@@ -36,6 +36,22 @@ afterEach(async () => {
 });
 
 describe("session creation snapshot", () => {
+  it("preserves a competing creation committed while the initial entry is prepared", async () => {
+    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-conflict-") };
+    const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
+    const competing = { sessionId: "competing", updatedAt: 1, label: "retained" };
+    openOpenClawAgentDatabase(scope);
+
+    await expect(
+      createSessionEntryWithTranscript(scope, ({ existingEntry }) => {
+        expect(existingEntry).toBeUndefined();
+        replaceSessionEntrySync(scope, competing);
+        return { ok: true, entry: { sessionId: "prepared", updatedAt: 2 } };
+      }),
+    ).rejects.toThrow("SQLite session entry changed before replacement");
+    expect(loadSessionEntry(scope)).toMatchObject(competing);
+  });
+
   it("preserves adopted history without selecting a new projection", async () => {
     const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-history-") };
     const scope = { agentId: "main", env, sessionKey: "agent:main:target", sessionId: "target" };

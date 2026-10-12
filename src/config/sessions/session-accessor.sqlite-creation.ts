@@ -284,6 +284,10 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
             storePath: scope.path,
             env: scope.env,
             sessionKey: normalizedKey,
+            creationSnapshot: {
+              ...source.snapshot,
+              databaseIdentity: source.databaseIdentity,
+            },
             previousSessionKeys: legacyKeys,
             entry: created.entry,
             assertCommitAllowed: assertCurrent,
