@@ -425,15 +425,6 @@ export function adoptPreparedLocation(
   ownedRoot?: string,
   requireCleanup = false,
   onCleanupFailure?: (report: CleanupFailureReport) => void,
-): PreparedSqliteReadOnlyLocation {
-  return adoptRetainedPreparedLocation(location, ownedRoot, requireCleanup, onCleanupFailure);
-}
-
-export function adoptRetainedPreparedLocation(
-  location: string,
-  ownedRoot?: string,
-  requireCleanup = false,
-  onCleanupFailure?: (report: CleanupFailureReport) => void,
 ): PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation {
   const tempDir = ownedRoot ?? path.dirname(location);
   registerSnapshotTempDirectory(tempDir);

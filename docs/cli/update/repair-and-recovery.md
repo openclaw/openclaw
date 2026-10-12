@@ -162,7 +162,10 @@ Keep both names for manual inspection; their presence does not authorize restora
 
 These captures are evidence for manual recovery. Active writers can change state
 during capture; an observed change leaves the capture incomplete and produces a
-warning. The set is not an atomic snapshot across active stores. Missing,
+warning. For databases, the warning names each database that changed after its
+snapshot or had no stable generation during it, followed by the backup's
+database warnings. A running Gateway that writes during capture is enough to
+cause this. The set is not an atomic snapshot across active stores. Missing,
 unreadable, or incomplete captures do not establish a safe
 rollback point. The updater process keeps optional debug-proxy persistence
 disabled because its update history can use an older database schema. Doctor
@@ -363,7 +366,10 @@ recovery owner. This behavior does not deliver a newer repair implementation to
 an already-blocked older CLI. For completed `anchor-retired` history, use the
 [independent helper recovery](/install/updating#recover-a-completed-receipt-with-an-older-updater)
 to preserve the receipt and unblock the original updater without replacing its
-installation. Unfinished recovery retains the first-hop installation limitation.
+installation. For the narrowly verified remounted `publishing` case, the
+[independent settlement-only repair](/install/updating#recover-an-unfinished-publication-after-a-remount)
+can also clear the older updater's first-hop block without replacing packages.
+Other unfinished recovery still requires its original owner.
 
 For a package update stranded by an older updater's launcher ownership checks,
 use the manual installation hop, then repair from the new CLI at the same root:

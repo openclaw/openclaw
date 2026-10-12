@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createSessionMcpRuntimeManagerInstall } from "./agent-bundle-mcp-manager-install.js";
@@ -407,5 +408,38 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       advertisedScopedCatalogs: store.advertisedScopedCatalogBySessionId.size,
     }),
   });
-  return Object.assign(manager, { setScheduler: lifecycle.setScheduler });
+  return Object.assign(manager, {
+    setScheduler: lifecycle.setScheduler,
+    listSessionIdsForAgent(agentId: string) {
+      return [
+        ...new Set([
+          ...[...store.sessionIdBySessionKey].flatMap(([key, sessionId]) =>
+            parseAgentSessionKey(key)?.agentId === agentId &&
+            !lifecycle.runtimeKeysForSessionId(sessionId).some((runtimeKey) => {
+              const runtime = store.runtimesBySessionId.get(runtimeKey);
+              const currentAgent = runtime && sessionMcpRuntimeOwners.get(runtime)?.agentId;
+              return currentAgent !== undefined && currentAgent !== agentId;
+            })
+              ? [sessionId]
+              : [],
+          ),
+          ...[...store.runtimesBySessionId.values()].flatMap((runtime) =>
+            sessionMcpRuntimeOwners.get(runtime)?.agentId === agentId ? [runtime.sessionId] : [],
+          ),
+          ...[...store.pendingDisposals].flatMap(([sessionId, receipt]) =>
+            receipt.agentId === agentId ? [sessionId] : [],
+          ),
+        ]),
+      ];
+    },
+    retireSessionForAgentDeletion(sessionId: string, agentId: string, assertCurrent: () => void) {
+      return lifecycle.disposeManagedRuntimes(sessionId, {
+        agentDeletion: {
+          agentId,
+          assertCurrent,
+          deferRetirement: () => manager.deferRetirement(sessionId, { retainAcrossReuse: true }),
+        },
+      });
+    },
+  });
 }

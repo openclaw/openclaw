@@ -5781,6 +5781,9 @@ Worker-owned retirement cleanup borrows its retained executor instead of acquiri
 a native read candidate. The exact cleanup scope rechecks host liveness, while
 worker grants keep the durable journal and lease checks. Ordinary cold reads keep
 the native read-candidate owner and its existing release ordering.
+Only a store owned by the deleted agent receives an exclusive cleanup executor.
+Purging that agent's entries from a surviving agent's shared store borrows the
+survivor's admitted owner without closing it or cancelling its other borrowers.
 
 OAuth peer fencing, restoration, and settlement use the existing auth reader and
 agent writer. Discovery retains each candidate's physical database identity,
