@@ -309,7 +309,7 @@ export async function observeTerminalRunActivity(
       try {
         await prepared.subscription.waitForPendingEvents();
       } finally {
-        prepared.deferredLifecycleOwner?.discard();
+        await prepared.deferredLifecycleOwner?.discard();
         prepared.subscription.unsubscribe();
         const { clearActiveEmbeddedRun } =
           await vi.importActual<typeof import("../runs.js")>("../runs.js");

@@ -639,7 +639,8 @@ function prepareStream(
     try {
       attempt.onDeferredLifecycleOwner(deferredLifecycleOwner);
     } catch (error) {
-      deferredLifecycleOwner.discard();
+      // Release ownership synchronously; the cleanup scope tracks the diagnostic flush.
+      void deferredLifecycleOwner.discard();
       throw error;
     }
   }
