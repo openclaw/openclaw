@@ -24,6 +24,7 @@ import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import "../../../components/person-reference.ts";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
+import { renderChatPermissionCard } from "./chat-divider.ts";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
@@ -35,13 +36,12 @@ import {
 import { MessageWorkContext } from "./chat-message-context-view.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
 import { renderMessageImages } from "./chat-message-images.ts";
-import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import "./chat-clawhub-card.ts";
+import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
 import { type AttachmentItem, schedulePairingQrExpiryRefresh } from "./chat-message-media.ts";
 import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-view.tsx";
-import { renderChatPermissionCard } from "./chat-permission-card.tsx";
 import { renderReplyLine } from "./chat-reply-attribution.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {

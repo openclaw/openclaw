@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { toolIcons } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
@@ -10,6 +11,17 @@ import { formatSessionArchiveReason } from "../../../lib/sessions/session-archiv
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import "./chat-skill-learned-notice.tsx";
 import "./chat-permission-card.tsx";
+
+export function renderChatPermissionCard(
+  request: NodePermissionRequest,
+  onRetry?: (message: string) => void,
+) {
+  // Some transcript leaves mount independent Solid roots. The bridge recovers the app's DOM context.
+  return html`<openclaw-chat-permission-card
+    .request=${request}
+    .onRetry=${onRetry}
+  ></openclaw-chat-permission-card>`;
+}
 
 export function buildChatArchiveNotice(activeSession: GatewaySessionRow | null | undefined) {
   const archiveActor = activeSession?.archivedBy;
@@ -104,10 +116,7 @@ export function renderChatNotice(
 ) {
   if (item.permissionMissing) {
     return html`<div data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
-      <openclaw-chat-permission-card
-        .request=${item.permissionMissing}
-        .onRetry=${onPermissionRetry}
-      ></openclaw-chat-permission-card>
+      ${renderChatPermissionCard(item.permissionMissing, onPermissionRetry)}
     </div>`;
   }
   if (item.skillChanges) {

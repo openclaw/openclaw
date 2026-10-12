@@ -1,4 +1,3 @@
-import { html } from "lit";
 import { createMemo, createSignal, Show } from "solid-js";
 import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -6,17 +5,6 @@ import { projectNativeDeviceSettings } from "../../../lib/reactive/application-n
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
-
-export function renderChatPermissionCard(
-  request: NodePermissionRequest,
-  onRetry?: (message: string) => void,
-) {
-  // Some transcript leaves mount independent Solid roots. The bridge recovers the app's DOM context.
-  return html`<openclaw-chat-permission-card
-    .request=${request}
-    .onRetry=${onRetry}
-  ></openclaw-chat-permission-card>`;
-}
 
 export function ChatPermissionCard(props: {
   request: NodePermissionRequest;
