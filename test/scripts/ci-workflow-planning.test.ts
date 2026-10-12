@@ -6385,6 +6385,12 @@ describe("ci workflow guards", () => {
             group: "source-contracts",
             runner: "blacksmith-4vcpu-ubuntu-2404",
           });
+        } else if (row.group === "plugin-sdk-api-diff") {
+          expect(row).toEqual({
+            check_name: "report-plugin-sdk-api-diff",
+            group: "plugin-sdk-api-diff",
+            runner: "blacksmith-32vcpu-ubuntu-2404",
+          });
         } else {
           expect(readFrozenAdditionalCheckRows()).toContainEqual(row);
         }

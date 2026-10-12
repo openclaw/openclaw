@@ -1322,11 +1322,11 @@ const additionalChecks = [
   // Only dispatches execute this report; scheduled tips have no change range.
   ...(eventName === "workflow_dispatch"
     ? [
-        // Diff generation took 209–246s on smaller hosts; keep its 8GiB heap isolated.
+        // Serial renders exceeded 20m on 2 CPUs/8GiB; the 32-class clears the 8-CPU/24-GiB parallel floor.
         {
           check_name: "report-plugin-sdk-api-diff",
           group: "plugin-sdk-api-diff",
-          runner: "blacksmith-8vcpu-ubuntu-2404",
+          runner: "blacksmith-32vcpu-ubuntu-2404",
         },
       ]
     : []),
