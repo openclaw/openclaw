@@ -335,37 +335,42 @@ export async function preparePendingInputStore(
                 }
               },
             };
-            const hot =
-              inputActor.actor.snapshot(authority) ?? (await inputActor.actor.read(authority));
-            if (!hot.entry) {
-              throw new Error("Input actor lost its staged session");
-            }
-            const expectedState = buildRestartRecoveryExpectedState(hot.entry);
+            let expectedState: ReturnType<typeof buildRestartRecoveryExpectedState> | undefined;
             let receipt: ReturnType<typeof readPendingInputMutationReceipt>;
-            const outcome = await runSessionActorCommand(inputActor.actor, authority, (snapshot) =>
-              inputActor.actor.acceptInput(
-                {
-                  commandId: randomUUID(),
-                  phaseId: `accept:${input.runId}`,
-                  expected: snapshot?.version ?? hot.version,
-                  pending: input,
-                  lifecycle: {},
-                  expectedState,
-                },
-                authority,
-                {
-                  committed(commit) {
-                    receipt = readPendingInputMutationReceipt(
-                      commit.value.pendingInputReceipt,
-                      input,
-                    );
-                    if (!receipt) {
-                      throw new Error("Input actor omitted its committed custody receipt");
-                    }
-                    publish?.(committedFacts, assertOpen);
+            const outcome = await runSessionActorCommand(
+              inputActor.actor,
+              authority,
+              async (snapshot) => {
+                const hot = snapshot ?? (await inputActor.actor.read(authority));
+                if (!hot.entry) {
+                  throw new Error("Input actor lost its staged session");
+                }
+                // Select lifecycle facts inside the FIFO, then retain them across version rebasing.
+                expectedState ??= buildRestartRecoveryExpectedState(hot.entry);
+                return inputActor.actor.acceptInput(
+                  {
+                    commandId: randomUUID(),
+                    phaseId: `accept:${input.runId}`,
+                    expected: hot.version,
+                    pending: input,
+                    lifecycle: {},
+                    expectedState,
                   },
-                },
-              ),
+                  authority,
+                  {
+                    committed(commit) {
+                      receipt = readPendingInputMutationReceipt(
+                        commit.value.pendingInputReceipt,
+                        input,
+                      );
+                      if (!receipt) {
+                        throw new Error("Input actor omitted its committed custody receipt");
+                      }
+                      publish?.(committedFacts, assertOpen);
+                    },
+                  },
+                );
+              },
             );
             if (outcome.kind !== "committed") {
               throwSessionInputActorFailure(outcome, authorityFailure);
