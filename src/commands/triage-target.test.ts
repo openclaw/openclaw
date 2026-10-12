@@ -23,7 +23,7 @@ import { pinRuntimePaths, resolveStateDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
-import { OpenClawSchema } from "../config/zod-schema.js";
+import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import {
   getInstallationTarget,
@@ -463,12 +463,15 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                   plugins: { enabled: false },
                   gateway: { auth: { mode: "token", token: secret } },
                 };
-                const originalRuntimeConfig = materializeRuntimeConfig(
-                  OpenClawSchema.parse(config),
-                  {
-                    manifestRegistry: { plugins: [] },
-                  },
-                );
+                const validatedConfig = validateConfigObjectRaw(config);
+                if (!validatedConfig.ok) {
+                  throw new Error(
+                    `Invalid triage fixture config: ${JSON.stringify(validatedConfig.issues)}`,
+                  );
+                }
+                const originalRuntimeConfig = materializeRuntimeConfig(validatedConfig.config, {
+                  manifestRegistry: { plugins: [] },
+                });
                 await state.writeConfig(config);
                 const agentDir = state.statePath("agents", "diagnostic", "agent");
                 const profileId = "fixture:subscription";
