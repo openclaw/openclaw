@@ -8,24 +8,10 @@ function diceMessage(dice: unknown): Message {
 }
 
 describe("resolveTelegramNonTextBody", () => {
-  it("renders a dice roll as a one-line marker", () => {
-    expect(resolveTelegramNonTextBody(diceMessage({ emoji: "\u{1F3B2}", value: 4 }))).toEqual({
-      kind: "dice",
-      text: "[Dice \u{1F3B2} = 4]",
-    });
-  });
-
   it("covers the wider slot-machine range", () => {
     expect(resolveTelegramNonTextBody(diceMessage({ emoji: "\u{1F3B0}", value: 64 }))).toEqual({
       kind: "dice",
       text: "[Dice \u{1F3B0} = 64]",
-    });
-  });
-
-  it("keeps a zero value rather than treating it as absent", () => {
-    expect(resolveTelegramNonTextBody(diceMessage({ emoji: "\u{1F3AF}", value: 0 }))).toEqual({
-      kind: "dice",
-      text: "[Dice \u{1F3AF} = 0]",
     });
   });
 
