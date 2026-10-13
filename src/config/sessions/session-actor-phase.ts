@@ -20,6 +20,7 @@ import type {
 } from "./session-actor-contract.js";
 import { reduceSessionActorEntry } from "./session-actor-reducers.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
 import { projectPendingFinalDeliverySettlement } from "./session-pending-final-settlement.js";
 import type {
   PendingInputMutation,
@@ -421,6 +422,16 @@ export function applySessionActorPhaseWithBackend(
     if (reducers.some(({ changed }) => changed)) {
       entryUpdate = entry;
     }
+  }
+  if (command.type === "session.actor.completeTurn" && command.input.restartClaimCleanup) {
+    const entry = entryUpdate ?? requireEntry();
+    entryUpdate =
+      projectSessionEntryPatch({
+        existing: entry,
+        writeBase: entry,
+        sessionKey,
+        operation: command.input.restartClaimCleanup,
+      }) ?? entryUpdate;
   }
   if (entryUpdate) {
     backend.writeEntry(entryUpdate);

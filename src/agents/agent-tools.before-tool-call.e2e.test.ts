@@ -540,7 +540,7 @@ describe("before_tool_call loop detection behavior", () => {
           expectToolLoopBlockedResult(
             result,
             index === GLOBAL_CIRCUIT_BREAKER_THRESHOLD
-              ? "global circuit breaker"
+              ? "the runaway-loop limit"
               : "identical outcomes",
           );
         }

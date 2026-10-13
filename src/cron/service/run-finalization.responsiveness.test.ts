@@ -11,6 +11,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
+import * as workerStore from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
@@ -19,7 +20,6 @@ import { createCronScheduledRunId } from "../store/run-request-id.js";
 import { stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
 import { run } from "./ops-run.js";
-import * as runtimeMutation from "./runtime-mutation.js";
 
 async function whileContended<T>(
   databasePath: string,
@@ -153,17 +153,17 @@ it("services Gateway events while manual finalization waits for a writer", async
     });
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     await list(state);
-    const execute = runtimeMutation.runCronRuntimeMutation;
+    const execute = workerStore.executeOpenClawStateWorker;
     let observed = 0;
     const mutation = vi
-      .spyOn(runtimeMutation, "runCronRuntimeMutation")
-      .mockImplementation((params) => {
-        if (params.type !== "cron.finalizeRuns") {
-          return execute(params);
+      .spyOn(workerStore, "executeOpenClawStateWorker")
+      .mockImplementation((context, command) => {
+        if (command.type !== "cron.finalizeRuns") {
+          return execute(context, command);
         }
         observed += 1;
-        return whileContended(params.context.admission.databasePath, "cron.finalizeRuns", () =>
-          execute(params),
+        return whileContended(context.admission.databasePath, "cron.finalizeRuns", () =>
+          execute(context, command),
         );
       });
     try {

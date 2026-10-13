@@ -1,6 +1,6 @@
 import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -49,7 +49,7 @@ export async function sendReplyRestartRecoveryNotice(params: {
       sessionKey: params.sessionKey,
     });
     // Admission may have waited while reset or deletion changed the session.
-    const entry: InternalSessionEntry | undefined = loadSessionEntryReadOnly({
+    const entry: InternalSessionEntry | undefined = await readSessionEntryReadOnlyInWorker({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,

@@ -1,4 +1,6 @@
+import childProcess from "node:child_process";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +18,10 @@ import {
 } from "../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
+import {
+  invalidateAgentDeletionJournalStatus,
+  publishAgentDeletionJournalStatus,
+} from "../state/agent-deletion-journal-status.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { recordAgentProvenanceInDatabase } from "../state/agent-provenance.kernel.js";
@@ -28,13 +34,20 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
-import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  isOpenClawStateDatabaseOpen,
+  requireOpenClawStateDatabaseIdentity,
+} from "../state/openclaw-state-db-cache.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { readAgentProvenance } from "../test-utils/agent-provenance.js";
@@ -379,6 +392,44 @@ describe("agent lifecycle registry", () => {
     }, options);
   });
 
+  it("checks cold deletion authority without snapshot children except during artifact-preserving reads", async () => {
+    const options = createOptions();
+    await closeStateDatabaseForTest();
+    await withAgentDeletion(
+      "main",
+      async (begin) => {
+        const deletion = await begin(createEntry("main"));
+        const spawn = vi.spyOn(childProcess, "spawnSync");
+        syncBuiltinESMExports();
+        const snapshotChildren = () =>
+          spawn.mock.calls.filter(
+            ([, args]) => Array.isArray(args) && args.includes("--openclaw-sqlite-readonly-child"),
+          ).length;
+        try {
+          expect(isOpenClawStateDatabaseOpen(resolveOpenClawStateSqlitePath(options.env))).toBe(
+            false,
+          );
+          withArtifactPreservingStateReads(() => deletion.assertCurrentFinal());
+          expect(snapshotChildren()).toBe(1);
+          spawn.mockClear();
+          for (let invocation = 0; invocation < 3; invocation++) {
+            deletion.assertCurrentFinal();
+          }
+          expect(snapshotChildren()).toBe(0);
+          expect(isOpenClawStateDatabaseOpen(resolveOpenClawStateSqlitePath(options.env))).toBe(
+            false,
+          );
+        } finally {
+          spawn.mockRestore();
+          syncBuiltinESMExports();
+          await deletion.rollback();
+        }
+        expect(deletion.assertCurrentFinal).toThrow("no longer owns");
+      },
+      options,
+    );
+  });
+
   it("refuses changed journal authority before filesystem effects while the original deletion lease is held", async () => {
     const options = createOptions();
     await withAgentDeletion(
@@ -401,6 +452,7 @@ describe("agent lifecycle registry", () => {
           await deletion.assertCurrentAsync();
           // A committed external change cannot be hidden by an earlier discovery snapshot.
           db.exec(mutation);
+          invalidateAgentDeletionJournalStatus(db, "main");
           expect(writeEffect).toThrow();
           expect(fs.existsSync(effectPath)).toBe(false);
           await expect(deletion.assertCurrentAsync()).rejects.toThrow();
@@ -735,6 +787,7 @@ describe("agent lifecycle registry", () => {
       assertMatches(recreated, false);
       expect(await matchesAgentLifecycleBindingAsync(() => config, recreated, options)).toBe(false);
       database.db.exec("DELETE FROM agent_deletion_journal WHERE agent_id = 'main'");
+      publishAgentDeletionJournalStatus(database.db, "main", "absent");
       assertMatches(recreated, true);
 
       const capturing = captureAgentLifecycleBinding(() => config, "main", options);

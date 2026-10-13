@@ -20,6 +20,6 @@ export { decodeChatHistoryPageCursor } from "../../gateway/server-methods/chat-h
 export { readChatHistoryPage } from "../../gateway/server-methods/chat-history-pages.js";
 export { prepareChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
 export { listProjectedSessions } from "../../gateway/session-utils-list.js";
-export { loadGatewaySessionEntryReadOnly as loadSessionEntry } from "../../gateway/session-utils-store.js";
+export { loadGatewaySessionEntryReadOnlyInWorker } from "../../gateway/session-utils-store-worker.js";
 export { withPreparedSessionResolve } from "../../gateway/sessions-resolve.js";
 export type { SessionsListResult } from "../../gateway/session-utils.types.js";

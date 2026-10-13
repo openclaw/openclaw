@@ -48,10 +48,10 @@ import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { authorizeSessionAgentRun } from "./session-sharing-policy.js";
 import {
   authorizeResolvedSessionMutation,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
 } from "./session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 import { isToolUploadRequest } from "./tool-upload-policy.js";
 import {
@@ -262,7 +262,7 @@ async function invokeGatewayToolWithSignal(
         400,
         "invalid_request",
         `memory tools are disabled in tests${suffix}. ` +
-          `Enable by setting plugins.slots.memory="${defaultSlotIdForKey("memory")}" (and ensure plugins.enabled is not false).`,
+          `Enable by setting plugins.slots.memory="${defaultSlotIdForKey("memory")}" (and check that plugins.enabled is not false).`,
       );
     }
   }
@@ -310,7 +310,14 @@ async function invokeGatewayToolWithSignal(
   });
   const sessionEntry = params.preparedSession
     ? params.preparedSession.entry
-    : loadGatewaySessionEntryReadOnly(sessionKey, { agentId: selectedAgentId }).entry;
+    : (
+        await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg: params.cfg,
+          key: sessionKey,
+          agentId: selectedAgentId,
+          assertActive: assertInvocationCurrent,
+        })
+      ).entry;
   const authorizePrimary = (cfg = params.cfg) =>
     authorizeResolvedSessionMutation({
       cfg,
@@ -353,7 +360,7 @@ async function invokeGatewayToolWithSignal(
     const targetAgentId = targetAgent?.agentId ?? nestedAgentId ?? selectedAgentId;
     const existingTarget =
       toolName === "sessions_send" && nestedSessionKey
-        ? resolveSessionSharingTarget({
+        ? await resolveSessionSharingTargetAsync({
             cfg: params.cfg,
             sessionKey: nestedSessionKey,
             agentId: targetAgentId,
@@ -440,7 +447,7 @@ async function invokeGatewayToolWithSignal(
     ({ agentId, tools, workspaceDir } = await resolveTools(false));
   }
   const requestedAgentId = normalizeOptionalString(params.input.agentId);
-  if (requestedAgentId && agentId && requestedAgentId !== agentId) {
+  if (requestedAgentId && agentId && selectedAgentId !== agentId) {
     return failure(
       400,
       "invalid_request",

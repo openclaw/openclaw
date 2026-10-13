@@ -419,6 +419,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             url,
             cdpPolicy,
             ...(opts?.signal ? { signal: opts.signal } : {}),
+            ...(opts?.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
             ...ssrfPolicyOpts,
           });
           closeCreatedPage = page.close;

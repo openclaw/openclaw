@@ -116,6 +116,9 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_rpc_outcomes_total`                     | counter   | `phase`, `outcome`                                                                        |
 | `openclaw_run_completed_total`                            | counter   | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
 | `openclaw_run_duration_seconds`                           | histogram | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
+| `openclaw_secret_egress_requests_total`                   | counter   | `outcome`, `substituted`                                                                  |
+| `openclaw_tool_catalog_total`                             | counter   | `mode`, `source`                                                                          |
+| `openclaw_tool_catalog_tools_total`                       | counter   | `mode`, `source`                                                                          |
 | `openclaw_model_call_total`                               | counter   | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
 | `openclaw_model_call_duration_seconds`                    | histogram | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
 | `openclaw_model_failover_total`                           | counter   | `from_model`, `from_provider`, `lane`, `reason`, `suspended`, `to_model`, `to_provider`   |
@@ -400,7 +403,7 @@ The allowlists bound cardinality without publishing session IDs, database paths,
 command suffixes, or caller-provided names. The exporter's shared series cap still
 applies.
 
-The `transcripts` request family includes canonical event appends and retention.
+The `transcripts` request family includes stored event appends and retention.
 
 Shared-state reads use kind `stateRead` (formerly `state_read`) and the same
 bounded operation-family classifier as SQLite writers. Examples include

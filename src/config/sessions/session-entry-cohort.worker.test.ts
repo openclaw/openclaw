@@ -64,9 +64,7 @@ it.each([false, true])("reads complete cold entry facts with lifecycle=%s", asyn
     try {
       const first = read();
       expect(statements.counts.all).toBe(1);
-      expect(transactions.mock.calls.map(([sql]) => sql)).toEqual(
-        lifecycle ? ["BEGIN", "COMMIT"] : [],
-      );
+      expect(transactions.mock.calls).toEqual([]);
       expect(first.entries).toMatchObject([
         {
           sessionKey,
@@ -92,11 +90,35 @@ it.each([false, true])("reads complete cold entry facts with lifecycle=%s", asyn
         ],
       });
       expect(first.source.databaseIdentity).toBe(first.databaseIdentity.identity);
+      expect(first.lifecycleTimestamps).toEqual(
+        lifecycle ? { sessionStartedAt: 1, lastInteractionAt: undefined } : {},
+      );
       statements.counts.all = 0;
       expect(read([]).entries[0]?.entry.skillsSnapshot).toBeUndefined();
       expect(statements.counts.all).toBe(1);
+      statements.counts.all = 0;
+      const target = operations["session.entry.read"](
+        {
+          sessionKeys: [sessionKey],
+          runtimeTarget: { agentId: "main", sessionId: "fused", sessionKey },
+        },
+        context,
+      );
+      expect(target.runtimeTarget).toEqual({
+        agentId: "main",
+        sessionId: "fused",
+        sessionKey,
+        storePath: database.path,
+      });
+      expect(statements.counts.all).toBe(1);
+      expect(transactions.mock.calls).toEqual([]);
       recordSessionParticipant(scope, { ...contribution, promptedAt: 4 });
       removeSessionMember(scope, "member");
+      replaceSessionEntrySync(scope, {
+        sessionId: "fused",
+        updatedAt: 5,
+        sessionStartedAt: 5,
+      });
       statements.counts.all = 0;
       transactions.mockClear();
       const next = read();
@@ -105,8 +127,9 @@ it.each([false, true])("reads complete cold entry facts with lifecycle=%s", asyn
         { contributionCount: 2, firstPromptedAt: 2, lastPromptedAt: 4 },
       ]);
       expect(statements.counts.all).toBe(1);
-      expect(transactions.mock.calls.map(([sql]) => sql)).toEqual(
-        lifecycle ? ["BEGIN", "COMMIT"] : [],
+      expect(transactions.mock.calls).toEqual([]);
+      expect(next.lifecycleTimestamps).toEqual(
+        lifecycle ? { sessionStartedAt: 5, lastInteractionAt: undefined } : {},
       );
       database.db
         .prepare("UPDATE session_participants SET contribution_count = ? WHERE session_key = ?")

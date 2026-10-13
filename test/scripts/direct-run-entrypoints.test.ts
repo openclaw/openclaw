@@ -578,7 +578,7 @@ record("stdout-write-returned");
   it("boots scripts/e2e/kitchen-sink-rpc-walk.mjs from a relative PNPM_CONFIG_MODULES_DIR", async () => {
     const nodeArgs = ["--no-maglev", "--maglev", "--no-concurrent-sparkplug"];
     const result = await runShimFixture(
-      TSX_SHIM_WRAPPERS[2],
+      TSX_SHIM_WRAPPERS[1],
       ({ checkoutRoot, fixtureRoot }) => {
         const modulesDir = path.join(fixtureRoot, "hydrated-modules");
         writeTsxFixture(modulesDir, "hydrated");

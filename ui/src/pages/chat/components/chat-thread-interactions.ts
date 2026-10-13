@@ -168,6 +168,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     userId?: string | null;
     userName?: string | null;
     userAvatar?: string | null;
+    channelAvatar?: import("../../../lib/chat/channel-sender-avatar.ts").ChannelSenderAvatarSource;
     basePath?: string;
     sessionPublicOrigin?: string;
     resourceBasePath?: string;
@@ -200,6 +201,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     onHistoryIntent?: (event: Event) => void;
     onDraftChange: (next: string) => void;
     onSend: () => void;
+    onPermissionRetry?: (message: string) => void;
     onSetReply?: (target: MessageReplyTarget) => void;
     replyMessageAccess?: ReplyMessageAccess;
     onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
@@ -213,7 +215,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     /** Shows one of the session's subagents. */
     onOpenSubagent?: (sessionKey: string) => void;
     /** Shows the session's subagents; absent where the pane has no list of them to show. */
-    onOpenSubagents?: () => void;
+    onOpenSubagents?: (focus?: boolean) => void;
     modelSetupRequired?: boolean;
     onModelSetup?: () => void;
   };

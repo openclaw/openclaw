@@ -1,7 +1,7 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { resolveChannelInboundRouteEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ResolvedXAccount } from "./accounts.js";
 import { resolveXGuestSettings, supportsXGuestHelpers } from "./guest-policy.js";
 import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
@@ -50,12 +50,12 @@ function resolveXGuestReadinessError(
       ? [routedAgentId]
       : [...peerIds].map(
           (id) =>
-            resolveChannelInboundRouteEnvelope({
+            resolveAgentRoute({
               cfg,
               channel: "x",
               accountId,
               peer: { kind: "group", id },
-            }).route.agentId,
+            }).agentId,
         );
   } catch {
     return "X guest mode requires valid X agent bindings. Add a channel-wide X binding and correct any missing target agents.";

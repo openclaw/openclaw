@@ -6,12 +6,12 @@ import {
 import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
 import {
   listUsageCountedTranscriptStats as collectTranscriptStats,
-  resolveUsageCostTranscriptFile as resolveTranscriptFile,
+  resolveUsageCostTranscriptFiles,
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
 
 // These storage tests inspect their own native handles; runtime collection uses worker custody.
-export function createNativeStorageUsageAccess(env?: NodeJS.ProcessEnv): UsageCostCollectionAccess {
+function createNativeStorageUsageAccess(env?: NodeJS.ProcessEnv): UsageCostCollectionAccess {
   return {
     env,
     materializeArchive: async (sourcePath) => materializeSessionArchiveForRead(sourcePath),
@@ -40,6 +40,8 @@ export function listUsageCountedTranscriptStats(
   });
 }
 
-export function resolveUsageCostTranscriptFile(sessionFile: string) {
-  return resolveTranscriptFile(sessionFile, createNativeStorageUsageAccess());
+export async function resolveUsageCostTranscriptFile(sessionFile: string) {
+  return (
+    await resolveUsageCostTranscriptFiles([sessionFile], createNativeStorageUsageAccess())
+  )[0];
 }

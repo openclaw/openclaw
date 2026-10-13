@@ -28,6 +28,7 @@ export type ChatSubmitGuard = {
 };
 
 function yieldChatSubmitToInput(): Promise<void> {
+  // The supported browser floor supplies MessageChannel for this input yield.
   return new Promise<void>((resolve) => {
     const channel = new MessageChannel();
     channel.port1.addEventListener(
@@ -55,9 +56,8 @@ export async function withChatSubmitHandoff(
   },
   deliver: (item: ChatQueueItem) => Promise<QueuedChatSendResult>,
 ): Promise<QueuedChatSendResult> {
-  const yieldsToInput = options.yieldToInput && typeof MessageChannel !== "undefined";
   const startsImmediately =
-    yieldsToInput &&
+    options.yieldToInput &&
     options.isCurrent() &&
     host.connected &&
     host.client &&
@@ -74,7 +74,7 @@ export async function withChatSubmitHandoff(
   // Admission is durable, but delivery has not made a transport attempt yet.
   // Present that handoff inline without flashing the waiting-message tray.
   const submission =
-    yieldsToInput && host.connected && options.isCurrent()
+    options.yieldToInput && host.connected && options.isCurrent()
       ? chatOutboxOwner(host).beginSubmission(host, queued.id, {
           inline: Boolean(startsImmediately),
           isCurrent: () => host.connected && options.isCurrent(),
@@ -82,7 +82,7 @@ export async function withChatSubmitHandoff(
       : undefined;
   try {
     let current = queued;
-    if (yieldsToInput) {
+    if (options.yieldToInput) {
       // The shared outbox retains foreground custody while the browser accepts
       // input, including when terminal history settles before this task resumes.
       await yieldChatSubmitToInput();

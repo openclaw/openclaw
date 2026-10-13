@@ -24,6 +24,7 @@
   gap: 6px;
   min-width: 0;
 }
+
 .agent-chat__composer-notices:not(
   :has(
     > :not(openclaw-chat-child-attention, .chat-composer-lit-content),
@@ -505,9 +506,11 @@
   flex: 0 0 auto;
 }
 
-/* Keep settings, split view, and run status together in the footer's middle
-   track. The track is sized to content, so this group shrinks before it ever
-   pushes mic and send off the right edge. */
+.agent-chat__composer-context:not(:has(> .context-usage)) {
+  display: none;
+}
+
+/* Model controls shrink before pushing mic and send off the right edge. */
 .agent-chat__composer-controls {
   display: flex;
   position: relative;
@@ -1104,6 +1107,7 @@
 @container chat-composer (max-width: 560px) {
   .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {
     flex: 1 1 0;
+    gap: var(--chat-composer-chip-gap);
     min-width: 0;
     margin-inline-start: auto;
     overflow: visible;
@@ -1170,7 +1174,7 @@
   }
 
   .agent-chat__input--mobile-toolbar .context-ring,
-  .agent-chat__input--mobile-toolbar .chat-controls__permission-trigger,
+  .agent-chat__input.agent-chat__input--mobile-toolbar .chat-controls__permission-trigger,
   .agent-chat__input--mobile-toolbar .chat-send-btn--voice {
     width: var(--chat-composer-control-size);
     min-width: var(--chat-composer-control-size);
@@ -1235,6 +1239,39 @@
     color: var(--muted);
     opacity: var(--chat-mobile-row-mic-opacity);
     stroke-width: var(--chat-mobile-row-mic-stroke);
+  }
+}
+
+/* Context and Working share a stable row without borrowing the picker targets. */
+@container chat-composer (max-width: 480px) {
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-footer {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(44px, auto);
+    column-gap: 8px;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-lead {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-context {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-height: var(--chat-composer-control-size);
+    justify-content: flex-end;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {
+    grid-column: 2;
+    grid-row: 2;
+    margin-inline-start: 0;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-actions {
+    grid-column: 3;
+    grid-row: 2;
   }
 }
 

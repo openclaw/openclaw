@@ -32,6 +32,7 @@ export {
   type RealtimeVoiceSessionConnection,
 } from "../talk/realtime-session-lifecycle.js";
 export { createLazyRealtimeVoiceBridgeLifecycle } from "../talk/realtime-voice-lazy-lifecycle.js";
+export { RealtimeVoiceWebSocketTransport } from "../talk/realtime-voice-websocket-transport.js";
 export {
   convertPcmToMulaw8k,
   createStreamingPcmResampler,

@@ -82,7 +82,7 @@ suite.define(() => {
         await captureUpdateProof(page, artifactDir, "disabled-update.png");
 
         const tooltipHost = updateIssue.locator("openclaw-tooltip");
-        const tooltip = tooltipHost.locator("wa-tooltip");
+        const tooltip = tooltipHost.locator(".tooltip-surface[popover]");
         await tooltipHost.evaluate((element) => {
           element.addEventListener(
             "wa-after-show",

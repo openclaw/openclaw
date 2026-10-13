@@ -55,6 +55,15 @@ Stopping with `/stop`, deleting, resetting, or archiving a session cancels only 
 the selected conversation. Another agent's active turn and queued messages are
 preserved even when the agents use the same session key.
 
+## Automatic session names
+
+Interactive chat sessions without an explicit name generate a topic title in the
+background when the Gateway dispatches their message. Naming starts alongside
+worktree and reply preparation; it does not wait for the agent’s first progress
+event and does not block the turn. The name appears when the title model finishes.
+If the title request fails while overlapping a turn, it retries once after that
+turn settles. Explicit names and manual renames are preserved.
+
 ## DM isolation
 
 By default, all DMs share one session for continuity, which is fine for
@@ -90,7 +99,7 @@ those conversations stay isolated even under `main`. See
 
 <Tip>
 If the same person contacts you from multiple channels, use
-`session.identityLinks` to map their identities to one canonical peer id so
+`session.identityLinks` to map their identities to one shared peer id so
 they share a session.
 </Tip>
 
@@ -154,7 +163,7 @@ The `incognito-` segment is reserved for dashboard, subagent, and hidden interna
 
 Incognito does not restrict the agent's normal tools. An explicit request to save information, or any tool-driven file write, can still persist data outside the incognito session store. Your configured model provider still processes the messages you send. Incognito content is excluded from ordinary Gateway output, delivery and response diagnostics, WebSocket event previews, raw-stream, cache-trace, and Anthropic payload logs. Live replies remain available, and OpenClaw still records operational diagnostics and content-free audit metadata such as HMAC references.
 
-On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This protects them from storage and other gateway-mediated users, not from the gateway owner or process operator, who can always observe live sessions.
+On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This limits persisted session history and access through other gateway-mediated sessions; it does not make all tool, upload, approval, or configured diagnostic data ephemeral. The gateway owner or process operator can still observe live sessions.
 
 ## Remember across conversations
 
@@ -230,9 +239,14 @@ Opt into automatic resets globally, then override them per chat type or channel:
 
 ## Gateway restart recovery
 
-When a Gateway restart interrupts an active turn, OpenClaw tries to continue
-the existing session automatically. Three attempts that fail to start a backend
-turn exhaust the recovery budget. Once a real backend turn starts,
+When a Gateway restart interrupts an admitted turn, including one still waiting
+in the queue or preparing to execute, OpenClaw tries to continue the existing
+session automatically. Shutdown records recovery before canceling queued work.
+If restart cancellation finishes a collected run before that record commits,
+shutdown retains its recovery custody unless the session or run owner changes.
+Skipped sessions are logged with a reason, including when other sessions recover.
+Three attempts that fail to start a backend turn exhaust the recovery budget.
+Once a real backend turn starts,
 the budget refreshes, so a later Gateway restart does not consume the old allowance.
 Accepting, queueing, or preparing a resume request alone does not refresh it.
 CLI backends that do not report turn acceptance refresh the budget only after
@@ -252,6 +266,9 @@ the original caller's permission to run worktree setup scripts.
 
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
+A restart-aborted embedded response retains its already-streamed text as an
+interrupted assistant message when the transcript writer is still available.
+Unfinished tool calls in that response are discarded before persistence.
 A completed reply or a later user message closes that turn to replay.
 
 For authenticated operator turns, recovery revalidates the original caller's
@@ -267,6 +284,11 @@ This also covers parent turns started by subagent completion or pause notices.
 An interrupted parent continues independently of later child completions, and a
 retry of the same notice joins that recovery instead of starting the turn again.
 Parents still waiting after yielding to children remain owned by their child batch.
+
+If a delegated turn's sender authority cannot be reconstructed, automatic recovery
+stops with a recorded reason and a visible notice in the transcript or original
+channel. The notice explains how to continue in a replacement session. A saved
+delegation alone does not authorize replay after restart.
 
 Messages sent while restart recovery is waiting to start stay pending. Once
 recovery starts, they follow the session's normal message queue policy. You do

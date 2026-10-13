@@ -205,37 +205,26 @@ describe("sidebar narration subscription retries", () => {
     controller.disconnect();
   });
 
-  it.each([false, true])(
-    "settles a re-desired in-flight release without losing its observer (timeout: %s)",
-    async (timedOut) => {
-      const { controller, input, request, server, wireKeys } = releaseFixture();
-      await vi.advanceTimersByTimeAsync(0);
-      const released = createDeferred();
-      request.mockImplementationOnce(async () => {
-        await released.promise;
-        if (timedOut) {
-          wireKeys.clear();
-          throw new GatewayProtocolRequestTimeoutError({
-            method: "sessions.messages.unsubscribe",
-            timeoutMs: 30_000,
-            requestSent: true,
-          });
-        }
-        throw new GatewayProtocolRequestError({ retryable: true });
-      });
-      controller.sync({ ...input, rows: [] });
-      controller.sync(input);
-      released.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(wireKeys.size).toBe(1);
-      expect(request).toHaveBeenCalledTimes(timedOut ? 3 : 2);
-      expect(vi.getTimerCount()).toBe(0);
-      server.failure = null;
-      controller.disconnect();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(wireKeys.size).toBe(0);
-    },
-  );
+  it("settles a re-desired in-flight release after a retryable rejection", async () => {
+    const { controller, input, request, server, wireKeys } = releaseFixture();
+    await vi.advanceTimersByTimeAsync(0);
+    const released = createDeferred();
+    request.mockImplementationOnce(async () => {
+      await released.promise;
+      throw new GatewayProtocolRequestError({ retryable: true });
+    });
+    controller.sync({ ...input, rows: [] });
+    controller.sync(input);
+    released.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wireKeys.size).toBe(1);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+    server.failure = null;
+    controller.disconnect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wireKeys.size).toBe(0);
+  });
 
   it.each(["close", "replace", "disconnect"])(
     "cancels release retry work on %s",
@@ -365,7 +354,7 @@ describe("sidebar narration subscription retries", () => {
     expect(wireKeys.size).toBe(0);
   });
 
-  it("reacquires after the coordinator compensates a sent request timeout", async () => {
+  it("reacquires after a sent request timeout without a compensating RPC", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5);
     const request = vi
       .fn()
@@ -387,20 +376,16 @@ describe("sidebar narration subscription retries", () => {
       GatewayProtocolRequestTimeoutError,
     );
     await vi.advanceTimersByTimeAsync(0);
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "sessions.messages.subscribe",
-      "sessions.messages.unsubscribe",
-    ]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["sessions.messages.subscribe"]);
     await vi.advanceTimersByTimeAsync(250);
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "sessions.messages.subscribe",
-      "sessions.messages.unsubscribe",
       "sessions.messages.subscribe",
     ]);
     expect(vi.getTimerCount()).toBe(0);
     controller.disconnect();
     await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it.each<{ draw: number; hint?: number; delay: number; clockShift?: number }>([

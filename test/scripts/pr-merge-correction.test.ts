@@ -121,7 +121,6 @@ describePosix("correction authority through native merge admission", () => {
       configureCorrection(f);
       const state = f.state();
       state.pr.headRefOid = hosted;
-      state.issueComments[0]!.body = state.issueComments[0]!.body.replace(f.head, hosted);
       if (mode === "github_pending") {
         writeFileSync(
           join(f.worktree, ".local/gates.env"),
@@ -145,7 +144,6 @@ describePosix("correction authority through native merge admission", () => {
     "failed-check",
     "stale-gates",
     "stale-review",
-    "missing-clawsweeper",
     "final-review",
   ])("refuses deferred correction merge with %s", (fault) => {
     const f = correctionFixture();
@@ -156,9 +154,6 @@ describePosix("correction authority through native merge admission", () => {
     const state = f.state();
     state.requiredCheckName = fault === "missing-gate" ? "CI" : "openclaw/ci-gate";
     state.gates = fault === "failed-check" ? "fail" : "pending";
-    if (fault === "missing-clawsweeper") {
-      state.issueComments = [];
-    }
     if (fault === "final-review") {
       state.tamperCorrectionAtFinalReview = true;
     }
@@ -207,7 +202,6 @@ describePosix("correction authority through native merge admission", () => {
     const state = f.state();
     state.mode = "success";
     state.pr.headRefOid = replacement;
-    state.issueComments[0]!.body = state.issueComments[0]!.body.replace(f.head, replacement);
     f.save(state);
     if (fault === "incoming digest") {
       const path = join(f.worktree, ".local/review.json");

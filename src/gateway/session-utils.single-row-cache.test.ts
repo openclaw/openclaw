@@ -7,7 +7,11 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  getRuntimeConfig,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
@@ -35,6 +39,7 @@ async function withStateDirEnv<T>(
   });
 }
 
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly, loadSessionEntry } from "./session-utils.js";
 
 const MAIN_AGENT_ID = "main";
@@ -275,8 +280,9 @@ describe("single gateway session row child projections", () => {
       for (const projection of [undefined, "list"] as const) {
         const parse = vi.spyOn(JSON, "parse");
         try {
-          const loaded = loadGatewaySessionEntryReadOnly(parentA, {
-            clone: false,
+          const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg: getRuntimeConfig(),
+            key: parentA,
             includeStoreChildEntries: true,
             projection,
           });
@@ -380,7 +386,9 @@ describe("single gateway session row child projections", () => {
         await setSubagentControllerRun(childKey, parentKey, now);
         const parsed = vi.spyOn(JSON, "parse");
         try {
-          const loaded = loadGatewaySessionEntryReadOnly(parentKey, {
+          const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg: getRuntimeConfig(),
+            key: parentKey,
             includeStoreChildEntries: true,
           });
           expect(loaded.store[childKey]).toMatchObject({ sessionId: "child", updatedAt: now });
@@ -403,9 +411,13 @@ describe("single gateway session row child projections", () => {
           target: { canonicalKey: childKey, storeKeys: [childKey] },
         });
         expect(
-          loadGatewaySessionEntryReadOnly(parentKey, { includeStoreChildEntries: true }).store[
-            childKey
-          ],
+          (
+            await loadGatewaySessionEntryReadOnlyInWorker({
+              cfg: getRuntimeConfig(),
+              key: parentKey,
+              includeStoreChildEntries: true,
+            })
+          ).store[childKey],
         ).toBeUndefined();
         expect((await rowReader.row(parentKey, { now }))?.childSessions).toBeUndefined();
       });

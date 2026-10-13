@@ -19,14 +19,17 @@ import {
 } from "../state/user-model-accounts.js";
 import { getUserPreferences, setUserPreferences } from "../state/user-preferences.test-support.js";
 import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
-import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
+import {
+  prepareUserProfileCatalog,
+  prepareUserProfileIdentity,
+  readUserProfileIdentity,
+} from "../state/user-profile-list.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { userProfilesDb } from "../state/user-profiles-internal.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
-  resolveUserProfileId,
 } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createExpectedProfileBinding } from "./expected-profile.js";
@@ -69,9 +72,10 @@ function clientFor(profileId: string, scopes = ["operator.admin"]): GatewayClien
   } as GatewayClient;
 }
 
-function gateway() {
+async function gateway() {
   const admin = ensureProfileForEmail("admin@example.test");
   setUserProfileRole(admin.id, "admin");
+  const catalog = await prepareUserProfileCatalog();
   const context = {
     getRuntimeConfig: () => cfg,
     logGateway: { warn: vi.fn() },
@@ -97,6 +101,7 @@ function gateway() {
     return respond.mock.calls[0]!;
   };
   return {
+    [Symbol.dispose]: catalog.release,
     admin,
     context,
     dispatch,
@@ -118,7 +123,7 @@ function storedRedirect(profileId: string) {
 
 it("merges an email-less person through admin RPC without main-thread SQL and retires captured authority", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const rpc = gateway();
+    using rpc = await gateway();
     const providerIdentity = { login: "duplicate@github", name: "Duplicate" };
     const source = ensureProfileForTailscaleIdentity(providerIdentity);
     const target = ensureProfileForEmail("survivor@example.test");
@@ -176,7 +181,7 @@ it("merges an email-less person through admin RPC without main-thread SQL and re
         queries.mockRestore();
       }
       expect(storedRedirect(source.id)).toBe(target.id);
-      expect(resolveUserProfileId(source.id)).toBe(target.id);
+      expect(readUserProfileIdentity(source.id)?.profileId).toBe(target.id);
       expect(ensureProfileForTailscaleIdentity(providerIdentity).id).toBe(target.id);
       expect(resolveUserChannelIdentity(identity)?.profileId).toBe(target.id);
       expect(getUserPreferences(target.id)).toEqual({ shared: "target", sourceOnly: true });
@@ -206,7 +211,7 @@ it("merges an email-less person through admin RPC without main-thread SQL and re
 
 it("flattens source cohorts, invalidates their cached roles, and rejects redirects and descendant cycles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const rpc = gateway();
+    using rpc = await gateway();
     const ancestor = ensureProfileForEmail("ancestor@example.test");
     const source = ensureProfileForEmail("duplicate@example.test");
     const target = ensureProfileForEmail("survivor@example.test");
@@ -256,7 +261,7 @@ it("flattens source cohorts, invalidates their cached roles, and rejects redirec
 
 it("rejects invalid pairs and both direct and redirected shared-owner identities without merging", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const rpc = gateway();
+    using rpc = await gateway();
     const owner = ensureGatewayOwnerProfile(null);
     const source = ensureProfileForEmail("duplicate@example.test");
     const ownerAlias = ensureProfileForEmail("legacy-owner-alias@example.test");
@@ -305,7 +310,7 @@ it("rejects invalid pairs and both direct and redirected shared-owner identities
 
 it("delivers the merge response before closing the initiating administrator's retired connection", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const rpc = gateway();
+    using rpc = await gateway();
     const target = ensureProfileForEmail("survivor@example.test");
     const events: string[] = [];
     const client = {

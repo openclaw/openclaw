@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -24,9 +25,10 @@ afterEach(() => {
   }
 });
 
-function domain() {
+function domain(sourceIdentity?: (db: DatabaseSync) => string | symbol) {
   return createStateDomainPublication<Row>({
     domain: `receipt-test-${randomUUID()}`,
+    sourceIdentity,
     keyOf: (row) => row.id,
     isValue: (value): value is Row =>
       isRecord(value) && typeof value.id === "string" && typeof value.version === "number",
@@ -57,6 +59,33 @@ function fixture() {
     });
   return { db, publication, transaction, write, begin };
 }
+
+it("publishes committed facts under the domain's admitted source identity", () => {
+  const { db, transaction, write } = fixture();
+  const identity = "admitted-agent-database";
+  const publication = domain(() => identity);
+  const captured = transaction(() =>
+    publication.capture(db, () => write({ id: "credential", version: 2 }, publication)),
+  );
+  const changes: StateDomainChange<Row>[] = [];
+  cleanup.push(publication.subscribeFacts((change) => changes.push(change)));
+  const pending = publication.begin({ identity, assertCurrent() {} });
+  pending.committed(captured.receipt);
+  pending.finish(true);
+  expect(changes).toMatchObject([
+    { kind: "pending", identity },
+    {
+      kind: "committed",
+      receipt: {
+        source: { identity },
+        facts: new Map([
+          ["credential", { kind: "postimage", value: { id: "credential", version: 2 } }],
+        ]),
+      },
+    },
+    { kind: "settled", identity },
+  ]);
+});
 
 it("captures only committed postimages across nested rollback and waits for the outer commit", () => {
   const { db, publication, transaction, write } = fixture();
@@ -157,4 +186,27 @@ it("distinguishes a proven rollback from missing accepted commit evidence", () =
   changes.length = 0;
   begin().finish(true);
   expect(changes.map((change) => change.kind)).toEqual(["pending", "unknown", "settled"]);
+});
+
+it("invalidates installed facts when their publisher throws before completed settlement", () => {
+  const { db, publication, transaction, write, begin } = fixture();
+  const captured = transaction(() =>
+    publication.capture(db, () => write({ id: "grant", version: 1 })),
+  );
+  const changes: StateDomainChange<Row>[] = [];
+  cleanup.push(publication.subscribeFacts((change) => changes.push(change)));
+  const pending = begin();
+  const failure = new Error("publication failed");
+  expect(() =>
+    pending.committed(captured.receipt, () => {
+      throw failure;
+    }),
+  ).toThrow(failure);
+  pending.finish(true);
+  expect(changes.map((change) => change.kind)).toEqual([
+    "pending",
+    "committed",
+    "unknown",
+    "settled",
+  ]);
 });

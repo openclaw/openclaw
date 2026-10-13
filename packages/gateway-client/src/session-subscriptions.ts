@@ -1,9 +1,6 @@
 import { normalizeAgentIdStrict } from "@openclaw/normalization-core/agent-id";
 import { generateUUID } from "@openclaw/normalization-core/uuid";
-import {
-  GatewayProtocolRequestTimeoutError,
-  type GatewayProtocolRequestOptions,
-} from "./protocol-request.js";
+import type { GatewayProtocolRequestOptions } from "./protocol-request.js";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
 export type GatewaySessionMessageRequestClient = {
@@ -47,7 +44,6 @@ type SessionMessageSubscriptionEntry = {
   mode?: "narration";
   includeApprovals: boolean;
   canonicalSettled: boolean;
-  refreshRequired: boolean;
   handles: Set<GatewaySessionMessageSubscription>;
   pendingOwners: number;
   pendingFullOwners: number;
@@ -169,18 +165,6 @@ export class GatewaySessionMessageSubscriptionCoordinator {
         // Concurrent owners share this request without an unhandled side branch.
         void entry.ready.catch(() => undefined);
       }
-      if (entry.refreshRequired) {
-        entry.refreshRequired = false;
-        entry.plainFallback = null;
-        entry.approvalRequest = null;
-        const retainedApprovals = [...entry.handles].some((handle) => handle.includeApprovals);
-        // Refresh retained capabilities before applying a new owner's request;
-        // plain fallback must not downgrade an existing approval observer.
-        entry.ready = this.#requestSubscribe(entry, retainedApprovals).catch((error: unknown) => {
-          entry.refreshRequired = true;
-          throw error;
-        });
-      }
       const result = await this.#acquireCapability(entry, includeApprovals);
       if (!narration && entry.mode === "narration") {
         await this.#requestSubscribe(entry, false, "full");
@@ -259,13 +243,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     // rejected releases remain retryable on their original owner.
     const removeEntry = entry.handles.size === 1;
     const request = removeEntry
-      ? this.#requestMessages(entry).catch((error: unknown) => {
-          if (error instanceof GatewayProtocolRequestTimeoutError && error.requestSent) {
-            // The unsubscribe may have committed despite its missing acknowledgment.
-            entry.refreshRequired = true;
-          }
-          throw error;
-        })
+      ? this.#requestMessages(entry)
       : this.#requestSubscribe(entry, false, "narration");
     const tracked = request
       .then(() => this.#finishRelease(subscription, owner, removeEntry))
@@ -307,7 +285,6 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       wireRequest: null,
       includeApprovals: false,
       canonicalSettled: false,
-      refreshRequired: false,
       handles: new Set(),
       pendingOwners: 0,
       pendingFullOwners: 0,
@@ -426,45 +403,8 @@ export class GatewaySessionMessageSubscriptionCoordinator {
         [...entry.handles].every((handle) => handle.mode === "narration"))
         ? "narration"
         : undefined;
-    const result = await this.#requestMessages(entry, { mode, includeApprovals }).catch(
-      async (error: unknown) => {
-        if (
-          !(error instanceof GatewayProtocolRequestTimeoutError) ||
-          !error.requestSent ||
-          this.#retired
-        ) {
-          throw error;
-        }
-        try {
-          // A sent request can commit before its acknowledgment. Restore only
-          // capabilities still owned by acquired leases, including older approval panes.
-          const retainedApprovals = [...entry.handles].some((handle) => handle.includeApprovals);
-          const retainedMode =
-            entry.handles.size > 0 &&
-            [...entry.handles].every((handle) => handle.mode === "narration")
-              ? "narration"
-              : undefined;
-          await this.#requestMessages(
-            entry,
-            entry.handles.size > 0
-              ? { mode: retainedMode, includeApprovals: retainedApprovals }
-              : undefined,
-          );
-          entry.mode = retainedMode;
-          entry.includeApprovals = retainedApprovals;
-        } catch (recoveryError) {
-          if (!this.#retired) {
-            const subscriptionRecoveryFailure = new AggregateError(
-              [error, recoveryError],
-              "session message subscription recovery failed",
-              { cause: recoveryError },
-            );
-            throw subscriptionRecoveryFailure;
-          }
-        }
-        throw error;
-      },
-    );
+    // A lost acknowledgment can leave stale observation until a fresh subscribe or reconnect.
+    const result = await this.#requestMessages(entry, { mode, includeApprovals });
     const response = result && typeof result === "object" ? result : null;
     const responseKey = response && "key" in response ? response.key : undefined;
     entry.key =

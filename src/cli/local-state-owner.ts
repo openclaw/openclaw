@@ -126,7 +126,7 @@ export async function runWithLocalStateOwner<T>(params: {
       assertOwnerCurrent();
     };
     assertCurrent();
-    const { getRuntimeConfig } = await import("../config/config.js");
+    const { loadConfig } = await import("../config/config.js");
     assertCurrent();
     let config: OpenClawConfig | undefined;
     return await localOwnerAssertion.run(assertCurrent, () =>
@@ -135,7 +135,7 @@ export async function runWithLocalStateOwner<T>(params: {
         // Loading config can write state. Config-free owners must reach their own admission first.
         get config() {
           assertCurrent();
-          config ??= getRuntimeConfig();
+          config ??= loadConfig();
           assertCurrent();
           return config;
         },

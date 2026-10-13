@@ -81,8 +81,9 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     }
     this.sessionSharingHydrationTargets.set(cacheKey, sessionId);
     const states = new Map(this.sessionSharingStates);
-    states.delete(cacheKey);
-    this.sessionSharingStates = states;
+    if (states.delete(cacheKey)) {
+      this.sessionSharingStates = states;
+    }
     // Selecting a new generation under the same key must supersede an older
     // in-flight read. loadSessionSharing owns the connection and instance guards.
     void this.loadSessionSharing(session, true);
@@ -175,7 +176,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     ) {
       this.sessionSuggestions = [];
       this.sessionSuggestionRole = undefined;
-      this.requestUpdate();
+      this.chatState.requestBackgroundUpdate();
       return;
     }
     const sessionKey = scope.state.sessionKey;
@@ -198,7 +199,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       }
       this.sessionSuggestions = result.suggestions;
       this.sessionSuggestionRole = result.role;
-      this.requestUpdate();
+      this.chatState.requestBackgroundUpdate();
     } catch {
       if (
         requestVersion === this.sessionSuggestionsRequestVersion &&
@@ -206,7 +207,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       ) {
         this.sessionSuggestions = [];
         this.sessionSuggestionRole = undefined;
-        this.requestUpdate();
+        this.chatState.requestBackgroundUpdate();
       }
     }
   }
@@ -240,7 +241,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       );
     }
     this.sessionSuggestionBusyIds.delete(event.suggestion.id);
-    this.requestUpdate();
+    this.chatState.requestBackgroundUpdate();
     if (shouldRefresh) {
       void this.refreshSessionSuggestions();
     }

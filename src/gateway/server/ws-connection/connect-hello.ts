@@ -15,7 +15,7 @@ import {
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
-import { commitPresence } from "../../../infra/system-presence.js";
+import { commitPresence, listSystemPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
@@ -26,6 +26,7 @@ import {
   listControlUiLinkReaders,
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
+import { normalizeControlUiBasePath } from "../../control-ui-shared.js";
 import {
   broadcastSetupHandoffDeliveryUncertain,
   broadcastSetupHandoffCompletion,
@@ -34,6 +35,7 @@ import {
   type SetupHandoff,
 } from "../../device-pair-setup-completion.js";
 import { canReadDetailedUpdateMetadata } from "../../events.js";
+import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import { operatorSessionCap } from "../../operator-role-policy.js";
@@ -120,10 +122,14 @@ export async function sendGatewayHello(
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
   const sessionRowProjection = getSessionRowProjection(buildRequestContext());
-  while (sessionRowProjection?.needsMembershipPreparation()) {
-    await sessionRowProjection.prepareMembership();
-    if (context.handler.isClosed() || context.handler.getClient()?.invalidated) {
-      throw new Error("Gateway connection closed before hello");
+  if (
+    listSystemPresence({ includeConnectionId: connId }).some((row) => row.watchedSessions?.length)
+  ) {
+    while (sessionRowProjection?.needsMembershipPreparation()) {
+      await sessionRowProjection.prepareMembership();
+      if (context.handler.isClosed() || context.handler.getClient()?.invalidated) {
+        throw new Error("Gateway connection closed before hello");
+      }
     }
   }
   const snapshot = buildGatewaySnapshot({
@@ -146,7 +152,13 @@ export async function sendGatewayHello(
     scopes,
     buildRequestContext().getGatewayMethodRegistry?.(),
   );
-  const controlUiLocation = resolveControlUiLinkLocation(context.configSnapshot);
+  const ingress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
+  const controlUiLocation = ingress
+    ? {
+        origin: ingress.publicOrigin,
+        basePath: normalizeControlUiBasePath(context.configSnapshot.gateway?.controlUi?.basePath),
+      }
+    : resolveControlUiLinkLocation(context.configSnapshot);
   // Gateway runtime provenance is independent of the UI artifact source.
   // Consumers use the source field to decide whether UI build comparison applies.
   const controlUiBuildSource = context.configSnapshot.gateway?.controlUi?.root
@@ -196,6 +208,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.WORKTREES_RECOVER_REMOVAL_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_RETIRE_SNAPSHOT_OWNER,
         GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT,
+        GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,

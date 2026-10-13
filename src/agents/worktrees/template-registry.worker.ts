@@ -10,7 +10,7 @@ import {
 } from "../../infra/state-lease-process-owner.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { createOpenClawStateSchemaEnsurer } from "../../state/openclaw-state-feature-schema.js";
+import { createOpenClawStateSchemaEnsurer } from "../../state/openclaw-state-feature-schema-ensure.js";
 import type {
   WorkerOperationContext,
   WorkerOperationHandlers,

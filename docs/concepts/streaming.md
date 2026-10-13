@@ -215,7 +215,7 @@ other turns without a preview, they retain the configured block delivery policy.
 
 ## Preview streaming modes
 
-Canonical key: `channels.<channel>.streaming` (nested `{ mode, ... }`; legacy
+Current key: `channels.<channel>.streaming` (nested `{ mode, ... }`; legacy
 top-level boolean/string spellings are rewritten by `openclaw doctor --fix`).
 
 | Mode       | Behavior                                                              |

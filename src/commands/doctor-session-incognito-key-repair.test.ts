@@ -98,7 +98,7 @@ describe("doctor reserved incognito session key repair", () => {
         .run(oldKey);
       stateDatabase.db
         .prepare(
-          "INSERT INTO operator_approvals (approval_id, resolution_ref, kind, status, presentation_json, reviewer_device_ids_json, source_session_key, audience_session_keys_json, runtime_epoch, created_at_ms, expires_at_ms, updated_at_ms) VALUES ('approval-1', ?, 'exec', 'pending', '{}', '[]', ?, ?, 'epoch', 1, 2, 1)",
+          "INSERT INTO operator_approvals (cursor_id, approval_id, resolution_ref, kind, status, presentation_json, reviewer_device_ids_json, source_session_key, audience_session_keys_json, runtime_epoch, created_at_ms, expires_at_ms, updated_at_ms) VALUES (1, 'approval-1', ?, 'exec', 'pending', '{}', '[]', ?, ?, 'epoch', 1, 2, 1)",
         )
         .run("a".repeat(43), oldKey, JSON.stringify([baseLegacyKey]));
       secondaryDatabase.db

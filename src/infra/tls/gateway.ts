@@ -1,6 +1,6 @@
 // Public certificate inspection is read-only; server startup alone provisions TLS material.
 import { X509Certificate } from "node:crypto";
-import type { Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
@@ -43,10 +43,10 @@ async function publishGeneratedTlsOutput(
 ): Promise<GatewayTlsDegradationReason[]> {
   const degradationReasons: GatewayTlsDegradationReason[] = [];
   const stagedHandle = await fs.open(stagedPath, "r+");
-  let stagedIdentity: Stats;
+  let stagedIdentity: BigIntStats;
   try {
     await stagedHandle.sync();
-    stagedIdentity = await stagedHandle.stat();
+    stagedIdentity = await stagedHandle.stat({ bigint: true });
   } finally {
     await stagedHandle.close();
   }

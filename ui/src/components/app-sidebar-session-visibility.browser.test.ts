@@ -24,6 +24,7 @@ function visibilityProbe() {
   const observed = new Set<Element>();
   const intersections = new Map<Element, IntersectionObserverEntry>();
   let delivery = Promise.withResolvers<void>();
+  let deliveryReady = () => true;
   vi.stubGlobal(
     "IntersectionObserver",
     class extends NativeObserver {
@@ -34,7 +35,9 @@ function visibilityProbe() {
             for (const entry of entries) {
               intersections.set(entry.target, entry);
             }
-            delivery.resolve();
+            if (deliveryReady()) {
+              delivery.resolve();
+            }
           }
         }, options);
         if (options?.root instanceof Element && options.root.matches(".sidebar-shell__body")) {
@@ -66,7 +69,8 @@ function visibilityProbe() {
     get delivered() {
       return delivery.promise;
     },
-    reset() {
+    reset(ready = () => true) {
+      deliveryReady = ready;
       delivery = Promise.withResolvers<void>();
     },
   };
@@ -103,11 +107,22 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
   scroller.style.cssText = "height:600px;flex:none;overflow:auto";
   expect(observers).toHaveLength(0);
   harness.publishList(roster);
-  await sidebar.updateComplete;
+  await settleRoster(sidebar);
   const revealRunningRows = async () => {
     for (let page = 0; page < 2; page++) {
+      probe.reset(() => {
+        const runningRows = [...sidebar.querySelectorAll<HTMLElement>(".session-row-host")].filter(
+          (row) => row.querySelector(".session-glyph__ring, .session-glyph__trace-run"),
+        );
+        // Earlier rows can notify before the final page's new rows receive their entries.
+        return (
+          (page === 0 || runningRows.length === 11) &&
+          runningRows.every((row) => intersections.has(row))
+        );
+      });
       sidebar.querySelector<HTMLButtonElement>(".sidebar-session-pagination__button")!.click();
-      await sidebar.updateComplete;
+      await settleRoster(sidebar);
+      await probe.delivered;
     }
   };
   await revealRunningRows();
@@ -122,8 +137,8 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
   const first = rows[0]!;
   const last = rows.at(-1)!;
   const ring = (row: HTMLElement) => row.querySelector<HTMLElement>(".session-glyph__ring")!;
-  const scrollTo = async (row: HTMLElement) => {
-    probe.reset();
+  const scrollTo = async (row: HTMLElement, ready = () => true) => {
+    probe.reset(ready);
     scroller.scrollTop += row.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
     await probe.delivered;
   };
@@ -140,7 +155,7 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
   expect(intersections.get(last)?.intersectionRatio).toBe(0);
   expect(ring(last).classList.contains("session-run-indicator--offscreen")).toBe(false);
 
-  await scrollTo(last);
+  await scrollTo(last, () => intersections.get(first)?.isIntersecting === false);
   expect(ring(first).classList.contains("session-run-indicator--offscreen")).toBe(true);
   expect(getComputedStyle(ring(first)).animationPlayState).toBe("paused");
   expect(ring(last).classList.contains("session-run-indicator--offscreen")).toBe(false);
@@ -159,7 +174,7 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
         ),
       },
     });
-    await sidebar.updateComplete;
+    await settleRoster(sidebar);
     if (patch.hasActiveRun !== false) {
       await probe.delivered;
     }
@@ -202,7 +217,7 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
   expect(activeObservers.size).toBe(0);
   probe.reset();
   provider.append(sidebar);
-  await sidebar.updateComplete;
+  await settleRoster(sidebar);
   await revealRunningRows();
   await probe.delivered;
   expect(activeObservers.size).toBe(1);
@@ -210,7 +225,9 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
     (row) => row.querySelector(".session-glyph__trace-run"),
   );
   expect(reconnectedRows).toHaveLength(11);
-  await scrollTo(reconnectedRows.at(-1)!);
+  await scrollTo(reconnectedRows.at(-1)!, () =>
+    trace(reconnectedRows[0]!).classList.contains("session-run-indicator--offscreen"),
+  );
   expect(trace(reconnectedRows[0]!).classList.contains("session-run-indicator--offscreen")).toBe(
     true,
   );

@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
@@ -11,12 +12,23 @@ import { cronStoreKey } from "./store/key.js";
 import { readCronRunRecords } from "./store/read-only.js";
 import { recordCronRun, maintainCronRunHistory } from "./store/run-history.js";
 import {
-  pruneCronRunHistoryInDatabase,
+  applyCronRunHistoryMaintenanceInDatabase,
+  planCronRunHistoryMaintenance,
   readCronRunRecordsInDatabase,
   recordCronRunInDatabase,
 } from "./store/run-history.kernel.js";
 import type { CronRunHistoryWrite, CronRunRecord } from "./store/run-history.types.js";
-import { prepareCronRunReceiptWriteSchema } from "./store/run-receipt-write-admission.js";
+import {
+  prepareCronRunReceiptWriteSchema,
+  type CronRunReceiptWriteSchema,
+} from "./store/run-receipt-write-admission.js";
+
+function pruneHistory(db: DatabaseSync, now: number, schema: CronRunReceiptWriteSchema) {
+  const records = readCronRunRecordsInDatabase(db);
+  const activeJobs = new Set(records.flatMap((row) => (row.jobId ? [row.jobId] : [])));
+  const plan = planCronRunHistoryMaintenance(records, now, activeJobs);
+  return applyCronRunHistoryMaintenanceInDatabase(db, plan, now, schema).pruned;
+}
 
 async function readCronRunHistoryPage(options: ReadCronRunHistoryPageOptions) {
   return projectCronRunHistoryPage(
@@ -222,7 +234,7 @@ it("bounds quiet evaluations separately without evicting payload history or acti
               row.detail === undefined ? null : JSON.stringify(row.detail),
             );
           }
-          pruneCronRunHistoryInDatabase(db, now, schema);
+          pruneHistory(db, now, schema);
           const remaining = new Set(readCronRunRecordsInDatabase(db).map((row) => row.id));
           return new Set(records.filter((row) => !remaining.has(row.id)).map((row) => row.id));
         };
@@ -349,7 +361,7 @@ it("retains legacy identities and raw details without inventing a store partitio
         expect(projectCronRunHistoryPage(records, { storeKey: "current-store" }).entries).toEqual(
           [],
         );
-        expect(pruneCronRunHistoryInDatabase(db, 11, prepareCronRunReceiptWriteSchema(db))).toBe(0);
+        expect(pruneHistory(db, 11, prepareCronRunReceiptWriteSchema(db))).toBe(0);
         expect(
           db.prepare("SELECT detail_json FROM task_runs WHERE task_id = ?").get("legacy-null"),
         ).toEqual({ detail_json: rawDetail });
@@ -365,11 +377,7 @@ it("retains legacy identities and raw details without inventing a store partitio
         insertBinding.run("cron", "legacy-null");
         insertBinding.run("flow", "legacy-null");
         expect(
-          pruneCronRunHistoryInDatabase(
-            db,
-            10 + 7 * 24 * 60 * 60_000,
-            prepareCronRunReceiptWriteSchema(db),
-          ),
+          pruneHistory(db, 10 + 7 * 24 * 60 * 60_000, prepareCronRunReceiptWriteSchema(db)),
         ).toBe(3);
         expect(readCronRunRecordsInDatabase(db)).toEqual([]);
         expect(db.prepare("SELECT task_id FROM task_runs").all()).toEqual([
@@ -459,9 +467,9 @@ it("normalizes released lifecycle rows before history, recovery, and retention",
           ),
         ).toEqual([200, 200, 200, 200, 200]);
         const schema = prepareCronRunReceiptWriteSchema(db);
-        expect(pruneCronRunHistoryInDatabase(db, 200 + 24 * 60 * 60_000, schema)).toBe(1);
+        expect(pruneHistory(db, 200 + 24 * 60 * 60_000, schema)).toBe(1);
         expect(readCronRunRecordsInDatabase(db).map((row) => row.id)).not.toContain("lost");
-        expect(pruneCronRunHistoryInDatabase(db, 200 + 7 * 24 * 60 * 60_000, schema)).toBe(5);
+        expect(pruneHistory(db, 200 + 7 * 24 * 60 * 60_000, schema)).toBe(5);
         expect(readCronRunRecordsInDatabase(db).map((row) => row.id)).toEqual(["running"]);
       });
     },
@@ -489,11 +497,7 @@ it("rejects corrupt released enums before reading or pruning history", async () 
             `Invalid persisted task ${label}: "invalid"`,
           );
           expect(() =>
-            pruneCronRunHistoryInDatabase(
-              db,
-              7 * 24 * 60 * 60_000,
-              prepareCronRunReceiptWriteSchema(db),
-            ),
+            pruneHistory(db, 7 * 24 * 60 * 60_000, prepareCronRunReceiptWriteSchema(db)),
           ).toThrow(`Invalid persisted task ${label}: "invalid"`);
           db.prepare(`UPDATE task_runs SET ${column} = ?`).run(original!);
         }

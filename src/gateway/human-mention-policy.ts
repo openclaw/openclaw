@@ -12,10 +12,7 @@ import {
   type UsersMentionableResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
-import {
-  updateSessionProfileInvolvement,
-  updateSessionProfileInvolvementAsync,
-} from "../config/sessions/session-accessor.js";
+import { updateSessionProfileInvolvementAsync } from "../config/sessions/session-accessor.js";
 import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -37,11 +34,12 @@ import { authenticatedProfileUnavailableError } from "./server-methods/gateway-c
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
+import { prepareSessionSharingRead } from "./session-sharing-target-read.js";
 import {
   createProfileSessionEntryFilter,
   isSessionVisibilityAllowed,
   prepareSessionSharing,
+  resolveSessionSharingTargetAsync,
   resolveSessionSharingTarget,
   resolveSessionVisibility,
 } from "./session-sharing.js";
@@ -116,8 +114,11 @@ export function createHumanMentionPolicy(params: {
     let profile = displays.get(profileId);
     if (!profile) {
       profile = resolveCurrentUserProfileDisplay(profileId);
-      pruneMapToMaxSize(displays, MAX_DIRECTORY_PROFILES - 1);
-      displays.set(profileId, profile);
+      // Catalog hydration does not advance the profile revision; retry unresolved reads.
+      if (profile.kind === "resolved") {
+        pruneMapToMaxSize(displays, MAX_DIRECTORY_PROFILES - 1);
+        displays.set(profileId, profile);
+      }
     }
     return profile.kind === "resolved" ? profile : undefined;
   }
@@ -200,6 +201,7 @@ export function createHumanMentionPolicy(params: {
     client: GatewayClient | null,
     input: UsersMentionableParams,
     cfg: OpenClawConfig,
+    prepared?: { readTarget: () => Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>> },
   ): Result<{ target: MentionTarget; profile: MentionProfile }, ErrorShape> {
     const identified = identify(client, cfg);
     if (!identified.ok) {
@@ -218,11 +220,13 @@ export function createHumanMentionPolicy(params: {
       const resolved =
         binding && "kind" in binding
           ? null
-          : resolveSessionSharingTarget({
-              cfg,
-              sessionKey: input.sessionKey,
-              agentId: agent.agentId,
-            });
+          : prepared
+            ? prepared.readTarget()
+            : resolveSessionSharingTarget({
+                cfg,
+                sessionKey: input.sessionKey,
+                agentId: agent.agentId,
+              });
       const target = resolved && {
         agentId: resolved.agentId,
         sessionKey: resolved.canonicalKey,
@@ -301,70 +305,60 @@ export function createHumanMentionPolicy(params: {
   }
 
   return {
-    recordCommittedInvolvement(input: MentionCommittedInput): void {
-      if (isIncognitoSessionKey(input.sessionKey)) {
-        return;
+    async prepareContext(input: UsersMentionableParams) {
+      if (!("sessionKey" in input)) {
+        return { readTarget: () => null, release() {} };
       }
       const cfg = params.getRuntimeConfig();
-      const target = resolveSessionSharingTarget({
+      const agent = resolveRequestedSessionAgentId(cfg, input.sessionKey, input.agentId);
+      if (!agent.ok) {
+        return { readTarget: () => null, release() {} };
+      }
+      const prepared = await prepareSessionSharingRead({
         cfg,
         sessionKey: input.sessionKey,
-        agentId: input.agentId,
+        agentId: agent.agentId,
       });
-      const profileIds = involvedProfiles(input, target, cfg);
-      if (target && profileIds.length) {
-        updateSessionProfileInvolvement(
-          { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
-          {
-            expectedSessionId: input.sessionId,
-            profileIds,
-            change: { kind: "mention", source: input.committedSource },
-          },
-        );
-      }
+      return {
+        readTarget: () => prepared.readCurrent(params.getRuntimeConfig()).target,
+        release: prepared.release,
+      };
     },
-    async recordCommittedInvolvementAsync(input: MentionCommittedInput): Promise<void> {
+    async recordCommittedInvolvementAsync(
+      input: MentionCommittedInput,
+      facts: Awaited<ReturnType<typeof prepareSessionSharingRead>>,
+    ): Promise<void> {
       const cfg = params.getRuntimeConfig();
       const agent = resolveRequestedSessionAgentId(cfg, input.sessionKey, input.agentId);
       if (!agent.ok || isIncognitoSessionKey(input.sessionKey)) {
         return;
       }
-      const facts = await prepareSessionMutationFacts({
-        cfg,
-        sessionKey: input.sessionKey,
-        agentId: agent.agentId,
-        allowMissing: true,
-      });
-      try {
-        const target = facts.readCurrent(params.getRuntimeConfig()).target;
-        const profileIds = involvedProfiles(input, target, params.getRuntimeConfig());
-        if (!target || !profileIds.length) {
-          return;
-        }
-        const accepted = await updateSessionProfileInvolvementAsync(
-          { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
-          {
-            expectedSessionId: input.sessionId,
-            expectedEntry: target.entry,
-            profileIds,
-            change: { kind: "mention", source: input.committedSource },
-            assertCurrent() {
-              const currentCfg = params.getRuntimeConfig();
-              const current = facts.readCurrent(currentCfg).target;
-              if (
-                !active ||
-                !isDeepStrictEqual(involvedProfiles(input, current, currentCfg), profileIds)
-              ) {
-                throw new Error("Committed mention authority changed before involvement commit");
-              }
-            },
+      const target = facts.readCurrent(params.getRuntimeConfig()).target;
+      const profileIds = involvedProfiles(input, target, params.getRuntimeConfig());
+      if (!target || !profileIds.length) {
+        return;
+      }
+      const accepted = await updateSessionProfileInvolvementAsync(
+        { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
+        {
+          expectedSessionId: input.sessionId,
+          expectedEntry: target.entry,
+          profileIds,
+          change: { kind: "mention", source: input.committedSource },
+          assertCurrent() {
+            const currentCfg = params.getRuntimeConfig();
+            const current = facts.readCurrent(currentCfg).target;
+            if (
+              !active ||
+              !isDeepStrictEqual(involvedProfiles(input, current, currentCfg), profileIds)
+            ) {
+              throw new Error("Committed mention authority changed before involvement commit");
+            }
           },
-        );
-        if (!accepted) {
-          throw new Error("Committed mention involvement was refused for a changed session");
-        }
-      } finally {
-        facts.release();
+        },
+      );
+      if (!accepted) {
+        throw new Error("Committed mention involvement was refused for a changed session");
       }
     },
     identify,
@@ -384,9 +378,10 @@ export function createHumanMentionPolicy(params: {
     mentionable(
       client: GatewayClient | null,
       input: UsersMentionableParams,
+      prepared?: { readTarget: () => Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>> },
     ): Result<UsersMentionableResult, ErrorShape> {
       const cfg = params.getRuntimeConfig();
-      const context = resolveContext(client, input, cfg);
+      const context = resolveContext(client, input, cfg, prepared);
       if (!context.ok) {
         return context;
       }
@@ -459,12 +454,13 @@ export function createHumanMentionPolicy(params: {
       client: GatewayClient | null,
       input: UsersMentionableParams,
       profileIds: readonly string[],
+      prepared?: { readTarget: () => Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>> },
     ): Result<readonly string[], ErrorShape> {
       if (profileIds.length === 0) {
         return ok([]);
       }
       const cfg = params.getRuntimeConfig();
-      const context = resolveContext(client, input, cfg);
+      const context = resolveContext(client, input, cfg, prepared);
       if (!context.ok) {
         return context;
       }

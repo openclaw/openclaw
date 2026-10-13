@@ -1,6 +1,9 @@
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseCurrentReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import {
   isUpdateRecoveryPending,
   decodeUpdateRecovery,
@@ -14,12 +17,12 @@ export type { UpdateRecoveryRecord } from "./update-run-recovery-schema.js";
 export { inspectUpdateRecoveries } from "./update-run-recovery-store.js";
 export function loadUpdateRecovery(
   runId: string,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { allowNativeRead?: true } = {},
 ): UpdateRecoveryRecord | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-    ({ db }) => readRecovery(db, runId),
-    options,
-  );
+  const read = options.allowNativeRead
+    ? withExistingOpenClawStateDatabaseCurrentReadOnly
+    : withExistingOpenClawStateDatabaseArtifactPreservingReadOnly;
+  return read(({ db }) => readRecovery(db, runId), options);
 }
 /** Detection only. This delivery never claims, rewrites, or retires retained recovery. */
 export function assertNoPendingUpdateRecovery(options: OpenClawStateDatabaseOptions = {}): void {

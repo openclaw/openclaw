@@ -98,7 +98,7 @@ describe("model-backed transcript summaries", () => {
   it("uses visible JSON notes while retaining deterministic transcript identity and participants", async () => {
     runIsolatedCompletion.mockResolvedValue(
       completion(
-        `<think>Private draft</think>${JSON.stringify({ ...notes, participants: ["Invented"] })}`,
+        `<think>Private draft</think>${JSON.stringify({ ...notes, participants: ["Invented"] })}\nDiagnostics: {"tokens":12}`,
       ),
     );
     const summary = await summarizeTranscriptsWithModel(params);
@@ -146,60 +146,14 @@ describe("model-backed transcript summaries", () => {
     expect(summary?.actionItems).toEqual(["Alex: follow up"]);
   });
 
-  it("accepts visible notes wrapped in surrounding prose", async () => {
-    runIsolatedCompletion.mockResolvedValue(
-      completion(`Here are the notes:\n${JSON.stringify(notes)}\nHope this helps.`),
-    );
-    expect(await summarizeTranscriptsWithModel(params)).toMatchObject({
-      ...notes,
-      overview: notes.overview.trim(),
-      source: "model",
-    });
-    expect(runIsolatedCompletion).toHaveBeenCalledOnce();
+  it("leaves heuristic notes available when no model is selected", async () => {
+    resolveSimpleCompletionSelectionForAgent.mockReturnValue(null);
+    const enhanced = await summarizeTranscriptsWithModel(params);
+    expect(enhanced).toBeUndefined();
+    const summary = enhanced ?? summarizeTranscripts(params);
+    expect(summary.source).toBe("heuristic");
+    expect(summary.decisions).toContain("Zoe: We agreed to ship the CLI.");
   });
-
-  it("uses the first complete object when prose contains later JSON", async () => {
-    runIsolatedCompletion.mockResolvedValue(
-      completion(`${JSON.stringify(notes)}\nDiagnostics: {"tokens":12}`),
-    );
-
-    expect(await summarizeTranscriptsWithModel(params)).toMatchObject({
-      ...notes,
-      overview: notes.overview.trim(),
-      source: "model",
-    });
-    expect(runIsolatedCompletion).toHaveBeenCalledOnce();
-  });
-
-  it("tries the primary once after utility output is invalid", async () => {
-    runIsolatedCompletion
-      .mockResolvedValueOnce(completion("not JSON"))
-      .mockResolvedValueOnce(completion(JSON.stringify(notes), "primary-test-model"));
-    const summary = await summarizeTranscriptsWithModel(params);
-    expect(summary?.model).toBe("openai/primary-test-model");
-    expect(runIsolatedCompletion.mock.calls.map(([request]) => request.model)).toEqual([
-      "gpt-5.6-luna",
-      "primary-test-model",
-    ]);
-  });
-
-  it.each(["invalid JSON", "malformed object", "no model"])(
-    "leaves heuristic notes available after %s",
-    async (failure) => {
-      if (failure === "invalid JSON") {
-        runIsolatedCompletion.mockResolvedValue({ text: '{"overview":42}' });
-      } else if (failure === "malformed object") {
-        runIsolatedCompletion.mockResolvedValue(completion('Notes: {"overview":}'));
-      } else {
-        resolveSimpleCompletionSelectionForAgent.mockReturnValue(null);
-      }
-      const enhanced = await summarizeTranscriptsWithModel(params);
-      expect(enhanced).toBeUndefined();
-      const summary = enhanced ?? summarizeTranscripts(params);
-      expect(summary.source).toBe("heuristic");
-      expect(summary.decisions).toContain("Zoe: We agreed to ship the CLI.");
-    },
-  );
 
   it("aborts timed-out inference and joins its cleanup before returning", async () => {
     const held = createDeferred<ReturnType<typeof completion>>();

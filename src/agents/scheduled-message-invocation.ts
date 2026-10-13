@@ -120,6 +120,8 @@ export function createEmbeddedMessageInvocationPolicy(params: {
                 scheduledToolPolicy: params.scheduledToolPolicy,
                 runtimePluginToolGrant: profile.policy.runtimePluginToolGrant,
                 pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+                // The filter retains the admitted turn's resource and inherited ceilings.
+                preparedSessionCapabilityStore: {},
               });
         return (
           params.isAvailable() && filter(currentProfile).some((tool) => tool.name === "message")

@@ -7,7 +7,6 @@ import {
 } from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
-import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import { resolveRuntimeModelConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -90,12 +89,8 @@ export function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedG
           // display-only config publications must not make that still-current owner disappear.
           const owner = deps.getPreparedOwner({ agentId, config });
           if (!owner) {
-            if (getPreparedModelRuntimeStartupStatus()?.degraded) {
-              return [];
-            }
-            throw new ChatMetadataSnapshotUnavailableError(
-              `prepared chat metadata owner is unavailable for agent "${agentId}"`,
-            );
+            // An absent agent must not withdraw metadata for the published, healthy fleet.
+            return [];
           }
           const workspaceDir = owner.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
           const fullModelCatalog = owner.readFullModelCatalog?.();

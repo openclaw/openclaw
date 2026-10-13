@@ -157,6 +157,19 @@ describe("heartbeat acknowledgements", () => {
       sentText: "HEARTBEAT_OK",
     },
     {
+      name: "truncated NO_REPLY final",
+      payload: { text: "NO_R" },
+      options: { telegram: true },
+      sends: 0,
+    },
+    {
+      name: "truncated NO_REPLY acknowledgement",
+      payload: { text: "NO_RE" },
+      options: { showOk: true },
+      sends: 1,
+      sentText: "HEARTBEAT_OK",
+    },
+    {
       name: "exec summary with trailing acknowledgement",
       payload: { text: "Command completed: uploaded report.txt\nHEARTBEAT_OK" },
       exec: true,

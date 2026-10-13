@@ -24,6 +24,13 @@ export async function migrateAgentsApiBinding(
   };
   assertMigrationCurrent();
   const config = agentsApiConfigSchema.parse(readPluginConfig() ?? {});
+  if (!config.forwarding.gatewayTools || !config.forwarding.mcpServers) {
+    // Historical declarations allowed forwarding. Do not discover MCP or resolve
+    // its credentials merely to reject a binding that cannot adopt restrictions.
+    throw new Error(
+      "Agents API legacy binding cannot adopt forwarding restrictions; restore the original configuration and API key and retry, or reset the OpenClaw session to settle the saved native session with a currently authorized key. The saved binding has been retained.",
+    );
+  }
   const environment = resolveAgentsApiEnvironment(config, params.workspaceDir);
   const { webSearchEnabled } = resolveAgentsApiNativeToolPolicy(params, config);
   const mcpTools = await buildAgentsApiMcpTools(params);
@@ -74,6 +81,7 @@ export async function migrateAgentsApiBinding(
       environment,
       mcpTools,
       webSearchEnabled,
+      forwarding: config.forwarding,
     }),
   };
 }

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   fixture,
   completeInForeground,
@@ -20,6 +24,8 @@ import {
 import { readCodexNativeSubagentSubmissions } from "./native-subagent-submission.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 setupRunAttemptTestHooks();
 
 async function startAssignment(observeTurn = true) {
@@ -48,22 +54,24 @@ describe("native pending assignment inventory through registered monitor admissi
       const entered = createDeferred<void>();
       const releaseWrite = createDeferred<void>();
       const mutate = f.store.mutate.bind(f.store);
-      vi.spyOn(f.store, "mutate").mockImplementation(async (identity, mutation, assertCurrent) => {
-        if (
-          mutation.kind === "record-native-subagent-assignment" &&
-          mutation.assignment.nativeTurnId === "child-turn"
-        ) {
-          entered.resolve();
-          await releaseWrite.promise;
-          if (outcome === "failed") {
-            throw new Error("Synthetic binding write failure");
+      vi.spyOn(f.store, "mutate").mockImplementation(
+        async (identity, mutation, assertCurrent, authority) => {
+          if (
+            mutation.kind === "record-native-subagent-assignment" &&
+            mutation.assignment.nativeTurnId === "child-turn"
+          ) {
+            entered.resolve();
+            await releaseWrite.promise;
+            if (outcome === "failed") {
+              throw new Error("Synthetic binding write failure");
+            }
+            if (outcome === "rejected") {
+              return false;
+            }
           }
-          if (outcome === "rejected") {
-            return false;
-          }
-        }
-        return await mutate(identity, mutation, assertCurrent);
-      });
+          return await mutate(identity, mutation, assertCurrent, authority);
+        },
+      );
       const granted = vi.fn();
       const capture = codexNativeSubagentMonitorRuntime
         .captureModelSource({

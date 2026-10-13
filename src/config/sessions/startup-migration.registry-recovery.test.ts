@@ -11,6 +11,7 @@ import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../../state/agent-deletion-journal-recovery.js";
+import { publishAgentDeletionJournalStatus } from "../../state/agent-deletion-journal-status.js";
 import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../../state/openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -29,12 +30,14 @@ import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-pref
 import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   prepareOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
 import { replaceSessionEntry } from "./session-accessor.js";
@@ -53,6 +56,7 @@ afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 it.each(["cold", "preexisting"] as const)(
@@ -61,6 +65,8 @@ it.each(["cold", "preexisting"] as const)(
     const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-startup-handle-lifetime-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const options = { agentId: "main", env };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const initial = openOpenClawAgentDatabase(options);
     await replaceSessionEntry(
       { ...options, sessionKey: "agent:main:retained" },
@@ -75,19 +81,21 @@ it.each(["cold", "preexisting"] as const)(
     const statements = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
     try {
       await runSessionStartupMigration({
-        cfg: { agents: { entries: { main: {} } } },
+        cfg,
         env,
         log: { info: vi.fn(), warn: vi.fn() },
       });
     } finally {
       statements.restore();
     }
-    // Schema re-admission preserves the unchanged stored policy.
-    expect(
-      statements.queries.filter((sql) =>
-        /select "main_key" from "session_key_contract"/iu.test(sql),
-      ),
-    ).toEqual([]);
+    // Final close retires admission facts; only a retained handle reuses the stored policy.
+    if (lifetime === "preexisting") {
+      expect(
+        statements.queries.filter((sql) =>
+          /select "main_key" from "session_key_contract"/iu.test(sql),
+        ),
+      ).toEqual([]);
+    }
 
     expect(withOpenClawAgentDatabaseReadOnly(readCanonicalSessionMainKey, options)).toEqual({
       found: true,
@@ -344,6 +352,7 @@ it.each(["missing", "receipt-held", "malformed-receipt", "malformed-journal"])(
                   "INSERT INTO agent_deletion_journal (agent_id, agent_dir, workspace_dir, sessions_dir, database_paths_json, created_at, cleanup_completed, delete_files) VALUES (?, ?, ?, ?, ?, 1, 1, 0)",
                 )
                 .run("archived", stateDir, stateDir, stateDir, "{");
+              publishAgentDeletionJournalStatus(database.db, "archived", "complete");
             }
             if (history === "malformed-receipt") {
               database.db.exec(
@@ -444,6 +453,7 @@ it("re-registers durable lineage children before configured-only runtime reads",
     }).path;
     await closeOpenClawAgentDatabasesAsync(stateDir);
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     unregisterOpenClawAgentDatabase({ agentId: "codex", env, path: childDatabasePath });
 
     expect(fs.existsSync(childDatabasePath)).toBe(true);
@@ -503,6 +513,7 @@ it("keeps copied state directories self-contained for combined gateway reads", a
 
   await withEnvAsync({ OPENCLAW_STATE_DIR: canonicalSourceStateDir }, async () => {
     const env = { ...process.env };
+    setRuntimeConfigSnapshot(cfg);
     await replaceSessionEntry(
       { agentId: "main", env, sessionKey },
       { sessionId: "copied-session", updatedAt: 1 },

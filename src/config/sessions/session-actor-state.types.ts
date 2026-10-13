@@ -8,6 +8,7 @@ import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWatermark,
 } from "./session-transcript-context-version.types.js";
+import type { SessionTranscriptProjectionFacts } from "./session-transcript-projection-facts.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -36,7 +37,7 @@ export type SessionActorAuthorityFacts = Pick<
   "target" | "version" | "writeToken" | "dependencySessionIds" | "entry"
 >;
 
-/** Host-owned live authority, rechecked at both synchronous admission boundaries. */
+/** Host-owned live authority, rechecked at both synchronous admission boundaries. Facts are read-only. */
 export type SessionActorAuthority = {
   assertCurrent(): void;
   authorize(
@@ -64,6 +65,8 @@ export type SessionActorHotState = {
   /** Complete retry-key membership; outcome bodies stay in the worker. */
   completionKeys: string[];
   transcript: {
+    /** Durable projection postimage; omitted by adapters without SQLite projections. */
+    projection?: SessionTranscriptProjectionFacts;
     watermark: SessionTranscriptWatermark;
     version: SessionTranscriptContextVersion;
     /** Empty anchors prove absence only when this exact projection is resident. */

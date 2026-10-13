@@ -355,7 +355,7 @@ export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OU
 export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arguments";
 
 export const DEFAULT_MISSING_TOOL_RESULT_TEXT =
-  "Tool call interrupted before a result was recorded; its outcome is unknown. Retry only if the operation is read-only or idempotent. If it may have had side effects, verify the current state first instead of repeating it.";
+  "Tool call interrupted before a result was recorded; its outcome is unknown. Retry only if the operation is read-only or safe to repeat. If it may have had side effects, verify the current state first instead of repeating it.";
 
 export interface UserMessage {
   role: "user";

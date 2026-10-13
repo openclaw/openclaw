@@ -7,7 +7,6 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { normalizeDatabasePath } from "../../infra/sqlite-worker-identity.js";
 import {
   assertOpenClawAgentDatabaseIdentity,
   readOpenClawAgentDatabaseIdentity,
@@ -118,47 +117,37 @@ export function readSessionEntryCohort(
   const identity = source.identity;
   const requiresSnapshot = Boolean(
     transcript ||
-    runtimeTarget ||
     includeAuthProfileSource ||
     includeColdMetadata ||
-    input.lifecycleSessionKey ||
     input.replyInitializationSessionKey,
   );
-  const assertSource = () => {
-    const current = readOpenClawAgentDatabaseIdentity(database);
-    if (
-      current.incarnation !== source.incarnation ||
-      !database.db.isOpen ||
-      normalizeDatabasePath(database.db.location() ?? "") !== source.filename ||
-      (expected && current.incarnation !== expected.incarnation)
-    ) {
-      throw new SessionEntryChangedDuringReadError();
-    }
-  };
-  assertSource();
+  if (expected && source.incarnation !== expected.incarnation) {
+    throw new SessionEntryChangedDuringReadError();
+  }
+  // This synchronous read stays on its admitted handle; replacement is checked at admission.
   const read = (): SessionEntryCohortResult => {
-    assertSource();
     const sharedHeader =
       transcript?.includeHeader && transcript.sessionKey === input.lifecycleSessionKey;
-    const result: SessionExactEntriesWorkerResult = requiresSnapshot
-      ? readEntries({
-          ...selection,
-          kind: "session-exact-entries",
-          database: { agentId: database.agentId, path: database.path },
-          env: {},
-          projection: "full",
-          includeAuthorization: true,
-          ...(sharedHeader ? { lifecycleSessionKey: undefined } : {}),
-        })
-      : {
-          kind: "session-exact-entries",
-          ...readExactSessionEntryFactsInDatabase(
-            database,
-            input.sessionKeys,
-            input.snapshotFields ?? "full",
-          ),
-          lifecycleTimestamps: {},
-        };
+    const result: SessionExactEntriesWorkerResult =
+      requiresSnapshot || input.lifecycleSessionKey
+        ? readEntries({
+            ...selection,
+            kind: "session-exact-entries",
+            database: { agentId: database.agentId, path: database.path },
+            env: {},
+            projection: "full",
+            includeAuthorization: true,
+            ...(sharedHeader ? { lifecycleSessionKey: undefined } : {}),
+          })
+        : {
+            kind: "session-exact-entries",
+            ...readExactSessionEntryFactsInDatabase(
+              database,
+              input.sessionKeys,
+              input.snapshotFields ?? "full",
+            ),
+            lifecycleTimestamps: {},
+          };
     for (const selected of expected?.sessions ?? []) {
       const entry = result.entries.find(
         ({ sessionKey }) => sessionKey === selected.sessionKey,
@@ -193,14 +182,17 @@ export function readSessionEntryCohort(
     const authProfileSource = includeAuthProfileSource
       ? hasAgentAuthProfileSourceInDatabase(database.db)
       : undefined;
+    // A historical target may observe a newer key; live run admission owns the effect.
     const preparedRuntimeTarget = runtimeTarget && {
       ...runtimeTarget,
       sessionKey:
+        result.entries.find(
+          ({ entry: selectedEntry }) => selectedEntry.sessionId === runtimeTarget.sessionId,
+        )?.sessionKey ??
         readSessionKeyBySessionIdInDatabase(database, runtimeTarget.sessionId) ??
         runtimeTarget.sessionKey,
       storePath: database.path,
     };
-    assertSource();
     return {
       ...result,
       ...(preparedRuntimeTarget ? { runtimeTarget: preparedRuntimeTarget } : {}),
@@ -249,18 +241,7 @@ export function readSessionEntryDataInDatabase(
   if (typeof identity !== "string") {
     throw new Error("Session entry read requires its admitted durable owner");
   }
-  const assertSource = () => {
-    if (
-      readOpenClawAgentDatabaseIdentity(database).incarnation !== source.incarnation ||
-      !database.db.isOpen ||
-      normalizeDatabasePath(database.db.location() ?? "") !== source.filename
-    ) {
-      throw new Error("Session entry read changed its admitted physical owner");
-    }
-  };
-  assertSource();
   const facts = readExactSessionEntryFactsInDatabase(database, [sessionKey]);
-  assertSource();
   return {
     kind: "session-exact-entries",
     source: {

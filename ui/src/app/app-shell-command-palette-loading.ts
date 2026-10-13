@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import {
   COMMAND_PALETTE_DIALOG_STYLE,
   COMMAND_PALETTE_OPEN_EVENT,
@@ -9,20 +9,23 @@ import {
   type CommandPaletteInputHandoff,
   type CommandPaletteOpenInput,
 } from "../components/command-palette-contract.ts";
-import { renderCommandPaletteInput } from "../components/command-palette-input.ts";
+import { CommandPaletteInput } from "../components/command-palette-input.tsx";
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { showToast } from "../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../lib/uploads.ts";
+import { solidContent } from "../lit/solid-content.tsx";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
-import type {
-  LazyCustomElementRequestController,
-  OptionalCustomElement,
+import {
+  ensureCustomElementDefined,
+  type LazyCustomElementRequestController,
+  type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
 import { lazyShellEvent, type LazyShellEvent } from "./lazy-shell-action.ts";
 
@@ -177,6 +180,23 @@ export class CommandPaletteLoadingState {
       this.#returnFocus =
         document.activeElement instanceof HTMLElement ? document.activeElement : null;
     }
+    if (!customElements.get("openclaw-modal-dialog")) {
+      void ensureCustomElementDefined(
+        "openclaw-modal-dialog",
+        () => import("../components/modal-dialog.ts"),
+      ).then(
+        () => {
+          if (this.active) {
+            this.#host.requestUpdate();
+          }
+        },
+        (error: unknown) => {
+          if (this.active) {
+            showToast({ message: formatUiError(error) });
+          }
+        },
+      );
+    }
   }
 
   get value(): string {
@@ -224,11 +244,14 @@ export class CommandPaletteLoadingState {
     this.#host.requestUpdate();
   };
 
-  readonly inputRef = (element: Element | undefined): void => {
+  readonly inputRef = (element: Element | undefined, previous?: HTMLTextAreaElement): void => {
+    if (previous && previous !== this.#input) {
+      return;
+    }
+    if (this.active && this.#input && this.#input !== element) {
+      this.#draft = this.#snapshot();
+    }
     if (!(element instanceof HTMLTextAreaElement)) {
-      if (this.active && this.#input) {
-        this.#draft = this.#snapshot();
-      }
       this.#input = undefined;
       return;
     }
@@ -377,6 +400,9 @@ export function renderCommandPaletteLoading(
   state: CommandPaletteLoadingState,
   onClose: () => void,
 ) {
+  if (!customElements.get("openclaw-modal-dialog")) {
+    return nothing;
+  }
   const label = t("palette.placeholder");
   return html`<openclaw-modal-dialog
     class="cmd-palette-overlay palette"
@@ -391,7 +417,7 @@ export function renderCommandPaletteLoading(
       @compositionend=${state.handleCompositionEnd}
       @keydown=${state.handleKeydown}
     >
-      ${renderCommandPaletteInput({
+      ${solidContent(CommandPaletteInput, {
         value: state.value,
         placeholder: label,
         onInputRef: state.inputRef,

@@ -234,6 +234,14 @@ suite.define(() => {
         { width: 390, height: 844 },
       ]) {
         await page.setViewportSize(viewport);
+        // CSS resizes before the shell commits its drawer layout.
+        await page
+          .locator(viewport.width === 390 ? ".shell--mobile-nav" : ".shell:not(.shell--mobile-nav)")
+          .waitFor();
+        await waitForLayoutSettled(
+          page,
+          ".new-session-page__composer .chat-reply-preview, .new-session-page__composer .chat-reply-preview button",
+        );
         await captureNewSessionComposerUiProof(
           suite,
           page,
@@ -246,6 +254,10 @@ suite.define(() => {
             .getBoundingClientRect();
           const button = element.querySelector("button")!.getBoundingClientRect();
           return {
+            viewport: { width: innerWidth, height: innerHeight },
+            bar: bar.toJSON(),
+            text: text.toJSON(),
+            button: button.toJSON(),
             height: bar.height,
             textBeforeButton: text.right <= button.left,
             sameRow: Math.abs(text.top + text.height / 2 - button.top - button.height / 2) <= 1,
@@ -261,7 +273,7 @@ suite.define(() => {
           };
         });
         expect(layout.height).toBeLessThanOrEqual(48);
-        expect(layout).toMatchObject({
+        expect(layout, JSON.stringify(layout)).toMatchObject({
           textBeforeButton: true,
           sameRow: true,
           buttonContained: true,

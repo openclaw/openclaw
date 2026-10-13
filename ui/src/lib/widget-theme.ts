@@ -31,79 +31,122 @@ const HOST_TOKEN_SOURCES: Record<WidgetThemeToken, string> = {
   "font-mono": "--mono",
 };
 
-function collectWidgetThemeTokens(read: (hostVar: string) => string): Record<string, string> {
-  const tokens: Record<string, string> = {};
-  for (const token of WIDGET_THEME_TOKENS) {
-    const value = read(HOST_TOKEN_SOURCES[token]).trim();
-    if (value) {
-      tokens[token] = value;
-    }
-  }
-  return tokens;
+type WidgetThemeState = {
+  message?: WidgetThemeMessage;
+  revision?: string;
+  frames: Map<HTMLIFrameElement, string>;
+};
+const widgetThemes = new WeakMap<HTMLElement, WidgetThemeState>();
+
+function isStylesheet(node: Node | null): boolean {
+  return node instanceof Element && node.matches('style, link[rel~="stylesheet"]');
+}
+
+function changesStylesheet(record: MutationRecord): boolean {
+  return (
+    isStylesheet(record.target) ||
+    (record.type === "characterData" && isStylesheet(record.target.parentNode)) ||
+    [...record.addedNodes, ...record.removedNodes].some(isStylesheet)
+  );
 }
 
 export function buildWidgetThemeMessage(): WidgetThemeMessage {
   const root = document.documentElement;
+  const state = widgetThemeState(root);
+  // Reads in the same task as a theme change precede MutationObserver delivery.
+  const revision = JSON.stringify([
+    root.dataset.theme,
+    root.dataset.themeMode,
+    root.getAttribute("style"),
+  ]);
+  if (state.message && state.revision === revision) {
+    return state.message;
+  }
   const styles = getComputedStyle(root);
-  return {
+  const tokens: Record<string, string> = {};
+  for (const token of WIDGET_THEME_TOKENS) {
+    const value = styles.getPropertyValue(HOST_TOKEN_SOURCES[token]).trim();
+    if (value) {
+      tokens[token] = value;
+    }
+  }
+  state.revision = revision;
+  state.message = {
     type: WIDGET_THEME_MESSAGE_TYPE,
     mode: root.dataset.themeMode === "light" ? "light" : "dark",
-    tokens: collectWidgetThemeTokens((hostVar) => styles.getPropertyValue(hostVar)),
+    tokens,
   };
+  return state.message;
 }
 
 export function postWidgetTheme(frame: HTMLIFrameElement, targetOrigin = "*"): void {
   frame.contentWindow?.postMessage(buildWidgetThemeMessage(), targetOrigin);
 }
 
-const widgetThemeObserverWindows = new WeakSet<Window>();
-const widgetThemeFrames = new WeakMap<Window, Map<HTMLIFrameElement, string>>();
-
 /** Explicit registration also reaches widgets inside a chat component's shadow root. */
 export function registerWidgetThemeFrame(frame: HTMLIFrameElement, origin: string): () => void {
-  let frames = widgetThemeFrames.get(window);
-  if (!frames) {
-    frames = new Map();
-    widgetThemeFrames.set(window, frames);
-  }
+  const frames = widgetThemeState(document.documentElement).frames;
   frames.set(frame, origin);
-  installWidgetThemeObserver();
   return () => frames.delete(frame);
 }
 
-export function installWidgetThemeObserver(): void {
-  if (
-    typeof window === "undefined" ||
-    typeof document === "undefined" ||
-    typeof MutationObserver === "undefined"
-  ) {
-    return;
+function widgetThemeState(root: HTMLElement): WidgetThemeState {
+  const existing = widgetThemes.get(root);
+  if (existing) {
+    return existing;
   }
-  if (widgetThemeObserverWindows.has(window)) {
-    return;
-  }
-  widgetThemeObserverWindows.add(window);
-  const root = document.documentElement;
-  new MutationObserver(() => {
-    const registered = widgetThemeFrames.get(window);
-    for (const frame of document.querySelectorAll<HTMLIFrameElement>(
+  const state: WidgetThemeState = { frames: new Map() };
+  widgetThemes.set(root, state);
+  const publish = () => {
+    const registered = state.frames;
+    for (const frame of root.ownerDocument.querySelectorAll<HTMLIFrameElement>(
       ".chat-tool-card__preview-frame, .board-widget__frame",
     )) {
-      if (!registered?.has(frame)) {
+      if (!registered.has(frame)) {
         postWidgetTheme(frame);
       }
     }
-    for (const [frame, origin] of registered ?? []) {
+    for (const [frame, origin] of registered) {
       if (frame.isConnected) {
         postWidgetTheme(frame, origin);
       } else {
-        registered?.delete(frame);
+        registered.delete(frame);
       }
     }
-  }).observe(root, {
+  };
+  const observer = new MutationObserver((records) => {
+    const stylesheetChanged = records.some(changesStylesheet);
+    if (stylesheetChanged) {
+      state.message = undefined;
+    }
+    if (stylesheetChanged || records.some((record) => record.target === root)) {
+      publish();
+    }
+  });
+  observer.observe(root, {
     attributes: true,
     // "style" carries the accent override (inline custom properties on <html>);
     // without it a user accent change would only reach frames incidentally.
     attributeFilter: ["data-theme", "data-theme-mode", "style"],
   });
+  // Custom palettes replace style text; plugin activation changes link media.
+  const head = root.ownerDocument.head;
+  observer.observe(head, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ["href", "rel", "media", "disabled"],
+  });
+  head.addEventListener(
+    "load",
+    (event) => {
+      if (event.target instanceof HTMLLinkElement && isStylesheet(event.target)) {
+        state.message = undefined;
+        publish();
+      }
+    },
+    true,
+  );
+  return state;
 }

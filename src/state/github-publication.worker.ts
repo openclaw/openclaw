@@ -1,5 +1,5 @@
-import * as personal from "../gateway/github-personal-publication-store.js";
-import { selectGitHubPublicationDeferralsInDatabase } from "../gateway/github-publication-defer.kernel.js";
+import * as personal from "../gateway/github-personal-publication-store.worker.js";
+import { selectGitHubPublicationDeferralsInDatabase } from "../gateway/github-publication-defer.worker.js";
 import { captureGitHubPublicationChanges } from "../gateway/github-publication-events.js";
 import { githubPublicationEffectFacts } from "../gateway/github-publication-execution-effects.js";
 import {
@@ -8,12 +8,12 @@ import {
   markSharedGitHubPublicationReportedInDatabase,
   createGitHubPublicationExecutionStoreInDatabase,
   deferGitHubPublicationRequestsInDatabase,
-} from "../gateway/github-publication-store.js";
-import * as repository from "../gateway/github-repository-publication-store.js";
+} from "../gateway/github-publication-store.worker.js";
+import * as repository from "../gateway/github-repository-publication-store.worker.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import { captureGitHubPublicationWorkerReceipt } from "./github-publication-receipts.js";
 import { publicationRequestOperations } from "./github-publication-request.worker.js";
-import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
+import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.worker.js";
 import type { GitHubPublicationSourcePredicate } from "./github-publication-source-contract.js";
 import {
   assertGitHubPublicationConnectionSource,

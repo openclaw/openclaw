@@ -17,6 +17,11 @@ While an update is active, the table shows its phase instead of advertising anot
 update, and the final line points to `openclaw update status`. JSON still includes
 registry/Git `availability` separately from `activeRun`.
 
+When a package publication journal no longer matches its installation, status
+names the changed parent, control directory, or journal bindings with their
+recorded and current `dev:ino` values. It identifies device-number-only changes
+and directs you to `openclaw update repair` for verified recovery.
+
 Git availability checks, including the Gateway's background check after startup,
 refresh only the selected upstream. They do not import other remote branches or
 tags, prune existing refs, or change shallow-history boundaries. A fresh detached
@@ -84,7 +89,9 @@ including when an older updater did not record those warnings in its run history
 During an active update, let that update finish before following plugin repair
 advice. Existing plugin data and settings are kept until the upgrade completes.
 JSON exposes these messages as `migrationWarnings`; they clear when the plugin migration
-completes. If migration state cannot be read, `migrationWarningsError` reports
+completes. This check also works after a direct Git/source or package-manager upgrade
+with no update run. Run `openclaw doctor --fix` after those upgrades; normal commands
+and Gateway startup do not inspect or apply deferred plugin migrations. If migration state cannot be read, `migrationWarningsError` reports
 that failure while availability and run history remain visible.
 
 When the Gateway is reachable, status also reads its recorded channel warnings

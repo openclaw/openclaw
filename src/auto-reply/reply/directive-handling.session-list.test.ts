@@ -1,11 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import { listProjectedSessions } from "../../gateway/session-utils-list.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -20,7 +20,7 @@ it.each([
   async ({ command, authorized, expected }) => {
     using _ = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg: OpenClawConfig = {};
+      const cfg = await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "main", sessionKey: "agent:main:main" };
       const storePath = resolveSessionStorePathCore(undefined, { agentId: scope.agentId });
       await upsertSessionEntryCore(scope, {

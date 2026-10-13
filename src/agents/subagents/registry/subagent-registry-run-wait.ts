@@ -48,6 +48,7 @@ const WAIT_TIMEOUT_DEADLINE_SKEW_MS = 250;
 
 export type SubagentManagerOptions = {
   runs: Map<string, SubagentRunRecord>;
+  getChildSessionCandidates: (childSessionKey: string) => Iterable<SubagentRunRecord>;
   getRunsForChildSession: (
     childSessionKey: string,
     childAgentId?: string,

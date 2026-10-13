@@ -274,6 +274,7 @@ export function registerReplyCompactionCases({
             authProfileIdSource: plannerFails ? "user" : undefined,
             provider,
             model: model.id,
+            thinkLevel: "off",
             config,
             thinkingCatalog: [
               configured

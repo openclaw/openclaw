@@ -32,8 +32,9 @@ The Linux Tauri app leaves existing Gateway services unchanged on startup and
 updates. Switching to its current bundled Bun requires **Use bundled runtime…**;
 see [explicit runtime selection](/platforms/linux#adopt-the-bundled-runtime).
 macOS Tauri keeps its existing runtime behavior, separate from the native macOS
-app. Windows Tauri retains its existing runtime until a signed fork Windows build
-is available; an unsigned dry-run is not shippable.
+app. Windows Tauri uses the same shared runtime owner when its pin includes a signed
+Windows fork build. Without that entry, local setup reports the missing runtime
+and remote connections remain available; an unsigned dry-run is not shippable.
 
 OpenClaw.app bundles a pinned [OpenClaw Bun fork](https://github.com/openclaw/bun),
 the full matching OpenClaw package, and a signed SQLite library that meets the
@@ -243,11 +244,13 @@ cleanup warning and retains ownership of those files without failing the
 inspection. Read errors and required-cleanup failures still stop the operation;
 the original state database is unchanged.
 
-Gateway discovery follows the same policy when Windows reports a private snapshot
-as busy after a successful read. On a runtime without qualified native close,
-startup records a warning and keeps the snapshot registered for later cleanup.
-Read, schema, admission, native-close, and other removal errors still fail; runtimes
-with qualified native close continue to require immediate cleanup.
+Gateway discovery, database schema preflight, and state ownership inspection
+follow the same policy when Windows reports a private snapshot as busy after a
+successful read. On a runtime without qualified native close, startup records a
+`SQLite snapshot cleanup deferred` warning and keeps the snapshot registered for
+cleanup at exit or by the next process's abandoned-snapshot reclamation. Read, schema, admission,
+native-close, and other removal errors still fail; runtimes with qualified native
+close continue to require immediate cleanup.
 
 The result is never saved in config or state. Each new long-lived host checks its
 selected runtime and library again, including after an upgrade, downgrade, or rollback.

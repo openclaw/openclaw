@@ -3,7 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { For, Show, createMemo } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
-import "../../components/agent-row-chip.ts";
+import "../../components/agent-row-chip.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
@@ -238,11 +238,7 @@ export function UsageInsights(props: {
     const totals = props.totals;
     const aggregates = props.aggregates;
     const stats = props.stats;
-    const showCostHint = props.showCostHint;
     const showCostShares = props.showCostShares;
-    const errorHours = props.errorHours;
-    const sessionCount = props.sessionCount;
-    const totalSessions = props.totalSessions;
     if (!totals) {
       return undefined;
     }
@@ -335,13 +331,9 @@ export function UsageInsights(props: {
       cacheHitRate,
       errorRatePct,
       avgDurationLabel,
-      showCostHint,
       avgCost,
-      sessionCount,
-      totalSessions,
       insightLists,
       errorDays,
-      errorHours,
     };
   });
   return (
@@ -416,7 +408,7 @@ export function UsageInsights(props: {
                   hintId="average-cost"
                   metric="avgCost"
                   hint={t(
-                    insights().showCostHint
+                    props.showCostHint
                       ? "usage.overview.avgCostHintMissing"
                       : "usage.overview.avgCostHint",
                   )}
@@ -427,9 +419,9 @@ export function UsageInsights(props: {
                 <SummaryStat
                   hintId="sessions"
                   metric="sessions"
-                  value={insights().sessionCount}
+                  value={props.sessionCount}
                   sub={t("usage.overview.sessionsInRange", {
-                    count: String(insights().totalSessions),
+                    count: String(props.totalSessions),
                   })}
                   class="usage-summary-card--compact"
                 />
@@ -455,7 +447,7 @@ export function UsageInsights(props: {
                 )}
                 {renderInsightList(
                   t("usage.overview.peakErrorHours"),
-                  insights().errorHours,
+                  props.errorHours,
                   t("usage.overview.noErrorData"),
                   {
                     error: true,

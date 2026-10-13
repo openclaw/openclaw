@@ -156,8 +156,8 @@ export function createCrabboxWarmImageCapture(dependencies: {
             context.forkedCheckpointId === existing.image.checkpointId
               ? "available"
               : await verifyImage(context, existing.image.checkpointId);
-          // Foreground sessions use the refreshed checkout immediately. A reserve
-          // can publish that commit without making the session wait for a snapshot.
+          // Foreground forks top up runtime and checkout without a fresh capture.
+          // Age refresh and interrupted preparation retain their capture boundary.
           if (
             state === "available" &&
             owner.purpose === "session" &&
@@ -169,11 +169,10 @@ export function createCrabboxWarmImageCapture(dependencies: {
               Date.now() - existing.image.createdAtMs < dependencies.policy.refreshAfterMs) &&
             owner.cacheKey !== null &&
             existing.image.cacheKey === owner.cacheKey &&
-            runtimeMatches &&
-            existing.image.preparationKey !== owner.preparationKey &&
-            existing.image.baseCommit &&
-            owner.baseCommit &&
-            existing.image.baseCommit !== owner.baseCommit
+            (!context.projectCaptureRequired ||
+              (existing.image.baseCommit &&
+                owner.baseCommit &&
+                existing.image.baseCommit !== owner.baseCommit))
           ) {
             return;
           }
