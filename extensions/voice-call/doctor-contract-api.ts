@@ -55,7 +55,7 @@ const schemaMigrationDescriptions = {
   "state-table-retirement-v10": "retired shared-state tables -> removed tables and indexes",
   "state-table-retirement-v11": "retired skill curator tables -> removed tables and indexes",
   "singleton-state-foldin-v12": "singleton state tables -> shared configuration state",
-  "state-consolidation-v13": "cron jobs and subagent runs -> canonical JSON storage",
+  "state-consolidation-v13": "cron jobs and subagent runs -> current JSON storage",
   "creator-namespace-v14": "cron creators -> explicit principal namespaces",
   "conversation-binding-targets-v15":
     "conversation bindings -> exact target keys without agent/session projections",

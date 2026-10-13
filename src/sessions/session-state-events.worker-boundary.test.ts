@@ -6,6 +6,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -426,6 +427,52 @@ it.each([
     }
   },
 );
+
+it("restores explicit watcher notices as ordinary-turn context without starting replay turns", async () => {
+  const database = createDatabaseOptions();
+  const watchers = ["agent:main:dashboard:restored-a", "agent:main:dashboard:restored-b"];
+  const storePath = resolvePhysicalSessionStorePath({ sessionKey: watchers[0], env: database.env });
+  publishSystemEventStoreResolver(() => storePath);
+  const { db } = openOpenClawStateDatabase(database);
+  for (const [index, sessionKey] of watchers.entries()) {
+    await upsertSessionEntryCore(
+      { sessionKey, env: database.env },
+      { sessionId: `restored-watcher-${index}`, updatedAt: 1 },
+    );
+    db.prepare(`INSERT INTO session_watch_cursors
+      (watcher_session_key, target_session_key, watcher_store_path, last_seen_sequence,
+       notified_sequence, material_sequence, updated_at)
+      VALUES (?, ?, ?, 1, 3, 3, ?)`).run(sessionKey, child, storePath, Date.now());
+  }
+  resetSystemEventsForTest();
+  const capture = vi.spyOn(sessionEvents, "captureSessionEventTargetForHost");
+  await sweepSessionStateWatchNotices(database);
+  await sweepSessionStateWatchNotices(database);
+  expect(capture).not.toHaveBeenCalled();
+  for (const sessionKey of watchers) {
+    expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
+    expect(readCursor(database, sessionKey)).toEqual({
+      last_seen_sequence: 1,
+      notified_sequence: 3,
+      material_sequence: 3,
+    });
+    expect(
+      await drainFormattedSystemEvents({
+        cfg: {},
+        agentId: "main",
+        sessionKey,
+        isMainSession: false,
+        isNewSession: false,
+      }),
+    ).toContain(`Session "${child}" changed (other actor)`);
+    expect(readCursor(database, sessionKey)?.last_seen_sequence).toBe(3);
+  }
+  await sweepSessionStateWatchNotices(database);
+  for (const sessionKey of watchers) {
+    expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+  }
+  expect(capture).not.toHaveBeenCalled();
+});
 
 it("rechecks acknowledged, rebound, and advanced cursors after sweep discovery", async ({
   signal,

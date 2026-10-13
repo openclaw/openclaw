@@ -27,7 +27,7 @@ Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api)
 - Use `x-openclaw-session-key` for explicit session routing (rejected with `400 invalid_request_error` if it uses a reserved namespace: `subagent:`, `cron:`, `acp:`).
 - Use `x-openclaw-message-channel` for a non-default synthetic ingress channel context.
 
-For the canonical explanation of agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract).
+For the shared explanation of agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract).
 
 See [Operator scopes](/gateway/operator-scopes) and [Security](/gateway/security).
 

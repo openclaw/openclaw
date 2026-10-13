@@ -3543,9 +3543,9 @@ jobs:
           install-bun: "false"
           dependency-cache: *trusted_dependency_cache
 
-      - name: Restore test-type incremental state
+      - name: Restore typecheck incremental state
         id: test-type-cache
-        if: matrix.task == 'test-types' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
+        if: (matrix.task == 'prod-types' || matrix.task == 'test-types') && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .artifacts/tsgo-cache
@@ -3989,8 +3989,8 @@ jobs:
               ;;
           esac
 
-      - name: Save test-type incremental state
-        if: success() && matrix.task == 'test-types' && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true' && steps.test-type-cache.outputs.cache-hit != 'true'
+      - name: Save typecheck incremental state
+        if: success() && (matrix.task == 'prod-types' || matrix.task == 'test-types') && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true' && steps.test-type-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
