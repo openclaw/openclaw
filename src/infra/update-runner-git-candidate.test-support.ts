@@ -474,36 +474,30 @@ export function registerGitRuntimeStagingTests(
       await advanceRemote();
       const failure = new Error("candidate canary failed");
       const onStepComplete = vi.fn();
-      const updating = update({
-        progress: {
-          onStepComplete,
-          onStepStart: ({ name }) => {
-            if (failurePoint === "runtime staging" && name === "preflight-cleanup") {
-              expect(onStepComplete).toHaveBeenCalledWith(
-                expect.objectContaining({
-                  name: "preflight-runtime-stage",
-                  exitCode: 1,
-                  failureFacts: [expect.objectContaining({ check: "preflight-runtime-stage" })],
-                }),
-              );
-            }
+      await expect(
+        update({
+          progress: {
+            onStepComplete,
+            onStepStart: ({ name }) => {
+              if (failurePoint === "runtime staging" && name === "preflight-cleanup") {
+                expect(onStepComplete).toHaveBeenCalledWith(
+                  expect.objectContaining({
+                    name: "preflight-runtime-stage",
+                    exitCode: 1,
+                    failureFacts: [expect.objectContaining({ check: "preflight-runtime-stage" })],
+                  }),
+                );
+              }
+            },
           },
-        },
-        validateCandidate: async () => {
-          if (failurePoint === "validation") {
-            throw failure;
-          }
-          vi.spyOn(fs, "cp").mockRejectedValueOnce(failure);
-        },
-      });
-      if (failurePoint === "runtime staging") {
-        await expect(updating).rejects.toMatchObject({
-          message: expect.stringContaining("retry openclaw update"),
-          cause: failure,
-        });
-      } else {
-        await expect(updating).rejects.toBe(failure);
-      }
+          validateCandidate: async () => {
+            if (failurePoint === "validation") {
+              throw failure;
+            }
+            vi.spyOn(fs, "cp").mockRejectedValueOnce(failure);
+          },
+        }),
+      ).rejects.toBe(failure);
       expect(isStopped()).toBe(false);
       expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
       expect(await fs.readFile(path.join(root, "node_modules", "identity.cjs"), "utf8")).toContain(

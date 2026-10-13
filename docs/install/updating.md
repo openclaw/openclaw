@@ -453,9 +453,8 @@ that pass the source build-cache location, including 2026.9.6, also receive the
 installed-checkout check during candidate builds.
 
 On Windows, source runtime staging preserves workspace symlinks and junctions
-instead of expanding links back to the checkout. A failed copy removes its owned
-staging directories before reporting the error; if cleanup also fails, both
-errors are retained for inspection before retrying.
+instead of expanding links back to the checkout. A failed copy attempts to remove
+its owned staging directories and retains the existing update error reporting.
 This copy runs in the installed updater. An older updater can still fail at
 `preflight-runtime-stage` while installing a candidate containing the fix.
 The candidate's `OPENCLAW_UPDATE_IN_PROGRESS` build marker does not transfer

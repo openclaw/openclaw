@@ -103,7 +103,33 @@ describe("Git runtime promotion", () => {
         throw error;
       }
 
-      await activate(candidateRoot);
+      const promotion = await preparePromotion(candidateRoot);
+      const stagedModules = promotion.sourceTreeStagingPaths.filter((entry) =>
+        entry.startsWith("extensions/fixture/node_modules.openclaw-update-"),
+      );
+      expect(stagedModules).toHaveLength(1);
+      for (const staged of stagedModules) {
+        const stagedLink = path.join(root, staged, "candidate", "openclaw");
+        expect((await fs.lstat(stagedLink)).isSymbolicLink()).toBe(true);
+        expect(await fs.realpath(stagedLink)).toBe(root);
+        if (process.platform === "win32") {
+          const probe = await runCommandWithTimeout(
+            [
+              "powershell.exe",
+              "-NoProfile",
+              "-NonInteractive",
+              "-Command",
+              "(Get-Item -LiteralPath ([Console]::In.ReadToEnd())).LinkType",
+            ],
+            { input: stagedLink, timeoutMs: 5000 },
+          );
+          expect(probe.code, probe.stderr).toBe(0);
+          expect(probe.stdout.trim()).toBe("Junction");
+        }
+      }
+      await fs.rm(path.dirname(candidateRoot), { recursive: true, force: true });
+      await promotion.activate();
+      await promotion.cleanup();
 
       const installedLink = path.join(root, relativeLink);
       expect((await fs.lstat(installedLink)).isSymbolicLink()).toBe(true);
@@ -116,39 +142,22 @@ describe("Git runtime promotion", () => {
     },
   );
 
-  it.each([false, true])(
-    "retains copy errors and reports how to retry (cleanup fails: %s)",
-    async (cleanupFails) => {
-      const candidateRoot = await createCandidate();
-      const copyError = new Error("copy refused");
-      const cleanupError = new Error("cleanup refused");
-      const copy = vi.spyOn(fs, "cp").mockImplementationOnce(async (_source, destination) => {
-        await fs.mkdir(String(destination), { recursive: true });
-        await fs.writeFile(path.join(String(destination), "partial"), "partial copy");
-        throw copyError;
-      });
-      const remove = vi.spyOn(fs, "rm");
-      if (cleanupFails) {
-        remove.mockRejectedValueOnce(cleanupError);
-      }
-      try {
-        await expect(preparePromotion(candidateRoot)).rejects.toMatchObject({
-          message: expect.stringContaining("openclaw update"),
-          cause: cleanupFails ? expect.objectContaining({ errors: [cleanupError] }) : copyError,
-          ...(cleanupFails
-            ? { errors: [copyError, expect.objectContaining({ errors: [cleanupError] })] }
-            : {}),
-        });
-      } finally {
-        copy.mockRestore();
-        remove.mockRestore();
-      }
-      expect((await fs.readdir(root)).some((name) => name.includes(".openclaw-update-"))).toBe(
-        cleanupFails,
-      );
-      await expectRuntime(root, "original");
-    },
-  );
+  it("cleans a partial copy and preserves the original staging error", async () => {
+    const candidateRoot = await createCandidate();
+    const copyError = Object.assign(new Error("copy refused"), { code: "EPERM" });
+    const copy = vi.spyOn(fs, "cp").mockImplementationOnce(async (_source, destination) => {
+      await fs.mkdir(String(destination), { recursive: true });
+      await fs.writeFile(path.join(String(destination), "partial"), "partial copy");
+      throw copyError;
+    });
+    try {
+      await expect(preparePromotion(candidateRoot)).rejects.toBe(copyError);
+    } finally {
+      copy.mockRestore();
+    }
+    expect((await fs.readdir(root)).some((name) => name.includes(".openclaw-update-"))).toBe(false);
+    await expectRuntime(root, "original");
+  });
 
   it.each([false, true])(
     "does not repeat completed restoration after authority is lost (previous runtime: %s)",

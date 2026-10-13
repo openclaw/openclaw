@@ -331,19 +331,8 @@ export async function prepareGitRuntimePromotion(
       await relocateRuntimeTree(candidate, sourceRoot, destination, relocations);
     }
   } catch (error) {
-    try {
-      await cleanup();
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        "Git runtime staging failed; inspect the retained staging directories before retrying openclaw update.",
-        { cause: cleanupError },
-      );
-    }
-    throw new Error(
-      `${formatErrorMessage(error)}; check available disk space and file permissions, then retry openclaw update.`,
-      { cause: error },
-    );
+    await cleanup();
+    throw error;
   }
   const assertParents = (entry: (typeof staged)[number]) => {
     const identities = entry.identities;
