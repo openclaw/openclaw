@@ -385,6 +385,26 @@ dispatch; `openclaw_worker_request_seconds{kind,request_class}` measures dispatc
 to reply or failure. Both use the existing duration histogram buckets. Cancellation
 before dispatch removes the queued request without adding a duration sample.
 
+`openclaw_worker_request_phase_seconds{kind,request_class,phase}` breaks completed
+SQLite writer requests into observed intervals, using the same histogram buckets:
+
+| Phase      | Interval                                                                 |
+| ---------- | ------------------------------------------------------------------------ |
+| `dispatch` | Slot allocation through host preparation to the first `postMessage`.     |
+| `delivery` | First `postMessage` to worker receipt, including cold worker startup.    |
+| `input`    | Worker receipt to complete command reconstruction, including all frames. |
+| `prepare`  | Command reconstruction to backend execution.                             |
+| `execute`  | Backend execution, including owner code, admission exchanges, and SQL.   |
+| `result`   | Execution end through cleanup, serialization, and result framing.        |
+| `reply`    | Final reply preparation and posting through broker receipt.              |
+
+The Prometheus subscription enables these timestamps without a restart or a
+diagnostic flag. Large result transfers remain in `result`; input and result
+frames produce one sample per phase for the complete request. Missing or invalid
+intervals produce no sample. Open, close, and failed requests may omit phases they
+never reached. `postMessage` completion overlaps worker activity and is not added
+as another phase. Caller scheduling after broker receipt is outside these phases.
+
 Task kinds use their registered runtime entrypoint names, such as `gitOperations`,
 `preparedModelCatalog`, `codeModeNode`, and `sessionTranscript`. Standalone bundled
 workers have fixed names such as `diskBudget`, `memorySearch`, and `teamReports`.
@@ -432,6 +452,9 @@ histogram_quantile(0.99,
 
 # Request classes occupying dispatch slots for the most wall time
 sum by (kind, request_class) (rate(openclaw_worker_request_seconds_sum[5m]))
+
+# Where SQLite writer requests spend their observed wall time
+sum by (request_class, phase) (rate(openclaw_worker_request_phase_seconds_sum[5m]))
 
 # Shared-state read rate, by operation family
 sum by (request_class) (rate(openclaw_worker_request_seconds_count{kind="stateRead"}[5m]))
