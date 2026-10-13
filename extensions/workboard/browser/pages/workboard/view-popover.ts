@@ -1,4 +1,4 @@
-import { onCleanup } from "solid-js";
+import { onCleanup, onSettled } from "solid-js";
 
 export function closeWorkboardPopoverOnAction(event: Event) {
   if (!(event.target instanceof Element) || !event.target.closest("button")) {
@@ -11,12 +11,11 @@ export function closeWorkboardPopoverOnAction(event: Event) {
 
 export function workboardPopoverRef(align: "start" | "end" = "start", hover = false) {
   let dispose = () => {};
+  let panel!: HTMLElement;
   onCleanup(() => dispose());
-  return (element: Element | undefined) => {
-    dispose();
-    if (!(element instanceof HTMLElement)) {
-      return;
-    }
+  onSettled(() => {
+    const element = panel;
+    // Conditional Solid fragments have no sibling anchor until their DOM is committed.
     const sibling = element.previousElementSibling;
     const trigger = sibling instanceof HTMLElement ? sibling : null;
     let hoverTimer: ReturnType<typeof setTimeout> | undefined;
@@ -129,5 +128,8 @@ export function workboardPopoverRef(align: "start" | "end" = "start", hover = fa
       window.removeEventListener("resize", position);
       window.removeEventListener("scroll", position, true);
     };
+  });
+  return (element: HTMLElement) => {
+    panel = element;
   };
 }

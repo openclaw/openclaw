@@ -106,42 +106,24 @@ export async function resolveCodexNativeCommandSandboxBlock(
       release: modelCurrent?.release ?? (() => {}),
     };
   }
-  if (isCodexCliNodeResumeBind(subcommand, args)) {
-    let sandbox: Awaited<ReturnType<typeof prepareCodexNativeSandboxBlock>>;
-    try {
-      sandbox = await prepareCodexNativeSandboxBlock({
-        config: ctx.config,
-        sessionKey: ctx.sessionKey,
-        sessionId: ctx.sessionId,
-        surface: `/${["codex", subcommand].join(" ")}`,
-      });
-    } catch (error) {
-      modelCurrent?.release();
-      throw error;
-    }
-    return {
-      block: sandbox.block,
-      source: composeSessionEntryCommitGuards([modelCurrent?.source, sandbox.source]),
-      assertCurrent: async () => {
-        await modelCurrent?.assertCurrent();
-        await sandbox.assertCurrent();
-      },
-      release: () => {
-        sandbox.release();
-        modelCurrent?.release();
-      },
-    };
-  }
   let execution: Awaited<ReturnType<typeof prepareCodexNativeExecutionBlock>>;
   try {
-    execution = await prepareCodexNativeExecutionBlock({
-      config: ctx.config,
-      agentId: ctx.agentId,
-      sessionKey,
-      sessionId: ctx.sessionId,
-      storePath,
-      surface: `/${["codex", subcommand].join(" ")}`,
-    });
+    const surface = `/${["codex", subcommand].join(" ")}`;
+    execution = isCodexCliNodeResumeBind(subcommand, args)
+      ? await prepareCodexNativeSandboxBlock({
+          config: ctx.config,
+          sessionKey: ctx.sessionKey,
+          sessionId: ctx.sessionId,
+          surface,
+        })
+      : await prepareCodexNativeExecutionBlock({
+          config: ctx.config,
+          agentId: ctx.agentId,
+          sessionKey,
+          sessionId: ctx.sessionId,
+          storePath,
+          surface,
+        });
   } catch (error) {
     modelCurrent?.release();
     throw error;
