@@ -332,7 +332,9 @@ it("reclaims its captures during signal cleanup when the process outlives the dr
     ],
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, stdio: ["ignore", "pipe", "pipe"] },
   );
-  const exited = new Promise((resolve) => child.once("close", resolve));
+  const exited = new Promise((resolve) => {
+    child.once("close", resolve);
+  });
   try {
     const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
     const boundaryRoot = (await lines.next()).value as string;
