@@ -82,26 +82,11 @@ class SidebarAgentRoster extends AgentRosterElement {
     }
     const store = rosterActivityStore(this.context);
     store.setInvolvingMe(this.involvingMe);
-    const snapshot = store.snapshot;
-    const source = this.host.rosterSessionSource;
-    const agentIds = snapshot.cards.map((card) => card.id);
-    if (
-      !source ||
-      source.result !== snapshot.result ||
-      source.collapsedAgentIds !== this.collapsed ||
-      source.agentIds.length !== agentIds.length ||
-      source.agentIds.some((id, index) => id !== agentIds[index])
-    ) {
-      this.host.rosterSessionSource = {
-        result: snapshot.result,
-        agentIds,
-        collapsedAgentIds: this.collapsed,
-      };
-    }
+    this.host.rosterCollapsedAgentIds = this.collapsed;
   }
 
   override disconnectedCallback() {
-    this.host.rosterSessionSource = null;
+    this.host.rosterCollapsedAgentIds = null;
     // Agents home keeps the shared window alive after the grouped filter leaves.
     rosterActivityStore(this.context).setInvolvingMe(false);
     super.disconnectedCallback();
