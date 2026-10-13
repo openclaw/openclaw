@@ -15,6 +15,7 @@ import {
   releaseCodexAppServerLiveThread,
   readCodexLiveThreadEphemeralPolicy,
 } from "./client-runtime.js";
+import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
   getCodexInferenceThread,
@@ -225,24 +226,35 @@ export async function tryReuseCodexLiveThread(
   const creationPolicy = incognito
     ? readCodexLiveThreadEphemeralPolicy(params.client, binding.threadId)
     : undefined;
-  if (
-    incognito &&
-    (creationPolicy?.autoCompactTokenLimit !== params.config?.model_auto_compact_token_limit ||
-      creationPolicy?.autoCompactTokenLimitScope !==
-        params.config?.model_auto_compact_token_limit_scope)
-  ) {
-    throw new CodexIncognitoPolicyChangeError("compaction settings");
+  if (creationPolicy && options.admittedNativeThread?.status?.type !== "notLoaded") {
+    const effectivePolicy = createCodexEphemeralThreadPolicy(
+      params,
+      options.effectiveConfig.config,
+    );
+    if (
+      creationPolicy.autoCompactTokenLimit !== effectivePolicy.autoCompactTokenLimit ||
+      creationPolicy.autoCompactTokenLimitScope !== effectivePolicy.autoCompactTokenLimitScope
+    ) {
+      throw new CodexIncognitoPolicyChangeError("compaction settings");
+    }
   }
 
   // These native-owned ephemeral lifetimes do not enter ordinary
   // configuration ownership. Keep their existing live-only continuation path.
   if (incognito && (binding.preserveNativeModel || binding.connectionScope === "supervision")) {
+    if (options.admittedNativeThread?.status?.type === "notLoaded") {
+      return { kind: "rotate" };
+    }
     if (
       binding.clientId === clientId &&
       binding.clientId &&
       ((await options.buildLoadedPluginThreadConfig(binding))?.fingerprint ??
         binding.pluginAppsFingerprint) === binding.pluginAppsFingerprint
     ) {
+      // Native adoption cannot establish immutable creation settings from current defaults.
+      if (!creationPolicy && params.appServer.serviceTier === "ultrafast") {
+        throw new CodexIncognitoPolicyChangeError("compaction settings");
+      }
       await params.buildFinalConfigPatch?.(
         {
           action: "resume",
