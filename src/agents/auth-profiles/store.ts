@@ -20,6 +20,7 @@ import {
   copyCanonicalAuthProfileCredentialObservations,
   observeCanonicalAuthProfileCredentials,
 } from "./credential-observation.js";
+import { withAuthProfileCredentialWriteCustody } from "./credential-write-custody.js";
 import {
   syncPersistedExternalCliAuthProfiles,
   type createExternalAuthRuntime,
@@ -1637,12 +1638,14 @@ export function createAuthProfileStoreRuntime(
     const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
     if (database) {
       // Retain a prepared transaction owner, or use a shared connection's canonical identity.
-      saveAuthProfileStoreWithPreparedOwner(
-        store,
-        effectiveAgentDir,
-        options,
-        database,
-        resolveAuthProfileStoreOwner(database, getScopedAuthProfileEnv()),
+      withAuthProfileCredentialWriteCustody(database.db, () =>
+        saveAuthProfileStoreWithPreparedOwner(
+          store,
+          effectiveAgentDir,
+          options,
+          database,
+          resolveAuthProfileStoreOwner(database, getScopedAuthProfileEnv()),
+        ),
       );
       return;
     }

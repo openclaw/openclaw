@@ -12,6 +12,7 @@ import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { registerOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import {
@@ -74,6 +75,7 @@ describe("auth profile sqlite reader lifecycle", () => {
   it("reads a captured owner projection after native close without retaining schema metadata", () => {
     const databasePath = path.join(tempDirs.make("auth-schema-transfer-"), "agent.sqlite");
     const writer = nodeSqlite.openNodeSqliteDatabase(databasePath);
+    registerOpenClawAgentDatabaseIdentity(writer, databasePath);
     writer.exec(`CREATE TABLE auth_profile_store (
       store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL
     )`);
@@ -113,6 +115,7 @@ describe("auth profile sqlite reader lifecycle", () => {
   it("reuses admitted auth table facts across readers and refreshes them after owner writes", () => {
     const databasePath = path.join(tempDirs.make("auth-schema-facts-"), "agent.sqlite");
     const writer = nodeSqlite.openNodeSqliteDatabase(databasePath);
+    registerOpenClawAgentDatabaseIdentity(writer, databasePath);
     const storeSchema = `CREATE TABLE auth_profile_store (
       store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL
     )`;

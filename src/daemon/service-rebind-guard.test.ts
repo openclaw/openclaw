@@ -22,7 +22,6 @@ vi.mock("./launchd.js", async (original) => ({
 vi.mock("./future-config-guard.js", () => ({ assertFutureConfigActionAllowed: leaves.config }));
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.unstubAllEnvs();
 });
 it.each(
   (["gateway", "node"] as const).flatMap((kind) =>
@@ -108,6 +107,8 @@ it.each(
       }
     });
   } finally {
+    // Unwind nested stubs before the state fixture restores its original home.
+    vi.unstubAllEnvs();
     await state.cleanup();
   }
 });

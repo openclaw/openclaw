@@ -208,15 +208,15 @@ fi
 }
 
 function readAndroidReleaseWorkflow() {
-  return parse(readFileSync(".github/workflows/android-release.yml", "utf8"));
+  return readWorkflow(".github/workflows/android-release.yml");
 }
 
 function readWorkflowSanityWorkflow() {
-  return parse(readFileSync(".github/workflows/workflow-sanity.yml", "utf8"));
+  return readWorkflow(".github/workflows/workflow-sanity.yml");
 }
 
 function readRealBehaviorProofWorkflow() {
-  return parse(readFileSync(".github/workflows/real-behavior-proof.yml", "utf8"));
+  return readWorkflow(".github/workflows/real-behavior-proof.yml");
 }
 
 function readAndroidCompileSdk(relativePath: string): number {
@@ -989,7 +989,7 @@ AFTER_CD
   });
 
   it("scopes generated publication credentials to the repository and separates branch and PR authority", () => {
-    const action = parse(readFileSync(CREATE_GENERATED_PR_TOKENS_ACTION, "utf8"));
+    const action = readWorkflow(CREATE_GENERATED_PR_TOKENS_ACTION);
     const contents = action.runs.steps.find((step: WorkflowStep) => step.id === "contents-token");
     const pullRequest = action.runs.steps.find(
       (step: WorkflowStep) => step.id === "pull-request-token",
@@ -1017,7 +1017,7 @@ AFTER_CD
     expect(action.outputs["pull-request-token"].value).toBe(
       "${{ steps.pull-request-token.outputs.token }}",
     );
-    const publisher = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
+    const publisher = readWorkflow(PUBLISH_GENERATED_PR_ACTION);
     const tokens = publisher.runs.steps.find((step: WorkflowStep) => step.id === "tokens");
     expect(tokens.uses).toBe("./.github/actions/create-generated-pr-tokens");
     expect(tokens.with).toEqual({
@@ -1289,7 +1289,7 @@ AFTER_CD
         "::error::Refusing stale generated output because generator inputs changed on main.",
       );
 
-      const publishRun = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8")).runs.steps.find(
+      const publishRun = readWorkflow(PUBLISH_GENERATED_PR_ACTION).runs.steps.find(
         (step: { name?: string }) => step.name === "Publish generated pull request",
       ).run;
       const invalidPolicy = spawnSync("bash", ["-c", publishRun], {
@@ -1322,7 +1322,7 @@ AFTER_CD
     ];
 
     for (const item of cases) {
-      const workflow = parse(readFileSync(item.workflowPath, "utf8"));
+      const workflow = readWorkflow(item.workflowPath);
       const uploadStep = workflow.jobs.scan.steps.find(
         (step: WorkflowStep) => step.name === "Upload SARIF as workflow artifact",
       );
@@ -1339,7 +1339,7 @@ AFTER_CD
 
   it("verifies the pinned OpenGrep release binary before installing it", () => {
     for (const workflowPath of [OPENGREP_PR_DIFF_WORKFLOW, OPENGREP_FULL_WORKFLOW]) {
-      const workflow = parse(readFileSync(workflowPath, "utf8"));
+      const workflow = readWorkflow(workflowPath);
       const installStep = expectDefined(
         workflow.jobs.scan.steps.find((step: WorkflowStep) => step.name === "Install opengrep"),
         `Install opengrep step in ${workflowPath}`,
@@ -2410,7 +2410,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       job: "check_openclaw_npm",
     },
   ])("honors the global hosted runner override for $file/$job", ({ file, runner, job }) => {
-    const workflow = parse(readFileSync(`.github/workflows/${file}`, "utf8"));
+    const workflow = readWorkflow(`.github/workflows/${file}`);
     const runsOn = workflow.jobs[job]["runs-on"];
     const supportsHostedInput =
       file === "openclaw-npm-preflight.yml" || file === "openclaw-live-and-e2e-checks-reusable.yml";
@@ -2679,7 +2679,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       "use-actions-cache",
     ];
     for (const actionPath of setupActionPaths) {
-      const action = parse(readFileSync(actionPath, "utf8"));
+      const action = readWorkflow(actionPath);
       const steps = action.runs.steps as WorkflowStep[];
       expect(action.inputs["cache-mode"].default, actionPath).toBe("off");
       for (const legacyInput of legacyInputs) {
@@ -2715,7 +2715,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       ...findYamlFiles(".github/workflows"),
       ...findYamlFiles(".github/actions"),
     ]) {
-      const parsed = parse(readFileSync(file, "utf8"));
+      const parsed = readWorkflow(file);
       const stepLists = [
         ...Object.entries(parsed?.jobs ?? {}).map(([jobId, job]) => {
           const owner = job as { steps?: WorkflowStep[]; if?: string };
@@ -2828,7 +2828,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         }
         if (step.with?.path === ".artifacts/ci-sdk-declarations/sdk.json.gz") {
           expect(file).toBe(".github/actions/sdk-declarations/action.yml");
-          const action = parse(readFileSync(file, "utf8"));
+          const action = readWorkflow(file);
           const pack = action.runs.steps.find(
             (candidate: WorkflowStep) => candidate.id === "main-pack",
           );
@@ -2867,7 +2867,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
   });
 
   it("uses the workflow Node 24 pin for hosted default requests", () => {
-    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const action = readWorkflow(".github/actions/setup-node-env/action.yml");
     const setup: WorkflowStep = expectDefined(
       action.runs.steps.find((step: WorkflowStep) => step.id === "setup-node"),
       "Node setup",
@@ -2942,7 +2942,7 @@ process.exit(JSON.parse(process.env.RECIPE_EXITS)[count] ?? 99);
 `,
       );
       chmodSync(pnpm, 0o755);
-      const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+      const action = readWorkflow(".github/actions/setup-node-env/action.yml");
       const step: WorkflowStep = expectDefined(
         action.runs.steps.find(
           (candidate: WorkflowStep) => candidate.name === "Install dependencies",
@@ -3075,7 +3075,7 @@ process.exit(JSON.parse(process.env.RECIPE_EXITS)[count] ?? 99);
         { cwd: source, encoding: "utf8", env: { ...process.env, CI: "true" } },
       ).trim();
       const pnpm = resolvePnpmRunner({ nodeExecPath, npmExecPath });
-      const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+      const action = readWorkflow(".github/actions/setup-node-env/action.yml");
       const configureCache = expectDefined(
         action.runs.steps.find(
           (step: WorkflowStep) => step.name === "Configure dependency cache store",
@@ -3360,7 +3360,7 @@ server.listen(0, "127.0.0.1", () => {
   );
 
   it("shares full-build caches by installed Node version across requests and generations", () => {
-    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const action = readWorkflow(".github/actions/setup-node-env/action.yml");
     const cacheStep = expectDefined(
       action.runs.steps.find((step: WorkflowStep) => step.name === "Restore build-all cache"),
       "full-build cache restore",
@@ -3414,9 +3414,9 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("warms full builds with the release runtime without changing test cache selectors", () => {
-    const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
-    const npm = parse(readFileSync(".github/workflows/openclaw-npm-preflight.yml", "utf8"));
-    const frv = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
+    const npm = readWorkflow(".github/workflows/openclaw-npm-preflight.yml");
+    const frv = readWorkflow(".github/workflows/full-release-validation.yml");
     const steps = warmer.jobs.warm.steps as WorkflowStep[];
     const setup = expectDefined(
       steps.find((step) => step.id === "setup-node-env"),
@@ -3466,7 +3466,7 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("persists Node 26 minimum declarations through trusted bounded artifacts", () => {
-    const workflow = parse(readFileSync(".github/workflows/node-runtime-compat.yml", "utf8"));
+    const workflow = readWorkflow(".github/workflows/node-runtime-compat.yml");
     const steps = workflow.jobs.compat.steps as WorkflowStep[];
     const setupStep = steps.find((step) => step.name === "Setup Node environment");
     const resolveStep = steps.find(
@@ -3509,7 +3509,7 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("shares transform generations with the warmer after CI exports its harness", () => {
-    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const action = readWorkflow(".github/actions/setup-node-env/action.yml");
     const generationStep = (action.runs.steps as WorkflowStep[]).find(
       (step) => step.name === "Resolve Vitest transform cache generation",
     );
@@ -3565,7 +3565,7 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("persists isolated transform and compile caches through immutable protected archives", () => {
-    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const action = readWorkflow(".github/actions/setup-node-env/action.yml");
     const step = (name: string) =>
       expectDefined(
         action.runs.steps.find((candidate: WorkflowStep) => candidate.name === name),
@@ -3594,7 +3594,7 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("warms protected caches without main-run cancellation", () => {
-    const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
     const steps = warmer.jobs.warm.steps as WorkflowStep[];
     const step = (name: string) =>
       expectDefined(
@@ -3727,7 +3727,7 @@ server.listen(0, "127.0.0.1", () => {
       if (!existsSync(file)) {
         continue;
       }
-      const parsed = parse(readFileSync(file, "utf8"));
+      const parsed = readWorkflow(file);
       const jobs = parsed?.jobs ? Object.values(parsed.jobs) : [];
       const stepLists = [
         ...jobs.map((job) => (job as { steps?: WorkflowStep[] }).steps ?? []),
@@ -3850,7 +3850,7 @@ server.listen(0, "127.0.0.1", () => {
       if (!existsSync(file)) {
         continue;
       }
-      const parsed = parse(readFileSync(file, "utf8"));
+      const parsed = readWorkflow(file);
       const jobs = parsed?.jobs ? Object.values(parsed.jobs) : [];
       const stepLists = [
         ...jobs.map((candidate) => (candidate as { steps?: WorkflowStep[] }).steps ?? []),
@@ -4266,7 +4266,7 @@ ${step.run}`,
     expect(install.run).toContain('"$GOBIN/actionlint" -version');
     expect(install.run).toContain("v1.7.13-0.20260419144658-${ACTIONLINT_REVISION:0:12}");
     expect(install.run).toContain('echo "$GOBIN" >> "$GITHUB_PATH"');
-    const preCommit = parse(readFileSync(".pre-commit-config.yaml", "utf8"));
+    const preCommit = readWorkflow(".pre-commit-config.yaml");
     expect(
       preCommit.repos.find(
         (repo: { repo: string }) => repo.repo === "https://github.com/rhysd/actionlint",
@@ -5918,7 +5918,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const buildDistStep = buildArtifactSteps.find(
       (step: WorkflowStep) => step.name === "Build dist",
     );
-    const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
     const warmerSteps = warmer.jobs.warm.steps as WorkflowStep[];
     const saveStep = expectDefined(
       warmerSteps.find((step) => step.name === "Save dist build cache"),
@@ -6262,7 +6262,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   });
 
   it("keeps the Crabbox gate publisher on protected main with minimal permissions", () => {
-    const workflow = parse(readFileSync(".github/workflows/pr-crabbox-gate-publisher.yml", "utf8"));
+    const workflow = readWorkflow(".github/workflows/pr-crabbox-gate-publisher.yml");
     const publisher = readFileSync("scripts/pr-crabbox-gate-publisher.mjs", "utf8");
     const job = workflow.jobs.publish;
     expect(workflow.permissions).toEqual({});
@@ -6331,7 +6331,7 @@ it("pins generated publisher and maturity owners before credentials and selected
     name: "Prepare Git owner",
     uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
   };
-  const action = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
+  const action = readWorkflow(PUBLISH_GENERATED_PR_ACTION);
   expect(action.runs.steps.map(({ name }: WorkflowStep) => name)).toEqual([
     "Prepare Git owner",
     "Create generated PR tokens",
@@ -6354,7 +6354,7 @@ it("pins generated publisher and maturity owners before credentials and selected
     ".github/workflows/ci-test-timings-refit.yml",
     MATURITY_SCORECARD_WORKFLOW,
   ]) {
-    const workflow = parse(readFileSync(file, "utf8"));
+    const workflow = readWorkflow(file);
     const publishers = Object.values(workflow.jobs).flatMap((job) => {
       const jobSteps = (job as { steps?: WorkflowStep[] }).steps ?? [];
       return jobSteps.flatMap((step, index) =>
@@ -6371,7 +6371,7 @@ it("pins generated publisher and maturity owners before credentials and selected
 it.each(["publish", "promote"])(
   "requests independent Linux publication after stable %s activation",
   (owner) => {
-    const workflow = parse(readFileSync(`.github/workflows/openclaw-release-${owner}.yml`, "utf8"));
+    const workflow = readWorkflow(`.github/workflows/openclaw-release-${owner}.yml`);
     const job = workflow.jobs.publish_linux;
     expect(job, "stable publication must request the Linux release owner").toBeDefined();
     expect(job["continue-on-error"]).toBe(true);
@@ -6444,13 +6444,13 @@ it.each(["publish", "promote"])(
 );
 
 it("serializes Linux manifests with stable activation and reuses completed Linux builds", () => {
-  const linux = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
+  const linux = readWorkflow(".github/workflows/linux-app-release.yml");
   const finalizers = (
     [
       ["openclaw-release-publish.yml", "finalize_github_release"],
       ["openclaw-release-promote.yml", "finalize"],
     ] as const
-  ).map(([file, job]) => parse(readFileSync(`.github/workflows/${file}`, "utf8")).jobs[job]);
+  ).map(([file, job]) => readWorkflow(`.github/workflows/${file}`).jobs[job]);
   for (const job of [...finalizers, linux.jobs.publish, linux.jobs.mirror_legacy]) {
     expect(job.concurrency).toEqual({
       group: "linux-app-release-publish",
@@ -6519,7 +6519,7 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
 });
 
 it("detaches Linux mirror-only writers from both completed core finalizers", () => {
-  const linux = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
+  const linux = readWorkflow(".github/workflows/linux-app-release.yml");
   for (const event_name of ["push", "pull_request", "workflow_run", "workflow_dispatch"]) {
     expect(
       runInNewContext(linux.jobs.mirror_legacy.if.slice(3, -2), {
@@ -6544,7 +6544,7 @@ it("detaches Linux mirror-only writers from both completed core finalizers", () 
     ["openclaw-release-publish.yml", "finalize_github_release"],
     ["openclaw-release-promote.yml", "finalize"],
   ] as const) {
-    const workflow = parse(readFileSync(`.github/workflows/${file}`, "utf8"));
+    const workflow = readWorkflow(`.github/workflows/${file}`);
     const dispatch = workflow.jobs.dispatch_linux_mirror;
     expect(dispatch.needs).toContain(finalizer);
     expect(dispatch["continue-on-error"]).toBe(true);
@@ -6560,7 +6560,7 @@ it("detaches Linux mirror-only writers from both completed core finalizers", () 
     expect(dispatchStep.run).toContain("dispatch_linux_mirror");
     expect(dispatchStep.run).not.toMatch(/\b(?:watch|sleep|until|while)\b/u);
   }
-  const prepared = parse(readFileSync(".github/workflows/openclaw-release-promote.yml", "utf8"));
+  const prepared = readWorkflow(".github/workflows/openclaw-release-promote.yml");
   const preparedDispatch = JSON.stringify(prepared.jobs.dispatch_linux_mirror);
   expect(preparedDispatch).toContain(".releaseRunId");
   expect(preparedDispatch).toContain(".releaseRunAttempt");
@@ -6569,7 +6569,7 @@ it("detaches Linux mirror-only writers from both completed core finalizers", () 
 });
 
 it("reports stale Linux release requests before selected code runs", () => {
-  const workflow = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
+  const workflow = readWorkflow(".github/workflows/linux-app-release.yml");
   const job = workflow.jobs.validate_release;
   const requestStep = expectDefined((job.steps as WorkflowStep[])[0], "first request validation");
   const requestSha = "a".repeat(40);
@@ -6652,14 +6652,14 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     },
   ] as const;
   for (const entry of workflows) {
-    const workflow = parse(readFileSync(entry.file, "utf8"));
+    const workflow = readWorkflow(entry.file);
     const steps = workflow.jobs[entry.job].steps as WorkflowStep[];
     const checkout = steps.findIndex(({ name }) => name === entry.checkout);
     expect(steps[checkout - 1]).toEqual(pinned);
   }
 
-  const request = parse(readFileSync(".github/workflows/linux-app-release-request.yml", "utf8"));
-  const linux = parse(readFileSync(workflows[0].file, "utf8"));
+  const request = readWorkflow(".github/workflows/linux-app-release-request.yml");
+  const linux = readWorkflow(workflows[0].file);
   expect(request.permissions).toEqual({});
   expect(request.jobs.validate_request.permissions).toBeUndefined();
   expect(JSON.stringify(request)).not.toContain("${{ secrets.");
@@ -7088,7 +7088,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   expect(appImageTools).toContain("--connect-timeout 10 --max-time 120");
   expect(appImageTools).toContain("--retry 3 --retry-all-errors");
 
-  const prLinux = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  const prLinux = readWorkflow(".github/workflows/linux-app.yml");
   const workflowContracts = [
     {
       job: prLinux.jobs.build,

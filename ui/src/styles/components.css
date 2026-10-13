@@ -5257,7 +5257,6 @@ td.data-table-key-col {
 .session-row-host--draft-other {
   --session-row-bg: color-mix(in srgb, var(--bg-muted) 44%, transparent);
   --draft-row-opacity: 0.58;
-  background: var(--session-row-bg);
 }
 
 .session-row-host--draft-other:hover,

@@ -616,7 +616,7 @@ describe("Codex auth bridge", () => {
       ...startOptions,
       env: { CODEX_HOME: codexHome },
     });
-    await expect(fs.access(codexHome)).resolves.toBeUndefined();
+    await fs.access(codexHome);
     await expectPathMissing(codexHomeDir(agentDir));
     await reconcileArtifacts({
       startOptions,
@@ -650,8 +650,8 @@ describe("Codex auth bridge", () => {
       },
       clearEnv: ["FOO"],
     });
-    await expect(fs.access(codexHome)).resolves.toBeUndefined();
-    await expect(fs.access(nativeHome)).resolves.toBeUndefined();
+    await fs.access(codexHome);
+    await fs.access(nativeHome);
     expect(startOptions.clearEnv).toEqual(["CODEX_HOME", "HOME", "FOO"]);
     await reconcileArtifacts({
       startOptions,

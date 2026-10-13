@@ -395,3 +395,55 @@ it("counts the receipt deletion loop and lifecycle deletion as two reviewed sink
     }),
   ).toEqual([expect.stringContaining("unreviewed github_publication_session_lifecycles writer")]);
 });
+
+it("guards generic credential publication and custody helpers against new caller entries", () => {
+  const authority = "src/state/user-model-account-authority.ts";
+  const custody = "src/agents/auth-profiles/credential-write-custody.ts";
+  const machine = "src/state/config-machine-state-write.ts";
+  const sources = {
+    [custody]: `export function withAuthProfileCredentialWriteCustody() {}`,
+    [authority]: `
+      import { withAuthProfileCredentialWriteCustody } from '../agents/auth-profiles/credential-write-custody.js';
+      export function withAuthProfileCredentialWrite() { withAuthProfileCredentialWriteCustody(); }
+    `,
+    [machine]: `
+      import { withAuthProfileCredentialWrite } from './user-model-account-authority.js';
+      function publishMachineStateWrite() { withAuthProfileCredentialWrite(); }
+      function upsertConfigMachineState() { publishMachineStateWrite(); }
+    `,
+  };
+  expect(inspect(sources)).toEqual([]);
+  expect(
+    inspect({
+      ...sources,
+      "src/new-writer.worker.ts": `
+      import { withAuthProfileCredentialWriteCustody as write } from './agents/auth-profiles/credential-write-custody.js';
+      write();
+    `,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+  expect(
+    inspect({
+      ...sources,
+      [machine]: sources[machine] + `function bypass() { publishMachineStateWrite(); }`,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+});
+
+it("requires the host publication adapter for direct and aliased machine-state commands", () => {
+  const source = `export function writeConfigMachineStateAsync() {
+    const command = 'machineState.write' as const;
+    return scope.execute({ type: command, input: { key: 'authProfiles.store', value: {} } });
+  }`;
+  expect(inspect({ "src/state/config-machine-state-async.ts": source })).toEqual([]);
+  expect(inspect({ "src/new-writer.ts": source })).toEqual([
+    expect.stringContaining("machine-state credential writes require the host publication adapter"),
+  ]);
+  expect(
+    inspect({
+      "src/new-writer.ts": source.replace("type: command", "type: 'machineState.write'"),
+    }),
+  ).toEqual([
+    expect.stringContaining("machine-state credential writes require the host publication adapter"),
+  ]);
+});

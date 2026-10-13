@@ -506,7 +506,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           layout: this.layout,
           headerHeight: this.headerHeight,
           presented: snapshot.presented,
-          initialPositionPending: this.initialPositionPending,
+          initialPositionPending: () => this.initialPositionPending,
           onCommit: () => this.connected && this.didCommit(),
           rows,
           getContent: (index) => (rows[index] ? renderRow(rows[index]) : nothing),
@@ -739,7 +739,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       (this.initialPositionPending && this.rowKeys.length) ||
       this.offsetState.scrollCommand?.target === "message"
     ) {
-      this.renderer.queueAfterLayout(this.completeLayout);
+      this.renderer.queueAfterCommit(this.completeLayout);
     }
   }
 
@@ -761,7 +761,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       applyPendingScrollOffset(this.scrollRestoreHost);
       return;
     }
-    this.initialPositionPending = false;
     if (
       this.canAutoFollow() &&
       !this.offsetState.pendingInteractionAnchor &&
@@ -770,6 +769,19 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       this.scrollToEnd({ source: "auto", behavior: "instant" });
       this.offsetState.syncNativeOffset?.();
     }
+    for (const row of this.virtualizer.getVirtualItems()) {
+      const node = this.virtualizer.elementsCache.get(row.key);
+      if (
+        !node ||
+        !this.threadInnerElement?.contains(node) ||
+        Number.parseFloat(node.style.getPropertyValue("contain-intrinsic-block-size")) !== row.size
+      ) {
+        this.host.requestUpdate();
+        return;
+      }
+    }
+    this.initialPositionPending = false;
+    this.renderer.syncInitialPosition();
     this.host.requestUpdate();
   };
 }

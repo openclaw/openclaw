@@ -2,8 +2,9 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import process from "node:process";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { runClaudeCliNativeSpawnProof } from "../../test/helpers/claude-cli-native-spawn-proof.js";
+import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -160,6 +161,16 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
 describe.runIf(process.platform === "win32" || process.env.OPENCLAW_CLAUDE_CLI_SPAWN_PROOF === "1")(
   "ordinary Claude CLI executable launch",
   () => {
+    beforeAll(async () => {
+      const instance = await createOpenClawTestInstance({ name: "claude-cli-spawn-prepare" });
+      try {
+        // Reuse CI's built runtime; launcher cases do not own artifact publication.
+        await instance.entrypoint();
+      } finally {
+        await instance.cleanup();
+      }
+    }, 240_000);
+
     it.each(
       process.platform === "win32"
         ? (["native", "node-leading", "npm-shim"] as const)

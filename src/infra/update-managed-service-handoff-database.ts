@@ -8,7 +8,7 @@ import { root as openLockRoot, type Root } from "@openclaw/fs-safe/root";
 import { sql } from "kysely";
 import { z } from "zod";
 import { formatCliCommand } from "../cli/command-format.js";
-import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
@@ -174,6 +174,9 @@ export function readManagedHandoffRepairMetadata(
 }
 
 function initializeLeaseSchema(db: HandoffDatabase): void {
+  if (tableExists(db, "managed_update_handoffs")) {
+    return;
+  }
   executeSqliteQuerySync(
     db,
     leaseQueries(db)

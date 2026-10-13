@@ -226,8 +226,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
       // +1: the shared state-owner boundary for plugin CLIs.
+      // +1: owner-approved service-bound remote Control UI ingress.
       // +2: shared database-engine host and worker adapters.
-      154,
+      155,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -247,6 +248,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: approved prepared/data-only session patches and their authority contracts.
       // +4: CLI state-owner routing, Gateway owner guards, target selection, and timeout parsing.
       // +1: requester-bound transport effects for owner-routed plugin commands.
+      // +18: remote Control UI ingress V1/V2 types and typed admission error.
       // +5: approved sync-to-async replacements: inspectConversationBinding,
       // resolveCommandAuthorization, createApproverRestrictedNativeApprovalCapability,
       // createChannelApprovalNativeRuntimeAdapter, and createLazyChannelApprovalNativeRuntimeAdapter.
@@ -265,7 +267,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: readRuntimeConfig and captureRuntimeConfigAsyncReader on runtime-config-snapshot.
       // +10: shared database-engine contracts and operations after the SQLite export cutover.
       // +1: approved lexical database-engine admission scope for workboard boot/migrations.
-      3739,
+      3757,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

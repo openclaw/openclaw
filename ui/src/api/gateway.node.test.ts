@@ -636,7 +636,7 @@ describe("GatewayBrowserClient", () => {
     client.start();
     const ws = getLatestWebSocket();
     ws.emitOpen();
-    await vi.advanceTimersByTimeAsync(14_999);
+    await vi.advanceTimersByTimeAsync(29_999);
 
     expect(ws.lastClose).toBeNull();
     await vi.advanceTimersByTimeAsync(1);

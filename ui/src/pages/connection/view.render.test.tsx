@@ -97,6 +97,22 @@ function expectStatByLabel(container: Element, text: string): HTMLElement {
 }
 
 describe("connection view rendering", () => {
+  it("hides Gateway URL and shared credentials for embedded ingress while preserving recovery", () => {
+    document.documentElement.dataset.openclawRemoteIngress = "true";
+    try {
+      const container = document.createElement("div");
+      mountConnection(createConnectionProps({ lastError: "Ingress unavailable" }), container);
+      expect(container.querySelector('[aria-label="Gateway URL"]')).toBeNull();
+      expect(container.querySelector('[aria-label="Gateway secret"]')).toBeNull();
+      expect(container.textContent).toContain("Ingress unavailable");
+      expect(container.querySelector(".connection-actions button")?.textContent?.trim()).toBe(
+        "Retry connection",
+      );
+    } finally {
+      delete document.documentElement.dataset.openclawRemoteIngress;
+    }
+  });
+
   it("keeps edited controls and details mounted while diagnostics refresh", () => {
     const container = document.createElement("div");
     document.body.append(container);

@@ -177,7 +177,7 @@ export function retainSessionEntryWorkerPublication(params: {
       publication.begin(
         sessionKeys,
         [...memberships.keys()],
-        [],
+        [...(participantProjections?.keys() ?? [])],
         generationUnchangedKeys,
         undefined,
         entryPostimages,

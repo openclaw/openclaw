@@ -39,9 +39,18 @@ describe("memory chunk provenance backfill", () => {
     (_name, columns, withoutRowid) => {
       const db = fixture(columns, { withoutRowid });
       db.exec(MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL);
+      db.exec(`CREATE TRIGGER memory_index_chunk_provenance_after_insert
+        AFTER INSERT ON memory_index_chunks BEGIN SELECT 1; END`);
       db.exec(`INSERT INTO memory_index_chunk_provenance VALUES
       ('owned', 'owner', 'interactive', 3, 'prior')`);
       ensureMemoryChunkProvenance(db);
+      expect(
+        db
+          .prepare(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
+          )
+          .get(),
+      ).toBeUndefined();
       expect(
         db.prepare("SELECT source, hash FROM memory_index_sources ORDER BY source").all(),
       ).toEqual([

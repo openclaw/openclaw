@@ -36,12 +36,12 @@ Own local tooling, script wrappers, generated-artifact helper rules. Repo-global
 - PR CI = default broad proof. Change builds + focused tests pass → open ready PR; never hold for pre-PR suite runs.
 - Before PR: narrow local proof — touched tests (`pnpm test <file> --maxWorkers=1`) + targeted typecheck/lint/format. Trusted work: local proof default.
 - Boxes = exception. Crabbox/Testbox only for coverage CI/local machine cannot provide (another OS or device, live providers/channels, long E2E, heavy benchmarks), only when granted immediately. Queued → run locally. Never wait on box queue or chain Testbox → AWS → Hetzner fallbacks.
-- Never rerun/re-push just for green. Fix real failures. Before attributing red, read CI's published failure classification (pre-existing on main vs new).
+- CI fails → `pnpm test:ci-failed <pr>`; read published classification (pre-existing on main vs new). Fix new failures → `pnpm test:ci-failed <pr> --run` until local pass → push once. Pre-existing: failure-table landing rule. Never rerun/re-push just for green (`gh run rerun` included); never local full suite for CI repair.
 - Untrusted contributor/fork code: secretless isolation. Credentialed execution needs maintainer authorization; scope live credentials + isolate Gateway/state.
 
 ## PR Safety
 
-- PR operations: follow [maintainer workflow](../.agents/skills/openclaw-pr-maintainer/SKILL.md). Default handoff: `OPENCLAW_PR_GATES_REMOTE=github` + `merge-run --auto-merge`. Pending admission ≠ successful proof/merge completion.
+- PR operations: follow [maintainer workflow](../.agents/skills/openclaw-pr-maintainer/SKILL.md). Unset `OPENCLAW_PR_GATES_REMOTE` = GitHub default; explicit `OPENCLAW_PR_GATES_REMOTE=github` equivalent. Default handoff: `merge-run --auto-merge`. Old full local gates: explicit `OPENCLAW_PR_GATES_REMOTE=local`. `OPENCLAW_TESTBOX=1` + unset remote selector retains hosted mode. Pending admission ≠ successful proof/merge completion.
 - Landing subcommands require canonical/origin-main wrapper code. Never bypass wrapper trust, operation locks, exact-head review/gate bindings, live authority checks, or Octopool string rewrite protection; never select raw `gh` to get landing through.
 - Before returning: join all PR-state-mutating children. Drained self-exited failures auto-release their operation lock; interrupted/uncertain locks stay held — verify no child tools remain before reported exact-OID `scripts/pr lock-recover` command. Never delete lock refs manually.
 - Preserve transition journals, preparation evidence, outcome refs, captures. Never clear/push `refs/openclaw/pr-merge-outcomes/<PR>`, hand-edit receipts, or infer non-execution from failed command, elapsed time, absent process, or open PR.

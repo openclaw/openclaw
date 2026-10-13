@@ -6,6 +6,7 @@ import {
   isBrowserPanelSurfaceAvailable,
   isDesktopPanelAvailable,
 } from "../../app/panel-availability.ts";
+import { canUseQuestionPrompts } from "../../app/question-prompt-client.ts";
 import {
   refreshPendingQuestionsWithRetry,
   setQuestionPromptClient,
@@ -665,8 +666,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         this.chatState.requestBackgroundUpdate();
       };
       this.connectedClient = startupClient;
-      setQuestionPromptClient(this.questionPromptState, startupClient);
-      refreshPendingQuestionsWithRetry(this.questionPromptState, startupClient, clientIsCurrent);
+      const questionClient = canUseQuestionPrompts(snapshot) ? startupClient : null;
+      setQuestionPromptClient(this.questionPromptState, questionClient);
+      if (questionClient) {
+        refreshPendingQuestionsWithRetry(this.questionPromptState, questionClient, clientIsCurrent);
+      }
       this.headerWorktreePaths.clear();
       this.headerBranches.clear();
       this.headerPlatform = null;
