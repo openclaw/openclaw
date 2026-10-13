@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import * as mediaGeneration from "../agents/media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../agents/media-generation-activity.test-support.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
@@ -99,6 +100,42 @@ describe("sweepCronRunSessions", () => {
     state = undefined;
   });
 
+  it("observes a committed deletion after an earlier sweep without host SQL", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job:run:deleting";
+    await seedSessionEntries(storePath, {
+      [sessionKey]: { sessionId: "deleting", updatedAt: now },
+    });
+    expect(await sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log })).toEqual({
+      swept: true,
+      pruned: 0,
+    });
+    await withAgentDeletion("main", async (begin) => {
+      const deletion = await begin({
+        agentId: "main",
+        agentDir: state!.agentDir("main"),
+        workspaceDir: state!.workspaceDir,
+        sessionsDir: state!.sessionsDir("main"),
+        phase: "draining",
+      });
+      const hostSql = observeHostDataSql();
+      try {
+        expect(
+          await sweepCronRunSessions({
+            sessionStorePath: storePath,
+            nowMs: now + 26 * 3_600_000,
+            log,
+          }),
+        ).toEqual({ swept: false, pruned: 0 });
+        expect(hostSql.queries).toEqual([]);
+      } finally {
+        hostSql.restore();
+        await deletion.rollback();
+      }
+    });
+    expect(readSessionEntries(storePath)[sessionKey]?.sessionId).toBe("deleting");
+  });
+
   it("keeps a candidate whose retained prompt changes after worker discovery", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:cron:job:run:changed";
@@ -171,7 +208,7 @@ describe("sweepCronRunSessions", () => {
       expect(result).toEqual({ swept: true, pruned: 1 });
       expect(buildPendingSet).not.toHaveBeenCalled();
       expect(readSessionEntries(storePath)[sessionKey]).toBeUndefined();
-      await expect(fsPromises.access(staleArchive)).resolves.toBeUndefined();
+      await fsPromises.access(staleArchive);
       expect(warn).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledWith(
         { err: expect.stringContaining("archive cleanup denied") },

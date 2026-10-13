@@ -1,3 +1,4 @@
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   sessionChanges,
   type SessionRowChange,
@@ -20,7 +21,6 @@ import {
 } from "./session-accessor.sqlite-entry-cache-state.js";
 import {
   createSessionEntryCreationOperation,
-  assertSessionEntryCreationCurrent,
   assertSessionEntryCreationTarget,
   type SessionEntryCreationTarget,
   projectSessionSharingEntry,
@@ -46,6 +46,7 @@ import {
   recordAcquiringSessionMember,
   type CommittedSessionSharingFacts,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
+import { sealSessionEntryPublicationSource } from "./session-entry-publication-source.js";
 import type { SessionEntry } from "./types.js";
 
 export {
@@ -57,7 +58,6 @@ export {
 export type {
   PreparedSessionEntryChanges,
   SessionEntryPublicationSource,
-  SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 
 export function bindPreparedSessionEntryPublication(
@@ -97,6 +97,18 @@ export function emitPreparedSessionSharingChange(
   };
   bindPreparedSessionEntryPublication(change, record);
   bindSessionEntryPublicationSource(change, database);
+  if (record.kind === "metadata") {
+    const seal = () => sealSessionEntryPublicationSource(record.prepared.source);
+    if (
+      !stageSqliteTransactionState(database.db, {
+        stage() {},
+        commit: seal,
+        rollback() {},
+      })
+    ) {
+      seal();
+    }
+  }
   sessionChanges.emit(change, database.db);
 }
 
@@ -126,10 +138,13 @@ export function publishSessionEntryWorkerMetadataInvalidation(params: {
   storePath: string;
   databaseIdentity: string;
   sessionKey: string;
+  entry?: SessionEntry;
 }): void {
   invalidateSessionEntryCaches(params.databaseIdentity);
   for (const read of retainedSharingReads(params.databaseIdentity, params.sessionKey) ?? []) {
-    publishRetainedSessionEntryPredicate(read, undefined, false);
+    publishRetainedSessionEntryPredicate(read, params.entry, params.entry !== undefined, {
+      preserveMatchingEntry: true,
+    });
   }
   const change: SessionRowChange = {
     agentId: params.agentId,
@@ -171,6 +186,9 @@ export async function withSessionEntryCreationPublication<T>(
   ),
   run: (operation: SessionEntryCreationOperation) => Promise<T>,
 ): Promise<T> {
+  // Creation must reach the replica even before its first reader or after lifecycle cleanup.
+  const { ensureReplicaSubscription } = await import("./session-actor-replica.js");
+  ensureReplicaSubscription();
   const operation = createSessionEntryCreationOperation();
   const creation: CreationRecord = {
     agentId: params.agentId,
@@ -196,7 +214,6 @@ export function runWithSessionEntryCreationPublication<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   const creation = preparedSharingChanges.operations.get(operation);
-  assertSessionEntryCreationCurrent(creation);
   return preparedSharingChanges.current.run(creation, run);
 }
 

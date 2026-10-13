@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import "./app-host.ts";
+import { createShellOwner } from "./app-host-solid.test-support.ts";
 import type { ShellGatewayOwner } from "./app-shell-gateway.ts";
 import type { ApplicationContext } from "./context.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
@@ -53,9 +53,7 @@ describe("OpenClaw shell locale preferences", () => {
       theme: { refresh: refreshTheme },
       runtimeConfig,
     } as unknown as ApplicationContext;
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellServerPreferencesState;
+    const shell = createShellOwner() as unknown as ShellServerPreferencesState;
     shell.runtime = { context };
 
     await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
@@ -91,9 +89,7 @@ describe("OpenClaw shell locale preferences", () => {
       theme: { refresh: refreshTheme },
       runtimeConfig,
     } as unknown as ApplicationContext;
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellServerPreferencesState;
+    const shell = createShellOwner() as unknown as ShellServerPreferencesState;
     shell.runtime = { context };
 
     await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
@@ -126,9 +122,7 @@ describe("OpenClaw shell locale preferences", () => {
       theme: { recordServerSelection, refresh: vi.fn(), serverSelection: null },
       runtimeConfig,
     } as unknown as ApplicationContext;
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellServerPreferencesState;
+    const shell = createShellOwner() as unknown as ShellServerPreferencesState;
     shell.runtime = { context };
 
     await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
@@ -181,7 +175,7 @@ describe("profile preference ACK publication across browser realms", () => {
       const observed = mode === "published-read" || baseline || identical;
       const scope = "ws://ack-publication";
       const profileId = "profile-a";
-      const pinsKey = "ui.sidebarEntries";
+      const pinsKey = "ui.railShortcuts";
       const pendingKey =
         "openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:" + profileId;
       const lastSeenKey = "openclaw.control.serverPrefs.v1:" + scope + ":profile:" + profileId;
@@ -315,13 +309,13 @@ describe("profile preference ACK publication across browser realms", () => {
             },
           );
           expect(JSON.parse(localStorage.getItem(lastSeenKey)!)).toMatchObject({
-            sidebarEntries: confirmed.sidebarEntries,
+            railShortcuts: confirmed.railShortcuts,
             navigationConfirmation: confirmed.navigationConfirmation,
           });
         }
         const newestLastSeen = localStorage.getItem(lastSeenKey);
         expect(JSON.parse(newestLastSeen!)).toMatchObject({
-          sidebarEntries: cancelled ? wantedA.sidebarEntries : wantedB.sidebarEntries,
+          railShortcuts: cancelled ? wantedA.sidebarEntries : wantedB.sidebarEntries,
         });
         const aReads = aRequest.mock.calls.filter(
           ([method]) => method === "users.prefs.get",
@@ -344,7 +338,7 @@ describe("profile preference ACK publication across browser realms", () => {
         a.reconcile.applyServerUiPrefs({}, { scope, profileId, onApplied: vi.fn() });
         expect(a.settings.loadSettings(scope).sidebarEntries).toEqual(wantedB.sidebarEntries);
         expect(JSON.parse(localStorage.getItem(lastSeenKey)!)).toMatchObject({
-          sidebarEntries: cancelled ? wantedA.sidebarEntries : wantedB.sidebarEntries,
+          railShortcuts: cancelled ? wantedA.sidebarEntries : wantedB.sidebarEntries,
         });
         expect(aRequest.mock.calls.filter(([method]) => method === "users.prefs.get")).toHaveLength(
           aReads + (observed && !identical ? 1 : 0),
@@ -367,7 +361,7 @@ describe("profile preference ACK publication across browser realms", () => {
     const a = await loadPreferenceRealm();
     const scope = "ws://ack-before-commit";
     const profileId = "profile-a";
-    const server = { "ui.sidebarEntries": ["route:usage"] };
+    const server = { "ui.railShortcuts": ["route:usage"] };
     const dispatched = createDeferred();
     const commit = createDeferred();
     const request = vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
@@ -426,7 +420,7 @@ describe("profile preference ACK publication across browser realms", () => {
         sidebarEntries: desired.sidebarEntries,
       });
       expect(server).toMatchObject({
-        "ui.sidebarEntries": desired.sidebarEntries,
+        "ui.railShortcuts": desired.sidebarEntries,
       });
       expect(afterCommit).toHaveBeenCalledOnce();
     } finally {
@@ -444,7 +438,7 @@ describe("profile preference ACK publication across browser realms", () => {
       const scope = "ws://ack-storage-blocked";
       const profileId = "profile-a";
       const entries: Record<string, unknown> = {
-        "ui.sidebarEntries": ["route:usage"],
+        "ui.railShortcuts": ["route:usage"],
       };
       const committed = createDeferred();
       const reply = createDeferred<unknown>();
@@ -474,6 +468,9 @@ describe("profile preference ACK publication across browser realms", () => {
         });
       realm.settings.patchSettings({ gatewayUrl: scope });
       const storage = globalThis.localStorage;
+      const lastSeenKey = `openclaw.control.serverPrefs.v1:${scope}:profile:${profileId}`;
+      storage.setItem(lastSeenKey, JSON.stringify({ sidebarEntries: ["route:plugins"] }));
+      await refresh();
       vi.stubGlobal("localStorage", {
         getItem: (key: string) => {
           if (failure === "quota") {
@@ -501,7 +498,7 @@ describe("profile preference ACK publication across browser realms", () => {
           afterCommit,
         });
         await committed.promise;
-        entries["ui.sidebarEntries"] = ["route:usage"];
+        entries["ui.railShortcuts"] = ["route:usage"];
         await refresh();
         const confirmed = realm.prefs.serverUiPrefsOutbox.confirmedPrefsFallback?.prefs;
         reply.resolve({ status: "ok" });

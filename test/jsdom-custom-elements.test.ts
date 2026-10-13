@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { customElement } from "lit/decorators.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   dropRepoOwnedCustomElements,
@@ -17,28 +18,38 @@ describe("jsdom custom element tracking", () => {
     expect(definitions?.some((entry) => entry.name === "openclaw-jsdom-contract-probe")).toBe(true);
   });
 
-  it.each([false, true])(
-    "drops repo-owned tags and keeps dependency-owned ones (spy=%s)",
-    (spy) => {
+  it.each(["direct", "spy", "forwarding-spy"] as const)(
+    "drops repo-owned tags and keeps dependency-owned ones (%s define)",
+    (wrapper) => {
       const tracking = trackCustomElementRegistry(customElements);
       if (!tracking) {
         throw new Error("expected a jsdom registry");
       }
-      const tag = `openclaw-repo-owned-probe-${spy}`;
-      const registration = spy ? vi.spyOn(customElements, "define") : undefined;
+      const tag = `openclaw-repo-owned-probe-${wrapper}`;
+      const dependencyTag = `wa-dependency-probe-${crypto.randomUUID()}`;
+      const define = customElements.define.bind(customElements);
+      const registration = wrapper === "direct" ? undefined : vi.spyOn(customElements, "define");
+      if (wrapper === "forwarding-spy") {
+        // Fixtures that cold-import modules tolerate re-registration this way.
+        registration?.mockImplementation((name, constructor, options) => {
+          if (!customElements.get(name)) {
+            define(name, constructor, options);
+          }
+        });
+      }
       try {
         customElements.define(tag, class extends HTMLElement {});
+        // Dependency packages are externalized and register once per worker, so their
+        // definitions must survive a reset that the module graph cannot replay.
+        customElement(dependencyTag)(class extends HTMLElement {});
       } finally {
         registration?.mockRestore();
       }
-      // Dependency packages are externalized and register once per worker, so their
-      // definitions must survive a reset that the module graph cannot replay.
-      tracking.definitions.push({ name: "wa-dependency-probe" });
 
       dropRepoOwnedCustomElements(tracking);
 
       expect(customElements.get(tag)).toBeUndefined();
-      expect(tracking.definitions.some((entry) => entry.name === "wa-dependency-probe")).toBe(true);
+      expect(customElements.get(dependencyTag)).toBeDefined();
       // A repo module re-evaluated by the next file must be able to register again.
       expect(() => customElements.define(tag, class extends HTMLElement {})).not.toThrow();
     },

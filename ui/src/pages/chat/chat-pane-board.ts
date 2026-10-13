@@ -4,7 +4,7 @@ import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/i
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-render.ts";
+import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-options.ts";
 import { t } from "../../i18n/index.ts";
 import { BOARD_GRID_COLUMNS } from "../../lib/board/grid.ts";
 import {
@@ -16,6 +16,7 @@ import {
   type BoardViewCallbacks,
 } from "../../lib/board/provider.ts";
 import { updateBoardSessionView } from "../../lib/board/settings.ts";
+import { currentDisplayConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   isGatewayCapabilityAdvertised,
@@ -481,7 +482,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           return;
         }
         const swarmEnabled = isSwarmEnabledInConfig(
-          context.runtimeConfig?.state.configSnapshot?.config,
+          context.runtimeConfig ? currentDisplayConfig(context.runtimeConfig.state) : null,
           agentId,
         );
         if (this.swarmEnabled !== swarmEnabled) {

@@ -47,7 +47,7 @@ import {
   resetTranscriptTestDom,
   threadProps,
 } from "./components/chat-transcript.test-support.ts";
-import "./components/chat-sidebar-region.runtime.ts";
+import "./components/chat-sidebar-region.runtime.tsx";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import {
   closeSlot,

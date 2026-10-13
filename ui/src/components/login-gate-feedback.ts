@@ -46,7 +46,7 @@ type LoginFailureKind =
 type LoginFailurePlacement = "form" | "status";
 
 /** Pending is an expected wait, not a fault; the palette follows that distinction. */
-export type LoginFailureTone = "pending" | "warn" | "danger";
+type LoginFailureTone = "pending" | "warn" | "danger";
 
 type LoginFormField = "url" | "credential";
 

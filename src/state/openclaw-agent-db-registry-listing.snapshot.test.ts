@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
 
@@ -106,6 +107,21 @@ it.each(["capture", "reader"] as const)(
   },
 );
 
+it("inspects fresh registry rows without replacing the publication memo or its witnesses", async () => {
+  const retained = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options, () => false);
+  await retained.read();
+  const foreign = { ...entry, agentId: "foreign", path: "/fixture/foreign.sqlite" };
+  mocks.read.mockResolvedValue({ status: "available", entries: [foreign] });
+  const inspected = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
+    ...options,
+    fresh: true,
+  }).read();
+  expect(inspected.result).toEqual({ status: "available", entries: [foreign] });
+  expect(() => inspected.assertCurrent()).not.toThrow();
+  expect(() => retained.assertCurrent()).not.toThrow();
+  expect((await retained.read()).result).toEqual({ status: "available", entries });
+});
+
 it("retains scoped revocation before native registry rows are needed", async () => {
   const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options, () => true);
   expect(() => prepared.assertCurrent()).not.toThrow();
@@ -165,19 +181,41 @@ it.each(["unavailable", "appeared"] as const)(
   },
 );
 
-it.each(["authority", "memo"])("rejects unavailable facts after %s changes", async (kind) => {
+it("rejects unavailable facts after authority changes", async () => {
   const failure = new Error("authority revoked");
   mocks.read.mockImplementationOnce(async () => {
-    if (kind === "authority") {
-      mocks.assertCurrent.mockImplementation(() => {
-        throw failure;
-      });
-    } else {
-      invalidateRegisteredAgentDatabasesMemo(options);
-    }
+    mocks.assertCurrent.mockImplementation(() => {
+      throw failure;
+    });
     return { status: "unavailable" };
   });
   await expect(prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read()).rejects.toThrow(
-    kind === "authority" ? failure : "registry changed",
+    failure,
   );
+});
+
+it("refuses a replaced registry without retrying against another database's memo", async () => {
+  const firstReply = createDeferred<OpenClawAgentDatabaseRegistryReadResult>();
+  const secondReply = createDeferred<OpenClawAgentDatabaseRegistryReadResult>();
+  mocks.read
+    .mockImplementationOnce(() => firstReply.promise)
+    .mockImplementationOnce(() => secondReply.promise)
+    .mockRejectedValue(new Error("Unexpected retry without a registry publication"));
+  const first = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read();
+  const second = prepareOpenClawAgentDatabaseRegistrySnapshotRead({
+    path: "/fixture/other/state.sqlite",
+  }).read();
+  try {
+    firstReply.resolve({ status: "available", entries });
+    await expect(first).rejects.toThrow("registry changed");
+    secondReply.resolve({ status: "available", entries: [] });
+    await expect(second).resolves.toMatchObject({
+      result: { status: "available", entries: [] },
+    });
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+  } finally {
+    firstReply.resolve({ status: "available", entries });
+    secondReply.resolve({ status: "available", entries: [] });
+    await Promise.allSettled([first, second]);
+  }
 });

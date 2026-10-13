@@ -590,11 +590,11 @@ describe("google gemini cli backend auth bridge", () => {
       }
       await stageGeminiPreparedExecution(preparedAgain);
       expect(preparedAgain?.env?.GEMINI_CLI_HOME).toBe(home);
-      await expect(fs.access(sessionMarker)).resolves.toBeUndefined();
+      await fs.access(sessionMarker);
       await expect(fs.access(cachedCredentialsPath)).rejects.toThrow();
       await prepared?.cleanup?.();
       await preparedAgain?.cleanup?.();
-      await expect(fs.access(sessionMarker)).resolves.toBeUndefined();
+      await fs.access(sessionMarker);
       await expect(fs.access(path.dirname(systemSettingsPath ?? ""))).rejects.toThrow();
       await expect(
         fs.access(path.dirname(preparedAgain?.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH ?? "")),

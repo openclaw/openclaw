@@ -17,6 +17,11 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
+  closeAuthProfileFileState,
+  refreshAuthProfileFileState,
+} from "../auth-profiles/file-state.js";
+import * as migrationDiagnostics from "../auth-profiles/legacy-source-diagnostic.js";
+import {
   assertAuthProfileMigrationReady,
   clearAuthProfileMigrationDiagnostics,
 } from "../auth-profiles/legacy-source-diagnostic.js";
@@ -317,6 +322,7 @@ describe("SDK migration guard endpoint context", () => {
           // A raw write plus archive models another process's Doctor; this process keeps its fence.
           writePersistedAuthProfileStoreRaw(legacy, ownerDir);
           await rename(legacyFile, `${legacyFile}.migrated`);
+          await refreshAuthProfileFileState();
           storage.reload();
           await expect(storage.getApiKey("arcee", { baseUrl })).rejects.toMatchObject({
             code: "AUTH_PROFILE_MIGRATION_REQUIRED",
@@ -339,6 +345,7 @@ describe("SDK migration guard endpoint context", () => {
             });
             writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} });
             await state.writeJson(legacyPath, legacy);
+            await refreshAuthProfileFileState();
             expect(() => assertAuthProfileMigrationReady()).toThrow(
               "requires legacy credential migration",
             );
@@ -413,14 +420,25 @@ describe("SDK migration guard endpoint context", () => {
         });
         const fallback = vi.fn(() => "synthetic-other-account-key");
         storage.setFallbackResolver(fallback);
+        let reloadedSelectedCredential = false;
+        const assertSelected =
+          migrationDiagnostics.assertAuthProfileCredentialMigrationStateAtDatabasePath;
+        vi.spyOn(
+          migrationDiagnostics,
+          "assertAuthProfileCredentialMigrationStateAtDatabasePath",
+        ).mockImplementationOnce((...args) => {
+          writePersistedAuthProfileStoreRaw(
+            apiKeyStore("arcee", {
+              keyRef: { source: "env", provider: "default", id: "UNRESOLVED_IMPORTED_ARCEE" },
+            }),
+          );
+          storage.reload();
+          reloadedSelectedCredential = true;
+          assertSelected(...args);
+        });
         const pending = storage.getApiKey("arcee", { baseUrl });
-        writePersistedAuthProfileStoreRaw(
-          apiKeyStore("arcee", {
-            keyRef: { source: "env", provider: "default", id: "UNRESOLVED_IMPORTED_ARCEE" },
-          }),
-        );
-        storage.reload();
         await expect(pending).rejects.toMatchObject({ code: "AUTH_PROFILE_MIGRATION_REQUIRED" });
+        expect(reloadedSelectedCredential).toBe(true);
         expect(fallback).not.toHaveBeenCalled();
       },
     );
@@ -439,15 +457,27 @@ describe("SDK migration guard endpoint context", () => {
         const storage = AuthStorage.forAgent(agentDir, {
           models: { providers: { arcee: { baseUrl, models: [] } } },
         });
-        const pending = storage.getApiKey("arcee", { baseUrl });
-        writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} });
-        expect(() => assertAuthProfileMigrationReady()).toThrow(
-          "requires legacy credential migration",
-        );
         const localKey = "synthetic-new-local-key";
-        writePersistedAuthProfileStoreRaw(apiKeyStore("arcee", { key: localKey }), agentDir);
-        storage.reload();
+        let reloadedSelectedCredential = false;
+        const assertSelected =
+          migrationDiagnostics.assertAuthProfileCredentialMigrationStateAtDatabasePath;
+        vi.spyOn(
+          migrationDiagnostics,
+          "assertAuthProfileCredentialMigrationStateAtDatabasePath",
+        ).mockImplementationOnce((...args) => {
+          assertSelected(...args);
+          writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} });
+          expect(() => assertAuthProfileMigrationReady()).toThrow(
+            "requires legacy credential migration",
+          );
+          writePersistedAuthProfileStoreRaw(apiKeyStore("arcee", { key: localKey }), agentDir);
+          closeAuthProfileFileState();
+          storage.reload();
+          reloadedSelectedCredential = true;
+        });
+        const pending = storage.getApiKey("arcee", { baseUrl });
         await expect(pending).rejects.toMatchObject({ code: "AUTH_PROFILE_MIGRATION_REQUIRED" });
+        expect(reloadedSelectedCredential).toBe(true);
         expect(
           (await storage.getApiKey("arcee", { baseUrl })) === localKey,
           "new requests retain the local owner",

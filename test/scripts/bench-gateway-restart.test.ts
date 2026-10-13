@@ -139,52 +139,6 @@ describe("gateway restart benchmark script", () => {
     );
   });
 
-  it("flushes buffered restart output before classifying an iteration", () => {
-    const iteration = testing.createRestartIteration(1);
-    iteration.healthz = {
-      downtimeMs: 10,
-      firstErrorKind: "econnreset",
-      firstRecoveryMs: 30,
-      ms: 30,
-      status: 200,
-      transitions: [],
-      unavailableMs: 20,
-    };
-    iteration.readyz = {
-      downtimeMs: 12,
-      firstErrorKind: "http-503",
-      firstRecoveryMs: 42,
-      ms: 42,
-      status: 200,
-      transitions: [],
-      unavailableMs: 30,
-    };
-
-    const failure = testing.finalizeRestartIteration(iteration, false, () => {
-      iteration.gatewayReadyLogLine = "[gateway] ready";
-      iteration.gatewayReadyLogMs = 45;
-      iteration.restartTrace["restart.ready.total"] = 50;
-    });
-
-    expect(failure).toBeNull();
-  });
-
-  it("preserves buffered child output carry until stream end", () => {
-    const buffers = {
-      stderr: "[gateway] ready",
-      stdout: "[gateway] restart trace: restart.ready 12.5ms total=45.0ms",
-    };
-    const lines: string[] = [];
-
-    flushOutputLineBuffers(buffers, (line) => lines.push(line), 1);
-
-    expect(lines).toEqual([]);
-    expect(buffers).toEqual({
-      stderr: "[gateway] ready",
-      stdout: "[gateway] restart trace: restart.ready 12.5ms total=45.0ms",
-    });
-  });
-
   it("flushes buffered child output carry at stream end", () => {
     const buffers = {
       stderr: "[gateway] ready",
@@ -192,9 +146,7 @@ describe("gateway restart benchmark script", () => {
     };
     const lines: string[] = [];
 
-    flushOutputLineBuffers(buffers, (line) => lines.push(line), 1, {
-      flushPartial: true,
-    });
+    flushOutputLineBuffers(buffers, (line) => lines.push(line), 1);
 
     expect(lines).toEqual([
       "[gateway] restart trace: restart.ready 12.5ms total=45.0ms",

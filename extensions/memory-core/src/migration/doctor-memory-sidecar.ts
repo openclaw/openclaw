@@ -450,7 +450,7 @@ async function migrateLegacyMemorySidecarSource(params: {
         // Every imported table is a derived search index. A same-identity mismatch means the
         // current per-agent row wins; normal sync rebuilds any rows skipped with the sidecar.
         params.changes.push(
-          `Resolved Memory Core legacy memory index conflict for agent ${params.source.agentId} by keeping canonical per-agent SQLite rows`,
+          `Resolved Memory Core legacy memory index conflict for agent ${params.source.agentId} by keeping existing per-agent SQLite rows`,
         );
         return true;
       }
@@ -492,6 +492,34 @@ async function migrateLegacyMemorySidecarSource(params: {
 export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-legacy-sidecar-index-to-agent-sqlite",
   label: "Memory Core legacy memory index sidecar",
+  async collectBackupResources(params) {
+    const sources = await collectLegacyMemorySidecarSources(params);
+    const resources: Array<{ path: string; kind: "sqlite" | "file" }> = [];
+    for (const source of sources) {
+      resources.push({ path: source.agentDatabasePath, kind: "sqlite" });
+      for (const sourcePath of await existingLegacySidecarPaths(source.legacyPath)) {
+        // Header-based capture recognizes real SQLite files without opening empty
+        // or malformed legacy placeholders as databases.
+        resources.push(
+          { path: sourcePath, kind: "file" },
+          { path: `${sourcePath}.migrated`, kind: "file" },
+        );
+      }
+      // Failed imports can preserve a deterministic retry copy in core memory storage.
+      for (const name of [
+        `${source.agentId}.sqlite`,
+        `${source.agentId}.retry-${crypto.createHash("sha256").update(path.resolve(source.legacyPath)).digest("hex").slice(0, 12)}.sqlite`,
+      ]) {
+        for (const suffix of LEGACY_MEMORY_SIDECAR_SUFFIXES) {
+          resources.push({
+            path: path.join(params.stateDir, "memory", `${name}${suffix}`),
+            kind: "file",
+          });
+        }
+      }
+    }
+    return resources;
+  },
   async detectLegacyState(params) {
     const sources = await collectLegacyMemorySidecarSources(params);
     if (sources.length === 0) {
@@ -595,6 +623,8 @@ function createQmdRetirementMigration(kind: "workspace" | "locks"): PluginDoctor
       : "memory-core-qmd-file-locks-to-sqlite-leases",
     label: workspace ? "Memory Core retired QMD workspaces" : "Memory Core retired QMD file locks",
     ...(workspace ? { doctorOnly: true } : {}),
+    // Retirement removes only empty directories or disposable stale coordination locks.
+    collectBackupResources: () => [],
     async detectLegacyState(params) {
       const paths = await collect(params.stateDir);
       return paths.length > 0

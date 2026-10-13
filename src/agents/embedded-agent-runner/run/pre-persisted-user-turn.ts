@@ -3,6 +3,7 @@ import type { AgentMessage } from "../../../../packages/agent-core/src/types.js"
 import type { SessionTranscriptWriteScope } from "../../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
 import { readSessionTranscriptAnchorsAsync } from "../../../config/sessions/session-transcript-anchor-read.js";
+import type { SessionTranscriptAnchorFacts } from "../../../config/sessions/session-transcript-anchor-read.types.js";
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../../config/sessions/session-transcript-read-source.js";
 import type { TranscriptEntryAnchor } from "../../../config/sessions/transcript-entry-anchor.js";
@@ -62,11 +63,12 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   }
   return (
     message.stopReason === "toolUse" ||
-    (message.stopReason === "aborted" &&
-      (message.errorCode !== undefined
-        ? message.errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE
-        : message.errorMessage === AGENT_RUN_RESTART_ABORT_ERROR) &&
-      message.content.every((part) => part.type === "text" && part.text === ""))
+    ((message.stopReason === "aborted" || message.stopReason === "error") &&
+      (message.errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE ||
+        (message.stopReason === "aborted" &&
+          message.errorCode === undefined &&
+          message.errorMessage === AGENT_RUN_RESTART_ABORT_ERROR &&
+          message.content.every((part) => part.type === "text" && part.text === ""))))
   );
 }
 
@@ -215,29 +217,33 @@ export async function preparePersistedCurrentUserTurn(params: {
     reader.assertCurrent();
   };
   const binding = reader.incognitoBinding;
-  const incognito = binding && {
-    actor: binding.actor,
-    authority: { assertCurrent },
-    target: { sessionKey: scope.sessionKey, sessionId: scope.sessionId },
-  };
+  const incognito =
+    binding && !("kind" in binding)
+      ? {
+          actor: binding.actor,
+          authority: { assertCurrent },
+          target: { sessionKey: scope.sessionKey, sessionId: scope.sessionId },
+        }
+      : undefined;
   const withSource = <T>(
     signal: AbortSignal | undefined,
     operation: (target: typeof scope, assertSource: () => void) => Promise<T>,
   ): Promise<T> => {
     assertCurrent();
     const native = () => operation(scope, assertCurrent);
-    return binding
-      ? binding.actor.sessions.withSharedState(native)
-      : withSessionTranscriptReadSource(
-          scope,
-          native,
-          ({ scope: captured, assertCurrent: assertSource }) =>
-            operation(
-              { ...scope, agentId: captured.agentId, storePath: captured.storePath },
-              assertSource,
-            ),
-          signal,
-        );
+    if (binding) {
+      return "kind" in binding ? native() : binding.actor.sessions.withSharedState(native);
+    }
+    return withSessionTranscriptReadSource(
+      scope,
+      native,
+      ({ scope: captured, assertCurrent: assertSource }) =>
+        operation(
+          { ...scope, agentId: captured.agentId, storePath: captured.storePath },
+          assertSource,
+        ),
+      signal,
+    );
   };
   const validate = async (
     target: typeof scope,
@@ -250,39 +256,47 @@ export async function preparePersistedCurrentUserTurn(params: {
     assertCurrent();
     const allowInitial = !prepared && Boolean(initialWriter) && !initialWriter?.committedFence;
     let accepted = false;
-    await readSessionTranscriptAnchorsAsync(
-      target,
-      {
-        entryIds: prepared ? [prepared.entryId] : [],
-        replayValidation: {
-          expectedLifecycleRevision: scope.expectedLifecycleRevision,
-          expectedWriterRunId: scope.expectedWriterRunId,
-          allowInitial,
-          admission: resolveSessionTranscriptReadFence(target),
+    const selection = {
+      entryIds: prepared ? [prepared.entryId] : [],
+      replayValidation: {
+        expectedLifecycleRevision: scope.expectedLifecycleRevision,
+        expectedWriterRunId: scope.expectedWriterRunId,
+        allowInitial,
+        admission: resolveSessionTranscriptReadFence(target),
+      },
+      ...(prepared ? { contextValidation: { version: prepared.version } } : {}),
+    };
+    const onRead = (facts: SessionTranscriptAnchorFacts) => {
+      assertSource();
+      assertCurrent();
+      prepared?.assertCurrent();
+      if (
+        facts.replayValidated !== "current" &&
+        !(facts.replayValidated === "initial" && allowInitial && !initialWriter?.committedFence)
+      ) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
+      if (prepared && !facts.contextValidated) {
+        throw new Error("Persisted user turn changed before replay admission");
+      }
+      // Consume under the reader's writer FIFO and native mutation witness.
+      const anchor = facts.anchors[0];
+      consume(prepared && anchor ? { ...prepared, anchor } : undefined);
+      accepted = true;
+    };
+    if (binding && "kind" in binding) {
+      const facts = await binding.storage.read(
+        {
+          type: "session.history.anchors",
+          input: { ...selection, sessionId: target.sessionId },
         },
-        ...(prepared ? { contextValidation: { version: prepared.version } } : {}),
-      },
-      signal,
-      (facts) => {
-        assertSource();
-        assertCurrent();
-        prepared?.assertCurrent();
-        if (
-          facts.replayValidated !== "current" &&
-          !(facts.replayValidated === "initial" && allowInitial && !initialWriter?.committedFence)
-        ) {
-          throw new SessionTranscriptWriterClaimReboundError();
-        }
-        if (prepared && !facts.contextValidated) {
-          throw new Error("Persisted user turn changed before replay admission");
-        }
-        // Consume under the reader's writer FIFO and native mutation witness.
-        const anchor = facts.anchors[0];
-        consume(prepared && anchor ? { ...prepared, anchor } : undefined);
-        accepted = true;
-      },
-      incognito,
-    );
+        { ...binding.authority, assertCurrent },
+      );
+      signal?.throwIfAborted();
+      onRead(facts);
+    } else {
+      await readSessionTranscriptAnchorsAsync(target, selection, signal, onRead, incognito);
+    }
     assertCurrent();
     if (!accepted) {
       throw new Error("Persisted user turn changed before replay admission");

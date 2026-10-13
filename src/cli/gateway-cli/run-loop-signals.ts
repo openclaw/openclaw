@@ -275,42 +275,48 @@ export function createGatewayRunSignals(params: {
       const reason = eagerLifecycleRuntime.peekGatewayRestartReason();
       const deferRestartDrain = params.isRuntimeResetPending();
       eagerLifecycleRuntime.markGatewayRestartHandled();
-      enqueueSignal(
-        true,
-        (durableIntent, acceptedAtMs) => {
-          const restartIntent = durableIntent
-            ? { ...durableIntent, ...(localIntent?.successorOwner ? localIntent : {}) }
-            : localIntent;
-          if (!durableIntent && !authorized) {
-            if (!eagerLifecycleRuntime.isGatewayRestartExternallyAllowed()) {
-              gatewayLog.warn("SIGUSR2 restart ignored (not authorized; commands.restart=false).");
-              gatewayLog.warn(
-                "An unauthorized SIGUSR2 restart signal was received and ignored. " +
-                  "If a pending gateway restart needs to be applied, run `openclaw gateway restart` " +
-                  "or restart the gateway through your service manager.",
-              );
-              return;
-            }
-            if (params.isShuttingDown()) {
-              gatewayLog.info("received SIGUSR2 during shutdown; ignoring");
-              return;
-            }
-            eagerLifecycleRuntime.abortPendingChannelReloads();
-            eagerLifecycleRuntime.scheduleGatewayRestart({ delayMs: 0, reason: "SIGUSR2" });
+      const handleRestart = (durableIntent: GatewayRestartIntent | null, acceptedAtMs: number) => {
+        const restartIntent = durableIntent
+          ? { ...durableIntent, ...(localIntent?.successorOwner ? localIntent : {}) }
+          : localIntent;
+        if (!durableIntent && !authorized) {
+          if (!eagerLifecycleRuntime.isGatewayRestartExternallyAllowed()) {
+            gatewayLog.warn("SIGUSR2 restart ignored (not authorized; commands.restart=false).");
+            gatewayLog.warn(
+              "An unauthorized SIGUSR2 restart signal was received and ignored. " +
+                "If a pending gateway restart needs to be applied, run `openclaw gateway restart` " +
+                "or restart the gateway through your service manager.",
+            );
+            return;
+          }
+          if (params.isShuttingDown()) {
+            gatewayLog.info("received SIGUSR2 during shutdown; ignoring");
             return;
           }
           eagerLifecycleRuntime.abortPendingChannelReloads();
-          request(
-            "restart",
-            "SIGUSR2",
-            restartIntent?.reason ?? (durableIntent ? "gateway.restart" : reason),
-            restartIntent ?? undefined,
-            undefined,
-            { acceptedAtMs, deferRestartDrain },
-          );
-        },
-        (error) => restartSignalFailed(error, false),
-      );
+          eagerLifecycleRuntime.scheduleGatewayRestart({ delayMs: 0, reason: "SIGUSR2" });
+          return;
+        }
+        eagerLifecycleRuntime.abortPendingChannelReloads();
+        request(
+          "restart",
+          "SIGUSR2",
+          restartIntent?.reason ?? (durableIntent ? "gateway.restart" : reason),
+          restartIntent ?? undefined,
+          undefined,
+          { acceptedAtMs, deferRestartDrain },
+        );
+      };
+      enqueueSignal(true, handleRestart, (error, acceptedAtMs) => {
+        if (!authorized) {
+          restartSignalFailed(error, false);
+          return;
+        }
+        gatewayLog.warn(
+          `Restart intent could not be read; continuing the authorized local restart: ${formatErrorMessage(error)}`,
+        );
+        handleRestart(null, acceptedAtMs);
+      });
     } catch (err) {
       restartSignalFailed(err);
     }

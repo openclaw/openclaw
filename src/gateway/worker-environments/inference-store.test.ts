@@ -27,7 +27,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { AcceptedWorkerInferenceSessionDrain } from "./inference-control-internal.js";
 import {
   createWorkerInferenceStore,
@@ -35,11 +35,7 @@ import {
   type WorkerInferenceTurnInput,
 } from "./inference-store.js";
 import { createWorkerInferenceStoreKernel } from "./inference-store.kernel.js";
-import {
-  createWorkerInferenceManager,
-  type WorkerInferenceExecutor,
-  type WorkerInferenceSink,
-} from "./inference.js";
+import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
 import { serializeWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
@@ -327,7 +323,7 @@ describe("worker inference SQLite store", async () => {
               job.request.actor === target.actor &&
               reply.id === target.id &&
               !reply.ok &&
-              job.nativeDispatched &&
+              job.custody.dispatched &&
               refusal instanceof Error &&
               refusal.cause === ordinary
             ) {
@@ -496,7 +492,7 @@ describe("worker inference SQLite store", async () => {
           .mockImplementation((slot, reply, owner) => {
             if (
               slot.current?.request.type === "execute" &&
-              slot.current.nativeDispatched &&
+              slot.current.custody.dispatched &&
               reply.ok &&
               !reply.transfer &&
               !reply.input

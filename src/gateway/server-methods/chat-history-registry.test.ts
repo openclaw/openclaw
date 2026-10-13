@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntrySync,
@@ -19,6 +20,7 @@ import type { RespondFn } from "./types.js";
 describe("chat history registry projection", () => {
   it("keeps an empty history available across unrelated catalog publication", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const context = await createHistoryReadContext();
       const prepare = sharingPreparation.prepareSessionMutationFacts;
       const probe = vi
@@ -55,6 +57,7 @@ describe("chat history registry projection", () => {
 
   it("asks for a reload when an absent session is created during the read", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const context = await createHistoryReadContext();
       const scope = { agentId: "main", sessionKey: "agent:main:created-mid-read" };
       const prepare = sharingPreparation.prepareSessionMutationFacts;
@@ -97,6 +100,7 @@ describe("chat history registry projection", () => {
           session: { scope: sessionScope, mainKey: "home" },
         } satisfies OpenClawConfig;
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         for (const agentId of ["main", "work"]) {
           const scope = {
             agentId,
@@ -157,6 +161,7 @@ describe("chat history registry projection", () => {
       await withOpenClawTestState(
         { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
         async () => {
+          setRuntimeConfigSnapshot({});
           const scope = {
             agentId: "main",
             sessionKey: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001",

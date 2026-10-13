@@ -16,13 +16,7 @@ import { startUpdateRunWatcher, wakeUpdateRunWatcher } from "./update-run-watche
 const ledger = vi.hoisted(() => ({
   run: undefined as UpdateRunRecord | undefined,
   reads: vi.fn<(kind: "run" | "status") => void>(),
-  reconcile:
-    vi.fn<
-      (
-        input: { signal?: AbortSignal },
-        onCandidate?: (runId: string) => void,
-      ) => Promise<UpdateRunRecord[]>
-    >(),
+  reconcile: vi.fn<(input: { signal?: AbortSignal }) => Promise<UpdateRunRecord[]>>(),
   notice: vi.fn(async (_run: UpdateRunRecord) => {}),
   sentinel: vi.fn<() => Promise<RestartSentinelPayload | null>>(),
 }));
@@ -236,123 +230,81 @@ describe("Gateway update run watcher", () => {
     }
   });
 
-  it.each(["successor completed", "newer correction"] as const)(
-    "publishes a held verification result once while preserving %s",
-    async (scenario) => {
-      const first = beginRun();
-      first.phase = "verifying";
-      first.steps = [{ step: "notice:ack", status: "completed" }];
-      const initialBroadcast = createDeferredCore();
-      const selectCandidate = createDeferredCore();
-      const candidateSelected = createDeferredCore();
-      const verification = createDeferredCore<UpdateRunRecord[]>();
-      const nextCycle = createDeferredCore();
-      const firstNotice = createDeferredCore();
-      const successorNotice = createDeferredCore();
-      const correctionNotice = createDeferredCore();
-      ledger.reconcile
-        .mockImplementationOnce(async (_input, onCandidate) => {
-          await selectCandidate.promise;
-          onCandidate?.(first.runId);
-          candidateSelected.resolve();
-          return await verification.promise;
-        })
-        .mockImplementationOnce(async () => {
-          nextCycle.resolve();
-          return [];
-        });
-      ledger.notice.mockImplementation(async (run) => {
-        if (run.runId !== first.runId) {
-          successorNotice.resolve();
-        } else if (run.updatedAtMs === 2) {
-          firstNotice.resolve();
-        } else {
-          correctionNotice.resolve();
-        }
+  it("publishes a newer correction returned by held verification", async () => {
+    const first = beginRun();
+    first.phase = "verifying";
+    first.steps = [{ step: "notice:ack", status: "completed" }];
+    const initialBroadcast = createDeferredCore();
+    const verificationStarted = createDeferredCore();
+    const verification = createDeferredCore<UpdateRunRecord[]>();
+    const nextCycle = createDeferredCore();
+    const firstNotice = createDeferredCore();
+    const correctionNotice = createDeferredCore();
+    ledger.reconcile
+      .mockImplementationOnce(async () => {
+        verificationStarted.resolve();
+        return await verification.promise;
+      })
+      .mockImplementationOnce(async () => {
+        nextCycle.resolve();
+        return [];
       });
-      const broadcast = vi.fn().mockImplementationOnce(() => initialBroadcast.resolve());
-      watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
-      try {
-        await initialBroadcast.promise;
-        const terminal: UpdateRunRecord = {
-          ...first,
-          phase: "finished",
-          status: scenario === "newer correction" ? "failed" : "succeeded",
-          reason: scenario === "newer correction" ? "abandoned" : null,
-          updatedAtMs: 2,
-          finishedAtMs: 2,
-        };
-        if (scenario === "newer correction") {
-          // This cycle selects the already abandoned row and may later correct it.
-          ledger.run = terminal;
-        }
-        selectCandidate.resolve();
-        await candidateSelected.promise;
-        // The row is committed, but this verification cycle still holds its reply.
-        ledger.run = terminal;
-        await clock.advanceBy(2_000);
-        await firstNotice.promise;
-
-        if (scenario === "successor completed") {
-          const successorBroadcast = createDeferredCore();
-          broadcast.mockImplementationOnce(() => successorBroadcast.resolve());
-          const successor = beginRun("aa688074-cb7a-4fb8-ae6a-e099e37e1d20");
-          successor.steps = [{ step: "notice:ack", status: "completed" }];
-          wakeUpdateRunWatcher();
-          await successorBroadcast.promise;
-          ledger.run = {
-            ...successor,
-            phase: "finished",
-            status: "succeeded",
-            updatedAtMs: 4,
-            finishedAtMs: 4,
-          };
-          await clock.advanceBy(2_000);
-          await successorNotice.promise;
-        }
-
-        const settled: UpdateRunRecord =
-          scenario === "newer correction"
-            ? { ...terminal, status: "succeeded", reason: null, updatedAtMs: 3, finishedAtMs: 3 }
-            : terminal;
-        if (scenario === "newer correction") {
-          ledger.run = settled;
-        }
-        verification.resolve([settled]);
-        if (scenario === "newer correction") {
-          await correctionNotice.promise;
-        }
-        // A follow-up cycle starts only after the held result's scan has completed.
-        await nextCycle.promise;
-        await watcher.stop();
-        const revisions = scenario === "newer correction" ? [2, 3] : [2];
-        expect(
-          broadcast.mock.calls
-            .filter(([, run]) => run.runId === first.runId && run.status !== "running")
-            .map(([, run]) => run.updatedAtMs),
-        ).toEqual(revisions);
-        expect(
-          ledger.notice.mock.calls
-            .filter(([run]) => run.runId === first.runId)
-            .map(([run]) => run.updatedAtMs),
-        ).toEqual(revisions);
-        if (scenario === "successor completed") {
-          expect(
-            broadcast.mock.calls.filter(
-              ([, run]) => run.runId !== first.runId && run.status !== "running",
-            ),
-          ).toHaveLength(1);
-          expect(
-            ledger.notice.mock.calls.filter(([run]) => run.runId !== first.runId),
-          ).toHaveLength(1);
-        }
-      } finally {
-        selectCandidate.resolve();
-        verification.resolve([]);
-        await watcher.stop();
+    ledger.notice.mockImplementation(async (run) => {
+      if (run.runId !== first.runId) {
+        return;
       }
-    },
-  );
+      if (run.updatedAtMs === 2) {
+        firstNotice.resolve();
+      } else {
+        correctionNotice.resolve();
+      }
+    });
+    const broadcast = vi.fn().mockImplementationOnce(() => initialBroadcast.resolve());
+    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
+    try {
+      await initialBroadcast.promise;
+      await verificationStarted.promise;
+      const terminal: UpdateRunRecord = {
+        ...first,
+        phase: "finished",
+        status: "failed",
+        reason: "abandoned",
+        updatedAtMs: 2,
+        finishedAtMs: 2,
+      };
+      // The row is committed, but this verification cycle still holds its reply.
+      ledger.run = terminal;
+      await clock.advanceBy(2_000);
+      await firstNotice.promise;
+
+      const settled: UpdateRunRecord = {
+        ...terminal,
+        status: "succeeded",
+        reason: null,
+        updatedAtMs: 3,
+        finishedAtMs: 3,
+      };
+      ledger.run = settled;
+      verification.resolve([settled]);
+      await correctionNotice.promise;
+      // A follow-up cycle starts only after the held result's scan has completed.
+      await nextCycle.promise;
+      await watcher.stop();
+      expect(
+        broadcast.mock.calls
+          .filter(([, run]) => run.runId === first.runId && run.status !== "running")
+          .map(([, run]) => run.updatedAtMs),
+      ).toEqual([2, 3]);
+      expect(
+        ledger.notice.mock.calls
+          .filter(([run]) => run.runId === first.runId)
+          .map(([run]) => run.updatedAtMs),
+      ).toEqual([2, 3]);
+    } finally {
+      verification.resolve([]);
+      await watcher.stop();
+    }
+  });
 
   it("wakes for admission, broadcasts changed rows, and stops polling after the terminal event", async () => {
     const initialRead = nextLedgerRead("status");

@@ -702,25 +702,28 @@ it.each(["local", "repository"] as const)(
         await f.seed(sessionKey, f.profile.id, { repositoryWorkspaceId: repository.workspaceId });
       }
       await f.subscribe();
-      for (let index = 1; index < 20; index++) {
-        await f.subscribe([sessionKey], f.addReader(`warm-reader-${index}`).client);
-      }
-      await f.subscriptions.pollNow();
       const statements = observeSqliteReadSql(StatementSync.prototype);
-      f.load.mockClear();
       try {
+        for (let index = 1; index < 20; index++) {
+          await f.subscribe([sessionKey], f.addReader(`warm-reader-${index}`).client);
+        }
+        await f.subscriptions.pollNow();
+        expect(statements.queries.filter((sql) => /\buser_profiles\b/i.test(sql))).toEqual([]);
+        statements.queries.length = 0;
+        f.load.mockClear();
         for (let index = 0; index < 3; index++) {
           await f.subscriptions.pollNow();
         }
         const queries = statements.queries.map((sql) => sql.toLowerCase());
         expect({
           sessionReads: queries.filter((sql) => sql.includes("session_nodes")).length,
+          profileReads: queries.filter((sql) => sql.includes("user_profiles")).length,
           repositoryReads: queries.filter((sql) => sql.includes("session_repository_workspaces"))
             .length,
           freshnessReads: queries.filter(
             (sql) => sql.includes("pragma") || sql.includes("cache_generation"),
           ).length,
-        }).toEqual({ sessionReads: 0, repositoryReads: 0, freshnessReads: 0 });
+        }).toEqual({ sessionReads: 0, profileReads: 0, repositoryReads: 0, freshnessReads: 0 });
         expect(f.load).toHaveBeenCalledTimes(3);
         expect(frames(f.socket)).toEqual([expectedFrame(sessionKey)]);
       } finally {

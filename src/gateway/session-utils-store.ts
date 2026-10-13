@@ -22,7 +22,7 @@ import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import { resolveConfiguredPrimaryModelForAgent } from "../agents/utility-model.js";
-import { insideGitCheckout } from "../agents/worktrees/git.js";
+import { hasWorkspaceGitCheckout } from "../agents/workspace-git.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
@@ -133,7 +133,6 @@ function loadSessionEntryWithMode(
   sessionKey: string,
   opts:
     | (Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env"> & {
-        includeStoreChildEntries?: boolean;
         targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
       })
     | undefined,
@@ -151,7 +150,6 @@ function loadSessionEntryWithMode(
     targetDiscoveryCache: opts?.targetDiscoveryCache,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-    ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
   });
   const storePath = target.storePath;
   const store = target.store;
@@ -191,7 +189,6 @@ export function loadGatewaySessionEntry(
 export function loadGatewaySessionEntryReadOnly(
   sessionKey: string,
   opts?: {
-    includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
   } & Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env">,
   cfg?: OpenClawConfig,
@@ -218,7 +215,9 @@ export async function withGatewaySessionEntry<T>(
   cfg: OpenClawConfig = getRuntimeConfig(),
   assertConfigCurrent?: () => void,
 ): Promise<T> {
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
+    { sessionKey, agentId: opts?.agentId },
+  ]);
   const assertConfig = assertConfigCurrent ?? (() => assertRoutingCurrent(getRuntimeConfig()));
   return withGatewaySessionStoreTarget(
     { cfg, key: sessionKey, ...opts },
@@ -250,11 +249,17 @@ export async function withQualifiedGatewaySessionEntry<T>(params: {
   logicalStorePath: string;
   env?: NodeJS.ProcessEnv;
   includeMembership: boolean;
+  transcript?: import("../config/sessions/session-entry-read.types.js").SessionExactEntriesWorkerRequest["transcript"];
+  includeLifecycle?: boolean;
   consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
   assertConfigCurrent: () => void;
 }): Promise<T> {
   return withQualifiedGatewaySessionStoreTarget({
     ...params,
+    readOptions: {
+      transcript: params.transcript,
+      lifecycleSessionKey: params.includeLifecycle ? params.target.storeKey : undefined,
+    },
     consume: (target, membership, assertSourceCurrent) => {
       const canonicalMatch = findCanonicalStoreMatch(target.store, target.storeKeys);
       // Qualification retains the selected store key even before its row exists.
@@ -474,7 +479,7 @@ export async function listAgentsForGateway(
     const workspace = resolveAgentWorkspaceDir(cfg, id);
     // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
     // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
-    const workspaceGit = insideGitCheckout(workspace);
+    const workspaceGit = hasWorkspaceGitCheckout(workspace);
     const agent = Object.assign(
       {
         id,

@@ -97,7 +97,7 @@ export async function executeSessionPatchMutations(params: {
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);
   const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
-  const discovery = discoverSessionPatchTargets(cfg, params.targets);
+  const discovery = await discoverSessionPatchTargets(cfg, params.targets);
   if (!discovery.ok) {
     return discovery;
   }
@@ -286,6 +286,12 @@ export async function executeSessionPatchMutations(params: {
               const first = group[0]!;
               const storage = preparation.storage.get(first.index);
               const groupTiming = params.diagnostics?.scope("snapshot");
+              const runtimeSelectionReleases: Array<() => void> = [];
+              const releaseRuntimeSelections = () => {
+                for (const release of runtimeSelectionReleases.splice(0)) {
+                  release();
+                }
+              };
               try {
                 // Keep every resolver candidate for queued alias revalidation. Label
                 // uniqueness needs only the requested label's owners, not the full store.
@@ -316,6 +322,7 @@ export async function executeSessionPatchMutations(params: {
                   admission: "admitted" | "detached",
                   catalogPreparation?: SessionPatchCatalogResult,
                 ): Promise<GroupMutationOperation> => {
+                  releaseRuntimeSelections();
                   createdSessions.length = 0;
                   const workingStore = Object.fromEntries(
                     entries.flatMap(({ entry, sessionKey }) =>
@@ -439,23 +446,18 @@ export async function executeSessionPatchMutations(params: {
                         continue;
                       }
                       const validateSandbox = sandboxRuntime
-                        ? () =>
-                            sandboxRuntime.validateSessionPatchSandboxChange({
-                              client,
-                              context: params.context,
-                              patch: target.fullPatch,
-                              existingEntry,
-                              entry: projected.entry,
-                              sessionKey: primaryKey,
-                              storePath: target.storePath,
-                              lifecycleIdentities: target.lifecycleIdentities,
-                            })
+                        ? await sandboxRuntime.prepareSessionPatchSandboxChange({
+                            client,
+                            context: params.context,
+                            patch: target.fullPatch,
+                            existingEntry,
+                            entry: projected.entry,
+                            sessionKey: primaryKey,
+                            storePath: target.storePath,
+                            lifecycleIdentities: target.lifecycleIdentities,
+                          })
                         : undefined;
-                      const sandboxError = validateSandbox?.();
-                      if (sandboxError) {
-                        projectedOutcomes.push({ ok: false, error: sandboxError });
-                        continue;
-                      }
+                      groupTiming?.mark("runtimeSelection");
                       const runtimeSelection =
                         await modelSelection.prepareSessionPatchRuntimeSelection({
                           cfg,
@@ -468,9 +470,19 @@ export async function executeSessionPatchMutations(params: {
                           validateModelSelection: projected.validateModelSelection,
                           placement: { context: params.context, sessionKey: primaryKey },
                         });
+                      groupTiming?.mark("projection");
                       if (!runtimeSelection.ok) {
                         projectedOutcomes.push(runtimeSelection);
                         continue;
+                      }
+                      if (runtimeSelection.release) {
+                        const release = runtimeSelection.release;
+                        runtimeSelectionReleases.push(() => {
+                          if (runtimeSelection.validate) {
+                            commitGuards.delete(runtimeSelection.validate);
+                          }
+                          release();
+                        });
                       }
                       const authorizationFailure = mutationTargets[target.index]!.commitGuard();
                       if (authorizationFailure) {
@@ -484,7 +496,9 @@ export async function executeSessionPatchMutations(params: {
                           existingEntry.archivedAt !== undefined ||
                           target.fullPatch.archived)
                       ) {
-                        const worktreeTiming = params.diagnostics?.scope("worktree");
+                        const worktreeTiming = params.diagnostics?.scope(
+                          target.fullPatch.archived ? "archivePlacement" : "worktree",
+                        );
                         let transition: ArchiveTransition;
                         try {
                           transition = await prepareSessionPatchArchiveTransition({
@@ -543,6 +557,7 @@ export async function executeSessionPatchMutations(params: {
                             sessionKey: primaryKey,
                             storePath: target.storePath,
                             sessionId: replacement.outcome.entry.sessionId,
+                            entry: replacement.outcome.entry,
                             lifecycleRevision: replacement.outcome.entry.lifecycleRevision,
                           });
                         }
@@ -621,6 +636,7 @@ export async function executeSessionPatchMutations(params: {
                   };
                 }
               } finally {
+                releaseRuntimeSelections();
                 groupTiming?.finish();
               }
             });
@@ -659,6 +675,7 @@ export async function executeSessionPatchMutations(params: {
     context: params.context,
     callerScopes,
     callerCanManageCron: callerIsAdmin,
+    diagnostics: params.diagnostics,
     targets: activePrepared.flatMap((target) => {
       const outcome = outcomes[target.index];
       return outcome?.ok && outcome.applied

@@ -13,7 +13,7 @@ import { Chat } from "@mistralai/mistralai/sdk/chat";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { getAiTransportHost } from "../host.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
-import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import {
@@ -48,6 +48,7 @@ import { requireApiKey } from "../utils/required-api-key.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { boundResponseBody } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { applyMistralUsage } from "./mistral-usage.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
 import {
@@ -300,23 +301,6 @@ function resolveMistralPromptCacheKey(options?: MistralOptions): string | undefi
   return options?.promptCacheKey?.trim() || options?.sessionId?.trim() || undefined;
 }
 
-function readMistralCachedPromptTokens(usage: unknown, promptTokens: number): number {
-  const record = usage as {
-    promptTokensDetails?: { cachedTokens?: unknown } | null;
-    prompt_tokens_details?: { cached_tokens?: unknown } | null;
-    cachedTokens?: unknown;
-    cached_tokens?: unknown;
-  };
-  const rawCachedTokens =
-    record.promptTokensDetails?.cachedTokens ??
-    record.prompt_tokens_details?.cached_tokens ??
-    record.cachedTokens ??
-    record.cached_tokens;
-  const cachedTokens =
-    typeof rawCachedTokens === "number" && Number.isFinite(rawCachedTokens) ? rawCachedTokens : 0;
-  return Math.min(promptTokens, Math.max(0, cachedTokens));
-}
-
 async function consumeChatStream(
   model: Model<"mistral-conversations">,
   output: AssistantMessage,
@@ -329,7 +313,7 @@ async function consumeChatStream(
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
   type ToolBlock = {
-    block: ToolCall & { partialJson?: string };
+    block: ToolCall;
     contentIndex: number;
     preview: ToolArgumentPreviewSchedule;
     explicitIds: Set<string>;
@@ -474,16 +458,12 @@ async function consumeChatStream(
     }
 
     if (chunk.usage) {
-      const promptTokens = chunk.usage.promptTokens || 0;
-      const cachedPromptTokens = readMistralCachedPromptTokens(chunk.usage, promptTokens);
-      output.usage.input = Math.max(0, promptTokens - cachedPromptTokens);
-      output.usage.output = chunk.usage.completionTokens || 0;
-      output.usage.cacheRead = cachedPromptTokens;
-      output.usage.cacheWrite = 0;
-      output.usage.totalTokens =
-        chunk.usage.totalTokens ||
-        output.usage.input + output.usage.output + output.usage.cacheRead;
-      calculateCost(model, output.usage);
+      applyMistralUsage(
+        output.usage,
+        chunk.usage,
+        model,
+        Boolean(terminalFinishReason || chunk.choices[0]?.finishReason),
+      );
     }
 
     const choice = chunk.choices[0];

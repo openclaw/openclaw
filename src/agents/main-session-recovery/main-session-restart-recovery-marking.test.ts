@@ -6,10 +6,13 @@ import {
   admitReplyTurn,
   runWithReplyOperationLifecycleAdmission,
 } from "../../auto-reply/reply/reply-turn-admission.js";
+import { captureRuntimeConfigAsyncReader, setRuntimeConfigSnapshot } from "../../config/config.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryReader from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
+import * as sessionStoreWorker from "../../gateway/session-utils-store-worker.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
@@ -23,6 +26,7 @@ import {
   retainQueuedAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -42,6 +46,7 @@ import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agen
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import {
   markRestartAbortedMainSessions,
@@ -54,44 +59,119 @@ import {
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
 
-it("reports why supplied shutdown candidates could not be marked", async () => {
+it("keeps retained subagent interruptions out of main-session startup worker admission", async () => {
   const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const sessionKey = "agent:main:main";
   await replaceSessionEntry(
     { storePath, sessionKey },
-    {
-      sessionId: "main-session",
-      updatedAt: 1,
-      lifecycleRunId: "main-run",
-    },
+    { sessionId: "main-session", updatedAt: 1, abortedLastRun: true },
   );
-  const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
+  const summaries = await sessionEntryReader.readSessionEntrySummariesInWorker({ storePath });
+  const retained = Array.from({ length: 4_500 }, (_, index) => ({
+    sessionKey: `agent:main:subagent:retained-${index}`,
+    entry: { sessionId: `retained-${index}`, updatedAt: 1, abortedLastRun: true },
+  }));
+  const read = vi
+    .spyOn(sessionEntryReader, "readSessionEntrySummariesInWorker")
+    .mockResolvedValue([...retained, ...summaries]);
+  const resolveTarget = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
+  const lookup = vi
+    .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
+    .mockImplementation((params) => {
+      if (params.key !== sessionKey) {
+        return Promise.reject(new Error("worker task capacity reached"));
+      }
+      return resolveTarget(params);
+    });
+  const warn = vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation(() => {});
   try {
     expect(
-      await markRestartAbortedMainSessions({
+      await markStartupOrphanedMainSessionsForRecovery({
         cfg: { session: { store: storePath } },
         stateDir,
-        resolveGatewayContext: () => undefined,
-        activeRuns: [
-          {
-            sessionKey,
-            sessionId: "main-session",
-            runId: "main-run",
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          },
-        ],
-        isActiveRun: () => false,
       }),
-    ).toEqual({ marked: 0, skipped: 0 });
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("activeRuns=1 skipped=0 skipReason=owner_changed"),
-    );
-    expect(loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery).toBeUndefined();
+    ).toEqual({ marked: 1, skipped: 0 });
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      abortedLastRun: true,
+      mainRestartRecovery: { chargedAttempts: 0 },
+    });
+    expect(lookup.mock.calls.length).toBe(1);
+    expect(lookup.mock.calls[0]?.[0].key).toBe(sessionKey);
   } finally {
+    read.mockRestore();
+    lookup.mockRestore();
     warn.mockRestore();
   }
 });
+
+it.each([false, true])(
+  "reports skipped shutdown sessions when another is marked: %s",
+  async (markOther) => {
+    const stateDir = sessionDirs.make();
+    const storePath = path.join(stateDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry(
+      { storePath, sessionKey },
+      {
+        sessionId: "main-session",
+        updatedAt: 1,
+        lifecycleRunId: "main-run",
+      },
+    );
+    const otherKey = "agent:main:other";
+    if (markOther) {
+      await replaceSessionEntry(
+        { storePath, sessionKey: otherKey },
+        { sessionId: "other-session", updatedAt: 1, lifecycleRunId: "other-run" },
+      );
+    }
+    const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
+    try {
+      expect(
+        await markRestartAbortedMainSessions({
+          cfg: { session: { store: storePath } },
+          stateDir,
+          resolveGatewayContext: () => undefined,
+          activeRuns: [
+            {
+              sessionKey,
+              sessionId: "main-session",
+              runId: "main-run",
+              lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            },
+            {
+              sessionKey: "agent:main:missing",
+              sessionId: "missing-session",
+              runId: "missing-run",
+              lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            },
+            ...(markOther
+              ? [
+                  {
+                    sessionKey: otherKey,
+                    sessionId: "other-session",
+                    runId: "other-run",
+                    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+                  },
+                ]
+              : []),
+          ],
+          isActiveRun: (run) => run.runId !== "main-run",
+        }),
+      ).toEqual({ marked: markOther ? 1 : 0, skipped: 0 });
+      expect(warn).toHaveBeenCalledWith(
+        'skipped restart recovery session: {"sessionKey":"agent:main:main","reason":"owner_changed"}',
+      );
+      expect(warn).toHaveBeenCalledWith(
+        'skipped restart recovery session: {"sessionKey":"agent:main:missing","reason":"no_matching_session"}',
+      );
+      expect(loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
+  },
+);
 
 it("keeps healthy stores recoverable when an earlier startup mark fails", async () => {
   await withOpenClawTestState({ label: "recovery-mark-failure" }, async (state) => {
@@ -107,6 +187,7 @@ it("keeps healthy stores recoverable when an earlier startup mark fails", async 
       talk: { agentId: "main" },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     for (const agentId of ["main", "worker"]) {
       const sessionKey = `agent:${agentId}:main`;
       const sessionId = `${agentId}-session`;
@@ -178,6 +259,7 @@ it.each(["before", "after"] as const)(
   "preserves a registry-owned writer registered %s orphan planning",
   async (registration) => {
     await withOpenClawTestState({ label: "recovery-live-writer" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const sessionKey = "agent:main:main";
       const sessionId = "owned-session";
       const runId = "owned-run";
@@ -236,6 +318,7 @@ it.each(["before", "after"] as const)(
 
 it("recovers an orphan after its owner releases retained run metadata", async () => {
   await withOpenClawTestState({ label: "recovery-retained-run" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const sessionKey = "agent:main:main";
     const sessionId = "retained-session";
     const runId = "retained-run";
@@ -285,6 +368,7 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
       },
       talk: { agentId: "main" },
     };
+    setRuntimeConfigSnapshot(cfg);
     for (const agentId of ["main", "cleaner"]) {
       await replaceSessionEntry(
         { agentId, sessionKey: `agent:${agentId}:main` },
@@ -303,6 +387,7 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
       "PRAGMA user_version = 16; UPDATE schema_meta SET agent_id = 'main', schema_version = 16;",
     );
     copy.close();
+    revokeSqliteDatabaseAdmissionsForPath(copyPath);
     await assertOpenClawDatabasesReady({
       config: cfg,
       env: state.env,
@@ -391,7 +476,7 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
   }
 });
 
-it.each(["release", "completed", "rotation"] as const)(
+it.each(["release", "completed", "cancelled", "rotation"] as const)(
   "does not commit a restart mark when %s invalidates its owner after planning",
   async (change) => {
     const stateDir = sessionDirs.make();
@@ -400,6 +485,8 @@ it.each(["release", "completed", "rotation"] as const)(
     const sessionId = "closing";
     const resolveGatewayContext = () => undefined;
     let admission: SessionWorkAdmissionLease | undefined;
+    let cancelled = false;
+    const cancellation = createAgentRunDirectAbortError();
     const apply = sessionAccessor.applySessionEntryReplacements;
     let restoreSpy = () => {};
     try {
@@ -408,6 +495,8 @@ it.each(["release", "completed", "rotation"] as const)(
         scope: storePath,
         identities: [sessionKey, sessionId],
         resolveGatewayContext,
+        isSettling: () => cancelled,
+        getAbortReason: () => (cancelled ? cancellation : undefined),
         assertAllowed: () => {},
       });
       const spy = vi
@@ -419,6 +508,12 @@ it.each(["release", "completed", "rotation"] as const)(
               const prepared = await params.update(entries);
               if (change === "rotation") {
                 rotateAgentEventLifecycleGeneration();
+              } else if (change === "cancelled") {
+                cancelled = true;
+                sessionAccessor.replaceSessionEntrySync(
+                  { storePath, sessionKey },
+                  { sessionId, status: "killed", updatedAt: Date.now(), endedAt: 123 },
+                );
               } else {
                 admission?.release();
                 if (change === "completed") {
@@ -448,6 +543,12 @@ it.each(["release", "completed", "rotation"] as const)(
       if (change === "completed") {
         expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
           status: "done",
+          endedAt: 123,
+        });
+      }
+      if (change === "cancelled") {
+        expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+          status: "killed",
           endedAt: 123,
         });
       }

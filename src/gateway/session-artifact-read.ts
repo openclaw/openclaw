@@ -31,7 +31,7 @@ import {
   prepareArtifactDownloadResponse,
 } from "./artifact-download-projection.js";
 import { parseManagedOutgoingArtifactId } from "./managed-outgoing-artifact-id.js";
-import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
 import {
   type ArtifactRecord,
   mediaUrlValue,

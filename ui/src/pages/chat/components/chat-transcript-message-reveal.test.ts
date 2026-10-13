@@ -3,6 +3,8 @@
 import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import {
   installTranscriptDomMocks,
@@ -12,8 +14,19 @@ import {
 } from "./chat-transcript.test-support.ts";
 
 describe("chat transcript controller", () => {
-  beforeEach(installTranscriptDomMocks);
+  let flushFrames: () => void;
+  beforeEach(() => {
+    installTranscriptDomMocks();
+    flushFrames = stubAnimationFrames();
+  });
   afterEach(resetTranscriptTestDom);
+
+  async function commitLayout() {
+    flush();
+    await Promise.resolve();
+    flushFrames();
+    flush();
+  }
 
   it("retains a projected reply target until its row commits and prevents automatic follow from taking over", async () => {
     const update = createDeferred<boolean>();
@@ -54,10 +67,11 @@ describe("chat transcript controller", () => {
       expect(transcript.scrollToEnd({ source: "auto" })).toBe(false);
       update.resolve(true);
       await update.promise;
+      await commitLayout();
       expect(container.querySelector('[data-entry-id="original"]')).toBeNull();
 
       renderRows([original, tail]);
-      await Promise.resolve();
+      await commitLayout();
       expect(
         container
           .querySelector('[data-entry-id="original"]')
@@ -111,7 +125,7 @@ describe("chat transcript controller", () => {
         );
         renderRows(rows);
         if (interruption === "idle at end") {
-          vi.useFakeTimers();
+          vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
         }
         expect(transcript.revealMessage("first")).toBe(true);
         scrollTo.mockClear();
@@ -133,6 +147,7 @@ describe("chat transcript controller", () => {
         }
         update.resolve(true);
         await update.promise;
+        await commitLayout();
         expect(bubbles[0]?.classList.contains("chat-bubble--reply-target")).toBe(
           ["none", "idle at end"].includes(interruption),
         );

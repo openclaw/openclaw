@@ -5,6 +5,7 @@ import type { ServerUiPrefs, SyncedPrefKey } from "./server-prefs-state.ts";
 import {
   LAST_SEEN_KEY,
   parseStoredPrefs,
+  serializeStoredPrefs,
   readStorageState,
   writeStorage,
 } from "./server-prefs-storage.ts";
@@ -49,7 +50,7 @@ export function publishConfirmedPrefs(
   if (!Object.keys(navigationConfirmation).length) {
     delete next.navigationConfirmation;
   }
-  const raw = JSON.stringify(next);
+  const raw = serializeStoredPrefs(next);
   const persisted = writeStorage(LAST_SEEN_KEY, scope, raw);
   owner.confirmedPrefsFallback = {
     scope,

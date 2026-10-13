@@ -7,30 +7,37 @@ import {
 import {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
+  loadSqliteVecExtension,
   stopMemorySqliteWalMaintenance,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   assertTransactionUsable,
+  admitSqliteSchema,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
   requestSqliteWorkerOperationAdmission,
   readSqliteDatabasePendingWriteToken,
+  readSqliteDatabaseWriteTokenForPath,
   runSqliteImmediateTransactionSync,
+  runSqliteSingleStatementSync,
+  setSqliteBusyTimeout,
+  stageOpenClawAgentDatabaseSchemaExtension,
   supportsNodeSqliteExtensionLoading,
   tableExists,
+  withSqliteDatabaseWriteScope,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
-import { publishMemoryDatabaseTables, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
+import { publishMemoryDatabaseTables } from "./manager-db-kernel.js";
 import {
   clearMemoryEmbeddingCacheIdentities,
   countMemoryEmbeddingCache,
-  loadMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
+import { readMemoryIndex } from "./manager-index-read.js";
 import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheHeader,
@@ -49,21 +56,15 @@ import {
 } from "./manager-shadow-task.js";
 import {
   MemorySourceIndexKernel,
-  readMemorySourceChunks,
-  readMemorySourceHash,
   type MemorySourceIndexHeader,
   type MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
-import {
-  loadMemorySourceFileState,
-  refreshMemorySessionSourceState,
-} from "./manager-source-state.js";
+import { refreshMemorySessionSourceState } from "./manager-source-state.js";
 
 type PublicationConnection =
   | MemoryShadowConnection
   | {
       kind: "agent";
-      fileIdentity: MemoryShadowConnection["fileIdentity"];
       pragmas: Pick<MemoryShadowConnection["pragmas"], "busy_timeout" | "foreign_keys">;
     };
 
@@ -72,6 +73,7 @@ const agentConnectionPragmas = new WeakMap<
   DatabaseSync,
   Pick<MemoryShadowConnection["pragmas"], "busy_timeout" | "foreign_keys">
 >();
+const loadedExtensions = new WeakMap<DatabaseSync, string>();
 
 function failure(error: unknown): MemoryShadowFailure {
   return {
@@ -100,7 +102,6 @@ export function openExistingSqliteWorkerBackend(
   input: MemoryShadowConnection,
   context: { databasePath: string },
 ): Promise<SqliteWorkerBackend<MemoryPublicationOperations>> {
-  assertMemoryShadowIdentity(context.databasePath, input.fileIdentity);
   return openShadowBackend(context.databasePath, true, input);
 }
 
@@ -165,7 +166,6 @@ export function bindSqliteWorkerBackend(
     "kind" in input
       ? {
           kind: "agent",
-          fileIdentity: readMemoryShadowIdentity(context.databasePath),
           pragmas: pragmas!,
         }
       : input;
@@ -193,36 +193,33 @@ function createPublicationBackend(
   ownsConnection: boolean,
   admit: (stage: "transaction" | "commit") => void,
 ) {
-  const assertPath = () => assertMemoryShadowIdentity(databasePath, input.fileIdentity);
-  // One source owns this staging buffer until settlement. Large sources cost
-  // additional worker memory, but never turn transfer fragments into SQLite I/O.
+  // Agent handles are admitted by the database owner; private shadows are checked once on open.
+  if (!("kind" in input)) {
+    assertMemoryShadowIdentity(databasePath, input.fileIdentity);
+  }
+  // Each agent run binds its own backend; shadow runs use the private writer queue.
+  // Large sources stay in worker memory without per-fragment SQLite I/O.
   let staged:
     | ({
-        operation: string;
-        rows: number;
-        row: number;
-        part: number;
         fragments: MemoryPublicationFragment[];
       } & (
         | { kind: "source"; header: MemorySourceIndexHeader }
         | { kind: "cache"; header: MemoryEmbeddingCacheHeader }
       ))
     | undefined;
-  let loadedExtension: string | undefined;
   const loadExtension = (extensionPath: string | undefined) => {
-    if (extensionPath && extensionPath !== loadedExtension) {
+    if (extensionPath && extensionPath !== loadedExtensions.get(db)) {
       loadSqliteVecExtensionFromPath(db, extensionPath);
-      assertPath();
-      loadedExtension = extensionPath;
+      loadedExtensions.set(db, extensionPath);
     }
   };
-  assertPath();
   for (const [name, value] of Object.entries(input.pragmas)) {
-    if (!Number.isSafeInteger(value)) {
-      throw new Error("Invalid memory publication connection policy");
-    }
     if (ownsConnection) {
-      db.exec(`PRAGMA ${name} = ${value}`);
+      if (name === "busy_timeout") {
+        setSqliteBusyTimeout(db, value);
+      } else {
+        db.exec(`PRAGMA ${name} = ${value}`);
+      }
     }
   }
   const discard = () => {
@@ -243,24 +240,21 @@ function createPublicationBackend(
     let restoredBusyTimeout = false;
     const restoreBusyTimeout = () => {
       if (!restoredBusyTimeout) {
-        db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
+        setSqliteBusyTimeout(db, input.pragmas.busy_timeout);
         restoredBusyTimeout = true;
       }
     };
     try {
-      assertPath();
       // Failed BEGIN is returned to the preparing host without sleeping here.
       // It revalidates memory-file input before every retry, as before.
-      db.exec("PRAGMA busy_timeout = 0");
+      setSqliteBusyTimeout(db, 0);
       const value = run({
         onBegin: () => {
           entered = true;
           restoreBusyTimeout();
-          assertPath();
           admit("transaction");
         },
         withCommit: (commit) => {
-          assertPath();
           admit("commit");
           writeToken = readSqliteDatabasePendingWriteToken(db);
           commit();
@@ -282,11 +276,42 @@ function createPublicationBackend(
         db,
         () => {
           hooks.onBegin();
-          return run();
+          // Index writes do not change session facts. DDL still invalidates all scopes.
+          return withSqliteDatabaseWriteScope(db, [], run);
         },
         { withCommit: hooks.withCommit },
       ),
     );
+  const writeSingleStatement = <T>(statement: () => T): MemoryPublicationResult<T> => {
+    let statementStarted = false;
+    let committed = false;
+    try {
+      admit("transaction");
+      // Autocommit makes the statement the effect boundary.
+      admit("commit");
+      setSqliteBusyTimeout(db, 0);
+      statementStarted = true;
+      const value = withSqliteDatabaseWriteScope(db, [], () =>
+        runSqliteSingleStatementSync(db, statement),
+      );
+      committed = true;
+      const writeToken = readSqliteDatabaseWriteTokenForPath(databasePath);
+      return { ok: true, value, writeToken };
+    } catch (error) {
+      const detail = failure(error);
+      // Only a native lock refusal proves that the autocommit statement did not enter.
+      const lockRefused =
+        statementStarted &&
+        !committed &&
+        detail.errcode !== undefined &&
+        [5, 6].includes(detail.errcode & 0xff);
+      return { ok: false, error: detail, entered: !lockRefused, committed };
+    } finally {
+      if (statementStarted && db.isOpen) {
+        setSqliteBusyTimeout(db, input.pragmas.busy_timeout);
+      }
+    }
+  };
   const withFacts = <T>(result: MemoryPublicationResult<T>): MemoryPublicationResult<T> =>
     result.ok ? { ...result, facts: readMemoryDatabaseFacts(db) } : result;
   const writeMeta = (value: string) => {
@@ -299,6 +324,23 @@ function createPublicationBackend(
     );
   };
   return {
+    async prepare(command) {
+      if (command.type !== "vector.prepare") {
+        return;
+      }
+      const extensionPath = command.input.state.extensionPath;
+      const loadedPath = loadedExtensions.get(db);
+      if (loadedPath && (!extensionPath || extensionPath === loadedPath)) {
+        return;
+      }
+      // Module resolution can yield; the executor awaits preparation before
+      // entering its synchronous operation and transaction admission.
+      const loaded = await loadSqliteVecExtension({ db, extensionPath });
+      if (!loaded.ok || !loaded.extensionPath) {
+        throw new Error(loaded.error ?? "unknown sqlite-vec load error");
+      }
+      loadedExtensions.set(db, loaded.extensionPath);
+    },
     assertSettled() {
       assertTransactionUsable(db);
       if (!db.isOpen || db.isTransaction) {
@@ -306,11 +348,10 @@ function createPublicationBackend(
       }
     },
     execute(command) {
-      assertPath();
       if (command.type === "connection.inspect") {
         return "kind" in input
           ? {
-              fileIdentity: input.fileIdentity,
+              fileIdentity: readMemoryShadowIdentity(databasePath),
               pragmas: readMemoryConnectionPragmas(
                 db,
                 "Invalid memory publication connection policy",
@@ -318,79 +359,56 @@ function createPublicationBackend(
             }
           : input;
       }
-      if (command.type === "index.facts") {
-        return readMemoryDatabaseFacts(db);
+      if (
+        command.type === "index.facts" ||
+        command.type === "source.state" ||
+        command.type === "source.hash" ||
+        command.type === "source.chunks" ||
+        command.type === "cache.read" ||
+        command.type === "session.current"
+      ) {
+        return readMemoryIndex(db, command).value;
       }
       if (command.type === "schema.admit") {
         // Storage/STRICT migration must disable foreign keys before BEGIN.
         db.exec("PRAGMA foreign_keys = OFF");
         try {
-          return withFacts(write(() => ensureMemoryIndexSchema({ ...command.input, db })));
+          const result = write(() => ensureMemoryIndexSchema({ ...command.input, db }));
+          if (result.ok) {
+            admitSqliteSchema(db);
+          }
+          return withFacts(result);
         } finally {
           if (db.isOpen) {
             db.exec(`PRAGMA foreign_keys = ${input.pragmas.foreign_keys}`);
           }
         }
       }
-      if (command.type === "source.hash") {
-        return readMemorySourceHash(db, command.input.source, command.input.path);
-      }
-      if (command.type === "source.chunks") {
-        return readMemorySourceChunks(db, command.input.source, command.input.path);
-      }
       if (command.type === "index.writeMetadata") {
-        return withFacts(write(() => writeMeta(JSON.stringify(command.input))));
-      }
-      if (command.type === "source.state") {
-        return loadMemorySourceFileState({ db, ...command.input });
+        const serialized = JSON.stringify(command.input);
+        return withFacts(writeSingleStatement(() => writeMeta(serialized)));
       }
       if (command.type === "source.refresh") {
-        return withFacts(write(() => refreshMemorySessionSourceState(db, command.input)));
-      }
-      if (command.type === "session.current") {
-        return hasMemorySessionTombstone(db, command.input.agentId, command.input.sessionId)
-          ? "forgotten"
-          : "current";
-      }
-      if (command.type === "cache.read") {
-        return loadMemoryEmbeddingCache({ ...command.input, db });
+        return withFacts(
+          writeSingleStatement(() => refreshMemorySessionSourceState(db, command.input)),
+        );
       }
       if (command.type === "stage.start" || command.type === "cache.stage.start") {
-        if (staged) {
-          throw new Error("Memory publication input already belongs to another operation");
-        }
         staged =
           command.type === "stage.start"
-            ? { ...command.input, kind: "source", row: 0, part: 0, fragments: [] }
-            : { ...command.input, kind: "cache", row: 0, part: 0, fragments: [] };
+            ? { ...command.input, kind: "source", fragments: [] }
+            : { ...command.input, kind: "cache", fragments: [] };
         return undefined;
       }
       if (command.type === "stage.discard") {
-        if (staged?.operation === command.input.operation) {
-          discard();
-        }
+        discard();
         return undefined;
       }
       if (command.type === "stage.append") {
-        if (!staged || staged.operation !== command.input.operation) {
-          throw new Error("Memory publication input owner changed");
+        if (!staged) {
+          throw new Error("Memory publication input was not started");
         }
-        for (const fragment of command.input.fragments) {
-          if (
-            fragment.row !== staged.row ||
-            fragment.part !== staged.part ||
-            staged.row >= staged.rows
-          ) {
-            throw new Error("Memory publication input is incomplete or out of order");
-          }
-          staged.fragments.push(fragment);
-          if (fragment.last) {
-            staged.row++;
-            staged.part = 0;
-          } else {
-            staged.part++;
-          }
-        }
+        staged.fragments.push(...command.input.fragments);
         return undefined;
       }
       if (command.type === "cache.prune") {
@@ -404,9 +422,6 @@ function createPublicationBackend(
       }
       if (command.type === "cache.clear") {
         return write(() => {
-          if (readMemoryDatabaseRevision(db) !== command.input.expectedRevision) {
-            return false;
-          }
           clearMemoryEmbeddingCacheIdentities(db, command.input.identities);
           return true;
         });
@@ -419,23 +434,14 @@ function createPublicationBackend(
           const entries = command.input.entries;
           readEntries = () => entries;
         } else {
-          if (
-            !staged ||
-            staged.kind !== "cache" ||
-            staged.operation !== command.input.operation ||
-            staged.row !== staged.rows ||
-            staged.part !== 0
-          ) {
-            throw new Error("Memory cache input was not sealed");
+          if (staged?.kind !== "cache") {
+            throw new Error("Memory cache input was not started");
           }
           header = staged.header;
           const fragments = staged.fragments;
           readEntries = () => readPublicationRows<MemoryEmbeddingCacheEntry>(fragments);
         }
         const outcome = write(() => {
-          if (readMemoryDatabaseRevision(db) !== command.input.expectedRevision) {
-            return false;
-          }
           const eligible = new Map<string, boolean>();
           function* entries() {
             for (const entry of readEntries()) {
@@ -457,15 +463,24 @@ function createPublicationBackend(
         });
         return command.type === "cache.write" ? finish(outcome) : outcome;
       }
-      if (command.type === "vector.retireLegacy") {
-        if (!tableExists(db, "chunks_vec")) {
-          return { ok: true, value: false };
+      if (command.type === "vector.prepare") {
+        const loadedPath = loadedExtensions.get(db);
+        if (!loadedPath) {
+          throw new Error("Memory vector extension was not prepared");
         }
-        loadExtension(command.input.state.extensionPath);
-        return write(() => {
-          db.exec("DROP TABLE IF EXISTS chunks_vec");
-          return true;
-        });
+        if (!tableExists(db, "chunks_vec")) {
+          return {
+            ok: true,
+            value: { extensionPath: loadedPath, retiredLegacy: false },
+          };
+        }
+        return withFacts(
+          write(() => {
+            stageOpenClawAgentDatabaseSchemaExtension(db);
+            db.exec("DROP TABLE IF EXISTS chunks_vec");
+            return { extensionPath: loadedPath, retiredLegacy: true };
+          }),
+        );
       }
       if (command.type === "vector.ensure") {
         const { dimensions } = command.input;
@@ -480,6 +495,7 @@ function createPublicationBackend(
         loadExtension(command.input.state.extensionPath);
         return withFacts(
           write(() => {
+            stageOpenClawAgentDatabaseSchemaExtension(db);
             db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_VECTOR_TABLE}`);
             db.exec(
               `CREATE VIRTUAL TABLE ${MEMORY_INDEX_VECTOR_TABLE} USING vec0(\n` +
@@ -516,20 +532,34 @@ function createPublicationBackend(
           ),
         );
       }
+      if (command.type === "source.replace.group") {
+        const outcome = write(() => {
+          const kernel = new MemorySourceIndexKernel(db, command.input.state);
+          for (const { header, fragments } of command.input.sources) {
+            if (
+              header.source === "sessions" &&
+              hasMemorySessionTombstone(db, header.agentId, header.sessionId)
+            ) {
+              throw new Error(
+                "A session was forgotten while memory indexing was running; retry the memory index.",
+              );
+            }
+            kernel.replaceRows(header, readPublicationRows<MemorySourceIndexRow>(fragments));
+          }
+          return true;
+        });
+        return outcome.ok
+          ? { ...outcome, facts: readMemoryDatabaseFacts(db, command.input.state.hasVectorTable) }
+          : outcome;
+      }
       let header: MemorySourceIndexHeader;
       let rows: Iterable<MemorySourceIndexRow>;
       if (command.type === "source.replace.inline") {
         header = command.input.header;
         rows = readPublicationRows<MemorySourceIndexRow>(command.input.fragments);
       } else {
-        if (
-          !staged ||
-          staged.kind !== "source" ||
-          staged.operation !== command.input.operation ||
-          staged.row !== staged.rows ||
-          staged.part !== 0
-        ) {
-          throw new Error("Memory publication input was not sealed");
+        if (staged?.kind !== "source") {
+          throw new Error("Memory publication input was not started");
         }
         header = staged.header;
         rows = readPublicationRows<MemorySourceIndexRow>(staged.fragments);
@@ -544,17 +574,9 @@ function createPublicationBackend(
             "A session was forgotten while memory indexing was running; retry the memory index.",
           );
         }
-        const beforeRevision = readMemoryDatabaseRevision(db);
-        const { retainedDrift } = new MemorySourceIndexKernel(db, command.input.state).replaceRows(
-          header,
-          rows,
-        );
-        facts = readMemoryDatabaseFacts(db);
-        return {
-          beforeRevision,
-          databaseRevision: facts.revision,
-          retainedDrift,
-        };
+        new MemorySourceIndexKernel(db, command.input.state).replaceRows(header, rows);
+        facts = readMemoryDatabaseFacts(db, command.input.state.hasVectorTable);
+        return true;
       });
       const published = outcome.ok ? { ...outcome, facts } : outcome;
       return command.type === "source.replace.inline" ? published : finish(published);
@@ -571,14 +593,12 @@ function* readPublicationRows<Row extends MemorySourceIndexRow | MemoryEmbedding
   // SAFETY: Only the paired source/cache producer writes these sealed records.
   const parse = (parts: string[]) => JSON.parse(parts.join("")) as Row;
   let parts: string[] = [];
-  let row = 0;
   for (const fragment of fragments) {
-    if (fragment.row !== row) {
+    parts.push(fragment.json);
+    if (fragment.last) {
       yield parse(parts);
       parts = [];
-      row = fragment.row;
     }
-    parts.push(fragment.json);
   }
   if (parts.length) {
     yield parse(parts);

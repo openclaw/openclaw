@@ -94,8 +94,10 @@ export async function readSessionPhysicalDiskUsage(
   const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
   const databasePaths = listDurableSqliteTargetPathsForSessionStorePath(storePath);
   const databaseFiles = await readSqliteDatabaseFiles(databasePaths);
-  const databaseSharedMemoryPaths = new Set(
-    databasePaths.map((databasePath) => canonicalizePathForComparison(`${databasePath}-shm`)),
+  const databaseMetadataPaths = new Set(
+    databasePaths.flatMap((databasePath) =>
+      ["-shm", ".seal"].map((suffix) => canonicalizePathForComparison(`${databasePath}${suffix}`)),
+    ),
   );
   const databaseMainPaths = new Set(
     databaseFiles.filter((file) => !file.path.endsWith("-wal")).map((file) => file.canonicalPath),
@@ -110,7 +112,7 @@ export async function readSessionPhysicalDiskUsage(
     ...promptBlobFiles,
     ...databaseFiles,
   ]) {
-    if (!databaseSharedMemoryPaths.has(file.canonicalPath)) {
+    if (!databaseMetadataPaths.has(file.canonicalPath)) {
       uniqueFiles.set(file.canonicalPath, file);
     }
   }

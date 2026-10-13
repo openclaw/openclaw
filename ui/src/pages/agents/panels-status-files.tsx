@@ -6,7 +6,7 @@ import type {
   CronStatus,
 } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
-import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
+import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import {
   SettingsEmpty,
   SettingsRow,
@@ -25,7 +25,6 @@ import {
   formatNextRun,
 } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { AgentPanelAction } from "./panel-ui.tsx";
 import { renderAgentContextSection } from "./panels-overview.tsx";
 
@@ -292,17 +291,13 @@ export function AgentCron(params: {
                 );
               }}
             </For>
-            <LitContent
-              render={() =>
-                renderCronJobsPagination({
-                  jobsShown: params.jobs.length,
-                  jobsTotal: params.jobsTotal,
-                  hasMore: params.jobsHasMore,
-                  loading: params.loading,
-                  loadingMore: params.jobsLoadingMore,
-                  onLoadMore: params.onLoadMore,
-                })
-              }
+            <CronJobsPagination
+              jobsShown={params.jobs.length}
+              jobsTotal={params.jobsTotal}
+              hasMore={params.jobsHasMore}
+              loading={params.loading}
+              loadingMore={params.jobsLoadingMore}
+              onLoadMore={params.onLoadMore}
             />
           </>
         )}

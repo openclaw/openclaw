@@ -8,10 +8,11 @@ import {
 } from "./subagent-spawn.authority.test-support.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-spawn-model.mocks.shared.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { forkSessionEntryFromParent } from "../../../auto-reply/reply/session-fork.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
   listSessionChildEntriesReadOnly,
   loadSessionEntry,
@@ -55,6 +56,9 @@ import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 const { parentSessionKey, parentRunId, groupId, createBoundParent } = fixture;
 
 function createPreparationGateway(
@@ -392,8 +396,9 @@ describe("pending spawn preparation authority", () => {
         ],
       );
     }
-    const readChildKey = () =>
-      listSessionChildEntriesReadOnly({ storePath, sessionKey: parentSessionKey })[0]!.sessionKey;
+    const readChildKey = async () =>
+      (await listSessionChildEntriesReadOnly({ storePath, sessionKey: parentSessionKey }))[0]!
+        .sessionKey;
     const attachmentFixture = hasAttachments
       ? installSpawnAttachmentFixture({
           stateDir: fixture.stateDir,
@@ -404,7 +409,7 @@ describe("pending spawn preparation authority", () => {
               : closure === "native attachment files"
                 ? "files"
                 : undefined,
-          entered: () => entered.resolve(readChildKey()),
+          entered: async () => entered.resolve(await readChildKey()),
           release: release.promise,
         })
       : undefined;
@@ -431,7 +436,7 @@ describe("pending spawn preparation authority", () => {
       },
       resolveContextEngine: async () => {
         if (closure === "native engine resolution") {
-          entered.resolve(readChildKey());
+          entered.resolve(await readChildKey());
           await release.promise;
         }
         return Object.assign(new LegacyContextEngine(), { prepareSubagentSpawn: prepare });

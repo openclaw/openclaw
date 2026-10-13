@@ -1,13 +1,11 @@
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
-import { html, nothing } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { terminalFontFamily } from "../../app/terminal-font.ts";
-import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import { renderSolidSnapshot } from "../../lit/solid-snapshot.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
 import { terminalPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
-import { icons } from "../icons.ts";
 import { notifyPanelHostedTabsChanged } from "../panel-hosted-tabs.ts";
 import "../tooltip.ts";
 import {
@@ -27,11 +25,13 @@ import type {
   TerminalPanelSessionTab,
   TerminalRouteTarget,
 } from "./terminal-panel-session-types.ts";
-import { terminalPanelHostedTabs } from "./terminal-panel-tabs.ts";
+import { terminalPanelTabIcon, terminalPanelHostedTabs } from "./terminal-panel-tabs.ts";
 import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
 import type { TerminalPanelViewState } from "./terminal-panel-view.tsx";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
-import { renderTerminalSessionPickerTrigger } from "./terminal-session-picker.ts";
+
+// Hosted-tab getters can run in ownerless effects. Render static artwork at module load.
+const hostedTabIcon = renderSolidSnapshot(terminalPanelTabIcon);
 
 type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
@@ -239,7 +239,9 @@ export class TerminalPanelController extends SolidPanelController {
   }
 
   get hostedTabs() {
-    return terminalPanelHostedTabs(this.terminalSessions.tabs);
+    return terminalPanelHostedTabs(this.terminalSessions.tabs).map((tab) =>
+      Object.assign(tab, { icon: hostedTabIcon.cloneNode(true) }),
+    );
   }
 
   get activeHostedTabId(): string | null {
@@ -255,42 +257,10 @@ export class TerminalPanelController extends SolidPanelController {
     await this.updateComplete;
   }
 
-  get hostedActions() {
-    if (!this.embedded || !this.tabsInHeader) {
-      return nothing;
-    }
-    const upload = this.terminalPanelUploadController;
-    return html`
-      <openclaw-tooltip .content=${t("terminal.sessions")}>
-        ${renderTerminalSessionPickerTrigger(this.sessionPickerProps)}
-      </openclaw-tooltip>
-      ${
-        upload.uploadsEnabled()
-          ? html`<openclaw-tooltip .content=${t("terminal.addFiles")}>
-              <button
-                class="rail-header__action"
-                type="button"
-                aria-label=${t("terminal.addFiles")}
-                ?disabled=${!upload.hasActiveTab() || upload.hasPendingBatch()}
-                @click=${upload.chooseFiles}
-              >
-                ${icons.paperclip}
-              </button>
-            </openclaw-tooltip>`
-          : nothing
-      }
-      <openclaw-tooltip .content=${t("terminal.dockBottom")}>
-        <button
-          class="rail-header__action"
-          type="button"
-          aria-label=${t("terminal.dockBottom")}
-          ?disabled=${!this.terminalSessions.canHandoffSessions}
-          @click=${() => this.setDock("bottom")}
-        >
-          ${icons.panelBottomOpen}
-        </button>
-      </openclaw-tooltip>
-    `;
+  hostedActionsContent: HTMLElement | undefined;
+
+  get hostedActions(): HTMLElement | undefined {
+    return this.embedded && this.tabsInHeader ? this.hostedActionsContent : undefined;
   }
 
   activateTerminalHost(): void {
@@ -482,10 +452,12 @@ export class TerminalPanelController extends SolidPanelController {
     return this.renderRoot.querySelector(".tp-viewport");
   }
 
-  private get sessionPickerProps() {
+  private get sessionPickerProps(): TerminalPanelViewState["picker"] {
     return {
       hosted: this.embedded && this.tabsInHeader,
-      triggerRef: this.sessionPickerTrigger,
+      triggerRef: (element) => {
+        this.sessionPickerTrigger.value = element;
+      },
       open: this.sessionPickerOpen,
       loading: this.pickerLoading,
       sessions: this.pickerSessions,
@@ -537,12 +509,7 @@ export class TerminalPanelController extends SolidPanelController {
         : null,
       dockDisabled:
         (this.embedded || this.sessionBottomOnly) && !this.terminalSessions.canHandoffSessions,
-      picker: {
-        ...this.sessionPickerProps,
-        triggerRef: (element) => {
-          this.sessionPickerTrigger.value = element;
-        },
-      },
+      picker: this.sessionPickerProps,
       upload: this.terminalPanelUploadController,
       onSelect: (id) => this.terminalSessions.switchTo(id),
       onClose: (id) => this.closeHostedTab(id),

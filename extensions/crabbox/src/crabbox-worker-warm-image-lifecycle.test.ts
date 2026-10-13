@@ -11,6 +11,7 @@ import {
 import {
   captureWarmImage,
   checkpointResult,
+  createProjectOptions,
   createWarmProvider,
   provisionWarmProfile,
   CHECKPOINT_ID,
@@ -20,6 +21,80 @@ import {
 } from "./crabbox-worker-warm-image.test-support.js";
 
 describe("Crabbox warm-image lifecycle ownership", () => {
+  it("enrolls after detected setup failure, records diagnostics, and suppresses teardown capture after restart", async () => {
+    const events: string[] = [];
+    const { options, observe } = createProjectOptions(events);
+    const recipePreparation = {
+      source: "detected" as const,
+      ignoredPropertiesNote: "devcontainer image ignored on cloud machines",
+      phaseDurationsMs: { detectedInstall: 75 },
+      failure: { reason: "npm ci failed", outputTail: "synthetic missing dependency" },
+    };
+    options.project.prepare.mockResolvedValue({
+      seedKey: "a".repeat(64),
+      cacheHit: false,
+      captureSkipped: "npm ci failed",
+      recipePreparation,
+    });
+    const initial = createWarmProvider(observe);
+    const lease = await provisionWarmProfile(
+      initial.provider,
+      PROFILE,
+      "detected-failure",
+      undefined,
+      options,
+    );
+
+    expect(events).toContain("enrollment-begun");
+    expect(events).not.toContain("capture");
+    expect(events).not.toContain("runtime-granted");
+    expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
+      state: "no-image",
+      recipePreparation,
+      allocations: { [lease.leaseId]: { phase: "enrolled", captureSkipped: "npm ci failed" } },
+    });
+
+    await initial.provider.dispose();
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+    const restarted = createWarmProvider(undefined, initial.stateDir);
+    await destroyAndWait(restarted.provider, { leaseId: lease.leaseId, profile: PROFILE });
+    expect(
+      restarted.calls.some(({ argv }) => argv[1] === "checkpoint" && argv[2] === "create"),
+    ).toBe(false);
+    expect(restarted.calls.some(({ argv }) => argv[1] === "stop")).toBe(true);
+    expect((await listCrabboxWarmImages(crabboxState))[0]?.recipePreparation).toEqual(
+      recipePreparation,
+    );
+  });
+
+  it("retains declared recipe failure diagnostics while refusing dispatch", async () => {
+    const events: string[] = [];
+    const { options, observe } = createProjectOptions(events);
+    const recipePreparation = {
+      source: "devcontainer" as const,
+      phaseDurationsMs: { onCreate: 30 },
+      failure: { reason: "onCreateCommand failed", outputTail: "synthetic exit 7" },
+    };
+    options.project.prepare.mockImplementation(async (transport) => {
+      await transport.recordRecipePreparation?.(recipePreparation);
+      throw new Error("onCreateCommand failed");
+    });
+    const { provider, calls } = createWarmProvider(observe);
+
+    await expect(
+      provisionWarmProfile(provider, PROFILE, "declared-failure", undefined, options),
+    ).rejects.toThrow("onCreateCommand failed");
+    expect(events).not.toContain("enrollment-begun");
+    expect(events).not.toContain("capture");
+    expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(true);
+    expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
+      state: "no-image",
+      recipePreparation,
+      allocations: {},
+    });
+  });
+
   it("replays a cold allocation after restart even after another lease publishes the first image", async () => {
     const initial = createWarmProvider();
     const lease = await provisionWarmProfile(initial.provider, PROFILE, "response-lost");

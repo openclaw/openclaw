@@ -7,7 +7,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
-import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema.js";
+import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema-ensure.js";
 
 type BackgroundDatabase = Pick<DB, "user_background_images">;
 export const ensureUserBackgroundSchema = createOpenClawStateSchemaEnsurer({

@@ -132,6 +132,13 @@ export function copyRetainedTranscriptPayload(
             "event_zstd",
             "event_utf8_bytes",
             "navigation_json",
+            "navigation_type",
+            "navigation_custom_type",
+            "navigation_display",
+            "message_role",
+            "navigation_last_type",
+            "navigation_last_custom_type",
+            "navigation_valid",
             "created_at",
           ])
           .expression(
@@ -155,6 +162,13 @@ export function copyRetainedTranscriptPayload(
                   parentId === undefined
                     ? eb.ref("navigation_json").as("navigation_json")
                     : eb.val(null).as("navigation_json"),
+                  "navigation_type",
+                  "navigation_custom_type",
+                  "navigation_display",
+                  "message_role",
+                  "navigation_last_type",
+                  "navigation_last_custom_type",
+                  "navigation_valid",
                   "created_at",
                 ];
               })

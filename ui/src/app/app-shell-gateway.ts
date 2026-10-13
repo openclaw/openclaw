@@ -17,6 +17,7 @@ import {
   invalidateChatMetadataForSessionEvent,
   invalidateChatMetadataStore,
 } from "../lib/chat/chat-metadata-cache.ts";
+import { currentDisplayConfig } from "../lib/config/config-state-model.ts";
 import {
   invalidateModelAuthStatusRequests,
   modelAuthEventInvalidates,
@@ -26,6 +27,7 @@ import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext } from "./context.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
+import { profilePreferencesState } from "./server-prefs-profile.ts";
 import { flushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
@@ -92,6 +94,7 @@ export class ShellGatewayOwner {
     profileId: string;
     runtimeConfig: ApplicationContext["runtimeConfig"];
     configObject: unknown;
+    invalidationId: number;
     promise: Promise<void>;
   } | null = null;
 
@@ -119,10 +122,10 @@ export class ShellGatewayOwner {
   }
 
   async reconcileServerUiPrefs(runtimeConfig: ApplicationContext["runtimeConfig"]): Promise<void> {
-    const snapshot = runtimeConfig.state.configSnapshot;
+    const configObject = currentDisplayConfig(runtimeConfig.state);
     const context = this.host.context;
     if (
-      !snapshot?.config ||
+      !configObject ||
       !context ||
       context.runtimeConfig !== runtimeConfig ||
       context.gateway.snapshot.phase !== "connected"
@@ -131,7 +134,6 @@ export class ShellGatewayOwner {
     }
     const { client, hello } = context.gateway.snapshot;
     const profileId = context.gateway.snapshot.selfUser?.id;
-    const configObject = snapshot.config;
     if (!client) {
       return;
     }
@@ -141,8 +143,7 @@ export class ShellGatewayOwner {
     const remainsCurrent = () =>
       this.host.context === context &&
       context.runtimeConfig === runtimeConfig &&
-      runtimeConfig.state.configSnapshot === snapshot &&
-      runtimeConfig.state.configSnapshot.config === configObject &&
+      currentDisplayConfig(runtimeConfig.state) === configObject &&
       runtimeConfig.state.client === sourceClient &&
       context.gateway.snapshot.client === client &&
       context.gateway.snapshot.hello === hello &&
@@ -250,7 +251,11 @@ export class ShellGatewayOwner {
       void this.host.context?.config.refresh();
       // A local settings draft owns config conflicts; external snapshots must not overwrite it.
       const runtimeConfig = this.host.context?.runtimeConfig;
-      if (runtimeConfig && !runtimeConfig.state.configFormDirty) {
+      if (
+        runtimeConfig &&
+        !runtimeConfig.state.configFormDirty &&
+        (runtimeConfig.state.configSnapshot || !runtimeConfig.state.bootstrapConfig)
+      ) {
         // Save notifications reconcile in place so active editors keep focus and stay interactive.
         void runtimeConfig.refresh({ background: true });
       }
@@ -411,6 +416,9 @@ export class ShellGatewayOwner {
         );
       }
       void connectionBootstrap.run("outbox", () => this.host.outboxStoreImport.load());
+    } else {
+      // A reconnect can retain the client; retire its completed preference read now.
+      void this.ensureRuntimeConfig(snapshot, context?.runtimeConfig);
     }
     if (previousPhase !== "connected" && snapshot.phase === "connected") {
       i18n.retryPendingLocale();
@@ -422,7 +430,7 @@ export class ShellGatewayOwner {
     runtimeConfig = this.host.context?.runtimeConfig,
   ): Promise<void> {
     // Config-gated sidebar routes require the snapshot before any settings page opens.
-    if (snapshot.phase !== "connected" || !snapshot.client || !runtimeConfig) {
+    if (snapshot.phase !== "connected" || !snapshot.client || !runtimeConfig?.state.connected) {
       this.runtimeConfigClient = null;
       this.runtimeConfigProfileId = null;
       this.runtimeConfigReady = null;
@@ -450,7 +458,9 @@ export class ShellGatewayOwner {
     });
     const context = this.host.context;
     const generation = ++this.preferenceGeneration;
-    this.runtimeConfigReady = runtimeConfig.ensureLoaded().then(async () => {
+    this.runtimeConfigReady = (
+      runtimeConfig.state.bootstrapConfig ? Promise.resolve() : runtimeConfig.ensureLoaded()
+    ).then(async () => {
       if (
         this.host.context !== context ||
         this.runtimeConfigClient !== snapshot.client ||
@@ -506,7 +516,7 @@ export class ShellGatewayOwner {
       return Promise.resolve();
     }
     const client = snapshot.client;
-    const configObject = context.runtimeConfig.state.configSnapshot?.config;
+    const configObject = currentDisplayConfig(context.runtimeConfig.state);
     if (snapshot.phase !== "connected" || !client || !configObject) {
       return Promise.resolve();
     }
@@ -517,11 +527,20 @@ export class ShellGatewayOwner {
       previous?.client === client &&
       previous.profileId === profileId &&
       previous.runtimeConfig === runtimeConfig &&
-      previous.configObject === configObject
+      previous.configObject === configObject &&
+      previous.invalidationId === profilePreferencesState.invalidationId
     ) {
       return previous.promise;
     }
-    const source = { client, profileId, runtimeConfig, configObject, promise: Promise.resolve() };
+    // Writes retire profile reads independently of the config snapshot's identity.
+    const source = {
+      client,
+      profileId,
+      runtimeConfig,
+      configObject,
+      invalidationId: profilePreferencesState.invalidationId,
+      promise: Promise.resolve(),
+    };
     this.profileAppearanceSource = source;
     const scope = context.gateway.connection.gatewayUrl;
     const hello = snapshot.hello;
@@ -530,7 +549,7 @@ export class ShellGatewayOwner {
     const remainsCurrent = () =>
       this.host.context === context &&
       context.runtimeConfig === runtimeConfig &&
-      runtimeConfig.state.configSnapshot?.config === configObject &&
+      currentDisplayConfig(runtimeConfig.state) === configObject &&
       runtimeConfig.state.client === sourceClient &&
       context.gateway.snapshot.client === client &&
       context.gateway.snapshot.phase === "connected" &&
@@ -549,7 +568,7 @@ export class ShellGatewayOwner {
         if (!remainsCurrent()) {
           return;
         }
-        const applied = await runtime.refreshProfileAppearancePrefs({
+        const pending = runtime.refreshProfileAppearancePrefs({
           client,
           profileId,
           configObject,
@@ -566,6 +585,9 @@ export class ShellGatewayOwner {
             }
           },
         });
+        // Read admission may adopt the profile identity before its first await.
+        source.invalidationId = profilePreferencesState.invalidationId;
+        const applied = await pending;
         if (remainsCurrent()) {
           if (!applied) {
             context.theme.refresh({ notify: true });

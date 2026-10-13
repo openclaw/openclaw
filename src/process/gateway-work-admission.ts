@@ -15,6 +15,7 @@ export type GatewayShutdownTrigger =
   | "SIGINT"
   | "SIGUSR2"
   | "hosted Gateway stop"
+  | "process exit"
   | "host lifeline closed";
 export type GatewayDrainReason =
   | "restart"
@@ -51,6 +52,15 @@ type GatewayWorkAdmissionState = {
 };
 
 const admissionLog = createSubsystemLogger("gateway/admission");
+const reloadWaitingRoots = new AsyncLocalStorage<ReadonlySet<GatewayRootWorkAdmission>>();
+
+/** This root awaits the same reload transaction; retain admission while excluding its wait. */
+export function runWithGatewayReloadWaitingRoot<T>(run: () => T): T {
+  const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
+  return current
+    ? reloadWaitingRoots.run(new Set([...(reloadWaitingRoots.getStore() ?? []), current]), run)
+    : run();
+}
 
 function createShutdownCleanupController(): AbortController {
   const controller = new AbortController();
@@ -432,11 +442,12 @@ export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWo
 /** Independent roots count separately even when launched by an admitted parent. */
 export function tryBeginGatewayIndependentRootWorkAdmission(
   origin = "independent",
+  options: { detachedWork?: boolean } = {},
 ): GatewayRootWorkAdmissionLease | null {
   if (isGatewayWorkAdmissionClosed()) {
     return null;
   }
-  return createGatewayRootWorkAdmission(origin);
+  return createGatewayRootWorkAdmission(origin, options.detachedWork === true);
 }
 
 async function waitForGatewayWorkAdmissionChange(signal?: AbortSignal): Promise<void> {
@@ -639,17 +650,16 @@ export function runOutsideGatewayRootWorkAdmission<T>(run: () => T): T {
 
 /** Active root requests/ticks, optionally excluding the caller running prepare. */
 export function getActiveGatewayRootWorkCount(opts?: { excludeCurrent?: boolean }): number {
-  let count = GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size;
-  const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
-  if (
-    opts?.excludeCurrent === true &&
-    current &&
-    !current.released &&
-    GATEWAY_WORK_ADMISSION_STATE.activeRootWork.has(current)
-  ) {
-    count -= 1;
+  const active = GATEWAY_WORK_ADMISSION_STATE.activeRootWork;
+  if (!opts?.excludeCurrent) {
+    return active.size;
   }
-  return Math.max(0, count);
+  const excluded = new Set(reloadWaitingRoots.getStore());
+  const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
+  if (current) {
+    excluded.add(current);
+  }
+  return active.size - [...excluded].filter((root) => active.has(root)).length;
 }
 
 /** Bounded, deterministic root-owner inventory for shutdown diagnostics. */
@@ -657,7 +667,10 @@ export function getActiveGatewayRootWorkHolders(opts?: { excludeCurrent?: boolea
   const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
   const counts = new Map<string, number>();
   for (const admission of GATEWAY_WORK_ADMISSION_STATE.activeRootWork) {
-    if (opts?.excludeCurrent === true && admission === current) {
+    if (
+      opts?.excludeCurrent === true &&
+      (admission === current || reloadWaitingRoots.getStore()?.has(admission))
+    ) {
       continue;
     }
     counts.set(admission.origin, (counts.get(admission.origin) ?? 0) + 1);

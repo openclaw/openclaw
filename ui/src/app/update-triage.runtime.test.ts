@@ -8,6 +8,7 @@ import { createContext } from "../pages/custodian/custodian-page.test-harness.ts
 import { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { QUICK_ACTIONS_QUESTION } from "../test-helpers/custodian-quick-actions.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -108,10 +109,9 @@ describe("update triage presentation", () => {
         expect(recovery).not.toHaveProperty("message");
         expect(surface.textContent).toContain("started a fresh session");
       }
-      surface.requestUpdate();
-      await surface.updateComplete;
+      typeComposerDraft(surface, draft);
+      await waitForSolid(() => expect(composer.value).toBe(draft));
       expect(admission.admit).toHaveBeenCalledOnce();
-      expect(composer.value).toBe(draft);
 
       composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       await vi.waitFor(() =>
@@ -506,7 +506,9 @@ describe("update triage presentation", () => {
           ),
         ).toHaveLength(0);
         expect(custodianAlertStore.alert).toBeNull();
-        expect(surface.textContent).not.toContain("Private diagnostic cause");
+        await waitForSolid(() =>
+          expect(surface.textContent).not.toContain("Private diagnostic cause"),
+        );
         expect(
           surface.store.messages.every(
             (message) => !message.text.includes("Private diagnostic cause"),

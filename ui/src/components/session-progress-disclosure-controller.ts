@@ -1,7 +1,6 @@
 import { nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
-import { createRenderEffect, onCleanup, untrack } from "solid-js";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import {
   subscribeTranscriptScroll,
@@ -141,8 +140,10 @@ class ProgressDisclosureController {
   }
 
   private resetScrollInput(): void {
-    clearTimeout(this.settleTimer);
-    this.settleTimer = undefined;
+    if (this.settleTimer !== undefined) {
+      clearTimeout(this.settleTimer);
+      this.settleTimer = undefined;
+    }
     this.scrollSettled = false;
     this.lastWheelAt = undefined;
     this.gesture = undefined;
@@ -151,7 +152,9 @@ class ProgressDisclosureController {
   }
 
   private readonly scheduleCollapse = () => {
-    clearTimeout(this.settleTimer);
+    if (this.settleTimer !== undefined) {
+      clearTimeout(this.settleTimer);
+    }
     this.scrollSettled = false;
     this.settleTimer = setTimeout(() => {
       this.settleTimer = undefined;
@@ -537,15 +540,3 @@ class ProgressDisclosureDirective extends AsyncDirective {
 }
 
 export const composerDisclosure = directive(ProgressDisclosureDirective);
-
-/** Share the disclosure owner with Solid without copying its gesture state. */
-export function createComposerDisclosure(input: () => DisclosureInput) {
-  let controller: ProgressDisclosureController | undefined;
-  createRenderEffect(input, (value) => controller?.update(value));
-  onCleanup(() => controller?.dispose());
-  return (element: HTMLDetailsElement) => {
-    const initial = untrack(input);
-    controller = new ProgressDisclosureController(element, initial);
-    controller.update(initial);
-  };
-}

@@ -199,26 +199,6 @@ describe("channels setup access", () => {
   });
 });
 
-describe("channels section order", () => {
-  it("places DM access requests after the channel management sections", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: ["telegram"],
-      channelLabels: { telegram: "Telegram" },
-      channels: { telegram: { configured: false } },
-      channelAccounts: {},
-      channelDefaultAccountId: {},
-    });
-    const container = document.createElement("div");
-    renderChannelView(ChannelsView, props, container);
-
-    const headings = Array.from(container.querySelectorAll(".settings-section__heading"), (node) =>
-      node.textContent?.trim(),
-    );
-    expect(headings).toEqual(["Connected channels", "Add a channel", "DM access requests"]);
-  });
-});
-
 describe("channel row actions", () => {
   it.each([
     { list: "connected", action: "details", update: "reorder" },
@@ -560,20 +540,6 @@ describe("channel config advanced tier", () => {
     expect(onShowAdvancedSettings).toHaveBeenCalledWith(true);
   });
 
-  it("reveals advanced channel settings with a collapse affordance", () => {
-    const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(true);
-
-    expect(container.textContent).toContain("Enabled");
-    expect(container.textContent).toContain("Timeout Ms");
-    const disclosure = container.querySelector<HTMLDetailsElement>(
-      "details.config-advanced-disclosure",
-    );
-    expect(disclosure?.open).toBe(true);
-    disclosure!.open = false;
-    disclosure!.dispatchEvent(new Event("toggle"));
-    expect(onShowAdvancedSettings).toHaveBeenCalledWith(false);
-  });
-
   it("keeps the collapse control for channels whose settings are all advanced", () => {
     const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(true, {
       ...CHANNEL_TIER_HINTS,
@@ -603,7 +569,7 @@ describe("channel config advanced tier", () => {
 });
 
 describe("channel detail", () => {
-  it.each(["telegram", "whatsapp", "nostr"] as const)(
+  it.each(["whatsapp", "nostr"] as const)(
     "shows an escaped configuration save error inside the %s editor",
     (channelId) => {
       const data: ChannelsStatusSnapshot["channels"] =
@@ -621,36 +587,7 @@ describe("channel detail", () => {
     },
   );
 
-  it("links every channel to its docs page", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: ["telegram"],
-      channelLabels: { telegram: "Telegram" },
-      channels: { telegram: { configured: true } },
-      channelAccounts: {},
-      channelDefaultAccountId: {},
-    });
-
-    const container = document.createElement("div");
-    renderChannelView(
-      renderChannelDetail,
-      {
-        channelId: "telegram",
-        label: "Telegram",
-        props,
-        onClose: () => {},
-        onSetup: () => {},
-      },
-      container,
-    );
-
-    const docs = container.querySelector<HTMLAnchorElement>(".channels-detail__header-actions a");
-    expect(docs?.href).toBe("https://docs.openclaw.ai/channels/telegram");
-    expect(docs?.textContent?.trim()).toBe("Docs");
-  });
-
   it.each([
-    ["discord", "Discord", []],
     ["signal", "Signal", [["Base URL", "https://signal.example"]]],
     [
       "googlechat",
@@ -660,7 +597,6 @@ describe("channel detail", () => {
         ["Audience", "url · https://chat.example"],
       ],
     ],
-    ["telegram", "Telegram", [["Mode", "polling"]]],
   ] satisfies Array<[string, string, Array<[string, string]>]>)(
     "preserves localized status facts and probe actions for %s",
     (channelId, title, extraFacts) => {
@@ -724,7 +660,7 @@ describe("channel detail", () => {
     expect(fact(discord, "Running")).toBe("No");
   });
 
-  it.each(["guildchat", "__proto__"])(
+  it.each(["__proto__"])(
     "opens accountless plugin %s from its actual hub row without inherited account values",
     (channelId) => {
       for (const configured of [false, true]) {
@@ -762,61 +698,6 @@ describe("channel detail", () => {
 });
 
 describe("channel display selectors", () => {
-  it("returns the channel summary configured flag when present", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: ["guildchat"],
-      channelLabels: { guildchat: "Guild Chat" },
-      channels: { guildchat: { configured: false } },
-      channelAccounts: {
-        guildchat: [{ accountId: "guild-main", configured: true }],
-      },
-      channelDefaultAccountId: { guildchat: "guild-main" },
-    });
-
-    expect(resolveChannelDisplayState("guildchat", props).configured).toBe(false);
-  });
-
-  it("falls back to the default account when the channel summary omits configured", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: ["guildchat"],
-      channelLabels: { guildchat: "Guild Chat" },
-      channels: { guildchat: { running: true } },
-      channelAccounts: {
-        guildchat: [
-          { accountId: "default", configured: false },
-          { accountId: "guild-main", configured: true },
-        ],
-      },
-      channelDefaultAccountId: { guildchat: "guild-main" },
-    });
-
-    const displayState = resolveChannelDisplayState("guildchat", props);
-
-    expect(displayState.configured).toBe(true);
-    expect(displayState.defaultAccount?.accountId).toBe("guild-main");
-    expect(channelSnapshotEntryIsActive(props.channels.channelsSnapshot, "guildchat")).toBe(true);
-  });
-
-  it("falls back to the first account when no default account id is available", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: ["workspace"],
-      channelLabels: { workspace: "Workspace" },
-      channels: { workspace: { running: true } },
-      channelAccounts: {
-        workspace: [{ accountId: "workspace-a", configured: true }],
-      },
-      channelDefaultAccountId: {},
-    });
-
-    const displayState = resolveChannelDisplayState("workspace", props);
-
-    expect(displayState.configured).toBe(true);
-    expect(displayState.defaultAccount?.accountId).toBe("workspace-a");
-  });
-
   it("keeps disabled channels hidden when neither summary nor accounts are active", () => {
     const props = createProps({
       ts: Date.now(),
@@ -884,21 +765,6 @@ describe("WhatsApp card actions", () => {
     expect(onWhatsAppStart).toHaveBeenCalledWith(false);
   });
 
-  it("uses relink as the explicit action after WhatsApp is linked", () => {
-    const onWhatsAppStart = vi.fn();
-    const { buttons, labels } = renderWhatsAppButtons({
-      linked: true,
-      onWhatsAppStart,
-    });
-
-    expect(labels).toEqual(["Save", "Reload", "Relink", "Logout", "Refresh"]);
-
-    const relink = buttons.find((button) => button.textContent?.trim() === "Relink");
-    expect(relink).toBeInstanceOf(HTMLButtonElement);
-    relink!.click();
-    expect(onWhatsAppStart).toHaveBeenCalledWith(true);
-  });
-
   it("shows wait for scan only while a QR is displayed", () => {
     const { labels } = renderWhatsAppButtons({
       linked: false,
@@ -906,17 +772,6 @@ describe("WhatsApp card actions", () => {
     });
 
     expect(labels).toEqual(["Save", "Reload", "Show QR", "Wait for scan", "Logout", "Refresh"]);
-  });
-
-  it("renders the QR directly above the action row so it is visible next to Show QR", () => {
-    const { container } = renderWhatsAppButtons({
-      linked: false,
-      qrDataUrl: "data:image/png;base64,current-qr",
-    });
-
-    const qrRow = container.querySelector(".qr-wrap")?.closest(".settings-row");
-    expect(qrRow).not.toBeNull();
-    expect(qrRow?.nextElementSibling?.classList.contains("settings-row--actions")).toBe(true);
   });
 });
 

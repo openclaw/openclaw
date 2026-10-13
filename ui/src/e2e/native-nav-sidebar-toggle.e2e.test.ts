@@ -74,7 +74,7 @@ suite.define(() => {
   it("keeps the web expand/collapse controls in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
     const titlebarRequest = controlUiE2eBuiltModuleRequest(
-      "ui/src/components/macos-titlebar-controls.runtime.ts",
+      "ui/src/components/macos-titlebar-controls.runtime-solid.tsx",
     );
     const swipeRequest = controlUiE2eBuiltModuleRequest("ui/src/app/nav-drawer-swipe.runtime.ts");
 
@@ -243,8 +243,7 @@ suite.define(() => {
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
     await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
-    const sidebarToolbar = page.locator(".sidebar-session-toolbar");
-    const sidebarNewThread = sidebarToolbar.locator(".sidebar-new-session");
+    const sidebarNewThread = page.locator(".sidebar-rail .sidebar-new-session");
     await expect.poll(() => sidebarNewThread.isVisible()).toBe(true);
     await expect
       .poll(() =>
@@ -750,27 +749,19 @@ suite.define(() => {
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--mobile-nav");
-    await page.setViewportSize({ width: 620, height: 900 });
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .not.toContain("shell--mobile-nav");
-    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
-  });
-
-  it("uses the drawer below the native minimum main-pane width", async () => {
-    const page = await openPage({ webChrome: true, width: 560 });
     await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(false);
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .toContain("shell--mobile-nav");
     await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
-    // The native traffic-light cluster ends around x=78. Keep the brand aligned
-    // with the desktop titlebar controls' 92px inset so the groups stay distinct.
+    // Keep the brand clear of the native traffic-light cluster.
     await expect
       .poll(() =>
         page.locator(".topbar-brand").evaluate((element) => element.getBoundingClientRect().x),
       )
       .toBe(92);
+    await page.setViewportSize({ width: 620, height: 900 });
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--mobile-nav");
+    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
   });
 
   it("hides the drawer hamburger at narrow widths when the native toggle is present", async () => {

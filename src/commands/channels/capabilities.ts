@@ -22,7 +22,7 @@ import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targ
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { ExpectedCliError } from "../../cli/failure-output.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
-import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -292,7 +292,10 @@ export async function channelsCapabilitiesCommand(
         runtime,
       });
       // The writer refreshes the prepared view used by probes after installation.
-      cfg = await resolveCapabilitiesRuntimeConfig(getRuntimeConfig(), runtime);
+      cfg = await resolveCapabilitiesRuntimeConfig(
+        await captureRuntimeConfigAsyncReader()(),
+        runtime,
+      );
     }
     selected = resolved.plugin ? [resolved.plugin] : [];
   }

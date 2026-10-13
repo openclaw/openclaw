@@ -104,9 +104,10 @@ async function buildOpenAICodexLiveProviderConfig(params: {
   ).provider;
 }
 
+// mock-isolation: Catalog tests supply synthetic credentials and account metadata.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: mocks.resolveApiKeyForProvider,
-  resolveProviderAuthProfileMetadata: mocks.resolveProviderAuthProfileMetadata,
+  resolveProviderAuthProfileMetadataAsync: mocks.resolveProviderAuthProfileMetadata,
 }));
 
 async function runWrappedPayloadCase(params: {
@@ -229,6 +230,29 @@ describe("buildOpenAIProvider", () => {
     const provider = buildOpenAIProvider();
 
     for (const providerId of ["openai", "azure-openai", "azure-openai-responses"]) {
+      for (const [code, reason] of [
+        ["CONTEXT_LENGTH_EXCEEDED", "context_overflow"],
+        ["INVALID_PROMPT", "format"],
+        ["INVALID_REQUEST_ERROR", "format"],
+        ["CONTENT_POLICY_VIOLATION", "format"],
+        ["CONTENT_FILTER", "format"],
+      ]) {
+        expect(
+          provider.classifyFailoverReason?.({
+            provider: providerId,
+            errorMessage: "",
+            code,
+          }),
+        ).toBe(reason);
+      }
+      for (const errorMessage of [
+        "Provider finish_reason: content_filter",
+        "Provider incomplete_reason: content_filter",
+      ]) {
+        expect(provider.classifyFailoverReason?.({ provider: providerId, errorMessage })).toBe(
+          "format",
+        );
+      }
       expect(
         provider.classifyFailoverReason?.({
           provider: providerId,

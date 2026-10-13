@@ -73,6 +73,7 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
     environments: WorkerDispatchEnvironmentService &
       Pick<WorkerEnvironmentService, "recordError" | "requestDestroy"> &
       Partial<Pick<WorkerEnvironmentService, "requiresNodeEnrollment">>;
+    initialPlacements: readonly WorkerDispatchPlacement[];
     isShuttingDown?: () => boolean;
     runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
     runLocalBarrier: WorkerLocalDispatchBarrier;
@@ -104,19 +105,23 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   // Background recovery observes previously requested cleanup; explicit Stop and
   // Move retain their retry contract. Pending-result recovery must inherit this too.
   const recoveryEnvironments = { ...environments, destroy: environments.requestDestroy };
-  const recovery = createPlacementRecoveryActions({
-    ...options,
-    environments: recoveryEnvironments,
-    failure: createPlacementFailureActions({ environments: recoveryEnvironments, placements }),
-    recoverPlacementMoves: (projection, environmentId) =>
-      moveService.recoverSession(projection, environmentId),
-  });
+  const recovery = createPlacementRecoveryActions(
+    {
+      ...options,
+      environments: recoveryEnvironments,
+      failure: createPlacementFailureActions({ environments: recoveryEnvironments, placements }),
+      recoverPlacementMoves: (projection, environmentId) =>
+        moveService.recoverSession(projection, environmentId),
+    },
+    options.initialPlacements,
+  );
 
   const dispatch = async (
     request: WorkerPlacementDispatchRequest,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
+    awaitRequestedHandoff?: (signal?: AbortSignal) => Promise<void>,
   ): Promise<WorkerActiveDispatchPlacement> => {
     const assertCurrent = composePlacementAuthorization(authorize, () => {
       signal?.throwIfAborted();
@@ -151,6 +156,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return placement;
         },
       });
+      await awaitRequestedHandoff?.(signal);
       // The requested transition can acknowledge a detached caller while setup continues.
       // Revalidate that retained caller before any node or provider-side preparation.
       assertCurrent();
@@ -544,6 +550,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     reclaim,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,
+    isInterruptedTurn: recovery.isInterruptedTurn,
     resumeProvisioning: startup.resumeProvisioning,
   };
 }

@@ -171,68 +171,79 @@ describe("ModelProvidersPage agent scope", () => {
     );
   });
 
-  it("preserves trailing fallbacks when replacing the visible fallback", async () => {
-    const { context, request, runtimeConfig } = createHarness("main");
-    const model = {
-      primary: "openai/gpt-5",
-      fallbacks: ["anthropic/claude-sonnet", "google/gemini-pro"],
-    };
-    const catalog = {
-      models: [
-        { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
-        {
-          id: "claude-sonnet",
-          name: "Claude Sonnet",
-          provider: "anthropic",
-          available: true,
-        },
-        { id: "gemini-pro", name: "Gemini Pro", provider: "google", available: true },
-        { id: "grok", name: "Grok", provider: "xai", available: true },
-      ],
-    };
-    const originalRequest = request.getMockImplementation()!;
-    request.mockImplementation(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          config: {
-            agents: { defaults: { model, thinkingDefault: "low", fastModeDefault: "auto" } },
+  it.each([
+    { selection: "xai/grok", expected: ["xai/grok", "google/gemini-pro", "openai/gpt-5-mini"] },
+    { selection: "", expected: [] },
+  ])(
+    "discloses the fallback chain before selecting '$selection'",
+    async ({ selection, expected }) => {
+      const { context, request, runtimeConfig } = createHarness("main");
+      const model = {
+        primary: "openai/gpt-5",
+        fallbacks: ["anthropic/claude-sonnet", "google/gemini-pro", "openai/gpt-5-mini"],
+      };
+      const catalog = {
+        models: [
+          { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
+          {
+            id: "claude-sonnet",
+            name: "Claude Sonnet",
+            provider: "anthropic",
+            available: true,
           },
-          hash: "model-defaults",
-        };
-      }
-      return method === "models.list" ? catalog : originalRequest(method);
-    });
-    const page = appendPage(context);
-    await waitForProviders(page);
-    runtimeConfig.patch.mockClear();
-
-    await updatePickers(page.renderRoot);
-    const fallback = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
-      (select) =>
-        select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback Model",
-    );
-    expect(fallback).toBeDefined();
-    await choosePickerValue(fallback!, "xai/grok");
-
-    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5",
-              fallbacks: ["xai/grok", "google/gemini-pro"],
+          { id: "gemini-pro", name: "Gemini Pro", provider: "google", available: true },
+          { id: "grok", name: "Grok", provider: "xai", available: true },
+          { id: "gpt-5-mini", name: "GPT-5 mini", provider: "openai", available: true },
+        ],
+      };
+      const originalRequest = request.getMockImplementation()!;
+      request.mockImplementation(async (method: string) => {
+        if (method === "config.get") {
+          return {
+            config: {
+              agents: { defaults: { model, thinkingDefault: "low", fastModeDefault: "auto" } },
             },
-            utilityModel: null,
-            thinkingDefault: "low",
-            fastModeDefault: "auto",
+            hash: "model-defaults",
+          };
+        }
+        return method === "models.list" ? catalog : originalRequest(method);
+      });
+      const page = appendPage(context);
+      await waitForProviders(page);
+      runtimeConfig.patch.mockClear();
+
+      await updatePickers(page.renderRoot);
+      const fallback = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
+        (select) =>
+          select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback Model",
+      );
+      expect(fallback).toBeDefined();
+      expect(page.querySelector(".model-providers__defaults")?.textContent).toContain(
+        "2 more fallbacks after this one",
+      );
+      expect(fallback?.textContent).toContain("No fallback model (remove all 3)");
+      await choosePickerValue(fallback!, selection);
+
+      await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+      expect(runtimeConfig.patch).toHaveBeenCalledWith({
+        raw: {
+          agents: {
+            defaults: {
+              model:
+                expected.length > 0
+                  ? { primary: "openai/gpt-5", fallbacks: expected }
+                  : "openai/gpt-5",
+              utilityModel: null,
+              thinkingDefault: "low",
+              fastModeDefault: "auto",
+            },
           },
         },
-      },
-      note: "Update defaults from Control UI",
-      replacePaths: ["agents.defaults.model.fallbacks"],
-    });
-  });
+        note: "Update defaults from Control UI",
+        replacePaths: ["agents.defaults.model.fallbacks"],
+      });
+    },
+  );
 
   it("autosaves removal of inherited behavior overrides", async () => {
     const { context, runtimeConfig } = createHarness("main");

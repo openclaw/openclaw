@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { parseNdjsonStream } from "./stream.runtime.js";
+import { parseNdjsonStream } from "./stream-ndjson.js";
 
 function mockNdjsonReader(lines: string[], options: { trailingNewline?: boolean } = {}) {
   const payload = lines.join("\n") + (options.trailingNewline === false ? "" : "\n");

@@ -70,6 +70,7 @@ export type AgentDatabaseFileExecutionOwner = {
     requestedPath?: string,
   ): OpenClawAgentDatabaseExecution;
   closeIdle(): Promise<void>;
+  retireForCleanup(): Promise<void>;
   close(): Promise<void>;
 };
 
@@ -120,5 +121,4 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
   RegisteredAgentWorkerOperations & {
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
     "database.prepareWrite": { input: undefined; output: void };
-    "database.recordIntegrity": { input: undefined; output: boolean };
   };

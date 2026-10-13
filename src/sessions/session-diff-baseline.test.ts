@@ -157,14 +157,14 @@ describe("ensureSessionDiffBaseline", () => {
     },
   );
 
-  it("shares one capture across concurrent first-turn ensures", async () => {
+  it.each([true, false])("shares a capture with a concurrent caller (new=%s)", async (isNew) => {
     const sessionId = "concurrent-session";
     const entry = makeEntry(sessionId);
     const target = await seedEntry({ entry });
     const capture = deferCapture();
 
     const first = ensure(target, true);
-    const second = ensure(target, true);
+    const second = ensure(target, isNew);
     try {
       await capture.started;
       expect(captureMocks.capture).toHaveBeenCalledTimes(1);
@@ -200,6 +200,9 @@ describe("ensureSessionDiffBaseline", () => {
 
     await expect(ensure({ ...target, entry: unavailable })).resolves.toEqual(unavailable);
     expect(captureMocks.capture).toHaveBeenCalledTimes(1);
+    captureMocks.capture.mockResolvedValue(baseline(sessionId));
+    await expect(ensure(target)).resolves.toEqual(unavailable);
+    expect(loadInternal(target.sessionKey, target.storePath)?.sessionDiffBaseline).toBeUndefined();
   });
 
   it.each([
@@ -255,32 +258,12 @@ describe("ensureSessionDiffBaseline", () => {
     const entry = makeEntry("legacy-session");
     const target = await seedEntry({ entry });
 
-    const authoritative = loadInternal(target.sessionKey, target.storePath);
-    await expect(ensure(target)).resolves.toEqual(authoritative);
+    await expect(ensure(target)).resolves.toEqual(entry);
     expect(captureMocks.capture).not.toHaveBeenCalled();
     expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject(entry);
     expect(loadInternal(target.sessionKey, target.storePath)).not.toHaveProperty(
       "sessionDiffBaselineCapture",
     );
-  });
-
-  it("invalidates claim arming when the authoritative row is missing", async () => {
-    const entry = makeEntry("deleted-before-arm");
-    const storePath = path.join(sessionDirs.make(), "sessions.json");
-
-    const result = await Promise.allSettled([
-      ensure(
-        { agentId: "main", entry, sessionKey: "agent:main:missing-before-arm", storePath },
-        true,
-      ),
-    ]);
-
-    const [settled] = result;
-    if (!settled) {
-      throw new Error("expected claim-arm settlement");
-    }
-    expectWorkStartError(settled, /was deleted while starting work/i, "SESSION_WORK_START_CHANGED");
-    expect(captureMocks.capture).not.toHaveBeenCalled();
   });
 
   it("invalidates capture completion after the authoritative row is deleted", async () => {

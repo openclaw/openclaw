@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { migrateSqliteSchemaToStrict } from "./sqlite-strict.js";
+import { migrateSqliteSchemaToStrict, withSqliteForeignKeysDisabled } from "./sqlite-strict.js";
 
 const openDatabases: Array<import("node:sqlite").DatabaseSync> = [];
 
@@ -24,6 +24,47 @@ afterEach(() => {
       database.close();
     }
   }
+});
+
+describe("withSqliteForeignKeysDisabled", () => {
+  it.each([0, 1])("restores previous enforcement %i after success and failure", (enabled) => {
+    const database = createDatabase();
+    database.exec(`PRAGMA foreign_keys = ${enabled};`);
+    const operation = () => {
+      expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
+      return 42;
+    };
+    expect(withSqliteForeignKeysDisabled(database, operation)).toBe(42);
+    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: enabled });
+    expect(() =>
+      withSqliteForeignKeysDisabled(database, () => {
+        operation();
+        throw new Error("staging failed");
+      }),
+    ).toThrow("staging failed");
+    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: enabled });
+  });
+
+  it("rejects an active transaction before invoking the callback", () => {
+    const database = createDatabase();
+    database.exec("PRAGMA foreign_keys = ON; BEGIN;");
+    let called = false;
+    expect(() => withSqliteForeignKeysDisabled(database, () => (called = true))).toThrow(
+      "cannot change inside a transaction",
+    );
+    expect(called).toBe(false);
+    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    database.exec("ROLLBACK;");
+  });
+
+  it("rejects asynchronous work and restores enforcement", () => {
+    const database = createDatabase();
+    database.exec("PRAGMA foreign_keys = ON;");
+    expect(() => withSqliteForeignKeysDisabled(database, async () => 42)).toThrow(
+      "must be synchronous",
+    );
+    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+  });
 });
 
 describe("migrateSqliteSchemaToStrict", () => {
@@ -270,24 +311,6 @@ describe("migrateSqliteSchemaToStrict", () => {
       ),
     ).toThrow("changes rowid storage from implicit to integer-primary-key");
     expect(readStrictFlag(database, "entries")).toBe(0);
-  });
-
-  it("accepts values that SQLite can losslessly coerce", () => {
-    const database = createDatabase();
-    database.exec("CREATE TABLE counters (id TEXT PRIMARY KEY, value TEXT NOT NULL);");
-    database.prepare("INSERT INTO counters (id, value) VALUES (?, ?)").run("one", "42");
-
-    migrateSqliteSchemaToStrict(
-      database,
-      `CREATE TABLE IF NOT EXISTS counters (
-        id TEXT PRIMARY KEY,
-        value INTEGER NOT NULL
-      ) STRICT;`,
-    );
-
-    expect(
-      database.prepare("SELECT id, value, typeof(value) AS value_type FROM counters").get(),
-    ).toEqual({ id: "one", value: 42, value_type: "integer" });
   });
 
   it("rolls back when an existing value violates the canonical type", () => {

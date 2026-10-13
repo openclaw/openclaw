@@ -271,7 +271,7 @@ describe("worker node enrollment", () => {
         });
         const closed = vi.fn();
         closing = provider.close().then(closed);
-        await expect(fs.access(stagingRoot)).resolves.toBeUndefined();
+        await fs.access(stagingRoot);
         expect(closed).not.toHaveBeenCalled();
         resume.resolve(stagingRoot);
         await closing;

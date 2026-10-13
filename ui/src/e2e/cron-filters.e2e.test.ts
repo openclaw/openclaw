@@ -103,14 +103,7 @@ function jobTitle(page: Page, name: string) {
 async function dismissDropdownToNextTrigger(page: Page, trigger: Locator, nextTrigger: Locator) {
   await page.keyboard.press("Escape");
   expect(await trigger.evaluate((element) => element === document.activeElement)).toBe(true);
-  expect(
-    await trigger.evaluate((element) =>
-      element
-        .closest("wa-dropdown")
-        ?.shadowRoot?.querySelector('[part="menu"]')
-        ?.hasAttribute("inert"),
-    ),
-  ).toBe(true);
+  expect(await trigger.getAttribute("aria-expanded")).toBe("false");
   await page.keyboard.press("Tab");
   await expect
     .poll(() => nextTrigger.evaluate((element) => element === document.activeElement))
@@ -379,7 +372,7 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(`[data-test-id="cron-row-toggle-${readOnlyJob.id}"]`).count())
           .toBe(0);
-        await expect.poll(() => page.locator("wa-dropdown.cron-job-menu").count()).toBe(0);
+        await expect.poll(() => page.locator(".cron-job-menu").count()).toBe(0);
         await expect.poll(() => page.locator("[data-suggestion]").count()).toBe(0);
         expect(await page.locator(".cron-filter-popover__trigger").count()).toBe(1);
 
@@ -442,12 +435,12 @@ suite.define(() => {
 
         const initialRequestCount = (await gateway.getRequests("cron.runs")).length;
         await statusTrigger.click();
-        await statusFilter.locator('wa-dropdown-item[value="option:error"]').click();
+        await statusFilter.locator('[data-value="option:error"]').click();
         await page.getByRole("button", { name: "Status Error", exact: true }).waitFor();
-        await statusFilter.locator('wa-dropdown-item[value="option:ok"]').click();
+        await statusFilter.locator('[data-value="option:ok"]').click();
         await page.getByRole("button", { name: "Status OK, Error", exact: true }).waitFor();
         expect(await statusTrigger.textContent()).toContain("OK, Error");
-        await statusFilter.locator('wa-dropdown-item[value="option:skipped"]').click();
+        await statusFilter.locator('[data-value="option:skipped"]').click();
         await page
           .getByRole("button", { name: "Status OK +2 (OK, Error, and Skipped)", exact: true })
           .waitFor();
@@ -467,14 +460,14 @@ suite.define(() => {
 
         const statusRequestCount = (await gateway.getRequests("cron.runs")).length;
         await deliveryTrigger.click();
-        await deliveryFilter.locator('wa-dropdown-item[value="option:delivered"]').click();
+        await deliveryFilter.locator('[data-value="option:delivered"]').click();
         await page.getByRole("button", { name: "Delivery Delivered", exact: true }).waitFor();
-        await deliveryFilter.locator('wa-dropdown-item[value="option:not-delivered"]').click();
+        await deliveryFilter.locator('[data-value="option:not-delivered"]').click();
         await page
           .getByRole("button", { name: "Delivery Delivered, Not delivered", exact: true })
           .waitFor();
         expect(await deliveryTrigger.textContent()).toContain("Delivered, Not delivered");
-        await deliveryFilter.locator('wa-dropdown-item[value="option:unknown"]').click();
+        await deliveryFilter.locator('[data-value="option:unknown"]').click();
         await page
           .getByRole("button", {
             name: "Delivery Delivered +2 (Delivered, Not delivered, and Unknown)",
@@ -501,7 +494,7 @@ suite.define(() => {
           .toBe(true);
 
         const deliveryRequestCount = (await gateway.getRequests("cron.runs")).length;
-        await deliveryFilter.locator('wa-dropdown-item[value="command:clear"]').click();
+        await deliveryFilter.locator('[data-value="command:clear"]').click();
         await page.getByRole("button", { name: "Delivery All delivery", exact: true }).waitFor();
         await expect
           .poll(async () =>
@@ -519,7 +512,7 @@ suite.define(() => {
 
         const clearedDeliveryRequestCount = (await gateway.getRequests("cron.runs")).length;
         await statusTrigger.click();
-        await statusFilter.locator('wa-dropdown-item[value="command:clear"]').click();
+        await statusFilter.locator('[data-value="command:clear"]').click();
         await page.getByRole("button", { name: "Status All statuses", exact: true }).waitFor();
         await expect
           .poll(async () =>
@@ -566,7 +559,7 @@ suite.define(() => {
 
         await statusTrigger.focus();
         await page.keyboard.press("Enter");
-        await expect.poll(() => statusFilter.locator("wa-dropdown-item:focus").count()).toBe(1);
+        await expect.poll(() => statusFilter.locator(".oc-menu-item:focus").count()).toBe(1);
         await page.keyboard.press("ArrowDown");
         await page.keyboard.press("Enter");
         await page.getByRole("button", { name: "Status Fehler", exact: true }).waitFor();
@@ -584,7 +577,7 @@ suite.define(() => {
 
         await dismissDropdownToNextTrigger(page, statusTrigger, deliveryTrigger);
         await page.keyboard.press("Enter");
-        await expect.poll(() => deliveryFilter.locator("wa-dropdown-item:focus").count()).toBe(1);
+        await expect.poll(() => deliveryFilter.locator(".oc-menu-item:focus").count()).toBe(1);
         await page.keyboard.press("Enter");
         await page.keyboard.press("ArrowDown");
         await page.keyboard.press("Enter");
@@ -769,7 +762,7 @@ suite.define(() => {
         await statusTrigger.focus();
         await page.keyboard.press("Enter");
         await expect
-          .poll(() => page.locator('[data-filter="status"] wa-dropdown-item:focus').count())
+          .poll(() => page.locator('[data-filter="status"] .oc-menu-item:focus').count())
           .toBe(1);
         await dismissDropdownToNextTrigger(page, statusTrigger, deliveryTrigger);
       },

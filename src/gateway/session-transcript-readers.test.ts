@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
@@ -33,12 +37,14 @@ describe("session transcript reader facade", () => {
       prefix: "openclaw-transcript-readers-",
       layout: "state-only",
     });
+    setRuntimeConfigSnapshot({});
     tempDir = state.stateDir;
     storePath = path.join(tempDir, "sessions.json");
   });
 
   afterEach(async () => {
     await state.cleanup();
+    clearRuntimeConfigSnapshot();
   });
 
   async function writeTranscript(sessionId: string, events: unknown[]) {
@@ -261,6 +267,62 @@ describe("session transcript reader facade", () => {
     await expect(readSessionMessagesWithSourceAsync(scope, { mode: "page" })).rejects.toThrow(
       "Transcript source message exceeds the 8388608-byte page limit",
     );
+    await expect(
+      readSessionMessagesPageWithStatsAsync(scope, { offset: 0, maxMessages: 1 }),
+    ).rejects.toThrow("Transcript history message exceeds the 8388608-byte page limit");
+    await expect(
+      readRecentSessionMessagesWithStatsAsync(scope, { maxMessages: 1 }),
+    ).rejects.toThrow("Transcript history message exceeds the 8388608-byte page limit");
+    await expect(
+      readSessionMessagesAroundIdWithStatsAsync(scope, { messageId: "oversized", maxMessages: 1 }),
+    ).rejects.toThrow("Transcript history message exceeds the 8388608-byte page limit");
+    openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    })
+      .db.prepare("DELETE FROM transcript_event_identities WHERE session_id = ?")
+      .run(sessionId);
+    await expect(readSessionMessageByIdAsync(scope, "oversized")).resolves.toMatchObject({
+      found: true,
+    });
+    await expect(
+      readSessionMessagesAroundIdWithStatsAsync(scope, { messageId: "oversized", maxMessages: 1 }),
+    ).rejects.toThrow("Transcript history message exceeds the 8388608-byte page limit");
+  });
+
+  test("refuses unbounded anchor windows and caps payloads before decoding", async () => {
+    const sessionId = "reader-anchor-page-bytes";
+    const scope = await writeTranscript(sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      ...Array.from({ length: 3 }, (_, index) => ({
+        type: "message",
+        id: `large-${index}`,
+        parentId: index === 0 ? null : `large-${index - 1}`,
+        message: { role: "user", content: "a".repeat(3 * 1024 * 1024) },
+      })),
+    ]);
+    await expect(
+      readSessionMessagesAroundIdWithStatsAsync(scope, { messageId: "large-1", maxMessages: 3 }),
+    ).rejects.toThrow(
+      "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
+    );
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    });
+    // Preserve recorded sizes while poisoning excluded payloads: a late cap would parse this.
+    database.db
+      .prepare(
+        "UPDATE transcript_events SET event_json = '{malformed', event_zstd = NULL WHERE session_id = ? AND seq = 1",
+      )
+      .run(sessionId);
+    const page = await readSessionMessagesAroundIdWithStatsAsync(scope, {
+      messageId: "large-1",
+      maxMessages: 3,
+      maxBytes: 4 * 1024 * 1024,
+    });
+    expect(page.messages).toMatchObject([{ __openclaw: { id: "large-2" } }]);
+    expect(page.hasOverreadContext).toBe(false);
   });
 
   test.each(["visitor"] as const)(

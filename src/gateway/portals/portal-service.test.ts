@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { request, type Server } from "node:http";
-import { request as requestHttps } from "node:https";
+import { Agent as HttpsAgent, request as requestHttps } from "node:https";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -457,27 +457,28 @@ describe("direct HTTPS portal publication", () => {
     wildcardCertificate = createCertificate("DNS:*.example.test");
   });
 
-  // Only DNS routing is local to the fixture: CA, expiry, and URL hostname checks stay enabled.
+  // Own the listener route while keeping CA, expiry, and URL hostname checks enabled.
   async function readPortal(url: string, ca = certificate.cert) {
-    return await new Promise<{ status: number; body: string }>((resolve, reject) => {
-      const req = requestHttps(
-        url,
-        {
-          ca,
-          family: 4,
-          lookup: (_host, _options, callback) => callback(null, "127.0.0.1", 4),
-        },
-        (res) => {
+    const agent = new HttpsAgent({
+      ca,
+      family: 4,
+      lookup: (_host, _options, callback) => callback(null, "127.0.0.1", 4),
+    });
+    try {
+      return await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = requestHttps(url, { agent }, (res) => {
           const chunks: Buffer[] = [];
           res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
           res.on("end", () =>
             resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString() }),
           );
-        },
-      );
-      req.on("error", reject);
-      req.end();
-    });
+        });
+        req.on("error", reject);
+        req.end();
+      });
+    } finally {
+      agent.destroy();
+    }
   }
 
   it.each(["ip", "wildcard", "chain", "LAN", "configured"] as const)(

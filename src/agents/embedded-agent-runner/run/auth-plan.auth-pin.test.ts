@@ -61,6 +61,7 @@ describe("embedded run auth plan provider pin", () => {
       env: { OPENAI_API_KEY: "platform-api-key" },
     });
     agentDir = state.agentDir();
+    await state.writeAuthProfiles({ version: 1, profiles: {} });
     readCodexCliCredentialsCachedMock.mockReset().mockReturnValue({
       type: "oauth",
       provider: "openai",

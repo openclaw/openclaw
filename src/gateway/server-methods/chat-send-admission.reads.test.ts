@@ -15,14 +15,21 @@ import { retainGatewayPluginMetadata } from "../../plugins/plugin-metadata-lifec
 import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import {
+  roleClient,
+  rolePolicyConfig,
+  sharingPolicyClient,
+} from "../session-sharing.test-utils.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { stagePlacementTurnClaimWorkerPublication } from "../worker-environments/placement-turn-authority.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
@@ -249,7 +256,7 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
       if (!prepared.ok) {
         throw new Error("Session preparation failed");
       }
-      const session = qualifyChatSendSession(prepared.value);
+      const session = await qualifyChatSendSession(prepared.value);
       let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
       try {
         // Admission must read current settings even though preparation retained the old entry.
@@ -283,7 +290,6 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
         if (admitted?.ok) {
           admitted.value.cleanupAdmittedRun();
         }
-        session.releaseSessionTarget();
         clearAgentRunContext(runId);
       }
     });
@@ -334,25 +340,21 @@ it("releases rejected upload reservations so corrected input can reuse its key",
       if (!prepared.ok) {
         throw new Error("fixture session preparation failed");
       }
-      const session = qualifyChatSendSession(prepared.value);
-      try {
-        const admission = admitChatSend({
-          request: blocked.value,
-          session,
-          client: null,
-          context,
-          respond: vi.fn(),
-        });
-        if (failure === "throws") {
-          await expect(admission).rejects.toBe(policyError);
-        } else {
-          await expect(admission).resolves.toMatchObject({ ok: false });
-        }
-        expect(context.dedupe.has(session.pendingChatSendKey)).toBe(false);
-        expect(context.chatAbortControllers.size).toBe(0);
-      } finally {
-        session.releaseSessionTarget();
+      const session = await qualifyChatSendSession(prepared.value);
+      const admission = admitChatSend({
+        request: blocked.value,
+        session,
+        client: null,
+        context,
+        respond: vi.fn(),
+      });
+      if (failure === "throws") {
+        await expect(admission).rejects.toBe(policyError);
+      } else {
+        await expect(admission).resolves.toMatchObject({ ok: false });
       }
+      expect(context.dedupe.has(session.pendingChatSendKey)).toBe(false);
+      expect(context.chatAbortControllers.size).toBe(0);
       const corrected = await normalizeChatSendRequest({
         client: null,
         params: { sessionKey, message: "Hello", idempotencyKey: runId },
@@ -368,7 +370,7 @@ it("releases rejected upload reservations so corrected input can reuse its key",
       if (!next.ok) {
         throw new Error("fixture retry preparation failed");
       }
-      const retrySession = qualifyChatSendSession(next.value);
+      const retrySession = await qualifyChatSendSession(next.value);
       let retried: Awaited<ReturnType<typeof admitChatSend>> | undefined;
       try {
         retried = await admitChatSend({
@@ -383,7 +385,6 @@ it("releases rejected upload reservations so corrected input can reuse its key",
         if (retried?.ok) {
           retried.value.cleanupAdmittedRun();
         }
-        retrySession.releaseSessionTarget();
         clearAgentRunContext(runId);
       }
     }
@@ -423,7 +424,7 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
       if (!prepared.ok) {
         throw new Error("Session preparation failed");
       }
-      const session = qualifyChatSendSession(prepared.value);
+      const session = await qualifyChatSendSession(prepared.value);
       if (source === "new-terminal") {
         // The prepared request predates this receipt; its own reservation is not retry evidence.
         replaceSessionEntrySync(
@@ -498,7 +499,6 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
         if (admitted?.ok) {
           admitted.value.cleanupAdmittedRun();
         }
-        session.releaseSessionTarget();
         clearAgentRunContext(runId);
       }
     });
@@ -508,7 +508,6 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
 it.each([
   "caller revocation",
   "lifecycle rotation",
-  "placement publication",
   "service replacement",
   "unavailable reader",
 ] as const)("refuses %s while preparing placement admission", async (change) => {
@@ -522,8 +521,11 @@ it.each([
     const scope = { agentId: "main", sessionKey };
     const entry: SessionEntry = { sessionId: "placement-session", updatedAt: 1 };
     replaceSessionEntrySync(scope, entry);
+    const client = sharingPolicyClient({
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
     const request = await normalizeChatSendRequest({
-      client: null,
+      client,
       params: { sessionKey, message: "Hello", idempotencyKey: runId },
     });
     if (!request.ok) {
@@ -537,19 +539,20 @@ it.each([
     });
     const prepared = await prepareChatSendSession({
       request: request.value,
-      client: null,
+      client,
       context,
     });
     if (!prepared.ok) {
       throw new Error("Session preparation failed");
     }
-    const session = qualifyChatSendSession(prepared.value);
+    expect(prepared.value.restartSafeRequest).toBeDefined();
+    const session = await qualifyChatSendSession(prepared.value);
     const initialEntry = structuredClone(sessionAccessor.loadSessionEntry(scope));
     const observed = createDeferred();
     const resume = createDeferred();
-    const preparePlacement = placements.prepareRuntimeRefresh.bind(placements);
+    const preparePlacement = placements.prepareSessionPlacement.bind(placements);
     const delayed = vi
-      .spyOn(placements, "prepareRuntimeRefresh")
+      .spyOn(placements, "prepareSessionPlacement")
       .mockImplementationOnce(async (sessionId) => {
         const facts = await preparePlacement(sessionId);
         observed.resolve();
@@ -562,7 +565,7 @@ it.each([
     const pending = admitChatSend({
       request: request.value,
       session,
-      client: null,
+      client,
       context,
       respond,
       assertCurrent: () => {
@@ -578,8 +581,6 @@ it.each([
           callerCurrent = false;
         } else if (change === "lifecycle rotation") {
           rotateAgentEventLifecycleGeneration();
-        } else if (change === "placement publication") {
-          await placements.startDispatch({ ...scope, sessionId: entry.sessionId });
         } else {
           context.workerSessionPlacementService = createWorkerSessionPlacementStore();
         }
@@ -613,7 +614,151 @@ it.each([
       if (admitted?.ok) {
         admitted.value.cleanupAdmittedRun();
       }
-      session.releaseSessionTarget();
+      clearAgentRunContext(runId);
+    }
+  });
+});
+
+it.each([
+  {
+    name: "ineligible internal backend",
+    external: false,
+    initialRequired: false,
+    required: false,
+    allowed: true,
+    reloadDuringRead: false,
+  },
+  {
+    name: "required-profile external backend",
+    external: true,
+    initialRequired: true,
+    required: true,
+    allowed: true,
+    reloadDuringRead: false,
+  },
+  {
+    name: "local-to-required policy reload",
+    external: true,
+    initialRequired: false,
+    required: true,
+    allowed: true,
+    reloadDuringRead: false,
+  },
+  {
+    name: "local-to-required during placement preparation",
+    external: true,
+    initialRequired: false,
+    required: true,
+    allowed: true,
+    reloadDuringRead: true,
+  },
+  {
+    name: "required-to-local policy reload",
+    external: true,
+    initialRequired: true,
+    required: false,
+    allowed: false,
+    reloadDuringRead: false,
+  },
+])("preserves pending placement fences for $name", async (testCase) => {
+  await withOpenClawTestState({ label: "backend-chat-pending-placement" }, async () => {
+    let cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {} } },
+      ...(testCase.initialRequired ? { cloudWorkers: { requiredProfile: "native" } } : {}),
+    };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:backend-pending-placement",
+      sessionId: "backend-pending-placement",
+    };
+    const runId = "backend-pending-placement-send";
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const placements = createWorkerSessionPlacementStore();
+    const requested = await placements.startDispatch(scope);
+    const client = sharingPolicyClient({
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
+    client.connect.client = {
+      id: "gateway-client",
+      version: "test",
+      platform: "test",
+      mode: "backend",
+    };
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => cfg,
+      workerSessionPlacementService: placements,
+    });
+    const request = await normalizeChatSendRequest({
+      client,
+      params: { sessionKey: scope.sessionKey, message: "Hello", idempotencyKey: runId },
+    });
+    if (!request.ok) {
+      throw new Error(request.error);
+    }
+    const prepared = await prepareChatSendSession({
+      request: request.value,
+      client,
+      context,
+      isDirectExternalUser: testCase.external,
+    });
+    if (!prepared.ok) {
+      throw new Error("Session preparation failed");
+    }
+    expect(Boolean(prepared.value.restartSafeRequest)).toBe(testCase.external);
+    const session = await qualifyChatSendSession(prepared.value);
+    const reloadPolicy = () => {
+      cfg = {
+        ...cfg,
+        cloudWorkers: testCase.required ? { requiredProfile: "native" } : undefined,
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+    };
+    if (testCase.required !== testCase.initialRequired && !testCase.reloadDuringRead) {
+      reloadPolicy();
+    }
+    const read = await placements.prepareSessionPlacement(scope.sessionId);
+    const pending = stagePlacementTurnClaimWorkerPublication(
+      requireOpenClawStateDatabaseIdentity({ db: openOpenClawStateDatabase().db }),
+      requested,
+      undefined,
+      requested.state,
+      requested,
+    );
+    const preparePlacement = placements.prepareSessionPlacement.bind(placements);
+    const reloadingRead = testCase.reloadDuringRead
+      ? vi
+          .spyOn(placements, "prepareSessionPlacement")
+          .mockImplementationOnce(async (sessionId) => {
+            const facts = await preparePlacement(sessionId);
+            reloadPolicy();
+            return facts;
+          })
+      : undefined;
+    const respond = vi.fn();
+    let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
+    try {
+      expect(() => read.current()).toThrow("placement authority changed");
+      admitted = await admitChatSend({
+        request: request.value,
+        session,
+        client,
+        context,
+        respond,
+      });
+      expect(admitted.ok, JSON.stringify(respond.mock.calls)).toBe(testCase.allowed);
+      expect(context.chatAbortControllers.has(runId)).toBe(testCase.allowed);
+      if (!testCase.allowed) {
+        expect(respond.mock.calls[0]?.[2]?.message).toContain("placement authority changed");
+      }
+      expect(() => read.current()).toThrow("placement authority changed");
+    } finally {
+      reloadingRead?.mockRestore();
+      pending.rollback();
+      read.release();
+      if (admitted?.ok) {
+        admitted.value.cleanupAdmittedRun();
+      }
       clearAgentRunContext(runId);
     }
   });

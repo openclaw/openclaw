@@ -63,6 +63,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/fixtures/lit-to-solid/runtime.mts!",
   // The module-generation test launches this Bun regression directly from its source path.
   "src/plugins/plugin-module-generation.bun.test-support.ts!",
+  // The existing-store Bun regression launches this source fixture directly by path.
+  "src/infra/sqlite-existing-database.bun.test-support.ts!",
   // The plugin artifact suite launches these Node tests with the native tooling preload.
   "src/cli/plugins-feature-artifact.native.test-support.ts!",
   // ExecHostTransportProofTests.swift launches this isolated native client by path.
@@ -97,6 +99,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs!",
   // The Codex isolated-completion adapter test spawns this stdio app-server by path.
   "test/e2e/qa-lab/runtime/codex-isolated-app-server.fixture.mjs!",
+  // The physical-admission test resolves this worker from physicalFactsTestEntrypoint.
+  "src/infra/database-engine/physical-facts-worker.test-support.ts!",
   // The proxy owner test spawns this capture child through resolveRuntimeWorkerUrl.
   "src/proxy-capture/child-transport.process.test-support.ts!",
   // `pnpm ui:parity` runs this opt-in Vitest config by path; it includes the capture suite.
@@ -113,8 +117,6 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts!",
   // QA scenario YAML dispatches these scripts/tests by path rather than import.
   ...QA_SCENARIO_EXECUTION_ENTRIES,
-  // Invoked directly by the sandbox bind-conflict E2E verification script.
-  "scripts/e2e-sandbox-bind-conflict.mts!",
   // The Voice Call QA scenario loads this fixture through a generated plugin directory.
   "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
   // The topology analyzer owns these as an intentionally self-contained graph.
@@ -179,6 +181,10 @@ const workspaces = Object.fromEntries(
               // The plugin README documents this standalone fixture benchmark command.
               ...(workspace === "extensions/team-reports"
                 ? ["src/report-run.benchmark.test-support.ts!"]
+                : []),
+              // The PostgreSQL fixture resolves this backend through openEngineWorkerStore.
+              ...(workspace === "extensions/workboard"
+                ? ["src/test/postgres-fixture-worker.test-support.ts!"]
                 : []),
               // Vitest's root aliases execute these Discord-owned runtime adapters.
               ...(workspace === "extensions/discord" ? ["test/*-runtime.ts!"] : []),

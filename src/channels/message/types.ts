@@ -162,6 +162,8 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   cfg: TConfig;
   to: string;
   text: string;
+  /** Host-resolved session that produced this send, distinct from the destination session. */
+  sessionKey?: string;
   accountId?: string | null;
   deps?: OutboundSendDeps;
   replyToId?: string | null;

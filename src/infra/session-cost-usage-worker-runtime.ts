@@ -18,6 +18,10 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptStatsBatchFromDatabase } from "../config/sessions/session-accessor.sqlite-transcript-stats.js";
+import {
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { restoreSessionColdTranscript } from "../config/sessions/session-cold-storage.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
@@ -49,6 +53,7 @@ import {
   captureUsageCostIncognitoBinding,
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
+import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import {
   createUsageCostResolver,
   prepareUsageCostPricing,
@@ -76,7 +81,9 @@ export type PreparedUsageCostWorker = {
   config?: OpenClawConfig;
   agentDir: string;
   databases: Array<OpenClawAgentDatabaseOptions & { agentId: string; path: string }>;
+  archiveStorePaths: string[];
   incognito?: UsageCostIncognitoBinding;
+  sessionActor?: SessionActorStorageBinding;
 };
 
 export function prepareUsageCostWorker(params: {
@@ -89,7 +96,29 @@ export function prepareUsageCostWorker(params: {
   sessionFiles?: readonly string[];
   env?: NodeJS.ProcessEnv;
   incognito?: UsageCostIncognitoBinding;
+  sessionActor?: SessionActorStorageBinding;
 }): PreparedUsageCostWorker {
+  const sessionActor = getSessionActorStorageBinding({
+    ...params,
+    storePath: params.storePath ?? params.databasePath,
+  });
+  if (sessionActor) {
+    const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
+    env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+    return {
+      location: {
+        agentId: sessionActor.agentId,
+        databasePath: sessionActor.path,
+        storePath: sessionActor.path,
+        env: { ...env },
+      },
+      config: params.config,
+      agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionActor.agentId),
+      databases: [],
+      archiveStorePaths: [],
+      sessionActor,
+    };
+  }
   const incognito = captureUsageCostIncognitoBinding(params);
   const agentId = normalizeAgentId(params.agentId);
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
@@ -115,9 +144,10 @@ export function prepareUsageCostWorker(params: {
     databases.set(JSON.stringify([prepared.agentId, prepared.path]), prepared);
   };
   add({ agentId, path: databasePath, env });
+  const archiveStorePaths = listDurableSqliteTargetPathsForSessionStorePath(storePath);
   const targets = [
     { agentId, storePath },
-    ...listDurableSqliteTargetPathsForSessionStorePath(storePath).map((targetPath) => ({
+    ...archiveStorePaths.map((targetPath) => ({
       agentId,
       storePath: targetPath,
     })),
@@ -148,6 +178,7 @@ export function prepareUsageCostWorker(params: {
     config: params.config,
     agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, agentId),
     databases: [...databases.values()],
+    archiveStorePaths,
     incognito,
   };
 }
@@ -213,6 +244,21 @@ export async function runUsageCostWorker(
   operation: UsageCostWorkerRequest,
   suppliedIncognito?: UsageCostIncognitoBinding,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
+  if (prepared.sessionActor) {
+    const pricing =
+      operation.kind === "refresh"
+        ? await prepareUsageCostPricing(prepared.config, prepared.agentDir)
+        : undefined;
+    const request: UsageCostWorkerOperation =
+      operation.kind === "refresh"
+        ? { ...operation, pricingFingerprint: pricing!.fingerprint() }
+        : operation;
+    return runSessionActorUsage(
+      prepared.sessionActor,
+      request,
+      createUsageCostResolver(prepared, pricing),
+    );
+  }
   const incognito = suppliedIncognito ?? prepared.incognito;
   if (!incognito) {
     return runPreparedUsageCostWorker(prepared, operation);
@@ -295,6 +341,7 @@ async function runPreparedUsageCostWorker(
   incognito?: ReturnType<typeof createIncognitoUsageCostAdapter>,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   const location = structuredClone(prepared.location);
+  const archiveStorePaths = [...prepared.archiveStorePaths];
   const capturedOperation = structuredClone(operation);
   const signal = getAsyncWorkSignal();
   return withSessionCostUsageWorkerDatabases(prepared.databases, async (scope) => {
@@ -400,12 +447,14 @@ async function runPreparedUsageCostWorker(
           location,
           operation: workerOperation,
           databases: [],
+          archiveStorePaths,
           transcriptFiles: incognito?.filePaths,
         },
         {
           signal,
           beforeDispatch: assertCurrent,
-          inputBytes: 2 * JSON.stringify({ location, operation: workerOperation }).length,
+          inputBytes:
+            2 * JSON.stringify({ location, operation: workerOperation, archiveStorePaths }).length,
           timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS,
           onRequest: async (value, context) => {
             const transferList: Transferable[] = [];
@@ -549,10 +598,12 @@ async function runPreparedUsageCostWorker(
                     output = await requireLock("write cache rows").writeRollup(
                       {
                         rollupId: request.input.key,
-                        previousValueJson: request.input.previousValue,
                         valueJson: request.input.value,
                         blob: request.input.blob,
                         updatedAt: request.input.updatedAt,
+                        partitions: request.input.partitions,
+                        removedDates: request.input.removedDates,
+                        replacePartitions: request.input.replacePartitions,
                       },
                       context.signal,
                     );

@@ -39,7 +39,7 @@ import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   createRuntimeConfigReader,
-  getRuntimeConfig,
+  captureRuntimeConfigAsyncReader,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createNonExitingRuntime,
@@ -56,7 +56,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
-  getSessionEntry,
+  getSessionEntryAsync,
   readSessionUpdatedAtAsync,
   resolveSendPolicy,
   resolveStorePath,
@@ -197,7 +197,7 @@ const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me", "no menti
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promise<void> {
   const { scheduler } = opts;
   const runtime = opts.runtime ?? createNonExitingRuntime();
-  const cfg = opts.config ?? getRuntimeConfig();
+  const cfg = opts.config ?? (await captureRuntimeConfigAsyncReader()());
   const readConfig = createRuntimeConfigReader(cfg);
   const accountInfo = resolveIMessageAccount({
     cfg,
@@ -768,7 +768,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       cfg.agents?.defaults?.typingMode;
     const sendPolicy = resolveSendPolicy({
       cfg,
-      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
+      entry: await getSessionEntryAsync({ storePath, sessionKey: decision.route.sessionKey }),
       sessionKey: decision.route.sessionKey,
       channel: "imessage",
       chatType: decision.isGroup ? "group" : "direct",

@@ -7,6 +7,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import {
   inspectPlugin,
   readPluginCapabilityConsentError,
@@ -20,7 +21,6 @@ import {
   type PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import { installPlugin } from "../../lib/plugins/install.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { PluginConsentIntent, PluginConsentState } from "./consent-dialog.tsx";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
@@ -41,7 +41,7 @@ type PluginMutationOptions = {
 };
 
 type PluginsConsentControllerHost = {
-  gateway: GatewayPageController;
+  gateway: GatewayPageBinding;
   getContext: () => ApplicationContext;
   getResult: () => PluginListResult | null;
   canMutate: () => boolean;

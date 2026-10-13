@@ -68,7 +68,7 @@ suite.define(() => {
       await gateway.waitForRequest("connect");
       await page.evaluate(() => {
         const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
-        const entries: Record<string, unknown> = { "ui.sidebarEntries": [] };
+        const entries: Record<string, unknown> = { "ui.railShortcuts": [] };
         mock.setRequestHandler("users.prefs.get", ({ respond }) =>
           respond({ status: "ok", entries }),
         );
@@ -118,16 +118,16 @@ suite.define(() => {
       await menu.getByText("Pin session", { exact: true }).click();
       const pin = page.locator(`.sidebar-rail [data-sidebar-entry="session:${sessionKey}"]`);
       expect((await gateway.waitForRequest("users.prefs.set")).params).toEqual({
-        entries: { "ui.sidebarEntries": [`session:${sessionKey}`] },
-        expectedEntries: { "ui.sidebarEntries": [] },
+        entries: { "ui.railShortcuts": [`session:${sessionKey}`] },
+        expectedEntries: { "ui.railShortcuts": [] },
       });
       await pin.waitFor();
       expect(await gateway.getRequests("sessions.patch")).toEqual([]);
       await actions.click();
       await menu.getByText("Unpin session", { exact: true }).click();
       expect((await gateway.waitForRequest("users.prefs.set", { after: 1 })).params).toEqual({
-        entries: { "ui.sidebarEntries": [] },
-        expectedEntries: { "ui.sidebarEntries": [`session:${sessionKey}`] },
+        entries: { "ui.railShortcuts": [] },
+        expectedEntries: { "ui.railShortcuts": [`session:${sessionKey}`] },
       });
       await pin.waitFor({ state: "detached" });
       expect(await gateway.getRequests("sessions.patch")).toEqual([]);

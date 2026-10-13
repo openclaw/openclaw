@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
-import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, setRuntimeConfigSnapshot } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../gateway/agent-runtime-approval-authority.js";
 import { createPreparedTestApprovalManager } from "../gateway/exec-approval-manager.test-support.js";
@@ -77,6 +77,7 @@ beforeEach(async ({ onTestFinished }) => {
   );
   state = await createOpenClawTestState({ label: "node-exec-policy" });
   await state.writeConfig({});
+  await captureRuntimeConfigAsyncReader()();
   saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
   invokeCount = 0;
   rawPolicyReadable = true;
@@ -748,7 +749,7 @@ it.each(["caller", "node", "approvals"] as const)(
         workdir: link,
         ...(owner === "caller" ? { ask: "always" as const } : {}),
       }),
-    ).rejects.toThrow("canonical cwd");
+    ).rejects.toThrow("working directory without symlink path components");
     expect(invokeCount).toBe(0);
   },
 );
@@ -784,7 +785,9 @@ it("refuses a cwd replaced by a symlink after approval preparation", async () =>
   const result = await execution;
   expect(result.details).toMatchObject({ status: "failed", failureKind: "policy-denied" });
   expect(result.content).toEqual([
-    expect.objectContaining({ text: expect.stringContaining("canonical cwd") }),
+    expect.objectContaining({
+      text: expect.stringContaining("working directory without symlink path components"),
+    }),
   ]);
 });
 

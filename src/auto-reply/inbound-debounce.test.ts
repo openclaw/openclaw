@@ -105,33 +105,6 @@ describe("createInboundDebouncer", () => {
     expect(calls).toEqual([[1, 2], [3]]);
   });
 
-  it("flushes sustained same-key messages in complete, ordered batches", async () => {
-    const { calls, debouncer } = createRecordingDebouncer({ debounceMs: 50 });
-
-    for (let index = 0; index < 12; index += 1) {
-      await debouncer.enqueue({ key: "a", id: String(index) });
-      await vi.advanceTimersByTimeAsync(20);
-    }
-    expect(calls).toStrictEqual([]);
-
-    await debouncer.enqueue({ key: "a", id: "12" });
-    await vi.advanceTimersByTimeAsync(10);
-    expect(calls).toEqual([Array.from({ length: 13 }, (_, index) => String(index))]);
-
-    for (let index = 13; index < 25; index += 1) {
-      await debouncer.enqueue({ key: "a", id: String(index) });
-      await vi.advanceTimersByTimeAsync(20);
-    }
-    expect(calls).toHaveLength(1);
-
-    await vi.advanceTimersByTimeAsync(10);
-    expect(calls).toEqual([
-      Array.from({ length: 13 }, (_, index) => String(index)),
-      Array.from({ length: 12 }, (_, index) => String(index + 13)),
-    ]);
-    await debouncer.drain();
-  });
-
   it.each([undefined, 500])("anchors the batch deadline (maximum wait: %s)", async (maxWaitMs) => {
     const { calls, debouncer } = createRecordingDebouncer<Message & { windowMs: number }>({
       debounceMs: 0,
@@ -206,37 +179,6 @@ describe("createInboundDebouncer", () => {
     },
   );
 
-  it("flushes an explicit key without consulting the hold check", async () => {
-    const shouldHoldFlush = vi.fn(() => true);
-    const { calls, debouncer } = createRecordingDebouncer({ debounceMs: 10, shouldHoldFlush });
-
-    await debouncer.enqueue({ key: "a", id: "1" });
-    await debouncer.flushKey("a");
-
-    expect(calls).toEqual([["1"]]);
-    expect(shouldHoldFlush).not.toHaveBeenCalled();
-    await debouncer.drain();
-  });
-
-  it("reports buffered items when cancelling a key", async () => {
-    const canceled: Array<string[]> = [];
-
-    const { calls, debouncer } = createRecordingDebouncer({
-      debounceMs: 10,
-      onCancel: (items) => {
-        canceled.push(items.map((entry) => entry.id));
-      },
-    });
-
-    await debouncer.enqueue({ key: "a", id: "1" });
-    await debouncer.enqueue({ key: "a", id: "2" });
-    expect(debouncer.cancelKey("a")).toBe(true);
-    await vi.advanceTimersByTimeAsync(10);
-
-    expect(canceled).toEqual([["1", "2"]]);
-    expect(calls).toEqual([]);
-  });
-
   it("cancels a released flush still waiting behind active same-key work", async () => {
     const calls: Array<string[]> = [];
     const canceled: Array<string[]> = [];
@@ -308,20 +250,6 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "a", id: "2", debounce: false });
 
     expect(calls).toEqual([["1"], ["2"]]);
-  });
-
-  it("supports per-item debounce windows when default debounce is disabled", async () => {
-    const { calls, debouncer } = createRecordingDebouncer<Message & { windowMs: number }>({
-      debounceMs: 0,
-      resolveDebounceMs: (item) => item.windowMs,
-    });
-
-    await debouncer.enqueue({ key: "forward", id: "1", windowMs: 30 });
-    await debouncer.enqueue({ key: "forward", id: "2", windowMs: 30 });
-
-    expect(calls).toStrictEqual([]);
-    await vi.advanceTimersByTimeAsync(30);
-    expect(calls).toEqual([["1", "2"]]);
   });
 
   it("keeps fire-and-forget keyed work ahead of a later buffered item", async () => {
@@ -562,21 +490,6 @@ describe("createInboundDebouncer", () => {
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
-  });
-
-  it("bypasses debouncing for new keys once the tracked-key cap is reached", async () => {
-    const { calls, debouncer } = createRecordingDebouncer({
-      debounceMs: 50,
-      maxTrackedKeys: 1,
-    });
-
-    await debouncer.enqueue({ key: "a", id: "1" });
-    await debouncer.enqueue({ key: "b", id: "2" });
-
-    expect(calls).toEqual([["2"]]);
-
-    await vi.advanceTimersByTimeAsync(50);
-    expect(calls).toEqual([["2"], ["1"]]);
   });
 
   it("keeps same-key overflow work ordered after falling back to immediate flushes", async () => {

@@ -1,6 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal } from "solid-js";
-import "../components/option-card.ts";
+import "../components/option-card.tsx";
 
 type OptionCardAttributes = SolidJSX.HTMLAttributes<
   HTMLElementTagNameMap["openclaw-option-card"]

@@ -471,7 +471,9 @@ export function createPinnedLookup(params: {
     const candidates =
       requestedFamily === 4 || requestedFamily === 6
         ? records.filter((entry) => entry.family === requestedFamily)
-        : automaticRecords;
+        : opts.all
+          ? records
+          : automaticRecords;
     const usable = candidates.length > 0 ? candidates : automaticRecords;
     // Match dns.lookup's asynchronous callback contract so connection errors
     // cannot fire before the socket owner attaches its error listener.

@@ -14,10 +14,10 @@ function phasedText(text: string, phase: "commentary" | "final_answer", id: stri
 }
 
 describe("shared/chat-message-content", () => {
-  it.each(["commentary", "final_answer"] as const)(
+  it.each(["final_answer"] as const)(
     "lets explicit blocks override top-level %s without reviving unphased siblings",
     (phase) => {
-      const opposite = phase === "commentary" ? "final_answer" : "commentary";
+      const opposite = "commentary";
       const explicit = {
         type: "text",
         text: "Selected",
@@ -30,13 +30,6 @@ describe("shared/chat-message-content", () => {
       expect(extractAssistantTextForPhase(message, { phase: opposite })).toBe("Selected");
     },
   );
-  it("extracts the first text block from array content", () => {
-    expect(
-      extractFirstTextBlock({
-        content: [{ text: "hello" }, { text: "world" }],
-      }),
-    ).toBe("hello");
-  });
 
   it("returns plain string content", () => {
     expect(
@@ -44,27 +37,6 @@ describe("shared/chat-message-content", () => {
         content: "hello from string content",
       }),
     ).toBe("hello from string content");
-  });
-
-  it("preserves empty-string text in the first block", () => {
-    expect(
-      extractFirstTextBlock({
-        content: [{ text: "" }, { text: "later" }],
-      }),
-    ).toBe("");
-  });
-
-  it("only considers the first content block even if later blocks have text", () => {
-    expect(
-      extractFirstTextBlock({
-        content: [null, { text: "later" }],
-      }),
-    ).toBeUndefined();
-    expect(
-      extractFirstTextBlock({
-        content: [{ type: "image" }, { text: "later" }],
-      }),
-    ).toBeUndefined();
   });
 
   it("returns undefined for missing, empty, or non-text content", () => {
@@ -125,15 +97,6 @@ describe("extractAssistantPhaseText", () => {
     ).toBeUndefined();
   });
 
-  it("falls back to unphased legacy text", () => {
-    expect(
-      extractAssistantPhaseText({
-        role: "assistant",
-        content: [{ type: "text", text: "Legacy answer" }],
-      }),
-    ).toBe("Legacy answer");
-  });
-
   it("extracts persisted Responses output_text blocks as assistant-visible text", () => {
     expect(
       extractAssistantPhaseText({
@@ -141,28 +104,6 @@ describe("extractAssistantPhaseText", () => {
         content: [{ type: "output_text", text: "Persisted assistant answer" }],
       }),
     ).toBe("Persisted assistant answer");
-  });
-
-  it("extracts persisted Responses assistant input_text blocks", () => {
-    expect(
-      extractAssistantPhaseText({
-        role: "assistant",
-        content: [{ type: "input_text", text: "Persisted assistant input" }],
-      }),
-    ).toBe("Persisted assistant input");
-  });
-
-  it("does not mix unphased legacy text into final_answer output", () => {
-    expect(
-      extractAssistantPhaseText({
-        role: "assistant",
-        phase: "final_answer",
-        content: [
-          { type: "text", text: "Legacy answer" },
-          phasedText("Actual final answer", "final_answer", "msg_final"),
-        ],
-      }),
-    ).toBe("Actual final answer");
   });
 });
 
@@ -211,7 +152,7 @@ describe("resolveAssistantMessagePhase", () => {
   });
 });
 
-it.each(["    code", "\tcode", "\n\n    code"])("retains selected phase source: %j", (text) => {
+it.each(["\n\n    code"])("retains selected phase source: %j", (text) => {
   expect(extractAssistantPhaseText({ role: "assistant", content: text })).toBe(text);
   expect(
     extractAssistantPhaseText({

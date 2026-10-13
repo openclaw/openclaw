@@ -22,8 +22,16 @@ export type PluginSourceFile = {
   generated?: true;
 };
 
+export type PluginSourceBuild = {
+  directory: string;
+  include: (additions: readonly string[]) => void;
+  resolve: (source: string, mode?: PluginSourceLoadMode, nativeFormat?: string | null) => string;
+  sourceForOutput: (file: string) => PluginSourceFile | undefined;
+  dispose: () => void;
+};
+
 /** Compile captured source into a private namespace; native files stay with their capture owner. */
-export function buildPluginTypeScriptSource(root: string) {
+export function buildPluginTypeScriptSource(root: string): PluginSourceBuild {
   if (!useNodeModuleHooks()) {
     throw new Error("Plugin source builds require Node module hooks");
   }

@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { summarizeAgentActivity } from "../../../../../src/agents/agent-activity-presentation.js";
+import type { ControlUiSurfaceProps } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import { isToolCardError, isToolCardSkipped } from "../../../lib/chat/tool-cards.ts";
@@ -59,6 +60,27 @@ export type ToolRenderOptions = {
   runActive?: boolean;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  onPermissionRetry?: (message: string) => void;
   /** Lets a subagent's launch row show its session's state and open it. */
   subagents?: SubagentRowContext;
 };
+
+export function toolResultSurfaceProps(
+  card: ToolCard,
+  options: Pick<ToolRenderOptions, "sessionKey" | "agentId"> & { expanded: boolean },
+): ControlUiSurfaceProps["tool-result"] {
+  return {
+    sessionKey: options.sessionKey ?? "",
+    agentId: options.agentId,
+    toolName: card.name,
+    toolCallId: card.callId ?? card.id,
+    input: card.args,
+    output: {
+      text: card.outputText,
+      details: card.details,
+      isError: card.isError,
+      completed: card.completed,
+    },
+    expanded: options.expanded,
+  };
+}

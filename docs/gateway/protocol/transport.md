@@ -186,7 +186,7 @@ unbound action. Requests that omit `expectedProfileId` retain existing behavior.
 
 `expectedProfileId` is an optional opaque string of 1 to 128 characters on an
 authenticated request frame. The Gateway compares it exactly with the current
-canonical profile ID of the authenticated principal. It does not trim, fold
+primary profile ID of the authenticated principal. It does not trim, fold
 case, or follow merge aliases on the expected value. Obtain the ID from
 `users.self`; a Gateway URL, account label, agent ID, or session key is not a
 profile ID. A missing authenticated profile cannot satisfy the precondition.
@@ -209,7 +209,7 @@ the earlier outcome before retrying uncertain work. Ordinary socket disconnects
 do not cancel already-accepted work.
 
 On authenticated operator broadcasts, optional `recipientProfileId` identifies
-the recipient's canonical profile at publication. It is a per-recipient frame
+the recipient's primary profile at publication. It is a per-recipient frame
 fact, not the event's origin, a run-owner identity, or an authorization grant.
 Existing event permissions and subscriptions still govern delivery. Bind the
 consumer to both its physical Gateway connection and selected profile; if the

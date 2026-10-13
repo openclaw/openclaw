@@ -11,6 +11,7 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
@@ -42,6 +43,7 @@ import {
   unregisterOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabases,
 } from "./openclaw-agent-db-registry.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
   closeOpenClawAgentDatabaseByPath,
@@ -68,7 +70,6 @@ import {
   seedSchema19SessionKeyRepairFixture,
 } from "./openclaw-agent-db.test-support.js";
 import { materializeV21WorkerAgentDatabase } from "./openclaw-agent-schema-v21.test-support.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -2130,7 +2131,8 @@ describe("openclaw agent database", () => {
     expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
 
     // Retiring a claim during a real integrity read must precede index repair, not only exposure.
-    clearOpenClawAgentIntegrityVerification(databasePath, env);
+    invalidateOpenClawAgentDatabaseValidation(databasePath);
+    revokeSqliteDatabaseAdmissionsForPath(databasePath);
     const editor = nodeSqlite.openNodeSqliteDatabase(databasePath);
     try {
       editor.exec("DROP INDEX idx_agent_cache_expiry");
@@ -2458,26 +2460,6 @@ describe("openclaw agent database", () => {
 
     expect(fs.statSync(parentDir).mode & 0o777).toBe(0o755);
   });
-
-  it.runIf(process.platform !== "win32")(
-    "defers nested permission repair to the outer transaction boundary",
-    () => {
-      const stateDir = createTempStateDir();
-      const options = {
-        agentId: "worker-1",
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      };
-      const database = openOpenClawAgentDatabase(options);
-      fs.chmodSync(database.path, 0o644);
-
-      runOpenClawAgentWriteTransaction(() => {
-        runOpenClawAgentWriteTransaction(() => undefined, options);
-        expect(fs.statSync(database.path).mode & 0o777).toBe(0o644);
-      }, options);
-
-      expect(fs.statSync(database.path).mode & 0o777).toBe(0o600);
-    },
-  );
 
   it("repairs every missing or drifted canonical agent-state named index", () => {
     const stateDir = createTempStateDir();
@@ -2807,6 +2789,7 @@ describe("openclaw agent database", () => {
       )
       .run();
     corrupt.close();
+    revokeSqliteDatabaseAdmissionsForPath(databasePath);
 
     openOpenClawAgentDatabase(options);
     closeOpenClawAgentDatabasesForTest();

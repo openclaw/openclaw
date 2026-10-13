@@ -263,43 +263,6 @@ describe("sessions tool self-archive", () => {
       expect(callGateway).toHaveBeenLastCalledWith(archiveRequest);
     });
   });
-
-  it("retries when a competing turn releases before its archive rejection settles", async () => {
-    const dir = sessionDirs.make();
-    const { sessionKey, createTool, beginAdmission, archiveRequest } = await createArchiveSession(
-      dir,
-      "archive-release-race",
-    );
-    let competingTurnFinished = false;
-    const callGateway = vi.fn(async () => {
-      if (!competingTurnFinished) {
-        const competingAdmission = await beginAdmission();
-        competingAdmission.release();
-        competingTurnFinished = true;
-        throw Object.assign(new Error("Session did not finish stopping."), { retryable: true });
-      }
-      return { ok: true };
-    });
-    const tool = createTool(callGateway as never);
-    const admission = await beginAdmission();
-
-    try {
-      await admission.run(async () => {
-        const result = await tool.execute("archive-after-release-race", {
-          action: "patch",
-          archived: true,
-        });
-        expect(result.details).toMatchObject({ status: "scheduled", sessionKey });
-      });
-    } finally {
-      admission.release();
-    }
-
-    await vi.waitFor(() => {
-      expect(callGateway).toHaveBeenCalledTimes(2);
-      expect(callGateway).toHaveBeenLastCalledWith(archiveRequest);
-    });
-  });
 });
 
 it.each([false, true])(

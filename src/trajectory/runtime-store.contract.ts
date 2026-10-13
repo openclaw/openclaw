@@ -10,11 +10,15 @@ export type SqliteTrajectoryRuntimeScope = {
   assertCommitAllowed?: () => void;
 };
 
+export type SerializedTrajectoryEvent = Pick<TrajectoryEvent, "runId" | "ts"> & {
+  line: string;
+};
+
 export type SqliteTrajectoryRuntimeAppend = Pick<
   SqliteTrajectoryRuntimeScope,
   "sessionId" | "maxRuntimeBytes" | "maxGlobalRuntimeBytes"
 > & {
-  events: readonly TrajectoryEvent[];
+  events: readonly SerializedTrajectoryEvent[];
   /** The queued prefix exceeded this session's rolling window before admission. */
   discardPrevious?: boolean;
 };

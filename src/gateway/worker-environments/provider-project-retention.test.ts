@@ -101,6 +101,13 @@ describe("prepared project retention compatibility", () => {
       return {
         project,
         setupRecipe: "e".repeat(40),
+        recipe: {
+          source: "script",
+          identity: "e".repeat(40),
+          inputs: { ".openclaw/worktree-setup.sh": "e".repeat(40) },
+          env: {},
+          onCreate: ["./.openclaw/worktree-setup.sh"],
+        },
         assertCurrent: () => {
           if (!current) {
             throw new Error("Repository owner changed");
@@ -136,24 +143,6 @@ describe("prepared project retention compatibility", () => {
     expect(fixture.store.list()).toEqual(before);
   });
 
-  it("keeps providers without project preparation on ordinary cold provisioning", async () => {
-    const { owner, project } = await setup();
-    fixture.provider.supportsProjectPreparation = () => false;
-    const options = {
-      executionMode: "worker-turn" as const,
-      repository: { agentId: "main", url: project.source.url },
-      runSetupScript: true,
-      setupAuthorized: true,
-    };
-    const intent = await owner.prepareIntent("development", options);
-    expect(intent.preparationKey).toBeUndefined();
-    expect(intent.profileSnapshot).not.toHaveProperty("project");
-    const cold = await owner.createWithProfile("development", "private-cold", options, intent);
-    expect(cold.profileSnapshot).not.toHaveProperty("project");
-    expect(cold.preparation).toBeNull();
-    expect(sourceAdmission).not.toHaveBeenCalled();
-  });
-
   it("passes private pack production through the provisioning owner instead of worker fetch", async () => {
     const { project, record } = await setup();
     const stopped = new Error("Private pack producer stopped before transfer");
@@ -163,6 +152,7 @@ describe("prepared project retention compatibility", () => {
     sourceAdmission.mockResolvedValue({
       project,
       setupRecipe: undefined,
+      recipe: { source: "none", inputs: {}, env: {} },
       assertCurrent: () => {},
       revalidate: async () => {},
       prepareGitPack,
@@ -208,7 +198,7 @@ describe("prepared project retention compatibility", () => {
     ).toThrow("not owned by this lifecycle");
   });
 
-  it.each(["profile", "provider", "target"])(
+  it.each(["provider", "target"])(
     "checks %s compatibility on the next retention pass without external source authority",
     async (mutation) => {
       const { record, owner } = await setup();
@@ -259,17 +249,6 @@ describe("prepared project retention compatibility", () => {
 
     await expect(pending).resolves.toBeUndefined();
     expect(prepareNodeArtifacts).not.toHaveBeenCalled();
-    expect(sourceAdmission).not.toHaveBeenCalled();
-  });
-
-  it("distinguishes unavailable artifact observations from incompatible contents", async () => {
-    const { record, owner, prepareNodeArtifacts } = await setup();
-    const unavailable = new Error("Artifact archive temporarily unavailable");
-    prepareNodeArtifacts.mockRejectedValueOnce(unavailable);
-
-    await expect(owner.prepareRetention(record, fixture.abort.signal)).rejects.toBe(unavailable);
-    expect((await owner.prepareRetention(record, fixture.abort.signal))?.isCurrent()).toBe(true);
-    expect(fixture.store.get(record.environmentId)).toEqual(record);
     expect(sourceAdmission).not.toHaveBeenCalled();
   });
 

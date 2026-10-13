@@ -121,6 +121,77 @@ describe("responses compact endpoint", () => {
     });
   });
 
+  it.each([
+    { role: "user", content: [{ type: "input_text", text: "Retained fact." }] },
+    {
+      role: "assistant",
+      content: [{ type: "output_text", text: "Retained answer.", annotations: [] }],
+    },
+  ])(
+    "accepts a canonical retained $role window with fewer users than its input",
+    async (message) => {
+      const output = [
+        { type: "message", ...message },
+        { type: "compaction", encrypted_content: "opaque" },
+      ];
+      mockCompactResponse({
+        object: "response.compaction",
+        output,
+        usage: { input_tokens: 100, output_tokens: 10 },
+      });
+      const result = await requestPreparedOpenAIResponsesCompaction(
+        createOpenAIResponsesTransportStreamFn(),
+        officialOpenAIModel,
+        {
+          ...context,
+          messages: [
+            ...context.messages,
+            { role: "user", content: "A second user message.", timestamp: 2 },
+          ],
+        },
+        { apiKey: "test-key" },
+      );
+      expect(result.output).toEqual(output);
+      expect(result.historyMode).toBe("retained-users");
+      expect(sdkState.post).toHaveBeenCalledWith(
+        "/responses/compact",
+        expect.objectContaining({
+          body: expect.objectContaining({
+            input: [
+              expect.objectContaining({ role: "user" }),
+              expect.objectContaining({ role: "user" }),
+            ],
+          }),
+        }),
+      );
+    },
+  );
+
+  it.each([
+    {
+      output: [{ type: "message", role: "user", content: [] }],
+      reason: "must end with a compaction item",
+    },
+    {
+      output: [{ type: "compaction", encrypted_content: "" }],
+      reason: "nonempty encrypted_content",
+    },
+    {
+      output: [
+        { type: "compaction", encrypted_content: "first" },
+        { type: "compaction", encrypted_content: "last" },
+      ],
+      reason: "exactly one compaction item",
+    },
+  ])("rejects invalid canonical windows: $reason", async ({ output, reason }) => {
+    mockCompactResponse({
+      object: "response.compaction",
+      output,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    await expect(compact(officialOpenAIModel)).rejects.toThrow(reason);
+  });
+
   it("rejects retained-message prefixes from native xAI", async () => {
     mockCompactResponse({
       object: "response.compaction",
@@ -135,7 +206,7 @@ describe("responses compact endpoint", () => {
       usage: { input_tokens: 1, output_tokens: 1 },
     });
 
-    await expect(compact()).rejects.toThrow("one trailing compaction item");
+    await expect(compact()).rejects.toThrow("retained messages require native OpenAI");
     // xAI has no instructions field on /responses/compact and disables the developer role.
     expect(sdkState.post).toHaveBeenCalledWith(
       "/responses/compact",
@@ -164,7 +235,7 @@ describe("responses compact endpoint", () => {
       ],
       usage: { input_tokens: 1, output_tokens: 1 },
     });
-    await expect(compact(officialOpenAIModel)).rejects.toThrow("one trailing compaction item");
+    await expect(compact(officialOpenAIModel)).rejects.toThrow("unsupported content");
   });
 
   it.each([{ ...model, provider: "custom", baseUrl: "https://responses.example/v1" }])(
@@ -175,7 +246,7 @@ describe("responses compact endpoint", () => {
         output: [{ type: "compaction", encrypted_content: "opaque", status: "completed" }],
         usage: { input_tokens: 1, output_tokens: 1 },
       });
-      await expect(compact(route)).rejects.toThrow("one trailing compaction item");
+      await expect(compact(route)).rejects.toThrow("rewritten by the Responses payload policy");
     },
   );
 
@@ -194,7 +265,9 @@ describe("responses compact endpoint", () => {
         ],
         usage: { input_tokens: 1, output_tokens: 1 },
       });
-      await expect(compact(officialOpenAIModel)).rejects.toThrow("one trailing compaction item");
+      await expect(compact(officialOpenAIModel)).rejects.toThrow(
+        "rewritten by the Responses payload policy",
+      );
     },
   );
 

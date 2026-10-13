@@ -163,7 +163,8 @@ Responses endpoint. Configure the existing model settings:
   [thinking level](/tools/thinking), for example with `/think high`, before
   the next user turn. OpenClaw preserves the original request-level effort
   and places a `configuration_update` at the new turn. This optimization
-  works across matching session history over SSE or cached WebSockets.
+  works across matching session history over SSE or cached WebSockets, including
+  concurrent SSE requests in the same session.
   Automatic steering continuations keep their inherited settings. If steering
   waits for a tool result or approval, the explicit continuation uses current
   request settings, including output limits and reasoning settings, without
@@ -196,10 +197,12 @@ openclaw models set openai/gpt-6.1-sol
 ```
 
 It uses the Responses API for tool calls, accepts text and images, and supports
-a 1,050,000-token context window with up to 128,000 output tokens. OpenClaw
-keeps its 272,000-token active input budget by default; native Codex follows
-the selected account's advertised limits. Existing selections and the Astra
-setup default are unchanged. A successful account catalog remains authoritative;
+a 1,050,000-token context window with up to 128,000 output tokens. Direct
+OpenAI API-key traffic keeps its 272,000-token active input budget by default.
+The OpenClaw harness defaults to a 500,000-token active window with ChatGPT/Codex
+subscription auth; native Codex owns its context window and compaction. Explicit
+context budgets, other models, and the Astra setup default are unchanged. A successful account
+catalog remains authoritative, including smaller account-specific windows;
 subscription offline hints do not imply access.
 
 Reasoning defaults to `medium` and supports `low`, `medium`, `high`, `xhigh`,

@@ -217,6 +217,8 @@ export function coordinateWorkerPlacementDispatch(
         waitForInitialPlacement: coordinator.waitForInitialPlacement,
         startDispatch: async (request, onTransition, authorize, signal) => {
           const started = createDeferredCore<WorkerDispatchPlacement>();
+          const requestedHandoff = createDeferredCore();
+          const releaseAuthority = params.retainDispatch?.();
           const operation = coordinator.dispatch(
             request,
             (placement) => {
@@ -225,7 +227,13 @@ export function coordinateWorkerPlacementDispatch(
             },
             authorize,
             signal,
+            (dispatchSignal) =>
+              racePromiseWithAbortSignal(requestedHandoff.promise, dispatchSignal),
           );
+          // The requested acknowledgment can precede the final provider effect.
+          if (releaseAuthority) {
+            void operation.then(releaseAuthority, releaseAuthority);
+          }
           void operation.catch((error: unknown) => {
             try {
               sessionPreparation.warn("Worker setup failed: " + String(error));
@@ -233,7 +241,13 @@ export function coordinateWorkerPlacementDispatch(
               /* Reporting cannot replace durable setup failure. */
             }
           });
-          return await Promise.race([started.promise, operation]);
+          try {
+            await Promise.race([started.promise, operation]);
+            return { release: () => requestedHandoff.resolve() };
+          } catch (error) {
+            requestedHandoff.resolve();
+            throw error;
+          }
         },
       });
     },
@@ -325,7 +339,7 @@ export function coordinateWorkerPlacementDispatch(
         }
       }
     },
-    dispatch: async (request, onTransition, authorize, callerSignal) => {
+    dispatch: async (request, onTransition, authorize, callerSignal, awaitRequestedHandoff) => {
       callerSignal?.throwIfAborted();
       const inFlight = pendingOperations(request.sessionId).find(
         (pending) => pending.kind === "dispatch",
@@ -357,6 +371,7 @@ export function coordinateWorkerPlacementDispatch(
                 report,
                 composePlacementAuthorization(authorize, () => assertSessionCurrent?.()),
                 signal,
+                awaitRequestedHandoff,
               ),
             ),
           authorize,
@@ -468,6 +483,7 @@ export function coordinateWorkerPlacementDispatch(
     getEnvironmentAttachedSessionIds: (environmentId) =>
       service.getEnvironmentAttachedSessionIds(environmentId),
     readEnvironmentSessionIds: (environmentId) => service.readEnvironmentSessionIds(environmentId),
+    isInterruptedTurn: service.isInterruptedTurn,
     reconcile: (mode) => runReconciliation(() => service.reconcile(mode, tryRecovery)),
     reconcileActive: (environmentId) =>
       environmentId === undefined

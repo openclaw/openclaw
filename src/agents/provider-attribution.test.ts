@@ -176,6 +176,7 @@ import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   resolveProviderEndpoint,
+  resolveProviderFastModeRequestCapabilities,
   resolveProviderRequestCapabilities,
   resolveProviderRequestPolicy,
   describeProviderRequestRoutingSummary,
@@ -675,17 +676,21 @@ describe("provider attribution", () => {
     });
   });
 
-  it("allows Anthropic service tiers on the default route", () => {
-    expectRecordFields(
-      resolveProviderRequestCapabilities({
-        provider: "anthropic",
-        api: "anthropic-messages",
-        capability: "llm",
-        transport: "stream",
-      }),
-      { endpointClass: "default", allowsAnthropicServiceTier: true },
-    );
-  });
+  it.each([
+    ["anthropic", "anthropic-messages", undefined, "default", true],
+    [" ANTHROPIC ", " ANTHROPIC-MESSAGES ", "https://api.anthropic.com", "anthropic-public", true],
+    ["anthropic", "anthropic-messages", "https://proxy.example.test", "custom", false],
+    ["anthropic", "openai-completions", undefined, "default", false],
+    ["custom", "anthropic-messages", "https://api.anthropic.com", "anthropic-public", false],
+  ] as const)(
+    "resolves catalog service-tier facts for %s / %s / %s",
+    (provider, api, baseUrl, endpointClass, allowsAnthropicServiceTier) => {
+      const input = { provider, api, baseUrl };
+      const expected = { endpointClass, allowsAnthropicServiceTier };
+      expect(resolveProviderFastModeRequestCapabilities(input)).toEqual(expected);
+      expectRecordFields(resolveProviderRequestCapabilities(input), expected);
+    },
+  );
 
   it("respects compat.supportsPromptCacheKey override on prompt cache stripping", () => {
     // compat.supportsPromptCacheKey = true disables the strip even on a

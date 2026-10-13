@@ -1,6 +1,5 @@
-import { ContextNotFoundError } from "@solidjs/signals";
 import type { AssistantDockOwner } from "../app/assistant-dock.ts";
-import { useApplication } from "../lib/reactive/context.ts";
+import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { useSolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
@@ -13,25 +12,17 @@ type Methods = Pick<AssistantDockOwner, "openSession" | "closeSession"> & {
   toggle(): void;
   handleToggleRequest(event: Event): void;
 };
-export type OpenClawAssistantPanel = SolidBridgeElement<AssistantPanelProps, Methods> & {
+type OpenClawAssistantPanel = SolidBridgeElement<AssistantPanelProps, Methods> & {
   readonly openSessionKey: string | null;
   readonly assistantPanelOpen: boolean;
 };
 
 // The host outlives context-only Solid remounts; preserve its dock intent.
 const controls = new WeakMap<HTMLElement, AssistantPanelController>();
-export const AssistantPanel = defineSolidBridge<AssistantPanelProps, Methods>(
+defineSolidBridge<AssistantPanelProps, Methods>(
   "openclaw-assistant-panel",
   (props, element) => {
-    // A standalone bridge can connect before the application provider exists.
-    let application: ReturnType<typeof useApplication> | undefined;
-    try {
-      application = useApplication();
-    } catch (error) {
-      if (!(error instanceof ContextNotFoundError)) {
-        throw error;
-      }
-    }
+    const application = useOptionalApplication();
     const { host, revision } = useSolidControllerHost(() => [
       props.context,
       props.custodianAvailable,

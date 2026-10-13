@@ -54,10 +54,13 @@ import type {
   AbortedSessionTranscriptPartial,
   AbortedSessionTranscriptPartialResult,
   TranscriptReport,
+  TranscriptReportCommit,
   TranscriptReportWorkerOperations,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import type { TranscriptReportWorkerTarget } from "./session-accessor.sqlite-transcript-reports.worker.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { withMemoryReportWorker } from "./session-actor-transcript-reports.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
@@ -287,15 +290,23 @@ async function withReportWorker<T>(
   run: (
     operation: Pick<SqliteWorkerStore<TranscriptReportWorkerOperations>, "execute">,
     assertCurrent: () => void,
-    publish: (result: {
-      projectionNeedsReconcile: boolean;
-      cliHistoryChanged?: boolean;
-      sessionEntryChanged?: boolean;
-    }) => void,
+    publish: (
+      result: Pick<
+        TranscriptReportCommit,
+        "projectionNeedsReconcile" | "cliHistoryChanged" | "sessionEntryChanged" | "entry"
+      >,
+    ) => void,
   ) => Promise<Result<T, TranscriptAppendRefusal>>,
   sessionEntryCurrent?: SessionEntryCurrentCheck,
   incognito?: IncognitoTranscriptReportBinding,
 ): Promise<Result<T, TranscriptAppendRefusal>> {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    if (sessionEntryCurrent) {
+      throw new Error("A file session source cannot authorize a memory transcript report");
+    }
+    return withMemoryReportWorker(scope, memory, run);
+  }
   if (incognito) {
     if (sessionEntryCurrent) {
       throw new Error("A file session source cannot authorize an incognito transcript report");
@@ -447,6 +458,7 @@ async function withReportWorker<T>(
                           storePath: execution.path,
                           databaseIdentity,
                           sessionKey: resolved.sessionKey,
+                          entry: publication.entry,
                         });
                       }
                       if (publication.projectionNeedsReconcile) {
@@ -505,7 +517,9 @@ export async function appendAbortedSessionTranscriptPartial(
   },
   incognito?: IncognitoTranscriptReportBinding,
 ): Promise<Result<AbortedSessionTranscriptPartialResult, TranscriptAppendRefusal>> {
-  const binding = incognito ?? captureIncognitoSessionOperation(scope);
+  const binding = getSessionActorStorageBinding(scope)
+    ? undefined
+    : (incognito ?? captureIncognitoSessionOperation(scope));
   const publicationScope = {
     ...scope,
     ...(binding
@@ -521,7 +535,7 @@ export async function appendAbortedSessionTranscriptPartial(
     throw new Error("Aborted partial requires prepared assistant storage bytes");
   }
   const settlement =
-    !binding && isProcessHeldTranscript(publicationScope)
+    !getSessionActorStorageBinding(scope) && !binding && isProcessHeldTranscript(publicationScope)
       ? await withNativeCurrentTranscript(publicationScope, (database, resolved) =>
           appendAbortedSessionTranscriptPartialInTransaction(
             database,
@@ -570,9 +584,11 @@ export async function readLatestSessionTranscriptReport(
   customTypes: readonly string[],
   incognito?: IncognitoTranscriptReportBinding,
 ): Promise<Result<CustomMessageReport | undefined, TranscriptAppendRefusal>> {
-  const binding = incognito ?? captureIncognitoSessionOperation(scope);
+  const binding = getSessionActorStorageBinding(scope)
+    ? undefined
+    : (incognito ?? captureIncognitoSessionOperation(scope));
   const selectedTypes = [...customTypes];
-  if (!binding && isProcessHeldTranscript(scope)) {
+  if (!getSessionActorStorageBinding(scope) && !binding && isProcessHeldTranscript(scope)) {
     // Process-held incognito databases retain their sole native owner.
     return withNativeCurrentTranscript(
       scope,
@@ -608,8 +624,10 @@ export async function appendSessionTranscriptReport(
     incognito?: IncognitoTranscriptReportBinding;
   },
 ): Promise<Result<void, TranscriptAppendRefusal>> {
-  const incognito = options?.incognito ?? captureIncognitoSessionOperation(scope);
-  if (!incognito && isProcessHeldTranscript(scope)) {
+  const incognito = getSessionActorStorageBinding(scope)
+    ? undefined
+    : (options?.incognito ?? captureIncognitoSessionOperation(scope));
+  if (!getSessionActorStorageBinding(scope) && !incognito && isProcessHeldTranscript(scope)) {
     if (options?.sessionEntryCurrent) {
       throw new Error("A file session source cannot authorize a process-held transcript report");
     }
@@ -643,7 +661,6 @@ export async function appendSessionTranscriptReport(
   const selection = {
     kind: report.kind,
     customTypes: [...report.customTypes],
-    suppressWhenAssistantRun: report.suppressWhenAssistantRun,
   };
   const selectReport = report.selectReport;
   return withReportWorker(

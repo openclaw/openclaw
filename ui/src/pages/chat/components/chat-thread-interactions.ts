@@ -51,7 +51,7 @@ import {
   isConfirmedActionPopoverFocused,
   openChatRewindConfirmation,
 } from "./chat-message-confirmation.ts";
-import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.ts";
+import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.types.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import type { ReplyMessageStatus } from "./chat-reply-preview.ts";
@@ -124,6 +124,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     selectedSession: GatewaySessionRow | undefined;
     transcriptMetadata?: ChatTranscriptMetadata;
     boardProvider?: BoardProvider;
+    widgetLayout?: import("../session-message-cache.ts").ChatWidgetLayout;
     announceTranscript?: boolean;
     loading: boolean;
     routeLoadingSkeleton?: boolean;
@@ -150,6 +151,10 @@ export type ChatThreadProps = ChatSendStatusActions &
     runActive?: boolean;
     runWorking?: boolean;
     startupLabel?: string;
+    retryAt?: number;
+    onRetryRun?: (runId: string) => void;
+    onChangeFailureModel?: (runId: string) => void;
+    failureActionsRunId?: string;
     waitingApproval?: boolean;
     questionPrompts?: readonly QuestionPrompt[];
     asyncQuestions?: AsyncQuestionPresentation;
@@ -167,6 +172,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     userId?: string | null;
     userName?: string | null;
     userAvatar?: string | null;
+    channelAvatar?: import("../../../lib/chat/channel-sender-avatar.ts").ChannelSenderAvatarSource;
     basePath?: string;
     sessionPublicOrigin?: string;
     resourceBasePath?: string;
@@ -199,6 +205,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     onHistoryIntent?: (event: Event) => void;
     onDraftChange: (next: string) => void;
     onSend: () => void;
+    onPermissionRetry?: (message: string) => void;
     onSetReply?: (target: MessageReplyTarget) => void;
     replyMessageAccess?: ReplyMessageAccess;
     onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
@@ -212,7 +219,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     /** Shows one of the session's subagents. */
     onOpenSubagent?: (sessionKey: string) => void;
     /** Shows the session's subagents; absent where the pane has no list of them to show. */
-    onOpenSubagents?: () => void;
+    onOpenSubagents?: (focus?: boolean) => void;
     modelSetupRequired?: boolean;
     onModelSetup?: () => void;
   };

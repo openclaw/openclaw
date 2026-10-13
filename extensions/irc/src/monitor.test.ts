@@ -30,6 +30,7 @@ type InboundIrcServer = {
   port: number;
   lines: string[];
   sendInbound(target: string, colonlessBody?: boolean, senderNick?: string): void;
+  sendNotice(target: string, text: string): void;
   close(): Promise<void>;
 };
 
@@ -146,6 +147,9 @@ async function startInboundIrcServer(welcomeNick = "bot"): Promise<InboundIrcSer
         `:${senderNick}!ident@example.org PRIVMSG ${target}${bodySeparator}hello\r\n`,
       );
     },
+    sendNotice: (target, text) => {
+      clientSocket.write(`:server NOTICE ${target} :${text}\r\n`);
+    },
   };
 }
 
@@ -201,13 +205,13 @@ function monitorConfig(
   };
 }
 
-function installMonitorRuntime() {
+function installMonitorRuntime(debug = vi.fn(), verbose = false) {
   const activityRecord = vi.fn();
   setIrcRuntime({
     logging: {
-      shouldLogVerbose: vi.fn(() => false),
+      shouldLogVerbose: vi.fn(() => verbose),
       getChildLogger: vi.fn(() => ({
-        debug: vi.fn(),
+        debug,
         info: vi.fn(),
         warn: vi.fn(),
         error: vi.fn(),
@@ -552,8 +556,10 @@ describe("irc monitor inbound target", () => {
     "maps $label targets through the monitor boundary",
     async ({ serverTarget, colonlessBody, expected }) => {
       await withIngressQueue(async (ingressQueue) => {
-        installMonitorRuntime();
+        const debug = vi.fn();
+        installMonitorRuntime(debug, true);
         const server = await startInboundIrcServer();
+        const noticeText = "private-notice-sentinel";
         const messages: IrcInboundMessage[] = [];
         const completed = observeIngressCompletion(ingressQueue);
         let monitor: { stop: () => Promise<void> } | undefined;
@@ -565,6 +571,7 @@ describe("irc monitor inbound target", () => {
               messages.push(message);
             },
           });
+          server.sendNotice(serverTarget, noticeText);
           server.sendInbound(serverTarget, colonlessBody);
           const completedId = await withTimeout(completed, 3000, "inbound IRC message completion");
           expect(messages).toHaveLength(1);
@@ -574,6 +581,10 @@ describe("irc monitor inbound target", () => {
             senderNick: "alice",
             text: "hello",
           });
+          expect(debug).toHaveBeenCalledWith(expect.stringContaining(`notice ${serverTarget}`));
+          const diagnostics = JSON.stringify(debug.mock.calls);
+          expect(diagnostics).not.toContain("hello");
+          expect(diagnostics).not.toContain(noticeText);
         } finally {
           if (monitor) {
             await monitor.stop();

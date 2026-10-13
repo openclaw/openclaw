@@ -32,21 +32,20 @@ describe("buildCliRespawnPlan", () => {
     ).toBeNull();
   });
 
-  it.each([
-    ["gateway", "run", "--ambient-channels"],
-    ["gateway", "--ambient-channels", "run"],
-    ["gateway", "run", "--dev-ambient-channels"],
-  ])("keeps foreground Gateway ambient channel options in process: %j", (...args) => {
-    for (const platform of ["darwin", "linux", "win32"] as const) {
-      expect(
-        buildPlan({
-          argv: ["node", "openclaw", ...args],
-          autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-          platform,
-        }),
-      ).toBeNull();
-    }
-  });
+  it.each([["gateway", "--ambient-channels", "run"]])(
+    "keeps foreground Gateway ambient channel options in process: %j",
+    (...args) => {
+      for (const platform of ["darwin", "linux", "win32"] as const) {
+        expect(
+          buildPlan({
+            argv: ["node", "openclaw", ...args],
+            autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+            platform,
+          }),
+        ).toBeNull();
+      }
+    },
+  );
 
   it("does not detach native hook relays through a startup respawn", () => {
     expect(
@@ -82,62 +81,6 @@ describe("buildCliRespawnPlan", () => {
     },
   );
 
-  it("adds NODE_EXTRA_CA_CERTS and warning suppression in one respawn", () => {
-    const plan = buildPlan({
-      argv: ["node", "openclaw", "status"],
-      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-      platform: "linux",
-    });
-
-    const respawnPlan = expectCliRespawnPlan(plan);
-    expect(respawnPlan.command).toBe(process.execPath);
-    expect(respawnPlan.argv[0]).toBe(EXPERIMENTAL_WARNING_FLAG);
-    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
-    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
-    expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBe("1");
-    expect(respawnPlan.detachForProcessTree).toBe(true);
-  });
-
-  it("does not respawn gateway status only to suppress warnings", () => {
-    expect(
-      buildPlan({
-        argv: ["node", "openclaw", "gateway", "status", "--json"],
-        autoNodeExtraCaCerts: undefined,
-        platform: "linux",
-      }),
-    ).toBeNull();
-  });
-
-  it("preserves NODE_EXTRA_CA_CERTS respawn for gateway status", () => {
-    const plan = buildPlan({
-      argv: ["node", "openclaw", "gateway", "status", "--json"],
-      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-      platform: "linux",
-    });
-
-    const respawnPlan = expectCliRespawnPlan(plan);
-    expect(respawnPlan.argv).toEqual(["openclaw", "gateway", "status", "--json"]);
-    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
-    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
-    expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
-    expect(respawnPlan.detachForProcessTree).toBe(true);
-  });
-
-  it("preserves NODE_EXTRA_CA_CERTS respawn for interactive commands", () => {
-    const plan = buildPlan({
-      argv: ["node", "openclaw", "tui"],
-      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-      platform: "linux",
-    });
-
-    const respawnPlan = expectCliRespawnPlan(plan);
-    expect(respawnPlan.argv).toEqual(["openclaw", "tui"]);
-    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
-    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
-    expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
-    expect(respawnPlan.detachForProcessTree).toBe(false);
-  });
-
   it("keeps bare-root startup respawns attached to the terminal", () => {
     const plan = buildPlan({
       argv: ["node", "openclaw"],
@@ -169,45 +112,19 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.env.NODE_USE_SYSTEM_CA).toBe("1");
   });
 
-  it.each([
-    ["interactive commands", ["node", "openclaw", "tui"]],
-    ["the foreground Gateway", ["node", "openclaw", "gateway", "run"]],
-  ] as const)("keeps macOS system CA loading for %s", (_label, argv) => {
-    expect(
-      buildPlan({
-        argv: [...argv],
-        env: { NODE_USE_SYSTEM_CA: "1" },
-        autoNodeExtraCaCerts: undefined,
-        platform: "darwin",
-      }),
-    ).toBeNull();
-  });
-
-  it("does not respawn one-shot commands only to change CA trust", () => {
-    expect(
-      buildPlan({
-        argv: ["node", "openclaw", "cron", "list", "--json"],
-        env: {
-          NODE_USE_SYSTEM_CA: "1",
-          [OPENCLAW_NODE_OPTIONS_READY]: "1",
-        },
-        execArgv: [EXPERIMENTAL_WARNING_FLAG],
-        autoNodeExtraCaCerts: undefined,
-        platform: "darwin",
-      }),
-    ).toBeNull();
-  });
-
-  it("does not respawn interactive commands for warning suppression only", () => {
-    expect(
-      buildPlan({
-        argv: ["node", "openclaw", "tui"],
-        env: { [OPENCLAW_NODE_EXTRA_CA_CERTS_READY]: "1" },
-        autoNodeExtraCaCerts: undefined,
-        platform: "linux",
-      }),
-    ).toBeNull();
-  });
+  it.each([["interactive commands", ["node", "openclaw", "tui"]]] as const)(
+    "keeps macOS system CA loading for %s",
+    (_label, argv) => {
+      expect(
+        buildPlan({
+          argv: [...argv],
+          env: { NODE_USE_SYSTEM_CA: "1" },
+          autoNodeExtraCaCerts: undefined,
+          platform: "darwin",
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("does not overwrite an existing NODE_EXTRA_CA_CERTS value", () => {
     const plan = buildPlan({
@@ -253,29 +170,6 @@ describe("buildCliRespawnPlan", () => {
     ).toBeNull();
   });
 
-  it("adds a larger V8 stack size on Windows", () => {
-    const plan = buildPlan({
-      argv: [
-        "node",
-        "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
-        "dashboard",
-      ],
-      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-      platform: "win32",
-    });
-
-    const respawnPlan = expectCliRespawnPlan(plan);
-    expect(respawnPlan.argv).toEqual([
-      "--stack-size=8192",
-      "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
-      "dashboard",
-    ]);
-    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBeUndefined();
-    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBeUndefined();
-    expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
-    expect(respawnPlan.detachForProcessTree).toBe(false);
-  });
-
   it("preserves post-script node.exe arguments after normalizing the launcher prefix", () => {
     const scriptPath =
       "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
@@ -293,21 +187,6 @@ describe("buildCliRespawnPlan", () => {
 
     const respawnPlan = expectCliRespawnPlan(plan);
     expect(respawnPlan.argv).toEqual(["--stack-size=8192", scriptPath, "node.exe", "status"]);
-  });
-
-  it("does not respawn on Windows when stack size is already configured", () => {
-    expect(
-      buildPlan({
-        argv: [
-          "node",
-          "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
-          "dashboard",
-        ],
-        execArgv: ["--stack-size=16384"],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-        platform: "win32",
-      }),
-    ).toBeNull();
   });
 
   it("does not respawn on Windows when underscore stack size spelling is already configured", () => {

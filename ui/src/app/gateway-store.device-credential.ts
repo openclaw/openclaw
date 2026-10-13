@@ -8,6 +8,7 @@ import {
 } from "../lib/nodes/index.ts";
 import { clearBootRecords } from "./boot-record.ts";
 import type { ApplicationGateway, ApplicationGatewayConnectOptions } from "./gateway.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { persistSessionToken } from "./settings.ts";
 
 type DeviceCredentialHost = {
@@ -22,6 +23,9 @@ export function createDeviceCredentialMethods(
   host: DeviceCredentialHost,
 ): Required<Pick<ApplicationGateway, "hasStoredDeviceToken" | "forgetDeviceToken">> {
   const storedOperatorDeviceId = () => {
+    if (isRemoteControlUiIngress()) {
+      return null;
+    }
     const deviceId = peekStoredDeviceIdentityId();
     if (!deviceId) {
       return null;

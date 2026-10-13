@@ -595,6 +595,7 @@ describe("agent event handler", () => {
             attempt,
             maxAttempts: 10,
             reason,
+            retryAt: 1_800_000_000_000 + attempt * 30_000,
           },
           { seq: attempt * 2 + 1 },
         );
@@ -606,7 +607,12 @@ describe("agent event handler", () => {
             runId: "client-retry",
             state: "status",
             phase: "starting_model",
-            ...(reason === "rate_limit" ? { retry: { attempt, maxAttempts: 10, reason } } : {}),
+            retry: {
+              attempt,
+              maxAttempts: 10,
+              reason,
+              retryAt: 1_800_000_000_000 + attempt * 30_000,
+            },
           }),
         ),
       );
@@ -1331,11 +1337,15 @@ describe("agent event handler", () => {
   });
 
   it("uses newer session verbose state for in-flight tool events", async () => {
+    lineageProjection = createSessionRowProjectionFixture({
+      cfg: {},
+      agentId: "main",
+      store: { "session-1": { sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 } },
+    });
     const h = createHarness({
       now: 1_000,
       resolveSessionKeyForRun: () => "session-1",
     });
-    mockSessionEntry({ sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 });
 
     registerAgentRunContext("run-tool-toggle", {
       sessionKey: "session-1",

@@ -16,7 +16,8 @@ import {
   resolveStoredSubagentCapabilities,
   resolvePersistedSubagentToolPolicyEnvelope,
 } from "../spawn/subagent-capabilities.js";
-import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
+import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
+import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import {
   loadSubagentSessionEntry,
   resolveSubagentSessionCompletion,
@@ -102,13 +103,21 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
         expect
           .soft(parse.mock.calls.some(([value]) => value.includes("TARGET_COLD_PAYLOAD_")))
           .toBe(false);
-        expect(getSubagentDepthFromSessionStore(childSessionKey, options)).toBe(2);
-        expect(getSubagentDepthFromSessionStore("target", options)).toBe(2);
-        expect(resolveStoredSubagentCapabilities(childSessionKey, options)).toMatchObject({
+        expect(await getSubagentDepthFromSessionStoreInWorker(childSessionKey, options)).toBe(2);
+        expect(await getSubagentDepthFromSessionStoreInWorker("target", options)).toBe(2);
+        expect(
+          await withPreparedSessionCapabilityRead(() =>
+            resolveStoredSubagentCapabilities(childSessionKey, options),
+          ),
+        ).toMatchObject({
           depth: 2,
           canSpawn: true,
         });
-        expect(resolvePersistedSubagentToolPolicyEnvelope(childSessionKey, options)).toMatchObject({
+        expect(
+          await withPreparedSessionCapabilityRead(() =>
+            resolvePersistedSubagentToolPolicyEnvelope(childSessionKey, options),
+          ),
+        ).toMatchObject({
           spawnedBy: "agent:main:main",
           inheritedToolAllow: ["read"],
           inheritedToolDeny: ["exec"],
@@ -157,9 +166,13 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
         "invalid persisted session row requires repair",
       );
 
-      expect(getSubagentDepthFromSessionStore(childSessionKey, { cfg: params.cfg })).toBe(1);
       expect(
-        resolvePersistedSubagentToolPolicyEnvelope(childSessionKey, { cfg: params.cfg }),
+        await getSubagentDepthFromSessionStoreInWorker(childSessionKey, { cfg: params.cfg }),
+      ).toBe(1);
+      expect(
+        await withPreparedSessionCapabilityRead(() =>
+          resolvePersistedSubagentToolPolicyEnvelope(childSessionKey, { cfg: params.cfg }),
+        ),
       ).toBeUndefined();
 
       for (const [requested, stored, matches] of [

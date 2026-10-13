@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -44,8 +45,9 @@ export async function readSharedGitHubPublication(
 ) {
   const capturedSelector = { ...selector };
   let workspaceIndependent = false;
-  const binding = captureIncognitoSessionBinding(session);
-  const context = binding ? captureOpenClawStateReadWorkerContext() : undefined;
+  const memory = getSessionActorStorageBinding(session);
+  const binding = memory ? undefined : captureIncognitoSessionBinding(session);
+  const context = memory || binding ? captureOpenClawStateReadWorkerContext() : undefined;
   const observe = async (entry: SessionEntry) => {
     const result = await withArtifactPreservingStateReads(() =>
       executeExistingOpenClawStateRead(
@@ -67,6 +69,31 @@ export async function readSharedGitHubPublication(
       (!row || row.status === "published" || row.status === "failed");
     return row;
   };
+  if (memory) {
+    const readCurrent = () => {
+      const entry = memory.actor.snapshot(memory.authority)?.entry;
+      if (
+        !entry ||
+        entry.sessionId !== session.sessionId ||
+        (session.lifecycleRevision !== undefined &&
+          (entry.lifecycleRevision ?? null) !== session.lifecycleRevision)
+      ) {
+        throw new GitHubPublicationSessionChangedError();
+      }
+      return entry;
+    };
+    const entry = readCurrent();
+    const row = await observe(entry);
+    context!.admission.assertCurrent();
+    const current = readCurrent();
+    if (
+      !workspaceIndependent &&
+      !isDeepStrictEqual(workspaceSelection(entry), workspaceSelection(current))
+    ) {
+      throw new GitHubPublicationSessionChangedError();
+    }
+    return row;
+  }
   if (binding) {
     const { actor, admissionSignal } = binding;
     const claim = actor.sessions.captureCurrent(session.sessionKey);

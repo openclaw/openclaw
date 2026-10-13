@@ -177,7 +177,10 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
       const region = trimToUndefined(talkProviderConfig.region);
       const endpoint = trimToUndefined(talkProviderConfig.endpoint ?? talkProviderConfig.baseUrl);
       const baseUrl = normalizeAzureSpeechBaseUrl({
-        baseUrl: trimToUndefined(talkProviderConfig.baseUrl),
+        // Inherit the resolved route unless Talk explicitly selects another one.
+        baseUrl:
+          trimToUndefined(talkProviderConfig.baseUrl) ??
+          (!region && !endpoint ? base.baseUrl : undefined),
         endpoint,
         region: region ?? base.region,
       });

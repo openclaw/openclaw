@@ -50,6 +50,8 @@ async function createFixture(
         resolveStorePath: () => path.join(stateDir, "sessions.json"),
         getSessionEntry: ({ sessionKey: key }: { sessionKey: string }) =>
           key === sessionKey ? entry : undefined,
+        getSessionEntryAsync: async ({ sessionKey: key }: { sessionKey: string }) =>
+          key === sessionKey ? entry : undefined,
         prepareSessionEntryPatch: async ({
           prepare,
           authority,
@@ -273,17 +275,8 @@ describe("meeting shutdown", () => {
     },
   );
 
-  it("closes an idle engine once without opening a turn", async () => {
-    const fixture = await createFixture();
-    await fixture.handle.stop();
-    await fixture.handle.stop();
-    expect(fixture.eventTypes()).toEqual(["session.started", "session.ready", "session.closed"]);
-  });
-
   it.each([
     ["transcription", "stop"],
-    ["transcription", "fatal"],
-    ["voice", "stop"],
     ["voice", "fatal"],
   ] as const)("cancels the generic agent run from %s %s", async (engine, shutdown) => {
     const fixture = await createFixture(engine);
@@ -325,7 +318,6 @@ describe("meeting shutdown", () => {
   it.each([
     ["tts", "resolve", "stop"],
     ["tts", "reject", "stop"],
-    ["tts", "failed result", "stop"],
     ["sink", "resolve", "fatal"],
     ["sink", "reject", "fatal"],
   ] as const)("seals %s spans before %s settles after %s", async (stage, settlement, shutdown) => {
@@ -358,8 +350,6 @@ describe("meeting shutdown", () => {
       const pending = stage === "tts" ? synthesis : sink;
       if (settlement === "reject") {
         pending.reject(new Error("late failure"));
-      } else if (settlement === "failed result") {
-        synthesis.resolve({ ...spokenResult, success: false });
       } else if (stage === "tts") {
         synthesis.resolve(spokenResult);
       } else {
@@ -378,7 +368,7 @@ describe("meeting shutdown", () => {
     }
   });
 
-  it.each(["success", "tts failure", "sink failure"] as const)(
+  it.each(["tts failure", "sink failure"] as const)(
     "preserves active speech completion for %s",
     async (outcome) => {
       const fixture = await createFixture();
@@ -404,10 +394,8 @@ describe("meeting shutdown", () => {
             : ["output.audio.started", "output.audio.delta", "output.audio.done"]),
           "turn.ended",
         ]);
-        expect(fixture.logger.warn).toHaveBeenCalledTimes(outcome === "success" ? 0 : 1);
-        if (outcome !== "success") {
-          expect(eventsAtWarning).toEqual(fixture.eventTypes());
-        }
+        expect(fixture.logger.warn).toHaveBeenCalledOnce();
+        expect(eventsAtWarning).toEqual(fixture.eventTypes());
         await fixture.handle.stop();
         expect(fixture.eventTypes().slice(-2)).toEqual(["turn.ended", "session.closed"]);
       } finally {

@@ -56,8 +56,18 @@ afterEach(() => {
 });
 
 describe("manual run tool authority after the initiating invocation closes", () => {
-  it.each<{ name: string; toolsAllow: string[]; withdraw?: "disable" | "remove" }>([
+  it.each<{
+    name: string;
+    toolsAllow: string[];
+    withdraw?: "disable" | "remove";
+    senderIsOwner?: boolean;
+  }>([
     { name: "allowed tool reaches its handler", toolsAllow: [AUTOMATIONS_TOOL_NAME] },
+    {
+      name: "senderless scheduled run can inspect its own job",
+      toolsAllow: [AUTOMATIONS_TOOL_NAME],
+      senderIsOwner: false,
+    },
     { name: "tool outside the stored allowlist is absent", toolsAllow: ["read"] },
     {
       name: "disabling the job rejects the pending tool call",
@@ -69,7 +79,7 @@ describe("manual run tool authority after the initiating invocation closes", () 
       toolsAllow: [AUTOMATIONS_TOOL_NAME],
       withdraw: "remove",
     },
-  ])("$name", async ({ toolsAllow, withdraw }) => {
+  ])("$name", async ({ toolsAllow, withdraw, senderIsOwner }) => {
     const config: OpenClawConfig = {
       ...cfg,
       agents: {
@@ -136,6 +146,9 @@ describe("manual run tool authority after the initiating invocation closes", () 
           cwd: params.cwd,
           abortSignal: params.abortSignal,
           runtimeToolAllowlist: params.toolsAllow,
+          ...(senderIsOwner === false
+            ? { senderIsOwner, trigger: params.trigger, jobId: params.jobId }
+            : {}),
           scheduledToolPolicy: params.scheduledToolPolicy,
           toolConstructionPlan: {
             includeBaseCodingTools: true,
@@ -242,13 +255,17 @@ describe("manual run tool authority after the initiating invocation closes", () 
         expect(toolError).toBeUndefined();
         expect(listHandler).toHaveBeenCalledOnce();
         // The run gets the job's restricted inventory, not the admin caller's.
-        expect(toolResult).toMatchObject({ details: { scope: "caller", jobs: [] } });
+        expect(toolResult).toMatchObject({
+          details:
+            senderIsOwner === false ? { jobs: [{ id: jobId }] } : { scope: "caller", jobs: [] },
+        });
         expect(finishedEvent.status).toBe("ok");
       }
     } finally {
       continueTool.resolve();
       source.release();
       execution.stop();
+      await execution.waitForIdle();
     }
   });
 });

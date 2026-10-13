@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -13,6 +14,7 @@ import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
@@ -49,7 +51,7 @@ type ExecuteCliProcessOptions = {
 
 export async function executeCliProcess(params: {
   context: PreparedCliRunContext;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   backend: CliBackendConfig;
   deps: CliExecuteDeps;
   events: CliEventHandlers;
@@ -347,28 +349,32 @@ export async function executeCliProcess(params: {
           params.initialGatewayCaptureKey,
           assertProcessCurrent,
         );
-        const managedRun = await supervisor.spawn({
-          assertCurrent: params.assertCurrent,
-          runId: runParams.runId,
-          scopeKey,
-          replaceExistingScope: Boolean(params.useResume && scopeKey),
-          mode: "child",
-          argv: [params.executionCommand, ...params.executionLeadingArgv],
-          resolveArgs: params.resolveExecutionArgs,
-          argv0: params.executionArgv0,
-          timeoutMs: runParams.timeoutMs,
-          noOutputTimeoutMs: params.noOutputTimeoutMs,
-          onCancel: () => {
-            processCancelled = true;
-          },
-          cwd: context.cwd ?? context.workspaceDir,
-          env: params.env,
-          input: params.stdin ?? "",
-          secretInput: context.preparedBackend.secretInput,
-          captureOutput: false,
-          onStdout: consumeStdout,
-          onStderr: consumeStderr,
-        });
+        const managedRun = await runWithAgentToolSourceExecutionScope(params.assertCurrent, () =>
+          supervisor.spawn({
+            assertCurrent: params.assertCurrent,
+            prepareSpawn: params.argsPrompt ? context.cliHistoryWriter?.assertReadable : undefined,
+            prepareInput: params.stdin ? context.cliHistoryWriter?.assertReadable : undefined,
+            runId: runParams.runId,
+            scopeKey,
+            replaceExistingScope: Boolean(params.useResume && scopeKey),
+            mode: "child",
+            argv: [params.executionCommand, ...params.executionLeadingArgv],
+            resolveArgs: params.resolveExecutionArgs,
+            argv0: params.executionArgv0,
+            timeoutMs: runParams.timeoutMs,
+            noOutputTimeoutMs: params.noOutputTimeoutMs,
+            onCancel: () => {
+              processCancelled = true;
+            },
+            cwd: context.cwd ?? context.workspaceDir,
+            env: params.env,
+            input: params.stdin ?? "",
+            secretInput: context.preparedBackend.secretInput,
+            captureOutput: false,
+            onStdout: consumeStdout,
+            onStderr: consumeStderr,
+          }),
+        );
         managedRunPid = managedRun.pid;
         const detachReplyBackend = attachCliReplyBackend(runParams, () => {
           processCancelled = true;

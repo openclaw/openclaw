@@ -5,7 +5,7 @@ import "./resizable-divider.css";
 
 const DRAG_END_EVENTS = ["pointerup", "pointercancel", "blur"] as const;
 
-export type ResizableDividerProps = {
+type ResizableDividerProps = {
   splitRatio: number;
   minRatio: number;
   maxRatio: number;
@@ -18,7 +18,7 @@ export type ResizableDividerProps = {
 type ResizableDividerElement = SolidBridgeElement<ResizableDividerProps>;
 
 /** Dispatches resize-start, resize, and resize-end from the split-view separator. */
-export const ResizableDivider = defineSolidBridge<ResizableDividerProps>(
+defineSolidBridge<ResizableDividerProps>(
   "resizable-divider",
   (props, host) => {
     let startPosition = 0;
@@ -78,15 +78,14 @@ export const ResizableDivider = defineSolidBridge<ResizableDividerProps>(
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const step = e.shiftKey ? 0.05 : 0.02;
-      const ratio = currentRatio();
       let nextRatio: number | null = null;
 
       const decreaseKey = props.orientation === "horizontal" ? "ArrowUp" : "ArrowLeft";
       const increaseKey = props.orientation === "horizontal" ? "ArrowDown" : "ArrowRight";
       if (e.key === decreaseKey) {
-        nextRatio = ratio - step;
+        nextRatio = currentRatio() - step;
       } else if (e.key === increaseKey) {
-        nextRatio = ratio + step;
+        nextRatio = currentRatio() + step;
       } else if (e.key === "Home") {
         nextRatio = props.minRatio;
       } else if (e.key === "End") {
@@ -188,7 +187,13 @@ export const ResizableDivider = defineSolidBridge<ResizableDividerProps>(
     }
 
     function setCurrentAriaValue(value: number) {
-      host.setAttribute("aria-valuenow", String(toAriaValue(value)));
+      setAttribute("aria-valuenow", String(toAriaValue(value)));
+    }
+
+    function setAttribute(name: string, value: string) {
+      if (host.getAttribute(name) !== value) {
+        host.setAttribute(name, value);
+      }
     }
 
     host.setAttribute("role", "separator");
@@ -199,16 +204,16 @@ export const ResizableDivider = defineSolidBridge<ResizableDividerProps>(
       () => ({
         min: toAriaValue(props.minRatio),
         max: toAriaValue(props.maxRatio),
-        value: currentRatio(),
+        value: props.splitRatio,
         label: props.label || t("common.resizeSplitView"),
         orientation: props.orientation,
       }),
       (value) => {
-        host.setAttribute("aria-valuemin", String(value.min));
-        host.setAttribute("aria-valuemax", String(value.max));
+        setAttribute("aria-valuemin", String(value.min));
+        setAttribute("aria-valuemax", String(value.max));
         setCurrentAriaValue(value.value);
-        host.setAttribute("aria-label", value.label);
-        host.setAttribute("aria-orientation", value.orientation);
+        setAttribute("aria-label", value.label);
+        setAttribute("aria-orientation", value.orientation);
       },
     );
     onCleanup(() => {

@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { conversationIdentityFromMsgContext } from "./conversation-identity-inbound.js";
 import {
   buildConversationIdentity,
-  conversationIdentityFromMsgContext,
   conversationIdentityFromSessionEntry as conversationIdentityFromCanonicalSessionEntry,
 } from "./conversation-identity.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";

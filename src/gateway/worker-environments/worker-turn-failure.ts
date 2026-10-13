@@ -1,3 +1,4 @@
+import { logWarn } from "../../logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { reportPlacementTransition } from "./placement-record.js";
 import type {
@@ -5,6 +6,7 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
+import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { releaseClaimIfOwned } from "./worker-turn-admission.js";
@@ -31,6 +33,8 @@ export type WorkerTurnEnvironmentService = Pick<
   >;
 
 export type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
+export type WorkerTurnPartialIdentity = WorkerSessionTurnClaim &
+  Pick<ActiveWorkerPlacement, "sessionKey" | "agentId">;
 
 export class WorkerTurnExecutionError extends Error {}
 
@@ -41,6 +45,21 @@ export class WorkerWorkspaceReconciliationError extends Error {
 // Journal-terminal launches get a short cleanup grace before failure is surfaced.
 // This never limits a live launch or a turn still holding its claim.
 const TERMINAL_WORKER_CLEANUP_GRACE_MS = 30_000;
+
+export async function prepareWorkerTurnFailure(
+  placements: WorkerSessionPlacementStore,
+  claim: WorkerTurnPartialIdentity,
+  persistAbandonedPartial?: (claim: WorkerTurnPartialIdentity) => Promise<void>,
+) {
+  try {
+    if (persistAbandonedPartial && placements.validateTurnClaim(claim)) {
+      await persistAbandonedPartial(claim);
+    }
+  } catch (error) {
+    logWarn(`Cloud worker partial reply could not be saved: ${boundedWorkerError(error)}`);
+  }
+  return findPendingWorkerWorkspaceResult(placements, claim);
+}
 
 export async function failHandedOffTurn(params: {
   environments: WorkerTurnEnvironmentService;

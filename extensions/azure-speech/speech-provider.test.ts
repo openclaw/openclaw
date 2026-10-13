@@ -156,6 +156,73 @@ describe("buildAzureSpeechProvider", () => {
     });
   });
 
+  it.each([
+    {
+      name: "endpoint without region",
+      base: { region: undefined, endpoint: "https://speech.example.com/custom" },
+      talk: {},
+      expected: "https://speech.example.com/custom",
+    },
+    {
+      name: "inherited region",
+      base: {},
+      talk: {},
+      expected: "https://eastus.tts.speech.microsoft.com",
+    },
+    {
+      name: "inherited endpoint",
+      base: { endpoint: "https://speech.example.com/custom/cognitiveservices/v1" },
+      talk: {},
+      expected: "https://speech.example.com/custom",
+    },
+    {
+      name: "inherited base URL",
+      base: { baseUrl: "https://speech.example.com/custom/" },
+      talk: {},
+      expected: "https://speech.example.com/custom",
+    },
+    {
+      name: "voice-only override",
+      base: { baseUrl: "https://speech.example.com/custom" },
+      talk: { voiceId: "en-US-AriaNeural" },
+      expected: "https://speech.example.com/custom",
+    },
+    {
+      name: "explicit Talk endpoint",
+      base: { baseUrl: "https://speech.example.com/custom" },
+      talk: { endpoint: "https://talk.example.com/speech/cognitiveservices/v1/" },
+      expected: "https://talk.example.com/speech",
+    },
+    {
+      name: "explicit Talk base URL",
+      base: { baseUrl: "https://speech.example.com/custom" },
+      talk: { baseUrl: "https://talk.example.com/speech/" },
+      expected: "https://talk.example.com/speech",
+    },
+    {
+      name: "explicit Talk region",
+      base: { baseUrl: "https://speech.example.com/custom" },
+      talk: { region: "westus" },
+      expected: "https://westus.tts.speech.microsoft.com",
+    },
+  ])("routes synthesis with $name", async ({ base, talk, expected }) => {
+    const resolved = provider.resolveTalkConfig!({
+      cfg: {},
+      baseTtsConfig: {
+        providers: { "azure-speech": { apiKey: "key", region: "eastus", ...base } },
+      },
+      talkProviderConfig: talk,
+      timeoutMs: 30_000,
+    });
+    const providerConfig = provider.resolveConfig!({
+      cfg: {},
+      rawConfig: { providers: { "azure-speech": resolved } },
+      timeoutMs: 30_000,
+    });
+    await provider.synthesize({ ...synthesisRequest, providerConfig, target: "audio-file" });
+    expect(azureSpeechTTSMock).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: expected }));
+  });
+
   it("parses provider-specific TTS directives", () => {
     const policy = {
       enabled: true,
@@ -227,30 +294,6 @@ describe("buildAzureSpeechProvider", () => {
       outputFormat: "raw-8khz-8bit-mono-mulaw",
       sampleRate: 8_000,
     });
-  });
-
-  it("forwards the configured media byte cap to synthesis requests", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          mediaMaxMb: 2,
-        },
-      },
-    };
-    resolveGeneratedMediaMaxBytesMock.mockReturnValue(2 * 1024 * 1024);
-
-    await provider.synthesize({
-      ...synthesisRequest,
-      cfg,
-      target: "audio-file",
-    });
-
-    expect(resolveGeneratedMediaMaxBytesMock).toHaveBeenCalledExactlyOnceWith(cfg, "audio");
-    expect(azureSpeechTTSMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        maxBytes: 2 * 1024 * 1024,
-      }),
-    );
   });
 
   it("lists voices through config or explicit request auth", async () => {

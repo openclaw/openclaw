@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -83,9 +84,13 @@ beforeEach(() => {
   resetAgentEventsForTest();
   resetGatewayWorkAdmission();
   tmpDir = tempDirs.make();
+  setRuntimeConfigSnapshot({});
 });
 
-afterEach(() => resetGatewayWorkAdmission());
+afterEach(() => {
+  resetGatewayWorkAdmission();
+  clearRuntimeConfigSnapshot();
+});
 
 describe("main-session startup recovery", () => {
   it("preserves a claimless delivered continuation but marks one with only older receipts", async () => {
@@ -356,14 +361,14 @@ describe("main-session startup recovery", () => {
       updatedBeforeMs: cutoff,
     });
 
-    expect(marked).toEqual({ marked: 1, skipped: 3 });
+    expect(marked).toEqual({ marked: 1, skipped: 1 });
     let store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
     expect(store["agent:main:active-key"]?.abortedLastRun).toBeUndefined();
     expect(store["agent:main:active-id"]?.abortedLastRun).toBeUndefined();
     expect(store["agent:main:fresh"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:subagent:child"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:cron:nightly"]?.abortedLastRun).toBeUndefined();
+    expect(store["agent:main:subagent:child"]).toEqual(before["agent:main:subagent:child"]);
+    expect(store["agent:main:cron:nightly"]).toEqual(before["agent:main:cron:nightly"]);
     expect(store["agent:main:completed"]?.abortedLastRun).toBe(false);
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(true);
     expect(store["agent:main:completed"]?.restartRecoveryRuns).toBeUndefined();
@@ -376,7 +381,13 @@ describe("main-session startup recovery", () => {
     store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(false);
-    for (const key of [archivedKey, "agent:main:active-key", "agent:main:active-id"]) {
+    for (const key of [
+      archivedKey,
+      "agent:main:active-key",
+      "agent:main:active-id",
+      "agent:main:subagent:child",
+      "agent:main:cron:nightly",
+    ]) {
       expect(store[key]).toEqual(before[key]);
     }
     expect(await loadTranscriptEvents(archivedScope)).toEqual(archivedHistory);
@@ -461,6 +472,7 @@ describe("main-session startup recovery", () => {
           owner === "old"
             ? { agents: { entries: { main: {} } }, session: { store: storePath } }
             : {};
+        setRuntimeConfigSnapshot(cfg);
         if (shared) {
           openOpenClawAgentDatabase({ agentId: owner, path: storePath });
         }

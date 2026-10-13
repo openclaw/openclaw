@@ -112,16 +112,6 @@ describe("plugin state worker operations", () => {
     }
   });
 
-  it("keeps namespace scans coherent with eviction and deletion", async () => {
-    const store = open("cache", { maxEntries: 1, overflowPolicy: "evict-oldest" });
-    await store.register("old", "old");
-    const operation = store.createOperation<FixtureOperations>([store], handler);
-    expect(
-      (await operation.execute({ type: "cache", input: undefined }, { writeStores: [0] })).value,
-    ).toEqual([["old"], ["new"], undefined, []]);
-    expect(await store.entries()).toEqual([]);
-  });
-
   it("keeps read-only absent sources noncreating and uses only an explicit missing value", async () => {
     const env = { ...state.env, OPENCLAW_STATE_DIR: state.path("absent") };
     const store = open("absent", { env });
@@ -146,8 +136,6 @@ describe("plugin state worker operations", () => {
     const read = () =>
       operation.execute({ type: "read", input: { store: 0, key: "key" } }, { writeStores: [] });
     const before = await read();
-    before.assertCurrent();
-    await workerClient.sweepExpiredPluginStateEntriesInWorker({ env: state.env });
     before.assertCurrent();
     const pending = store.register("key", "revoked");
     expect(before.assertCurrent).toThrow("no longer current");

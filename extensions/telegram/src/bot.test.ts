@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
+  getSessionEntryAsync,
   listSessionEntries,
   normalizeSessionDeliveryState,
   upsertSessionEntry,
@@ -1265,7 +1266,7 @@ describe("createTelegramBot", () => {
       commandText: "echo canonical",
       telegram: { capabilities: ["vision"] },
       terminalTitle: "ℹ️ Approval already resolved",
-      terminalResult: "Canonical result: Allowed once",
+      terminalResult: "Recorded result: Allowed once",
       editFails: false,
     },
     {
@@ -1278,7 +1279,7 @@ describe("createTelegramBot", () => {
       commandText: "echo denied",
       telegram: {},
       terminalTitle: "✅ Approval resolved here",
-      terminalResult: "Canonical result: Denied",
+      terminalResult: "Recorded result: Denied",
       editFails: true,
     },
   ] satisfies Array<{
@@ -1406,7 +1407,7 @@ describe("createTelegramBot", () => {
       firstError: "resolved",
       secondOutcome: "canonical",
       expectedCalls: 2,
-      expectedTerminal: "Canonical result: Denied",
+      expectedTerminal: "Recorded result: Denied",
       secondOwner: "canonical-exec",
     },
     {
@@ -1419,7 +1420,7 @@ describe("createTelegramBot", () => {
       secondOutcome: "missing",
       expectedCalls: 2,
       expectedTerminal:
-        "It was already resolved or expired; the canonical decision is unavailable here.",
+        "It was already resolved or expired; the recorded decision is unavailable here.",
     },
     {
       name: "resolves opaque plugin ids without inferring kind from spelling",
@@ -1731,6 +1732,9 @@ describe("createTelegramBot", () => {
   });
 
   it("keeps hot-reloaded model pins on the next assembled turn", async () => {
+    using _ = vi
+      .spyOn(telegramBotDepsForTest, "getSessionEntryAsync")
+      .mockImplementation(getSessionEntryAsync);
     const storePath = createTelegramTestStorePath("model-fresh-cfg");
     const debounceMs = 4321;
     const startupConfig = makeModelPickerConfig(storePath, {

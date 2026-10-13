@@ -69,10 +69,16 @@ async function startOAuthFixture() {
     }
     if (url.pathname === "/register" && request.method === "POST") {
       const metadata = JSON.parse(await readBody(request)) as { redirect_uris?: string[] };
+      const redirectUris = metadata.redirect_uris?.map((value) => {
+        const redirect = new URL(value);
+        redirect.port = "";
+        return redirect.href;
+      });
       sendJson(
         response,
         {
           ...metadata,
+          redirect_uris: redirectUris,
           client_id: "fixture-client",
           client_id_issued_at: Math.floor(Date.now() / 1000),
         },
@@ -328,7 +334,7 @@ describe("mcp login OAuth integration", () => {
     });
   });
 
-  it("logs in and probes an OAuth MCP server through the CLI", async () => {
+  it("logs in and probes through the CLI with a portless loopback registration", async () => {
     await withTempHome(`openclaw-mcp-login-${randomUUID()}-`, async () => {
       const fixture = await startOAuthFixture();
       try {

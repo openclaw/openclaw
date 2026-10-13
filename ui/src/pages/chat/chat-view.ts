@@ -40,12 +40,12 @@ import {
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import "./components/chat-comment-controller.ts";
 import {
   type ChatPlacementStartupNoticeProps,
   renderChatComposerNotices,
   renderChatTopbarNotices,
 } from "./chat-view-notices.ts";
-import "./components/chat-comment-controller.ts";
 import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
 import {
   createChatAttachmentDropHandlers,
@@ -55,11 +55,11 @@ import { resolveChatCommentAnchor } from "./components/chat-comment-anchor.ts";
 import {
   renderComposerQuestionDock,
   resolveComposerQuestionPanel,
-} from "./components/chat-composer-question.ts";
+} from "./components/chat-composer-question.tsx";
 import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
-import { renderChatComposerQueue } from "./components/chat-composer-view.ts";
-import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposerQueue } from "./components/chat-composer-view.tsx";
+import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.tsx";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
@@ -81,6 +81,7 @@ import {
 import { renderChatThread } from "./components/chat-thread.ts";
 import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
+import { chatFailureRunId } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";
@@ -90,6 +91,8 @@ export type ChatProps = Omit<
   | "runActive"
   | "runWorking"
   | "startupLabel"
+  | "retryAt"
+  | "failureActionsRunId"
   | "questionPrompts"
   | "agents"
   | "queuedMessageAction"
@@ -120,6 +123,7 @@ export type ChatProps = Omit<
     presented?: PresentationValue;
     historyState?: ChatState;
     startupStatus?: ChatRunStartupStatus | null;
+    environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
     providerPolicyNotice?: ProviderPolicyNotice | null;
     providerReviewNotice?: TemplateResult | typeof nothing;
     error: string | null;
@@ -280,7 +284,14 @@ export function renderChat(props: ChatProps) {
         pendingInputs: displayedPendingInputs,
         runActive: props.runActive === true,
         runWorking,
-        startupLabel: chatStartupStatusLabel(props.startupStatus, placementStartup),
+        startupLabel: chatStartupStatusLabel(
+          props.startupStatus,
+          placementStartup,
+          props.environmentStartStatus,
+        ),
+        retryAt:
+          props.startupStatus?.phase === "retrying" ? props.startupStatus.retryAt : undefined,
+        failureActionsRunId: chatFailureRunId(props.runError, props.selectedSession),
         questionPrompts: props.gatewayQuestionPrompts,
         agents: props.agentsList?.agents,
         onOpenImage: openImage,
@@ -424,7 +435,7 @@ export function renderChat(props: ChatProps) {
   // The composer keeps the outbox queue; only the transcript includes the
   // placement initial turn, whose retry action belongs to startup.
   const notices = renderChatComposerNotices(props);
-  // Transcript invalidation replaces its render context; bind submission afterward.
+  // The outer view owns submission callbacks across deferred transcript commits.
   questionState.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
   questionState.transcriptRenderContext.onAsyncQuestionDiscard = asyncQuestions.discard;
   const inputDisplay = selectChatInputDisplay(
@@ -500,7 +511,7 @@ export function renderChat(props: ChatProps) {
           </div>
           ${taskSuggestionTray}
         </div>`;
-  // Keep the affordance mounted so visibility changes can finish their exit transition.
+  // Keep the affordance mounted so showing it never changes the transcript layout.
   const scrollToBottomButton = props.onScrollToBottom
     ? html`
         <div class="chat-scroll-to-bottom-wrap">
