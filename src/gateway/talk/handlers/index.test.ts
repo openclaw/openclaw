@@ -170,6 +170,7 @@ vi.mock("../../../tts/provider-registry.js", async (importOriginal) => ({
   listSpeechProviders: mocks.listSpeechProviders,
 }));
 
+// mock-isolation: Keep synthesis stubbed while using real settings/readiness without barrel initialization.
 vi.mock("../../../tts/tts.js", async () => ({
   isTtsProviderConfiguredAsync: (await import("../../../tts/tts-provider-resolution.js"))
     .isTtsProviderConfiguredAsync,
