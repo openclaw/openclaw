@@ -1395,10 +1395,17 @@ describe("worker runtime", () => {
           "error",
           expect.stringContaining("fixture inference cancelled"),
         );
-        expect(gateway.liveEventRequests.at(-1)?.event.payload).toHaveProperty(
-          "error",
-          expect.stringContaining("fixture desktop cleanup failed"),
-        );
+        if (computerCleanupFailure) {
+          expect(gateway.liveEventRequests.at(-1)?.event.payload).toHaveProperty(
+            "error",
+            expect.stringContaining("fixture desktop cleanup failed"),
+          );
+        } else {
+          expect(gateway.liveEventRequests.at(-1)?.event.payload).not.toHaveProperty(
+            "error",
+            expect.stringContaining("desktop cleanup failed"),
+          );
+        }
       } else if (computerCleanupFailure) {
         expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
           kind: "lifecycle",
