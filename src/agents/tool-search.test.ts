@@ -1,6 +1,7 @@
 // Tool search tests cover catalog compaction, scoped tool lookup, raw fallback
 // tools, hooks, abort wrapping, and transcript projection.
 
+import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { validateToolArguments } from "@openclaw/ai/validation";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
@@ -1767,25 +1768,49 @@ describe("Tool Search", () => {
     },
   );
 
-  it("rebinds fresh non-MCP executors on same-run reuse", async () => {
-    const config = { tools: { toolSearch: true } } as never;
-    const first = pluginTool("fake_current_run", "Current-run capability");
-    first.execute = vi.fn(async () => jsonResult({ marker: "first" }));
-    const { ctx, catalogRef } = catalogFixture([first], { config });
+  it.each([false, true])(
+    "rebinds fresh non-MCP executors with published schemas=%s",
+    async (published) => {
+      const config = { tools: { toolSearch: true } } as never;
+      const first = pluginTool("fake_current_run", "Current-run capability");
+      const parameters = { type: "object", properties: { value: { type: "string" } } };
+      if (published) {
+        first.parameters = publishRuntimeToolInputSchema(parameters)
+          .schema as AnyAgentTool["parameters"];
+      }
+      first.execute = vi.fn(async () => jsonResult({ marker: "first" }));
+      const { ctx, catalogRef } = catalogFixture([first], { config });
 
-    const second = pluginTool("fake_current_run", "Current-run capability");
-    second.execute = vi.fn(async () => jsonResult({ marker: "second" }));
-    const reused = applyToolSearchCatalog({
-      tools: [...structuredControlStubs(), second],
-      ...ctx,
-    });
+      const second = pluginTool("fake_current_run", "Current-run capability");
+      second.parameters = first.parameters;
+      second.execute = vi.fn(async () => jsonResult({ marker: "second" }));
+      const reused = applyToolSearchCatalog({
+        tools: [...structuredControlStubs(), second],
+        ...ctx,
+      });
 
-    expect(reused.catalogReused).toBe(true);
-    const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
-    await expect(runtime.callValue("fake_current_run")).resolves.toEqual({ marker: "second" });
-    expect(first.execute).not.toHaveBeenCalled();
-    expect(second.execute).toHaveBeenCalledOnce();
-  });
+      expect(reused.catalogReused).toBe(true);
+      const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
+      await expect(runtime.callValue("fake_current_run")).resolves.toEqual({ marker: "second" });
+      expect(first.execute).not.toHaveBeenCalled();
+      expect(second.execute).toHaveBeenCalledOnce();
+
+      if (published) {
+        second.parameters = publishRuntimeToolInputSchema({
+          type: "object",
+          properties: { count: { type: "integer" } },
+        }).schema as AnyAgentTool["parameters"];
+        const changed = applyToolSearchCatalog({
+          tools: [...structuredControlStubs(), second],
+          ...ctx,
+        });
+        expect(changed.catalogReused).toBe(false);
+        expect(
+          catalogRef.current?.entries.find((entry) => entry.name === second.name)?.parameters,
+        ).toEqual(second.parameters);
+      }
+    },
+  );
 
   it("registers fresh MCP wrappers and executes the current run wrapper", async () => {
     const config = { tools: { toolSearch: true } } as never;

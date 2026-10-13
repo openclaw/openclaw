@@ -8,6 +8,7 @@ import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { AgentRosterElement } from "../lib/agents/roster-element.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import type { SessionMethodAccess } from "../lib/session-method-access.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { newSessionSearch } from "../pages/new-session/location.ts";
@@ -53,6 +54,10 @@ function cachedRosterCards(host: RosterHost) {
 }
 
 class SidebarAgentRoster extends AgentRosterElement {
+  protected override requestRosterUpdate(): void {
+    this.host.sessionData.requestSessionDataUpdate();
+  }
+
   protected override cards() {
     return cachedRosterCards(this.host) ?? super.cards();
   }
@@ -62,11 +67,8 @@ class SidebarAgentRoster extends AgentRosterElement {
   @property({ attribute: false }) involvingMe = false;
   @property({ attribute: false }) empty = false;
   @state() private collapsed = new Set<string>();
+  @state() private openedMenus = new Set<string>();
   private settingsScope: string | null = null;
-  private published: {
-    snapshot: ReturnType<typeof rosterActivityStore>["snapshot"];
-    collapsed: ReadonlySet<string>;
-  } | null = null;
 
   protected override willUpdate() {
     const gatewayUrl = this.context.gateway.connection.gatewayUrl;
@@ -81,11 +83,18 @@ class SidebarAgentRoster extends AgentRosterElement {
     const store = rosterActivityStore(this.context);
     store.setInvolvingMe(this.involvingMe);
     const snapshot = store.snapshot;
-    if (this.published?.snapshot !== snapshot || this.published.collapsed !== this.collapsed) {
-      this.published = { snapshot, collapsed: this.collapsed };
+    const source = this.host.rosterSessionSource;
+    const agentIds = snapshot.cards.map((card) => card.id);
+    if (
+      !source ||
+      source.result !== snapshot.result ||
+      source.collapsedAgentIds !== this.collapsed ||
+      source.agentIds.length !== agentIds.length ||
+      source.agentIds.some((id, index) => id !== agentIds[index])
+    ) {
       this.host.rosterSessionSource = {
         result: snapshot.result,
-        agentIds: snapshot.cards.map((card) => card.id),
+        agentIds,
         collapsedAgentIds: this.collapsed,
       };
     }
@@ -240,7 +249,12 @@ class SidebarAgentRoster extends AgentRosterElement {
                     <wa-dropdown
                       class="sidebar-customize-menu sidebar-agent-roster__menu"
                       placement="bottom-end"
-                      @wa-show=${() => this.host.dismissTransientMenus()}
+                      @wa-show=${() => {
+                        this.host.dismissTransientMenus();
+                        if (!this.openedMenus.has(card.id)) {
+                          this.openedMenus = new Set(this.openedMenus).add(card.id);
+                        }
+                      }}
                       @wa-select=${(
                         event: CustomEvent<{ item: HTMLElement & { value?: string } }>,
                       ) => {
@@ -274,18 +288,28 @@ class SidebarAgentRoster extends AgentRosterElement {
                       >
                         ${icons.moreHorizontal}
                       </button>
-                      <wa-dropdown-item class="sidebar-customize-menu__item" value="main"
-                        ><span slot="icon" class="nav-item__icon">${icons.messageSquare}</span
-                        >${t("agentsHome.openMainChat")}</wa-dropdown-item
-                      >
-                      <wa-dropdown-item class="sidebar-customize-menu__item" value="sessions"
-                        ><span slot="icon" class="nav-item__icon">${icons.listTree}</span
-                        >${t("agentsHome.allSessions")}</wa-dropdown-item
-                      >
-                      <wa-dropdown-item class="sidebar-customize-menu__item" value="collapse-others"
-                        ><span slot="icon" class="nav-item__icon">${icons.foldVertical}</span
-                        >${t("agentsHome.collapseOthers")}</wa-dropdown-item
-                      >
+                      ${
+                        this.openedMenus.has(card.id)
+                          ? html`<wa-dropdown-item class="sidebar-customize-menu__item" value="main"
+                                ><span slot="icon" class="nav-item__icon"
+                                  >${icons.messageSquare}</span
+                                >${t("agentsHome.openMainChat")}</wa-dropdown-item
+                              >
+                              <wa-dropdown-item
+                                class="sidebar-customize-menu__item"
+                                value="sessions"
+                                ><span slot="icon" class="nav-item__icon">${icons.listTree}</span
+                                >${t("agentsHome.allSessions")}</wa-dropdown-item
+                              >
+                              <wa-dropdown-item
+                                class="sidebar-customize-menu__item"
+                                value="collapse-others"
+                                ><span slot="icon" class="nav-item__icon"
+                                  >${icons.foldVertical}</span
+                                >${t("agentsHome.collapseOthers")}</wa-dropdown-item
+                              >`
+                          : nothing
+                      }
                     </wa-dropdown>
                   </span>
                 </div>
@@ -327,7 +351,15 @@ class SidebarNewSessionMenu extends AgentRosterElement {
     return cachedRosterCards(this.host) ?? super.cards();
   }
   @property({ attribute: false }) host!: RosterHost;
-  @property({ attribute: false }) access!: ReturnType<RosterHost["readNewSessionAccess"]>;
+  @property({ attribute: false }) snapshot: RosterHost["sidebarSnapshot"] = null;
+  @property({
+    attribute: false,
+    hasChanged: (value: SessionMethodAccess, previous?: SessionMethodAccess) =>
+      value.allowed !== previous?.allowed ||
+      (!value.allowed && (!previous || previous.allowed || value.reason !== previous.reason)),
+  })
+  access!: SessionMethodAccess;
+  @state() private opened = false;
 
   override render() {
     return this.avatars.withActiveRoutes(() => {
@@ -337,7 +369,10 @@ class SidebarNewSessionMenu extends AgentRosterElement {
         class="sidebar-new-session-menu"
         placement="bottom-end"
         aria-label=${t("agentChip.agents")}
-        @wa-show=${() => this.host.dismissTransientMenus()}
+        @wa-show=${() => {
+          this.host.dismissTransientMenus();
+          this.opened = true;
+        }}
         @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
           const item = event.detail.item;
           event.preventDefault();
@@ -365,26 +400,30 @@ class SidebarNewSessionMenu extends AgentRosterElement {
         >
           ${icons.plus}
         </button>
-        ${cards.map(
-          (card) => html`<wa-dropdown-item
-            value=${card.id}
-            @click=${(event: MouseEvent) => {
-              if (shouldHandleNavigationClick(event)) {
-                event.preventDefault();
-              } else if (event.currentTarget instanceof HTMLElement) {
-                event.currentTarget.dataset.nativeNavigation = "true";
-              }
-            }}
-            ><a
-              class="sidebar-agent-roster__link"
-              href=${`${pathForRoute("new-session", this.host.basePath)}${newSessionSearch(card.id)}`}
-              tabindex="-1"
-              ><span class="sidebar-agent-roster__avatar" aria-hidden="true">
-                ${renderAgentIdentityAvatar(card)} </span
-              ><span>${card.name}</span></a
-            >
-          </wa-dropdown-item>`,
-        )}
+        ${
+          this.opened
+            ? cards.map(
+                (card) => html`<wa-dropdown-item
+                  value=${card.id}
+                  @click=${(event: MouseEvent) => {
+                    if (shouldHandleNavigationClick(event)) {
+                      event.preventDefault();
+                    } else if (event.currentTarget instanceof HTMLElement) {
+                      event.currentTarget.dataset.nativeNavigation = "true";
+                    }
+                  }}
+                  ><a
+                    class="sidebar-agent-roster__link"
+                    href=${`${pathForRoute("new-session", this.host.basePath)}${newSessionSearch(card.id)}`}
+                    tabindex="-1"
+                    ><span class="sidebar-agent-roster__avatar" aria-hidden="true">
+                      ${renderAgentIdentityAvatar(card)} </span
+                    ><span>${card.name}</span></a
+                  >
+                </wa-dropdown-item>`,
+              )
+            : nothing
+        }
       </wa-dropdown>`;
     });
   }
@@ -395,6 +434,7 @@ customElements.define("openclaw-sidebar-new-session-menu", SidebarNewSessionMenu
 export function renderSidebarNewSessionMenu(host: RosterHost) {
   return html`<openclaw-sidebar-new-session-menu
     .host=${host}
+    .snapshot=${host.sidebarSnapshot}
     .access=${host.readNewSessionAccess()}
     .active=${host.navigationVisible}
   ></openclaw-sidebar-new-session-menu>`;

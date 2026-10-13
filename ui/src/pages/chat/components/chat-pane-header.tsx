@@ -181,7 +181,7 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
               type="button"
               title={t("chat.sessionHeader.renameTooltip")}
               aria-label={t("chat.sessionHeader.renameAria", { title: props.title })}
-              onClick={props.onBeginRename}
+              onClick={() => props.onBeginRename()}
             >
               <SessionTitle {...props} />
             </button>
