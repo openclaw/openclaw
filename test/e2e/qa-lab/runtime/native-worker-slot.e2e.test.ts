@@ -127,6 +127,7 @@ function readPlacement(gateway: WireGateway, key: string) {
 it.skipIf(process.platform === "win32")(
   "settles native A, deletes it, then runs B on the same one-slot node",
   async ({ signal }) => {
+    process.stderr.write("[native-slot] starting one-slot proof\n");
     const root = tempDirs.make("native-slot-lifecycle-");
     const provider = await providerFixture();
     const published = await createPublishedWireWorkspace(root);
@@ -245,6 +246,9 @@ it.skipIf(process.platform === "win32")(
             }
             try {
               const state = readPlacement(gateway, key);
+              process.stderr.write(
+                `[native-slot] settlement ${JSON.stringify({ key, ...state })}\n`,
+              );
               if (state.placement?.turn_claim_id === null && !state.pending) {
                 settled.resolve();
               }

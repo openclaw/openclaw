@@ -136,7 +136,7 @@ it.skipIf(process.platform === "win32")(
     const startedAt = Date.now();
     const record = (boundary: string, detail: unknown) => {
       const entry = { ms: Date.now() - startedAt, boundary, detail };
-      console.info("required-native-boundary", JSON.stringify(entry));
+      process.stderr.write(`required-native-boundary ${JSON.stringify(entry)}\n`);
     };
     let onNativeRequest: ((marker: string) => void) | undefined;
     const provider = createServer((request, response) => {
