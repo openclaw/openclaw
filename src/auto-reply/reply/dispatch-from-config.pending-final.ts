@@ -31,7 +31,7 @@ export async function settleReplyPendingFinalDelivery(
   const metadata = getReplyPayloadMetadata(payload);
   const completion = metadata?.pendingFinalDeliveryCompletion;
   if (!completion) {
-    return;
+    return undefined;
   }
   const cleanup = metadata.pendingFinalDeliveryCleanup;
   const terminal = state === "delivered" || state === "suppressed";

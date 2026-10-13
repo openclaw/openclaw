@@ -110,6 +110,7 @@ describe("channel turn terminal settlement", () => {
         },
       },
     });
+    expect(deliver).toHaveBeenCalledOnce();
     expect(onDelivered).toHaveBeenCalledOnce();
     expect((await readEntry())?.pendingFinalDelivery?.deliveries).toEqual(expectedPending);
     if (observerThrows) {

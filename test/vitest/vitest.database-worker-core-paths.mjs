@@ -122,6 +122,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
   "src/channels/feedback-reflection.worker.test.ts",
   "src/channels/turn/pending-delivery-notice.integration.test.ts",
+  "src/channels/turn/run-channel-turn.settlement.test.ts",
   "src/config/sessions/session-accessor.sqlite-bounded-context.test.ts",
   "src/gateway/server-methods/chat-transcript-persistence.mirrors.test.ts",
   "src/gateway/server-methods/chat-transcript-persistence.generated-media.test.ts",
