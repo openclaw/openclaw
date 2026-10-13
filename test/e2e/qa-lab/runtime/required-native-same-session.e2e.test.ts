@@ -1,4 +1,3 @@
-// CI baseline probe for #170257; no behavior changes.
 import { execFile } from "node:child_process";
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
