@@ -436,29 +436,27 @@ export function isBrowserEvaluateDisabledError(err: unknown): boolean {
     : code === "ACT_EVALUATE_DISABLED";
 }
 
-/**
- * Page script for a wheel at an optional CSS point. Like a native wheel, it scrolls the
- * nearest scroller under the pointer that can still move that way, else the document.
- */
-export function browserScrollScript(params: {
-  deltaX: number;
-  deltaY: number;
-  point?: { x: number; y: number };
-}): string {
+export async function scrollBrowserBy(
+  client: BrowserRequestClient,
+  params: { targetId: string; deltaX: number; deltaY: number; point?: { x: number; y: number } },
+) {
   const dx = Math.round(params.deltaX);
   const dy = Math.round(params.deltaY);
   const point = params.point
     ? `[${Math.max(0, Math.round(params.point.x))}, ${Math.max(0, Math.round(params.point.y))}]`
     : "null";
-  return `() => {
+  const fn = `() => {
   const dx = ${dx}, dy = ${dy}, point = ${point};
   const scrolls = (value) => value === "auto" || value === "scroll" || value === "overlay";
   const canScroll = (el) => {
     const style = getComputedStyle(el);
     const y = dy !== 0 && scrolls(style.overflowY) &&
-      (dy > 0 ? el.scrollTop + el.clientHeight < el.scrollHeight - 1 : el.scrollTop > 0);
+      (dy > 0 ? el.scrollTop + el.clientHeight < el.scrollHeight : el.scrollTop > 0);
+    const maxX = el.scrollWidth - el.clientWidth;
+    const minLeft = style.direction === "rtl" ? -maxX : 0;
+    const maxLeft = style.direction === "rtl" ? 0 : maxX;
     const x = dx !== 0 && scrolls(style.overflowX) &&
-      (dx > 0 ? el.scrollLeft + el.clientWidth < el.scrollWidth - 1 : el.scrollLeft > 0);
+      (dx > 0 ? el.scrollLeft < maxLeft : el.scrollLeft > minLeft);
     return x || y;
   };
   let el = point ? document.elementFromPoint(point[0], point[1]) : null;
@@ -467,7 +465,7 @@ export function browserScrollScript(params: {
     if (!inner || inner === el) break;
     el = inner;
   }
-  while (el && el !== document.body && el !== document.documentElement) {
+  while (el && el !== document.scrollingElement) {
     if (canScroll(el)) {
       el.scrollBy(dx, dy);
       return true;
@@ -475,18 +473,12 @@ export function browserScrollScript(params: {
     const root = el.getRootNode();
     el = el.parentElement || (root instanceof ShadowRoot ? root.host : null);
   }
-  window.scrollBy(dx, dy);
+  window.scrollBy(${dx}, ${dy});
   return true;
 }`;
-}
-
-export async function scrollBrowserBy(
-  client: BrowserRequestClient,
-  params: { targetId: string; deltaX: number; deltaY: number; point?: { x: number; y: number } },
-) {
   await evaluateInBrowser(client, {
     targetId: params.targetId,
-    fn: browserScrollScript(params),
+    fn,
   });
 }
 

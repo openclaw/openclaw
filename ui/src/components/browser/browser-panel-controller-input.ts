@@ -203,6 +203,7 @@ export class BrowserPanelInputController {
       ) {
         return;
       }
+      const point = this.scrollPoint;
       void this.host.runAction(async (actionClient) => {
         if (this.host.evaluateUnavailable) {
           // No page JS allowed: fall back to a coarse keyboard scroll.
@@ -216,7 +217,7 @@ export class BrowserPanelInputController {
           targetId,
           deltaX,
           deltaY,
-          ...(this.scrollPoint ? { point: this.scrollPoint } : {}),
+          ...(point ? { point } : {}),
         });
       });
     });
