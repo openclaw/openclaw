@@ -788,6 +788,7 @@ export const en: TranslationMap & {
     copyLink: "Copy link",
     archiveSessionOnly: "Session only",
     communication: {
+      title: "Cross-session messaging",
       send: "Send messages",
       receive: "Receive messages",
       always: "Always",

@@ -3995,9 +3995,8 @@ survives cleanup failure while the failed native owner retires. Use `run` when
 dependent commands share a binding or host publication must stay inside the
 same FIFO interval.
 
-Memory source-state reads, cache pruning, standing-intent operations, and session
-collaboration writes without a preparation callback use that single-command
-path. Memory bindings reuse the canonical connection's installed policy. Small
+Memory cache pruning, standing-intent operations, and session collaboration
+writes without a preparation callback use that single-command path. Memory bindings reuse the canonical connection's installed policy. Small
 source replacements and embedding-cache writes carry a bounded inline batch in
 one request through the same tombstone, capacity, and commit checks.
 Larger inputs retain bounded fragment messages and stage one publication in worker
@@ -4153,9 +4152,11 @@ binary values and is discarded after settlement or owner closure. Source-file in
 host. Cache pruning uses that same worker for its live count and oldest-row deletion,
 with a transaction recheck before each batch of at most 100 rows. The host releases
 admission and yields between batches; only definite pre-entry lock failures retry.
-Cache and source-hash reads use the retained publication worker, checking that
-its handle is open at admission. Source snapshots use that same publication owner;
-read-only diagnostics use the retrieval worker. Shadow session publication prepares
+Published source hashes, chunks, embedding-cache rows, session tombstones, and
+index/source snapshots use the existing retrieval worker's read-only connection.
+They retain their physical source and caller lifetime without reserving the agent
+writer FIFO. Private shadow databases keep their publication worker and private
+queue for read-your-writes. Both adapters use the same read kernels. Shadow session publication prepares
 its current tombstone predicate in the original published worker while retaining
 the workspace lock through commit. Ordinary publication checks that predicate only
 inside its committing transaction. The shadow's empty tombstone table never grants

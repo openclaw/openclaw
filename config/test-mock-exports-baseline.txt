@@ -6481,7 +6481,6 @@
 ["src/daemon/launchd-ancestry.test-support.ts","./service-process-membership.js","c76592b4b84e16260ea7dfa685d8f4c1933402149a615045413471a8b8b6f6e5",1]
 ["src/daemon/launchd-current-service.test.ts","../infra/restart-stale-pids.js","e13b6986c932647618fedcfc34efbf35172d655cc6fb7de6c702c63839ae2c8c",1]
 ["src/daemon/launchd-current-service.test.ts","./launchd-runtime.js","63ce0d8d357683ba43f939fc131ab6c4d664868b43d70e6d531977c6468c2ac6",1]
-["src/daemon/launchd-current-service.test.ts","./service-process-membership.js","c1c2c5bb233117ee840464400f14c8301cf53f61ef7fbe5bd4ffaabbada91cd8",1]
 ["src/daemon/launchd-foreign-jobs.process.test.ts","../../packages/terminal-core/src/note.js","336fc791de8ce9b19eba2b7bc282f83250c9743ee50617878e94ae793b1f1113",1]
 ["src/daemon/launchd-foreign-jobs.process.test.ts","../commands/doctor-gateway-services.js","8301f0c2ef3f1bc8f5d975f94ce261056a9b4086432acdb3ff1c9442fadb171c",1]
 ["src/daemon/launchd-foreign-jobs.process.test.ts","../commands/doctor-service-repair-policy.js","845844f93353c6a6246aa17d99bdbf1f9ebf1ee76d6fc185bcc6b719b5227711",1]
