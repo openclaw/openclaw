@@ -483,6 +483,12 @@ describe("file references", () => {
       "<pre><code><ul><li>literal</li></ul></code></pre>",
       "<pre><code>&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;</code></pre>",
     ],
+    ["escaped divider", "Use &lt;hr/&gt; here", "Use &lt;hr/&gt; here"],
+    [
+      "escaped list and aside examples",
+      "<ul><li>&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;</li></ul><aside>&lt;aside&gt;literal&lt;/aside&gt;</aside>",
+      "• &lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;\n<blockquote>&lt;aside&gt;literal&lt;/aside&gt;</blockquote>",
+    ],
   ])("renders %s captions without leaking rich blocks", (_name, input, expected) => {
     for (const textMode of ["html", "markdown"] as const) {
       expect(renderTelegramHtmlText(input, { textMode, downgradeRichPromptTags: true })).toBe(

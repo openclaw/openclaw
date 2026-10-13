@@ -304,24 +304,12 @@ function renderSupportedTelegramHtml(html: string): string {
   return protectTelegramAssistantTranscriptRoleHeaders(promoted);
 }
 
-/** Project escaped rich blocks after Markdown rendering so list markers stay literal. */
-function downgradeRichBlockTags(text: string): string {
-  if (!text.includes("&lt;")) {
+/** Project authored rich tags, leaving entity-escaped examples and code literal. */
+function downgradeRichBlockTags(text: string, markdown: boolean): string {
+  if (!text.includes("<")) {
     return text;
   }
-  // Keep offsets into the original HTML while the shared tokenizer sees decoded delimiters.
-  const entityOffsets: number[] = [];
-  const decoded = text.replace(/&(?:lt|gt);/g, (entity, offset: number) => {
-    entityOffsets.push(offset - entityOffsets.length * 3);
-    return entity === "&lt;" ? "<" : ">";
-  });
-  let entityIndex = 0;
-  const sourceOffset = (offset: number) => {
-    while (entityIndex < entityOffsets.length && entityOffsets[entityIndex]! < offset) {
-      entityIndex += 1;
-    }
-    return offset + entityIndex * 3;
-  };
+  const codeRegions = markdown ? findCodeRegions(text) : [];
   const lists: Array<{ name: string; next: number }> = [];
   const items: number[] = [];
   const parts: string[] = [];
@@ -345,16 +333,20 @@ function downgradeRichBlockTags(text: string): string {
       trailingBoundary = parts.length - 1;
     }
   };
-  for (const tag of tokenizeHtmlTags(decoded)) {
-    const start = sourceOffset(tag.start);
-    const end = sourceOffset(tag.end);
-    const raw = text.slice(start, end);
-    append(text.slice(cursor, start));
-    cursor = end;
-    if (raw.startsWith("<") && (tag.name === "code" || tag.name === "pre")) {
-      codeDepth = tag.closing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
+  for (const tag of tokenizeHtmlTags(text)) {
+    const raw = tag.raw;
+    append(text.slice(cursor, tag.start));
+    cursor = tag.end;
+    if (isInsideCode(tag.start, codeRegions)) {
+      append(raw);
+      continue;
     }
-    if (raw.startsWith("<") || codeDepth > 0) {
+    if (tag.name === "code" || tag.name === "pre") {
+      codeDepth = tag.closing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
+      append(raw);
+      continue;
+    }
+    if (codeDepth > 0) {
       append(raw);
       continue;
     }
@@ -379,9 +371,12 @@ function downgradeRichBlockTags(text: string): string {
         } else {
           boundary();
           const list = lists.at(-1);
-          append("  ".repeat(Math.max(0, lists.length - 1)));
+          const indent = "  ".repeat(Math.max(0, lists.length - 1));
+          append(markdown ? indent.replaceAll(" ", "&#32;") : indent);
           items.push(parts.length);
-          append(list?.name === "ol" ? `${list.next++}. ` : "• ");
+          const marker = list?.name === "ol" ? `${list.next++}. ` : "• ";
+          // Entity-encode generated prefixes so Markdown cannot renumber or de-indent them.
+          append(markdown ? marker.replace(/^\d/, (digit) => `&#${digit.charCodeAt(0)};`) : marker);
         }
         break;
       case "input": {
@@ -423,11 +418,13 @@ export function renderTelegramHtmlText(
     downgradeRichPromptTags?: boolean;
   } = {},
 ): string {
-  const html =
-    options.textMode === "html"
-      ? escapeUnsupportedTelegramHtml(normalizeTelegramLegacyHtmlTables(text))
-      : markdownToTelegramHtml(text, { tableMode: options.tableMode });
-  return options.downgradeRichPromptTags === true ? downgradeRichBlockTags(html) : html;
+  const source =
+    options.downgradeRichPromptTags === true
+      ? downgradeRichBlockTags(text, options.textMode !== "html")
+      : text;
+  return options.textMode === "html"
+    ? escapeUnsupportedTelegramHtml(normalizeTelegramLegacyHtmlTables(source))
+    : markdownToTelegramHtml(source, { tableMode: options.tableMode });
 }
 
 function normalizeTelegramLegacyHtmlTables(html: string): string {
