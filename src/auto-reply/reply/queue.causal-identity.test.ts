@@ -22,7 +22,9 @@ describe("causal identity through the followup queue", () => {
     "preserves routing and only single-source causal identity (%s sources)",
     async (count) => {
       const q = createQueueCase();
-      for (let i = 1; i <= count; i++) q.add(source(`work-${i}`, `route-${i}`, `causal-${i}`));
+      for (let i = 1; i <= count; i++) {
+        q.add(source(`work-${i}`, `route-${i}`, `causal-${i}`));
+      }
       await q.drain();
       expect(q.calls).toHaveLength(1);
       expect(q.calls[0]?.messageId).toBe(`route-${count}`);

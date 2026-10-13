@@ -45,6 +45,7 @@ describe("registered plugin causal hook metadata", () => {
       const base = {
         sessionId: "synthetic-session",
         sessionKey: "agent:main:googlechat:group:synthetic-chat",
+        sessionFile: "/synthetic/session.jsonl",
         workspaceDir: "/synthetic/workspace",
         trigger: "user" as const,
         senderId: "synthetic-sender",
