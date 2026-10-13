@@ -53,6 +53,10 @@ scenario:
     summary: Hold the requester lane with a foreground exec, release a barrier-gated child inside that window, and verify the completion is recorded after the requester's committed reply and delivered to Telegram exactly once.
     config:
       requiredProviderMode: live-frontier
+      # The leased-participant ingress contract below only exists on the live
+      # Telegram adapter, so the lane filter must exclude the mock drivers
+      # rather than letting a crabline lane claim a "real Telegram inbound turn".
+      requiredChannelDriver: live
       childLabelPrefix: telegram-busy-lane-child
       childResultPrefix: TELEGRAM_BUSY_CHILD_RESULT
       childVisiblePrefix: TELEGRAM_BUSY_CHILD_VISIBLE
@@ -121,8 +125,14 @@ flow:
               id:
                 ref: conversationId
               kind: direct
-            senderId: alice
-            senderName: Alice
+            # The live adapter resolves senderId against leased aliases and
+            # tester user IDs, and rejects anything else outright once the lease
+            # carries more than one participant. "primary" is the alias the
+            # adapter always creates for the leased credential itself, so it is
+            # the only ingress identity a healthy multi-participant lease can
+            # guarantee.
+            senderId: primary
+            senderName: Primary
             text:
               expr: |-
                 `Follow these instructions exactly.
@@ -134,12 +144,18 @@ flow:
         # The requester session key is needed at the moment the requester's own
         # reply reaches Telegram, so the registry row is resolved first. The row
         # exists from spawn time; only its terminal fields are awaited later.
+        # Read native persistence facts directly: the Tasks CLI was retired by
+        # https://github.com/openclaw/openclaw/pull/159179 without a
+        # compatibility facade, so a `tasks list` poll can never discover the
+        # child. readNativeQaSubagentRuns reads the isolated Gateway's own
+        # subagent_runs rows and is left unfiltered here so the completion read
+        # below can independently re-derive the requester key.
         - call: waitForCondition
           saveAs: spawnedChild
           args:
             - lambda:
                 async: true
-                expr: "(async () => { const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); return (payload.tasks ?? []).find((task) => task.label === childLabel && task.createdAt >= attemptStartedAt && typeof task.requesterSessionKey === 'string' && task.requesterSessionKey.length > 0); })()"
+                expr: "(await readNativeQaSubagentRuns(env)).find((run) => run.label === childLabel && run.createdAt >= attemptStartedAt && typeof run.requesterSessionKey === 'string' && run.requesterSessionKey.length > 0)"
             - expr: liveTurnTimeoutMs(env, 120000)
             - 250
         - call: waitForOutboundMessage
@@ -180,12 +196,16 @@ flow:
             - expr: liveTurnTimeoutMs(env, 120000)
             - sinceIndex:
                 ref: outboundStartIndex
+        # Same native read, now awaiting the terminal execution and delivery
+        # facts: the retired CLI's flat status/endedAt/deliveryStatus fields map
+        # onto execution.status + execution.outcome.status, execution.endedAt,
+        # and delivery.status respectively.
         - call: waitForCondition
           saveAs: completedChild
           args:
             - lambda:
                 async: true
-                expr: "(async () => { const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); return (payload.tasks ?? []).find((task) => task.label === childLabel && task.createdAt >= attemptStartedAt && typeof task.requesterSessionKey === 'string' && task.requesterSessionKey.length > 0 && typeof task.childSessionKey === 'string' && task.childSessionKey.length > 0 && typeof task.endedAt === 'number' && Number.isFinite(task.endedAt) && task.status === 'succeeded' && task.deliveryStatus === 'delivered'); })()"
+                expr: "(await readNativeQaSubagentRuns(env)).find((run) => run.label === childLabel && run.createdAt >= attemptStartedAt && typeof run.requesterSessionKey === 'string' && run.requesterSessionKey.length > 0 && typeof run.childSessionKey === 'string' && run.childSessionKey.length > 0 && typeof run.execution.endedAt === 'number' && Number.isFinite(run.execution.endedAt) && run.execution.status === 'terminal' && run.execution.outcome?.status === 'ok' && run.delivery?.status === 'delivered')"
             - expr: liveTurnTimeoutMs(env, 60000)
             - 250
         # Neither preceding wait is a barrier on the requester's message-tool
@@ -268,11 +288,11 @@ flow:
             message:
               expr: "`requester tool timeline was incomplete or out of order; events=${JSON.stringify(parentToolEvents.map((event) => ({ name: event.name, timestamp: event.timestamp })))}`"
         - assert:
-            expr: "proofContents.startedAt <= completedChild.endedAt && completedChild.endedAt <= proofStat.mtimeMs"
+            expr: "proofContents.startedAt <= completedChild.execution.endedAt && completedChild.execution.endedAt <= proofStat.mtimeMs"
             message:
-              expr: "`child did not finish while exec held the requester lane; execStarted=${String(proofContents.startedAt)} childEnded=${String(completedChild.endedAt)} execFinished=${String(proofStat.mtimeMs)}`"
+              expr: "`child did not finish while exec held the requester lane; execStarted=${String(proofContents.startedAt)} childEnded=${String(completedChild.execution.endedAt)} execFinished=${String(proofStat.mtimeMs)}`"
         - assert:
-            expr: "proofContents.startedAt <= completedChild.endedAt && completedChild.endedAt <= proofContents.finishedAt"
+            expr: "proofContents.startedAt <= completedChild.execution.endedAt && completedChild.execution.endedAt <= proofContents.finishedAt"
             message: exec proof interval did not contain child completion
         # successfulToolCallEvents carries the tool RESULT timestamp, so an exec
         # that had backgrounded itself at the default 10s yield would land here
@@ -282,9 +302,9 @@ flow:
             message:
               expr: "`exec did not stay in the foreground for the whole hold; execFinished=${String(proofContents.finishedAt)} execToolResult=${String(execEvent?.timestamp)}`"
         - assert:
-            expr: "completedChild.endedAt <= execEvent?.timestamp"
+            expr: "completedChild.execution.endedAt <= execEvent?.timestamp"
             message:
-              expr: "`child completion did not precede the exec tool result; childEnded=${String(completedChild.endedAt)} execToolResult=${String(execEvent?.timestamp)}`"
+              expr: "`child completion did not precede the exec tool result; childEnded=${String(completedChild.execution.endedAt)} execToolResult=${String(execEvent?.timestamp)}`"
         - assert:
             expr: "String(childTranscript.finalText ?? '').trim() === childResult"
             message: child did not produce the exact isolated result marker
@@ -315,4 +335,4 @@ flow:
             expr: duplicateMatches.length === 1
             message:
               expr: "`expected one deferred child completion during duplicate window, saw ${duplicateMatches.length}`"
-      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'subagent-completion-busy-lane-telegram-live', requesterSessionKey: completedChild.requesterSessionKey, childSessionKey: completedChild.childSessionKey, execStartedAt: proofContents.startedAt, childEndedAt: completedChild.endedAt, execFinishedAt: proofContents.finishedAt, completionSendAt: completionSendEvent?.timestamp, admissionPath, replyEventLine: replyAnchor.assistantReplyStartLine, postReplyUserMessages: completionTranscript.userMessageCount, postReplyTools: completionTranscript.successfulToolCallCounts ?? {}, parentOutboundId: parentOutbound.id, childOutboundId: childOutbound.id, deferredCompletionCount: duplicateMatches.length }, null, 2)"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'subagent-completion-busy-lane-telegram-live', requesterSessionKey: completedChild.requesterSessionKey, childSessionKey: completedChild.childSessionKey, execStartedAt: proofContents.startedAt, childEndedAt: completedChild.execution.endedAt, execFinishedAt: proofContents.finishedAt, completionSendAt: completionSendEvent?.timestamp, admissionPath, replyEventLine: replyAnchor.assistantReplyStartLine, postReplyUserMessages: completionTranscript.userMessageCount, postReplyTools: completionTranscript.successfulToolCallCounts ?? {}, parentOutboundId: parentOutbound.id, childOutboundId: childOutbound.id, deferredCompletionCount: duplicateMatches.length }, null, 2)"
