@@ -11,13 +11,14 @@ import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
 type TelegramMediaMessage = Pick<
   Message,
-  "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker"
+  "photo" | "video" | "video_note" | "animation" | "audio" | "voice" | "document" | "sticker"
 >;
 
 type TelegramMediaFileRef =
   | NonNullable<Message["photo"]>[number]
   | NonNullable<Message["video"]>
   | NonNullable<Message["video_note"]>
+  | NonNullable<Message["animation"]>
   | NonNullable<Message["audio"]>
   | NonNullable<Message["voice"]>
   | NonNullable<Message["document"]>
@@ -45,7 +46,7 @@ export function resolveTelegramPrimaryMedia(
   }
   const candidates: Array<[TelegramMediaKind, TelegramMediaFileRef | undefined]> = [
     ["image", msg.photo?.[msg.photo.length - 1]],
-    ["video", msg.video ?? msg.video_note],
+    ["video", msg.video ?? msg.video_note ?? msg.animation],
     ["audio", msg.audio ?? msg.voice],
     ["document", msg.document],
     ["sticker", msg.sticker],

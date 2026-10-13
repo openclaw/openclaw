@@ -5,6 +5,10 @@ import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  withGatewayServiceUpdateAuthority,
+} from "./service-update-authority.js";
 import { readGatewayServiceState } from "./service.js";
 import { createMockGatewayService } from "./service.test-helpers.js";
 
@@ -223,3 +227,35 @@ describe("ordinary service inspection deadline", () => {
     },
   );
 });
+
+it.each([1, 101])(
+  "outer inspection excludes custody but charges %s ms of native work",
+  async (spent) => {
+    const service = createMockGatewayService({
+      readCommand: vi.fn(async () => {
+        assertGatewayServiceUpdateCurrent();
+        return command;
+      }),
+      isLoaded: vi.fn(async () => {
+        assertGatewayServiceUpdateCurrent();
+        return true;
+      }),
+      readRuntime: vi.fn(async () => {
+        assertGatewayServiceUpdateCurrent();
+        now += spent;
+        return { status: "running" as const, pid: 4242 };
+      }),
+    });
+    const work = withGatewayServiceUpdateAuthority(
+      () => {
+        now += 2_000;
+      },
+      () => readGatewayServiceState(service, { env: {}, timeoutMs: 100, requireEffective: true }),
+    );
+    if (spent > 100) {
+      await expect(work).rejects.toThrow("Service inspection deadline expired.");
+    } else {
+      await expect(work).resolves.toMatchObject({ running: true, command });
+    }
+  },
+);

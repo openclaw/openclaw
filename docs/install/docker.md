@@ -344,6 +344,12 @@ external-plugin build path; root npm artifacts continue to exclude it. Selected
 plugins must compile successfully; unselected external plugin source and
 runtime output are pruned.
 
+The install layer stages every workspace's `package.json` so frozen-lockfile
+validation can check the complete workspace. The build stage installs workspace
+dependencies needed to compile plugin assets; the production stage installs only
+core, shared packages, and required or selected plugins. Staging a plugin manifest
+does not select that plugin for the runtime image.
+
 For example, these commands build separate, multi-architecture standalone
 FakeCo Gateway images for ClickClack, Slack, and Microsoft Teams. ClawRouter is
 already part of the root OpenClaw runtime, so the ClickClack image selects only

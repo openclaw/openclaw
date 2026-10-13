@@ -1,10 +1,11 @@
 import type { OpenClawConfig } from "../runtime-api.js";
 import { findMSTeamsConversationMember } from "./graph-conversation-members.js";
-import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";
+import { resolveConversationPath, resolveGraphMessageContext } from "./graph-messages.js";
 import { deleteGraphRequest, escapeOData, mutateGraphJson, resolveGraphToken } from "./graph.js";
 
 type AddParticipantMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
   userId: string;
   role?: string;
@@ -29,19 +30,17 @@ function resolveConversationMemberRoles(
 }
 
 export async function addParticipantMSTeams(params: AddParticipantMSTeamsParams) {
-  const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const conv = resolveConversationPath(conversationId);
+  const { token, conversationId, kind, basePath } = await resolveGraphMessageContext(params);
 
   const body = {
     "@odata.type": "#microsoft.graph.aadUserConversationMember",
-    roles: resolveConversationMemberRoles(params.role, conv.kind),
+    roles: resolveConversationMemberRoles(params.role, kind),
     "user@odata.bind": `https://graph.microsoft.com/v1.0/users('${escapeOData(params.userId)}')`,
   };
 
   await mutateGraphJson<unknown>({
     token,
-    path: `${conv.basePath}/members`,
+    path: `${basePath}/members`,
     method: "POST",
     body,
   });
@@ -51,6 +50,7 @@ export async function addParticipantMSTeams(params: AddParticipantMSTeamsParams)
 
 type RemoveParticipantMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
   userId: string;
 };
@@ -60,10 +60,12 @@ type RemoveParticipantMSTeamsParams = {
  * Lists members first to resolve the membership ID, then deletes.
  */
 export async function removeParticipantMSTeams(params: RemoveParticipantMSTeamsParams) {
-  const token = await resolveGraphToken(params.cfg);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const { conversationId, member } = await findMSTeamsConversationMember({
     token,
     to: params.to,
+    cfg: params.cfg,
+    accountId: params.accountId,
     userId: params.userId,
   });
   if (!member?.id) {
@@ -81,20 +83,19 @@ export async function removeParticipantMSTeams(params: RemoveParticipantMSTeamsP
 
 type RenameGroupMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
   name: string;
 };
 
 export async function renameGroupMSTeams(params: RenameGroupMSTeamsParams) {
-  const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const conv = resolveConversationPath(conversationId);
+  const { token, conversationId, kind, basePath } = await resolveGraphMessageContext(params);
 
-  const body = conv.kind === "chat" ? { topic: params.name } : { displayName: params.name };
+  const body = kind === "chat" ? { topic: params.name } : { displayName: params.name };
 
   await mutateGraphJson<unknown>({
     token,
-    path: conv.basePath,
+    path: basePath,
     method: "PATCH",
     body,
   });

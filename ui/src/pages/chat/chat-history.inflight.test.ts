@@ -6,7 +6,6 @@ import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResponse, ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { materializeVisibleAssistantStreamMessages } from "./chat-history-stream.ts";
 import {
   activeHistory,
   createState,
@@ -22,11 +21,9 @@ import {
   type TestState,
 } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import {
   admitChatSubmission,
   getChatSessionProjection,
-  getChatModelObservedRunId,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   publishChatSessionProjection,
@@ -195,7 +192,7 @@ it("restores cleared activity alongside an owned run's current text", async () =
 });
 
 it.each(["fresh mirror", "retained idempotency"])(
-  "keeps complete persisted and live replies above a steer (%s)",
+  "keeps saved replies before an accepted steer and the live tail after it (%s)",
   async (mode) => {
     const history = activeHistory("active-run");
     const identity = (seq: number) =>
@@ -246,8 +243,8 @@ it.each(["fresh mirror", "retained idempotency"])(
     expect(tail(state)).toBe("After steer.");
     expect(renderedText(state)).toEqual([
       ...persistedText,
-      "After steer.",
       "Steer prompt",
+      "After steer.",
       "Queued follow-up.",
     ]);
     emit(state, "active-run", {
@@ -257,8 +254,8 @@ it.each(["fresh mirror", "retained idempotency"])(
     });
     expect(renderedText(state)).toEqual([
       ...persistedText,
-      "After steer. Continued.",
       "Steer prompt",
+      "After steer. Continued.",
       "Queued follow-up.",
     ]);
     expect(state.chatStream).toBe("After steer. Continued.");
@@ -271,8 +268,8 @@ it.each(["fresh mirror", "retained idempotency"])(
     });
     const expected = [
       ...persistedText,
-      "After steer. Continued. Final suffix.",
       "Steer prompt",
+      "After steer. Continued. Final suffix.",
       "Queued follow-up.",
     ];
     expect(renderedText(state)).toEqual(expected);
@@ -305,7 +302,7 @@ it.each(["fresh mirror", "retained idempotency"])(
 );
 
 it.each([false, true])(
-  "keeps the steer below the whole assistant message (history=%s)",
+  "keeps the accepted steer before the whole unpersisted assistant message (history=%s)",
   async (reload) => {
     const runId = "active-run";
     const { original, steer } = steerPrompts(2);
@@ -325,7 +322,7 @@ it.each([false, true])(
       true,
       { kind: "live", activeRunId: runId },
     );
-    expect(renderedText(state)).toEqual(["Original prompt", "Before steer.", "Steer prompt"]);
+    expect(renderedText(state)).toEqual(["Original prompt", "Steer prompt", "Before steer."]);
     if (reload) {
       await loadChatHistory(state);
     } else {
@@ -338,8 +335,8 @@ it.each([false, true])(
     expect(state.chatRunId).toBe(runId);
     expect(renderedText(state)).toEqual([
       "Original prompt",
-      "Before steer. After steer.",
       "Steer prompt",
+      "Before steer. After steer.",
     ]);
   },
 );
@@ -364,8 +361,8 @@ it("keeps streaming one message after a live steer is published", async () => {
   });
   expect(renderedText(state)).toEqual([
     "Original prompt",
-    "Before steer. After steer.",
     "Steer prompt",
+    "Before steer. After steer.",
   ]);
 });
 
@@ -446,21 +443,21 @@ it.each([false, true])(
       );
       expect(renderedText(state)).toEqual([
         "Repeat the answer",
-        "Repeated answer.",
         "Steer prompt",
+        "Repeated answer.",
       ]);
     }
     await loadChatHistory(state);
     expect(state.chatRunId).toBe("active-run");
     const persisted = ["Repeat the answer", "Repeated answer."];
     const steers = steered ? ["Steer prompt"] : [];
-    expect(renderedText(state)).toEqual([...persisted, "Repeated answer.", ...steers]);
+    expect(renderedText(state)).toEqual([...persisted, ...steers, "Repeated answer."]);
     emit(state, "active-run", {
       state: "delta",
       deltaText: " Continued.",
       message: message("assistant", "Repeated answer. Continued."),
     });
-    expect(renderedText(state)).toEqual([...persisted, "Repeated answer. Continued.", ...steers]);
+    expect(renderedText(state)).toEqual([...persisted, ...steers, "Repeated answer. Continued."]);
   },
 );
 
@@ -536,8 +533,8 @@ it.each(["live replacement", "history adoption", "steer then history"])(
     expect(state.chatRunId).toBe(runId);
     expect(renderedText(state)).toEqual([
       ...expected,
-      text,
       ...(delivery === "steer then history" ? ["Steer prompt"] : []),
+      text,
     ]);
   },
 );
@@ -645,7 +642,6 @@ it("adopts the snapshot after remount replaces an unchanged run map", async () =
   response.resolve(history);
   await loading;
   expect(state.chatRunId).toBe("run-reconnected");
-  expect(getChatModelObservedRunId(state, history.sessionInfo)).toBe("run-reconnected");
   expect(state.chatStream).toBe(history.inFlightRun!.text);
 });
 
@@ -720,7 +716,6 @@ it("does not resurrect delayed history after a newer intervening run completes",
   await loading;
   expect(state.chatRunId).toBeNull();
   expect(state.chatStream).toBeNull();
-  expect(getChatModelObservedRunId(state, history.sessionInfo)).toBeUndefined();
 });
 
 it("retains newer live startup progress through delayed history", async () => {
@@ -744,46 +739,6 @@ it("retains newer live startup progress through delayed history", async () => {
     runId: "run-live",
     phase: "creating_worktree",
   });
-});
-
-it("reconciles retry waits after live progress", async () => {
-  const history = activeHistory("run-live");
-  history.inFlightRun!.text = "I finished the first step.";
-  const retry = event(2, "run_status", {
-    phase: "retrying",
-    message: "Rate limited. Retrying in 4 seconds (attempt 3/8).",
-  });
-  history.inFlightRun!.events = [
-    event(1, "tool", { phase: "result", toolCallId: "read-1", name: "read", result: "done" }),
-    retry,
-  ];
-  const state = createState(history);
-  const label = () =>
-    chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
-  const text = () =>
-    materializeVisibleAssistantStreamMessages(state.chatMessages, state).map(extractText);
-  await loadChatHistory(state);
-  expect(label()).toBe(retry.data.message);
-  expect(state.chatRunId).toBe("run-live");
-  expect(text()).toEqual(["I finished the first step."]);
-  await loadChatHistory(state);
-  expect(label()).toBe(retry.data.message);
-  expect(text()).toEqual(["I finished the first step."]);
-  const progress = event(3, "assistant", { text: "Continuing" });
-  handleAgentEvent(state, progress);
-  await loadChatHistory(state);
-  expect(label()).toBeUndefined();
-  handleAgentEvent(state, { ...retry, seq: 4 });
-  await loadChatHistory(state);
-  expect(label()).toBe(retry.data.message);
-  handleChatGatewayEvent(state, {
-    runId: "run-live",
-    sessionKey: "main",
-    state: "final",
-    message: { role: "assistant", content: "Finished" },
-  });
-  expect(state.chatRunId).toBeNull();
-  expect(label()).toBeUndefined();
 });
 
 describe("chat history run ownership recovery", () => {

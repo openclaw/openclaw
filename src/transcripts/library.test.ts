@@ -19,6 +19,7 @@ import {
   createTranscriptLibraryStoreFixture,
   transcriptLibrarySession as session,
 } from "./library.store.test-support.js";
+import { deriveMeetingTranscriptSummaryColumns } from "./store-columns.js";
 import { meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
@@ -411,7 +412,9 @@ describe("transcript library SQLite reads", () => {
           .updateTable("meeting_transcript_summaries")
           .set({
             markdown: notesKind === "structured-only" ? null : canonicalMarkdown,
-            ...(notesKind === "markdown-only" ? { summary_json: null } : {}),
+            ...(notesKind === "markdown-only"
+              ? { summary_json: null, ...deriveMeetingTranscriptSummaryColumns(null) }
+              : {}),
           })
           .where("session_id", "=", target.sessionId)
           .where("session_started_at", "=", target.startedAt),
@@ -531,9 +534,9 @@ describe("transcript library asynchronous reads", () => {
           return snapshot;
         });
       } else {
-        const iterate = store.iterateExport.bind(store);
-        vi.spyOn(store, "iterateExport").mockImplementationOnce(async function* (...args) {
-          const snapshot = yield* iterate(...args);
+        const stream = store.streamExport.bind(store);
+        vi.spyOn(store, "streamExport").mockImplementationOnce(async (...args) => {
+          const snapshot = await stream(...args);
           reading.resolve();
           await gate.promise;
           return snapshot;
@@ -581,15 +584,4 @@ describe("transcript library asynchronous reads", () => {
       expect(await store.readUtterancesForSession(replacement)).toMatchObject([utterance, added]);
     },
   );
-
-  it("rejects an export canceled before its completion result", async () => {
-    const { store } = fixture();
-    vi.spyOn(store, "iterateExport").mockImplementationOnce(async function* () {
-      yield { sequence: 0, text: "Partial content" };
-      return undefined;
-    });
-    await expect(
-      exportTranscriptLibrary(store, { selector: "canceled", format: "jsonl" }),
-    ).rejects.toThrow("export ended before completion");
-  });
 });

@@ -42,7 +42,7 @@ async function prepareMigrationOwner() {
     runWithPluginMetadataSnapshot: (_scope, run) => run(),
     doctorOnlyStateMigrations: true,
   });
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await readConfigFileSnapshot(await owner.snapshotOptions());
   await owner.prepare(snapshot);
   await owner.converged([], snapshot, undefined);
   return owner;
@@ -67,38 +67,41 @@ describe("unavailable plugin migration owners", () => {
   it.each([
     { kind: "object", value: {} },
     { kind: "array", value: [] },
-  ])("keeps an authored empty legacy $kind protected", async ({ value: legacyValue }) => {
-    await withHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        gateway: { mode: "local" },
-        plugins: { enabled: false },
-        legacyFixture: legacyValue,
-      });
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        await recordDeferredPluginMigrations({
-          pending: [
-            {
-              pluginId: "missing-owner",
-              reason: "Retained compatibility input",
-              command: "openclaw doctor --fix",
-              configPaths: [["legacyFixture"]],
-              validationExcludedPaths: [["legacyFixture"]],
-            },
-          ],
+  ])(
+    "keeps an authored empty legacy $kind protected during Doctor preparation",
+    async ({ value: legacyValue }) => {
+      await withHome(async (home) => {
+        await writeOpenClawConfig(home, {
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+          legacyFixture: legacyValue,
         });
-        expect((await readConfigFileSnapshot()).valid).toBe(true);
-        const owner = await prepareMigrationOwner();
-        await owner.complete();
-        expect(readDeferredPluginMigrations()).toContainEqual(
-          expect.objectContaining({ pluginId: "missing-owner" }),
-        );
-        expect((await readConfigFileSnapshot()).valid).toBe(true);
-        expect(
-          JSON.parse(await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8")),
-        ).toHaveProperty("legacyFixture", legacyValue);
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          await recordDeferredPluginMigrations({
+            pending: [
+              {
+                pluginId: "missing-owner",
+                reason: "Retained compatibility input",
+                command: "openclaw doctor --fix",
+                configPaths: [["legacyFixture"]],
+                validationExcludedPaths: [["legacyFixture"]],
+              },
+            ],
+          });
+          expect((await readConfigFileSnapshot()).valid).toBe(false);
+          const owner = await prepareMigrationOwner();
+          await owner.complete();
+          expect(readDeferredPluginMigrations()).toContainEqual(
+            expect.objectContaining({ pluginId: "missing-owner" }),
+          );
+          expect((await readConfigFileSnapshot(await owner.snapshotOptions())).valid).toBe(true);
+          expect(
+            JSON.parse(await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8")),
+          ).toHaveProperty("legacyFixture", legacyValue);
+        });
       });
-    });
-  });
+    },
+  );
   it("supersedes a replaced QQ Bot owner only after the official successor completes migration", async () => {
     await withHome(async (home) => {
       const pluginId = "openclaw-qqbot";
@@ -274,6 +277,59 @@ describe("unavailable plugin migration owners", () => {
       });
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "retains the blocked-path diagnosis after Doctor settles migration receipts",
+    async () => {
+      await withHome(async (home) => {
+        const pluginId = "blocked-owner-fixture";
+        const pluginPath = path.join(home, "local-plugin");
+        await fs.mkdir(pluginPath);
+        await fs.writeFile(
+          path.join(pluginPath, "openclaw.plugin.json"),
+          JSON.stringify({ id: pluginId, configSchema: { type: "object" } }),
+        );
+        await fs.writeFile(
+          path.join(pluginPath, "index.js"),
+          "throw new Error('must not execute');\n",
+        );
+        await fs.chmod(pluginPath, 0o777);
+        try {
+          await writeOpenClawConfig(home, {
+            gateway: { mode: "local" },
+            plugins: {
+              load: { paths: [pluginPath] },
+              entries: { [pluginId]: { enabled: true, config: { retained: "authored" } } },
+            },
+          });
+          await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+            const result = await runDoctorConfigPreflight(options);
+            const pending = readDeferredPluginMigrations().find(
+              (entry) => entry.pluginId === pluginId,
+            );
+            expect(pending).toMatchObject({
+              reason: expect.stringContaining("present but blocked"),
+              command: "openclaw doctor --fix",
+            });
+            expect(pending?.reason).not.toContain("Install or enable");
+            expect(result.snapshot.sourceConfig.plugins?.entries?.[pluginId]).toEqual({
+              enabled: true,
+              config: { retained: "authored" },
+            });
+            expect(result.stateMigrationStepReceipts).toContainEqual(
+              expect.objectContaining({
+                id: "plugin:blocked-owner-fixture",
+                outcome: "deferred",
+                warnings: [expect.stringContaining("present but blocked")],
+              }),
+            );
+          });
+        } finally {
+          await fs.chmod(pluginPath, 0o755);
+        }
+      });
+    },
+  );
 
   it("keeps retained values and tells Doctor which unavailable plugin to install or enable", async () => {
     await withHome(async (home) => {

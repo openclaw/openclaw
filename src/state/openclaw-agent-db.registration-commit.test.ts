@@ -96,18 +96,10 @@ describe("agent registration commit publication", () => {
         { env: fixture.env },
         () => false,
       );
-      let waiting: Promise<void> | undefined;
       try {
-        const refused = await prepared.read().catch((error: unknown) => error);
-        if (!(refused instanceof registryListing.AgentDatabaseRegistryPendingError)) {
-          throw new Error("Expected pending registry admission", { cause: refused });
-        }
-        let settled = false;
-        waiting = refused.waitForSettlement().then(() => {
-          settled = true;
-        });
-        await Promise.resolve();
-        expect(settled).toBe(false);
+        await expect(prepared.read()).rejects.toThrow(
+          "Agent database registry ownership is changing during discovery",
+        );
         if (throws) {
           assertCurrent.mockImplementation(() => {
             throw new Error("existing schema scope ended");
@@ -117,7 +109,6 @@ describe("agent registration commit publication", () => {
       } finally {
         registration.finish();
       }
-      await waiting;
       const after = await prepared.read();
       expect(after.result).toEqual({ status: "available", entries: [] });
       expect(after.assertCurrent).not.toThrow();

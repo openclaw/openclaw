@@ -13,15 +13,15 @@ import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.path
 import { shortenHomePath } from "../utils.js";
 import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
 
-export function loadAdmittedAuthStores(params: {
+export async function loadAdmittedAuthStores(params: {
   agentDirs: readonly string[];
   env: NodeJS.ProcessEnv;
-  loadAuthStore: (agentDir?: string) => AuthProfileStore;
+  loadAuthStore: (agentDir?: string) => AuthProfileStore | Promise<AuthProfileStore>;
   allowUnavailable: boolean;
-}): {
+}): Promise<{
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
   degradedOwners: DegradedSecretOwner[];
-} {
+}> {
   const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   const degradedOwners: DegradedSecretOwner[] = [];
   for (const agentDir of params.agentDirs) {
@@ -49,7 +49,7 @@ export function loadAdmittedAuthStores(params: {
       continue;
     }
     try {
-      const source = params.loadAuthStore(agentDir);
+      const source = await params.loadAuthStore(agentDir);
       const store = structuredClone(source);
       copyCanonicalAuthProfileCredentialObservations(source.profiles, store.profiles);
       authStores.push({ agentDir, store });

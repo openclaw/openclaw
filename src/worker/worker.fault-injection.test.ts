@@ -238,6 +238,8 @@ describe("cloud worker milestone 2 fault injection", () => {
         const payload = finishing[0]!.event.payload;
         if (outcome === "provider failure") {
           expect(payload).toHaveProperty("error", "fixture provider failed");
+        } else if (outcome === "cancellation") {
+          expect(payload).toHaveProperty("error", "worker turn cancelled");
         } else {
           expect(payload).not.toHaveProperty("error");
         }

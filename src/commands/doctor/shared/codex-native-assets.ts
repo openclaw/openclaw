@@ -96,9 +96,8 @@ function isCodexPluginConfigured(cfg: OpenClawConfig): boolean {
     return false;
   }
   const allow = plugins?.allow;
-  const allowList = Array.isArray(allow) ? allow.map((entry) => normalizeString(entry)) : undefined;
-  if (allowList) {
-    return allowList.includes("codex");
+  if (Array.isArray(allow)) {
+    return allow.some((entry) => normalizeString(entry) === "codex");
   }
   return hasRecord(plugins?.entries?.codex) && plugins.entries.codex.enabled !== false;
 }

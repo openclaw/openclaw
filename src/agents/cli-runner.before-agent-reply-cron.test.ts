@@ -200,7 +200,7 @@ beforeEach(() => {
   authStoreMock.mockReset();
   authFailureMock.mockReset().mockResolvedValue(undefined);
   authSuccessMock.mockReset().mockResolvedValue(undefined);
-  vi.spyOn(authProfiles, "loadAuthProfileStoreForRuntime").mockImplementation(authStoreMock);
+  vi.spyOn(authProfiles, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(authStoreMock);
   vi.spyOn(authProfiles, "markAuthProfileFailure").mockImplementation(authFailureMock);
   vi.spyOn(authProfiles, "markAuthProfileSuccess").mockImplementation(authSuccessMock);
 });
@@ -212,7 +212,7 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
-  vi.mocked(authProfiles.loadAuthProfileStoreForRuntime).mockRestore();
+  vi.mocked(authProfiles.loadAuthProfileStoreForRuntimeAsync).mockRestore();
   vi.mocked(authProfiles.markAuthProfileFailure).mockRestore();
   vi.mocked(authProfiles.markAuthProfileSuccess).mockRestore();
   cliBackendsTesting.resetDepsForTest();
@@ -295,7 +295,7 @@ describe("runCliAgent before_agent_reply seam", () => {
           expect(effect).toHaveBeenCalledOnce();
           if (scenario === "current root") {
             expect(heldRequest).toThrow("no longer active");
-            expect(heldClaim).toThrow("generation is unavailable");
+            expect(heldClaim).toThrow("no longer active");
           }
         }
         expect(prepareMock).not.toHaveBeenCalled();
@@ -381,7 +381,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       version: 1,
       profiles: { [profileId]: { type: "oauth", provider } },
     };
-    authStoreMock.mockReturnValue(store);
+    authStoreMock.mockResolvedValue(store);
     prepareMock.mockRejectedValueOnce(
       new CliAuthProfilePreparationError({
         message: "selected profile needs login",
@@ -609,7 +609,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     }
   });
 
-  it("clears stateless CLI bindings when before_agent_reply claims a cron turn", async () => {
+  it("passes the heartbeat queue and clears stateless CLI bindings when its hook claims", async () => {
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
       resolveRuntimeCliBackends: () => [
@@ -631,10 +631,16 @@ describe("runCliAgent before_agent_reply seam", () => {
 
     const result = await runCliAgent({
       ...runParams,
-      trigger: "cron",
+      trigger: "heartbeat",
+      sessionKey: "agent:main:heartbeat:heartbeat",
+      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
       config: {},
     });
 
+    expect(replyMock.mock.calls[0]?.[1]).toMatchObject({
+      sessionKey: "agent:main:heartbeat:heartbeat",
+      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+    });
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
     expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
@@ -752,7 +758,11 @@ describe("runCliAgent before_agent_reply seam", () => {
   });
 
   it("preserves delivery after failed MCP retirement", async () => {
-    executeMock.mockResolvedValue({ text: "", didSendViaMessagingTool: true });
+    executeMock.mockResolvedValue({
+      text: "",
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+    });
     retireMock.mockImplementation(async ({ onError }: { onError?: (error: unknown) => void }) => {
       onError?.(new Error("session mcp retire failed"));
       return false;

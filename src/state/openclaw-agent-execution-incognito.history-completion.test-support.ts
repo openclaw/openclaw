@@ -17,6 +17,7 @@ import { runWithSessionTranscriptReadFence } from "../config/sessions/session-tr
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { HistoryWiringFixture } from "./openclaw-agent-execution-incognito.history-visibility.test-support.js";
+import type { IncognitoActorProbe } from "./openclaw-agent-execution-incognito.test-support.js";
 
 type CompletionFixture = Pick<HistoryWiringFixture, "actor" | "authority" | "env" | "targetInput">;
 
@@ -117,7 +118,10 @@ export async function createIncognitoCompletionSource(
   return { claim, session, target, scope, anchor };
 }
 
-export function registerIncognitoCompletionTests(fixture: CompletionFixture) {
+export function registerIncognitoCompletionTests(
+  fixture: CompletionFixture,
+  probe: IncognitoActorProbe,
+) {
   const { authority } = fixture;
   it("requires committed input before retaining cold original-run completion custody", async () => {
     const { actor } = fixture;
@@ -156,7 +160,7 @@ export function registerIncognitoCompletionTests(fixture: CompletionFixture) {
   });
 
   it.each([true, false])(
-    "binds resumed command completion only with valid source input=%s",
+    "prepares resumed command completion only with valid source input=%s",
     async (validInput) => {
       const { actor } = fixture;
       const { claim, session, target } = await createIncognitoCompletionSource(
@@ -177,8 +181,8 @@ export function registerIncognitoCompletionTests(fixture: CompletionFixture) {
       }
       await withIncognitoSessionActor(actor, async () => {
         let callerCurrent = true;
-        const binding = Promise.resolve().then(() =>
-          bindCommandHarnessCompletionAssertion({
+        const binding = Promise.resolve().then(() => {
+          const { opts } = bindCommandHarnessCompletionAssertion({
             claim,
             persisted: session.entry,
             sessionKey: target.sessionKey,
@@ -191,22 +195,22 @@ export function registerIncognitoCompletionTests(fixture: CompletionFixture) {
                 }
               },
             },
-          }),
-        );
+          });
+          return prepareSessionSourceAuthority(opts.assertSourceCurrent);
+        });
         if (!validInput) {
           await expect(binding).rejects.toThrow(
             "Incognito harness completion source is no longer current",
           );
           return;
         }
-        const bound = await binding;
-        assert(bound.source);
+        const source = await binding;
         try {
-          bound.opts.assertSourceCurrent?.();
+          source.assertCurrent();
           callerCurrent = false;
-          expect(bound.opts.assertSourceCurrent).toThrow("command source caller revoked");
+          expect(source.assertCurrent).toThrow("command source caller revoked");
         } finally {
-          await bound.source.release();
+          await source.release?.();
         }
       });
     },
@@ -228,8 +232,7 @@ export function registerIncognitoCompletionTests(fixture: CompletionFixture) {
     const entered = createDeferredCore();
     const resume = createDeferredCore();
     const order: string[] = [];
-    const accepted = actor.run({ assertCurrent: source.assertCurrent }, async (native) => {
-      await native.execute({ type: "database.incognito.memory", input: undefined });
+    const accepted = probe.read(actor, { assertCurrent: source.assertCurrent }, async () => {
       entered.resolve();
       await resume.promise;
       order.push("native-settled");
@@ -381,12 +384,12 @@ export function registerIncognitoCompletionTests(fixture: CompletionFixture) {
       };
       const queued = createDeferredCore();
       const resume = createDeferredCore();
-      let held: Promise<void> | undefined;
+      let held: Promise<unknown> | undefined;
       let mutation: Promise<IncognitoEntryPatchResult> | undefined;
       const history = actor.sessions.history;
       const observer = vi.spyOn(actor.sessions, "history").mockImplementation((...args) => {
         // All three operations reserve this actor's FIFO before the barrier opens.
-        held = actor.run(authority, () => resume.promise);
+        held = probe.read(actor, authority, () => resume.promise);
         mutation = actor.sessions.entry(authority, {
           type: "session.entry.patch.commit",
           input: {

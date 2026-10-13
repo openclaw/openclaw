@@ -1,9 +1,13 @@
 import { fork } from "node:child_process";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { z } from "zod";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
+import {
+  getOrLoadSqliteDatabaseAdmissionForPath,
+  prepareSqliteDatabaseAdmission,
+  readSqliteDatabaseCleanClose,
+} from "../infra/sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import {
   isSqliteInspectionDeadlineOwnedByCaller,
@@ -12,9 +16,11 @@ import {
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { agentSchemaMetadataKey } from "./openclaw-agent-db-metadata.js";
+import { agentDatabaseValidationKey } from "./openclaw-agent-db-validation-facts.js";
 import {
-  agentSchemaInspectionErrorSchema,
   restoreAgentSchemaInspectionError,
+  type AgentSchemaInspectionResponse,
 } from "./openclaw-agent-schema-inspection-response.js";
 import type {
   AgentSchemaInspection,
@@ -24,123 +30,6 @@ import type {
   StateSchemaInspection,
   StateSchemaInspectionInput,
 } from "./openclaw-state-schema-preflight.js";
-
-const stateSchemaRow = z.object({
-  kind: z.literal("state"),
-  path: z.string(),
-  foundVersion: z.number(),
-  supportedVersion: z.number(),
-  writerAppVersion: z.string().optional(),
-});
-const deletionFacts = z.object({
-  entries: z.array(
-    z.object({ agentId: z.string(), agentDir: z.string(), databasePaths: z.array(z.string()) }),
-  ),
-  held: z.array(z.object({ agentId: z.string(), path: z.string() })),
-});
-const schemaContract = z.object({
-  schemaSql: z.string(),
-  tables: z.map(
-    z.string(),
-    z.object({
-      definition: z
-        .object({ columns: z.map(z.string(), z.string()), constraints: z.array(z.string()) })
-        .nullable(),
-      indexes: z.array(
-        z.object({
-          name: z.string().nullable(),
-          origin: z.string(),
-          partial: z.number(),
-          sql: z.string().nullable(),
-          terms: z.array(
-            // Canonical index fingerprints serialize the assembly owner's field order.
-            z.object({
-              coll: z.string(),
-              desc: z.number(),
-              key: z.number(),
-              kind: z.enum(["column", "expression", "rowid"]),
-              name: z.string().nullable(),
-              seqno: z.number(),
-            }),
-          ),
-          unique: z.number(),
-        }),
-      ),
-      strict: z.number(),
-      triggers: z.array(z.object({ name: z.string(), sql: z.string().nullable() })),
-      virtualTableSql: z.string().nullable(),
-      withoutRowid: z.number(),
-    }),
-  ),
-});
-const stateInspectionSchema = z.object({
-  schemas: z.object({
-    incompatible: z.array(stateSchemaRow),
-    indeterminate: z.array(
-      z.object({ kind: z.literal("state"), path: z.string(), reason: z.string() }),
-    ),
-    pendingMigrations: z.array(stateSchemaRow).optional(),
-    deferredSchemaPublications: z
-      .array(
-        z.object({
-          kind: z.literal("state"),
-          path: z.string(),
-          foundVersion: z.number(),
-          contentVersion: z.number(),
-          runId: z.string().optional(),
-          publishAfterMs: z.number().nullable().optional(),
-          message: z.string(),
-        }),
-      )
-      .optional(),
-  }),
-  registeredDatabases: z.array(z.object({ agentId: z.string(), path: z.string() })).optional(),
-  deletionJournal: z
-    .discriminatedUnion("status", [
-      z.object({ status: z.literal("empty") }),
-      deletionFacts.extend({ status: z.literal("present") }),
-      z.object({
-        status: z.literal("unavailable"),
-        cause: z.enum(["missing", "unreadable"]),
-        reason: z.string(),
-        known: deletionFacts.optional(),
-      }),
-    ])
-    .optional(),
-  inspectionErrors: z.array(agentSchemaInspectionErrorSchema),
-});
-
-const inspectionResponse = z.discriminatedUnion("ok", [
-  z.object({
-    requestId: z.number().int().safe(),
-    ok: z.literal(false),
-    error: agentSchemaInspectionErrorSchema,
-  }),
-  z.object({
-    requestId: z.number().int().safe(),
-    ok: z.literal(true),
-    stateInspection: stateInspectionSchema.optional(),
-    schemaContracts: z.array(schemaContract).optional(),
-    inspection: z
-      .object({
-        version: z.number().int().safe(),
-        integrityGateOutcome: z.enum(["cached", "healthy"]).optional(),
-        preparationPending: z.literal(true).optional(),
-        writerAppVersion: z.string().optional(),
-        reason: z.string().optional(),
-        failure: agentSchemaInspectionErrorSchema.optional(),
-        agentSchemaMeta: z
-          .object({
-            agentId: z.string().nullable(),
-            role: z.string().nullable(),
-            schemaVersion: z.number().nullable(),
-          })
-          .nullable()
-          .optional(),
-      })
-      .nullable(),
-  }),
-]);
 
 type ReaderProcess = {
   child: ReturnType<typeof fork>;
@@ -203,11 +92,13 @@ export function createAgentSchemaInspectionWorker() {
   };
   const operations = {
     inspect: async (
-      input: AgentSchemaInspectionInput | StateSchemaInspectionInput,
+      request:
+        | { kind: "agent"; input: AgentSchemaInspectionInput }
+        | { kind: "state"; input: StateSchemaInspectionInput },
       callerSignal?: AbortSignal,
       snapshotPath?: string,
-      kind?: "state",
     ): Promise<AgentSchemaInspection | StateSchemaInspection | null> => {
+      const { input, kind } = request;
       const signal = resolveSqliteInspectionSignal(callerSignal);
       signal?.throwIfAborted();
       if (disposed || busy) {
@@ -219,6 +110,40 @@ export function createAgentSchemaInspectionWorker() {
       }
       busy = true;
       try {
+        if (
+          kind !== "state" &&
+          !snapshotPath &&
+          input.requireStartupMigrationReadiness &&
+          readSqliteDatabaseCleanClose(input.pathname)
+        ) {
+          const validation = getOrLoadSqliteDatabaseAdmissionForPath(
+            input.pathname,
+            agentDatabaseValidationKey,
+            () => undefined,
+          );
+          const metadata = getOrLoadSqliteDatabaseAdmissionForPath(
+            input.pathname,
+            agentSchemaMetadataKey,
+            () => undefined,
+          );
+          if (
+            validation?.schema?.facts.userVersion === input.supportedVersion &&
+            Atomics.load(new Int32Array(validation.valid), 0) === 1 &&
+            Atomics.load(new Int32Array(validation.schema.valid), 0) === 1 &&
+            prepareSqliteDatabaseAdmission(input.pathname) ===
+              `${validation.identity}:${validation.birthtime}` &&
+            metadata?.agentId === validation.agentId &&
+            (input.agentId === undefined || input.agentId === validation.agentId) &&
+            metadata.role === "agent" &&
+            metadata.schemaVersion === input.supportedVersion
+          ) {
+            return {
+              version: input.supportedVersion,
+              integrityGateOutcome: "cached",
+              agentSchemaMeta: metadata,
+            };
+          }
+        }
         const snapshot = snapshotPath
           ? { pathname: snapshotPath, identity: readSqliteIntegrityFileIdentity(snapshotPath) }
           : undefined;
@@ -247,21 +172,20 @@ export function createAgentSchemaInspectionWorker() {
           failure = toStringifiedError(signal?.reason);
           kill();
         };
-        const onMessage = (message: unknown) => {
+        const onMessage = (message: AgentSchemaInspectionResponse) => {
           if (failure) {
             return;
           }
-          const parsed = inspectionResponse.safeParse(message);
-          if (!parsed.success || parsed.data.requestId !== requestId) {
+          if (message.requestId !== requestId) {
             failure = new Error("Invalid agent schema inspection response");
             kill();
-          } else if (!parsed.data.ok) {
-            failure = restoreAgentSchemaInspectionError(parsed.data.error);
+          } else if (!message.ok) {
+            failure = restoreAgentSchemaInspectionError(message.error);
             // Failed native close can retain a handle and its lease until child exit.
             retireReader(active);
           } else {
             if (kind === "state") {
-              const stateInspection = parsed.data.stateInspection;
+              const stateInspection = message.stateInspection;
               if (!stateInspection) {
                 failure = new Error("Invalid state schema inspection response");
                 kill();
@@ -269,14 +193,14 @@ export function createAgentSchemaInspectionWorker() {
               }
               response.resolve({
                 ...stateInspection,
-                schemaContracts: parsed.data.schemaContracts,
+                schemaContracts: message.schemaContracts,
                 inspectionErrors: stateInspection.inspectionErrors.map(
                   restoreAgentSchemaInspectionError,
                 ),
               });
               return;
             }
-            const inspection = parsed.data.inspection;
+            const inspection = message.inspection;
             response.resolve(
               inspection
                 ? {
@@ -372,7 +296,7 @@ export function createAgentSchemaInspectionWorker() {
       callerSignal?: AbortSignal,
       snapshotPath?: string,
     ): Promise<AgentSchemaInspection | null> => {
-      const result = await operations.inspect(input, callerSignal, snapshotPath);
+      const result = await operations.inspect({ kind: "agent", input }, callerSignal, snapshotPath);
       if (result && "schemas" in result) {
         throw new Error("Unexpected state schema inspection result");
       }
@@ -381,9 +305,9 @@ export function createAgentSchemaInspectionWorker() {
     inspectState: async (
       input: StateSchemaInspectionInput,
       callerSignal: AbortSignal | undefined,
-      snapshotPath: string,
+      snapshotPath?: string,
     ): Promise<StateSchemaInspection> => {
-      const result = await operations.inspect(input, callerSignal, snapshotPath, "state");
+      const result = await operations.inspect({ kind: "state", input }, callerSignal, snapshotPath);
       if (!result || !("schemas" in result)) {
         throw new Error("Missing state schema inspection result");
       }

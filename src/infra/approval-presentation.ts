@@ -61,9 +61,6 @@ function buildExecApprovalPresentation(params: {
   request: unknown;
   allowedDecisions: readonly ApprovalDecision[];
 }): ApprovalPresentation | null {
-  if (!isRecord(params.request)) {
-    return null;
-  }
   const request = params.request as ExecApprovalRequestPayload;
   const { commandText, commandPreview } = resolveExecApprovalCommandDisplay(request);
   if (!commandText.trim()) {
@@ -91,9 +88,6 @@ function buildPluginApprovalPresentation(params: {
   request: unknown;
   allowedDecisions: readonly ApprovalDecision[];
 }): ApprovalPresentation | null {
-  if (!isRecord(params.request)) {
-    return null;
-  }
   const request = params.request as PluginApprovalRequestPayload;
   const rawTitle = normalizeOptionalString(request.title);
   const rawDescription = normalizeOptionalString(request.description);
@@ -144,9 +138,6 @@ function buildSystemAgentApprovalPresentation(params: {
   request: unknown;
   allowedDecisions: readonly ApprovalDecision[];
 }): ApprovalPresentation | null {
-  if (!isRecord(params.request)) {
-    return null;
-  }
   const request = params.request as SystemAgentApprovalRequestPayload;
   const title = normalizeOptionalString(request.title);
   const description = normalizeOptionalString(request.description);
@@ -169,6 +160,9 @@ export function buildApprovalPresentation(params: {
   request: unknown;
   allowedDecisions: readonly ApprovalDecision[];
 }): ApprovalPresentation | null {
+  if (!isRecord(params.request)) {
+    return null;
+  }
   if (params.kind === "exec") {
     return buildExecApprovalPresentation(params);
   }

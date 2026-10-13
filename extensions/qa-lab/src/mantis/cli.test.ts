@@ -114,6 +114,22 @@ it("waits for interrupted cleanup and reports its failure artifact", async () =>
   expect(stderr).toContain("/tmp/mantis/error.txt");
 });
 
+it("recognizes an interrupted aggregate with a shared error cause", async () => {
+  const stderr = await interruptRun((signal) => {
+    const interrupted = new Error("lane aborted", { cause: signal.reason });
+    return attachMantisFailureArtifact(
+      new AggregateError(
+        [new Error("baseline aborted", { cause: interrupted }), interrupted],
+        "Mantis interrupted",
+        { cause: interrupted },
+      ),
+      "/tmp/mantis/error.txt",
+    );
+  });
+  expect(stderr).toContain("Mantis SIGINT error details: /tmp/mantis/error.txt");
+  expect(stderr).not.toContain("cleanup failed");
+});
+
 it("reports cleanup failure details while preserving the interrupt exit code", async () => {
   const stderr = await interruptRun(
     (signal) =>

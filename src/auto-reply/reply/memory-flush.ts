@@ -7,22 +7,15 @@ import { resolveModelExtraParamSources } from "../../agents/model-extra-params.j
 import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
-import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TranscriptTokenEstimate } from "./agent-runner-memory-transcript-context.js";
 
-export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
-  const parsed = parseNonNegativeByteSize(
-    cfg?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
-  );
-  return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
-}
-
-export function resolveEffectivePromptTokens(
+function resolveEffectivePromptTokens(
   basePromptTokens?: number,
   lastOutputTokens?: number,
   promptTokenEstimate?: number,
@@ -33,6 +26,24 @@ export function resolveEffectivePromptTokens(
   // Flush gating projects the next input context by adding the previous
   // completion and the current user prompt estimate.
   return base + output + estimate;
+}
+
+export function resolveProjectedPromptTokens(
+  persistedPromptTokens: number | undefined,
+  promptTokenEstimate: number | undefined,
+  transcript: TranscriptTokenEstimate | undefined,
+): number {
+  const project = (promptTokens: number | undefined, outputTokens: number | undefined) =>
+    typeof promptTokens === "number"
+      ? resolveEffectivePromptTokens(promptTokens, outputTokens, promptTokenEstimate)
+      : 0;
+  return Math.max(
+    project(persistedPromptTokens, transcript?.outputTokens),
+    project(
+      transcript?.promptTokens,
+      transcript?.promptIncludesOutput ? undefined : transcript?.outputTokens,
+    ),
+  );
 }
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
@@ -89,6 +100,11 @@ export function resolveResponsesServerCompactionThreshold(params: {
     contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
   };
   if (normalizedProvider === "anthropic") {
+    // The default Anthropic trigger sits below the local threshold, so only an explicit opt-in
+    // (which may target any Claude model or a raised trigger) needs local compaction held back.
+    if (extraParams.anthropicServerCompaction !== true) {
+      return undefined;
+    }
     return resolveAnthropicServerCompactionPlan(
       { ...compactionModel, api: compactionModel.api ?? "anthropic-messages" },
       extraParams,

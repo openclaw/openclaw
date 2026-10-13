@@ -27,6 +27,11 @@ import type {
 
 const getQueue = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "channel_ingress_events">>(db);
 const affectedRows = (result: { numAffectedRows?: bigint }) => Number(result.numAffectedRows ?? 0n);
+const CLEARED_CLAIM_COLUMNS = {
+  claim_token: null,
+  claim_owner: null,
+  claimed_at: null,
+};
 
 function executeMutation(
   db: DatabaseSync,
@@ -43,14 +48,17 @@ function normalizeLimit(limit: number | "all" | undefined): number {
   return limit === "all" ? Number.MAX_SAFE_INTEGER : Math.max(1, Math.floor(limit ?? 100));
 }
 
+function selectQueueRows(db: DatabaseSync, queueName: string) {
+  return getQueue(db)
+    .selectFrom("channel_ingress_events")
+    .selectAll()
+    .where("queue_name", "=", queueName);
+}
+
 function selectRow(db: DatabaseSync, queueName: string, id: string) {
   return executeSqliteQueryTakeFirstSync(
     db,
-    getQueue(db)
-      .selectFrom("channel_ingress_events")
-      .selectAll()
-      .where("queue_name", "=", queueName)
-      .where("event_id", "=", id),
+    selectQueueRows(db, queueName).where("event_id", "=", id),
   );
 }
 
@@ -58,10 +66,7 @@ export function readChannelIngressClaimSnapshotInDatabase(
   db: DatabaseSync,
   input: ChannelIngressClaimRequest,
 ): ChannelIngressClaimSnapshot {
-  const base = getQueue(db)
-    .selectFrom("channel_ingress_events")
-    .selectAll()
-    .where("queue_name", "=", input.queueName);
+  const base = selectQueueRows(db, input.queueName);
   const claimed = input.candidateIds?.length
     ? executeSqliteQuerySync(
         db,
@@ -128,9 +133,7 @@ function tombstoneCorruptRow(
                 .else(eb.ref("payload_json"))
                 .end(),
             }),
-        claim_token: null,
-        claim_owner: null,
-        claimed_at: null,
+        ...CLEARED_CLAIM_COLUMNS,
         updated_at: now,
       }))
       .where("queue_name", "=", row.queue_name)
@@ -277,9 +280,7 @@ export function recoverChannelIngressClaimInDatabase(
       .updateTable("channel_ingress_events")
       .set((eb) => ({
         status: "pending",
-        claim_token: null,
-        claim_owner: null,
-        claimed_at: null,
+        ...CLEARED_CLAIM_COLUMNS,
         attempts: eb("attempts", "+", 1),
         last_attempt_at: input.now,
         updated_at: input.now,
@@ -331,9 +332,7 @@ export function completeChannelIngressInDatabase(
       completed_metadata_json: input.metadataJson,
       payload_json: "null",
       metadata_json: null,
-      claim_token: null,
-      claim_owner: null,
-      claimed_at: null,
+      ...CLEARED_CLAIM_COLUMNS,
       last_attempt_at: null,
       last_error: null,
       updated_at: input.now,
@@ -376,9 +375,7 @@ export function releaseChannelIngressInDatabase(
     db,
     selectedMutation(db, input).set((eb) => ({
       status: "pending",
-      claim_token: null,
-      claim_owner: null,
-      claimed_at: null,
+      ...CLEARED_CLAIM_COLUMNS,
       // A claim can lose its owner before processing starts. Returning it
       // must not consume retry budget or erase the previous real failure.
       ...(input.recordAttempt === false
@@ -407,9 +404,7 @@ export function failChannelIngressInDatabase(
         .then(FAILED_NULL_PAYLOAD_SENTINEL)
         .else(eb.ref("payload_json"))
         .end(),
-      claim_token: null,
-      claim_owner: null,
-      claimed_at: null,
+      ...CLEARED_CLAIM_COLUMNS,
       updated_at: input.now,
     })),
   );
@@ -500,10 +495,7 @@ export function listStaleChannelIngressClaimsInDatabase(
 ): ChannelIngressRow[] {
   return executeSqliteQuerySync(
     db,
-    getQueue(db)
-      .selectFrom("channel_ingress_events")
-      .selectAll()
-      .where("queue_name", "=", input.queueName)
+    selectQueueRows(db, input.queueName)
       .where("status", "=", "claimed")
       .where((eb) =>
         eb.or([
@@ -569,9 +561,7 @@ export function resubmitChannelIngressInDatabase(
         last_error: null,
         failed_at: null,
         failed_reason: null,
-        claim_token: null,
-        claim_owner: null,
-        claimed_at: null,
+        ...CLEARED_CLAIM_COLUMNS,
         completed_at: null,
         completed_metadata_json: null,
       })
@@ -619,11 +609,11 @@ export function listChannelIngressRowsInDatabase(
   db: DatabaseSync,
   input: ChannelIngressListInput,
 ): ChannelIngressRow[] {
-  const select = getQueue(db)
-    .selectFrom("channel_ingress_events")
-    .selectAll()
-    .where("queue_name", "=", input.queueName)
-    .where("status", "in", input.status === "unsettled" ? ["pending", "claimed"] : [input.status]);
+  const select = selectQueueRows(db, input.queueName).where(
+    "status",
+    "in",
+    input.status === "unsettled" ? ["pending", "claimed"] : [input.status],
+  );
   if (input.status === "claimed" || input.status === "failed") {
     let ordered = select.orderBy(input.status === "claimed" ? "claimed_at" : "failed_at", "asc");
     if (input.status === "claimed") {

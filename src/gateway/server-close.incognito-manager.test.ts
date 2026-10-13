@@ -7,8 +7,11 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { IncognitoSessionEndedError } from "../state/incognito-session-error.js";
+import { useIncognitoActorProbe } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
+
+const probe = useIncognitoActorProbe();
 
 it("settles accepted actor appends across the real close prelude before closing the actor", async ({
   signal,
@@ -49,7 +52,7 @@ it("settles accepted actor appends across the real close prelude before closing 
     });
     const manager = await withIncognitoSessionActor(actor, () => SessionManager.openAsync(target));
     const actorEntered = createDeferredCore();
-    held = actor.run(authority, async () => {
+    held = probe.read(actor, authority, async () => {
       actorEntered.resolve();
       await release.promise;
     });

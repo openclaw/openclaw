@@ -8,14 +8,32 @@ title: "Restart recovery"
 ---
 
 Conversations, transcripts, scheduled jobs, native subagent records, and queued
-outbound messages live on disk. After a gateway restart, eligible work interrupted
-mid-turn is detected and resumed automatically. Recovery is always on and
-normally needs no manual intervention. Exhausted infrastructure retries, or a
+outbound messages live on disk. Main chat sessions that were working when the
+Gateway restarted always enter automatic main-session recovery, including after
+a crash, forced kill, or missed shutdown marker. No operator action is needed to
+resume them. Recovery is always on. Exhausted infrastructure retries, or a
 missing durable message-action authority claim, may tombstone one session
 until you inspect or replace it.
 
+Inter-session steering updates remain context for the executing turn. When that
+turn retains a human Control UI or channel source claim, recovery uses the claim
+rather than treating the latest steering message as a new delegated request.
+The existing source-authorization and delivery checks still apply; a transcript
+message alone cannot restore missing sender authority.
+
+This includes automation turns running in dashboard main sessions. If a restart
+exhausts its drain budget, cancellation preserves restart recovery even when the
+provider reports an error and the turn settles before shutdown discovers it.
+The next visible message preserves an interrupted turn's recovery claim even
+when its saved status is failed, timed out, or killed. Recovery resumes the
+interrupted work before the new message takes foreground ownership.
+
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
+
+During startup, a new reply waits for its agent's model and plugin runtime to
+finish loading. Agents that are already ready can serve replies while other
+agents continue loading. Startup preparation failures still report an error.
 
 ## What survives a restart
 
@@ -63,7 +81,7 @@ rejects same-ID retries against retained newer receipts before execution. This
 includes queued or interrupted inputs and consumed collected-input receipts.
 Consumed receipts remain excluded from pending counts. Individually consumed
 inputs have already left the pending-input store and retain normal transcript
-idempotency. Upgrading again restores matching unconsumed-input recovery through
+duplicate prevention. Upgrading again restores matching unconsumed-input recovery through
 fresh authentication and admission, provided the session and accepted input have
 not been changed or removed. Already-consumed input remains consumed. Do not
 delete receipts or change message IDs merely to bypass a downgrade conflict.
@@ -84,6 +102,14 @@ and missing or contradictory source identities do not authorize replay. A held a
 or still-valid admitted input keeps recovery pending. Native parent rotation must preserve
 the current connection and requester identity checks. A later parent registration cannot
 supply missing historical ownership.
+
+An interrupted admitted completion keeps its complete recovery claim even when
+the saved run status is failed, timed out, or killed. The next visible message or queued
+follow-up resumes that recovery before taking foreground ownership or entering
+the active transcript. Session reuse must not attach the old completion to the
+new message. Recovery still checks the admitted input, requester lifecycle,
+delivery receipt, and replay safety; it does not infer delivery from a terminal
+run status.
 
 Before parent completion admission, native Codex pending assignments retain their
 run, child-thread, native-parent, and known native-turn identities in the existing
@@ -143,6 +169,13 @@ CLI shutdown drains process-wide work. Closing an individual Gateway drains its
 own active chat runs and queued turns, and waits on the process-wide pending-reply
 count. Both report remaining work as named counts; categories can overlap and
 should not be added as distinct turns.
+
+Transcript index reconciliation gets five seconds to finish during final cleanup.
+After that, shutdown logs the stalled worker, cancels further projection work,
+and terminates its native task. It still waits for accepted writes and database
+lease cleanup before closing agent databases. Committed transcripts remain intact;
+unfinished index work is rediscovered after restart. Idle pools close immediately.
+This also applies to update restarts once the running Gateway contains this fix.
 
 When Gateway connection shutdown begins, session observer event subscriptions
 stop before the observer closes. Accepted observer work still settles, while
@@ -334,9 +367,10 @@ while the Gateway drains. These requests must belong to still-pending work
 admitted before shutdown; normal authorization checks still apply. New question
 and approval requests remain fenced.
 
-Only work that cannot finish inside the drain budget (or any run interrupted
-by a forced restart or a crash) is aborted — and before that happens, each
-affected session is marked for recovery.
+Work that cannot finish inside the drain budget is marked for recovery before
+the shutdown owner aborts it. Restart cancellation from an earlier cleanup step
+does not remove that run from the marker's candidates. If no supplied candidate
+can be marked, a warning reports the counts and dominant skip reason.
 
 Restart cancellation also preserves recoverability when the bulk shutdown marker
 cannot be written. Native runtime preparation interrupted by the same Gateway
@@ -433,6 +467,14 @@ refreshes cached health and presence. The health and presence refresh still runs
 when a busy gateway defers only the channel restart. This keeps stale sockets from
 waiting for their normal expiry without interrupting an active reply or agent
 startup when a busy event loop caused the timer gap.
+
+Sleep and backward wall-clock adjustments do not by themselves revoke state
+ownership. After a heartbeat gap, the Gateway verifies its lock's physical
+identity and acquisition bytes before renewing it. A removed or replaced lock,
+or a renewal that still fails, fences state access. Locally authorized recovery
+still restarts the Gateway when the fenced database cannot supply the stored
+restart intent; raw unauthorized restart signals retain their existing policy.
+No configuration or database migration is needed when updating to this behavior.
 
 The macOS app and Linux companion cooperate with a local gateway by preparing a
 short suspension lease before the host sleeps and resuming it after wake. Remote
@@ -636,13 +678,18 @@ Three complementary mechanisms mark sessions whose turn did not finish:
   currently loaded `before_agent_reply` hooks run under their normal trigger
   rules. Ambiguous prior hook outcomes resume with restart-safe tools rather
   than replaying unrestricted side effects.
-- **At shutdown:** during the restart drain, every session with an active run
-  is stamped with a recovery marker in the session store before the run is
-  aborted.
-- **At startup:** the gateway scans recovery-owned claims whose execution has
-  no live owner in the new process. This catches hard crashes and kills where
-  no shutdown code ran, without inferring recovery from a run outcome. Stale transcript lock
-  files are cleaned up at the same time.
+- **At shutdown:** every session with an active run is stamped with a recovery
+  marker before the shutdown owner aborts it. Runs already cancelled for restart
+  remain candidates, even if connection cleanup ran first.
+- **At startup:** the Gateway scans recovery-owned claims and main sessions with
+  `abortedLastRun: true` or an `interrupted` outcome, even without a claim. With
+  no live owner in the new process, the existing recovery owner creates the
+  missing cycle and resumes the turn. This safety net covers missed or failed
+  shutdown markers, hard crashes, and kills where no shutdown code ran. Archived
+  and tombstoned sessions stay excluded; pending delivery, yielded continuations,
+  and retry budgets retain their existing owners and rules. A newer user turn
+  clears the prior interruption and is not replayed. Stale transcript lock files
+  are cleaned up at the same time.
 
 Agents still undergoing database startup inspection retain their recovery work.
 When admission finishes, the same startup recovery owner scans their stores with
@@ -689,6 +736,12 @@ and worker pressure. Once execution starts, the normal main lane owns concurrenc
 a long recovered turn does not hold a separate startup slot. Deferred database
 admissions join the same startup scheduler. Shutdown stops new preparation and
 joins the current pass, leaving unstarted interruptions available for the next boot.
+
+Recovery follows retained transcript-window ownership when a session moves to a
+new key or rotates its session ID. Claim validation and cleanup read only those
+candidate sessions, so stale recovery claims do not load unrelated saved prompts
+while interactive session changes wait. Claim authority, retry budgets, stored
+data, and upgrade behavior are unchanged.
 
 The restart does not cancel the user's task. The agent checks the current state,
 reconciles tool results whose outcomes are unknown, and continues without asking
@@ -766,7 +819,7 @@ model selection instead direct you to **Resume in new session** in WebChat.
 
 Every retry reuses one durable dispatch identifier, so an ambiguous connection
 failure cannot start the same recovery twice. Completed Control UI turns also
-retain bounded durable idempotency tombstones, allowing a reconnecting outbox
+retain bounded durable completion markers, allowing a reconnecting outbox
 to retire them without re-executing the request.
 
 When a pending final has no remaining queue owner and its delivery outcome is
@@ -844,8 +897,24 @@ through their normal completion path as soon as startup restores requester owner
 without waiting for the periodic registry sweep. The sweep remains a retry backstop.
 The crash-loop breaker pauses this settlement too; the same sweep retries when
 the breaker's recovery window ends.
+Startup restores completed runs directly from the registry. Any retained delivery
+keeps its normal session and ownership checks. Unfinished runs still reconcile
+the current child session before resuming.
 They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
+For native children with completion notifications disabled, recovery sends a
+private continuation to the original parent when its saved session identity still
+matches. Normal successful completion stays quiet. A reset or cancellation does
+not authorize a continuation into a replacement parent session.
+If the child session was reset or replaced, recovery settles the old task with
+that reason and notifies its original parent without changing the replacement
+child session. A quiet child's original parent receives this private outcome too.
+Resetting the parent retires that old task's pending notice without attempting
+to stop the replacement child session or its descendants.
+Cancelled turns can retain a cleanup lease briefly. That lease does not make them
+restart candidates; an immediate Gateway restart preserves their terminal outcome.
+Finished executions whose final reply is still pending retain their recovery
+custody, as do turns interrupted by the restart itself.
 Its recovery input lists current unfinished child session and run identities,
 including children interrupted by the restart. Older runs superseded by a newer
 child run are omitted, as are records from another store, parent session, or
@@ -862,7 +931,10 @@ already completed, assign a replacement, or finish the remaining work itself.
 Recovery does not automatically replay child commands or duplicate running work.
 An interruption alone is not a blocker; the parent continues until the request
 is finished or a specific blocker requires user input or unavailable authority.
-Existing cleanup and retention settings still apply.
+Interrupted native children retain their session history even when configured
+with `cleanup: "delete"`, so the parent can inspect and continue the unfinished
+work. Successful runs keep their configured cleanup behavior; normal history
+retention still applies.
 
 Startup retires superseded requester completion claims through the registry's
 cleanup owner before restoring the surviving claim.
@@ -1004,6 +1076,13 @@ channels.start --params '{"channel":"<id>"}'`
   See also [Gateway](/gateway) (safe mode paragraph) for the same control-plane
   vs channel-autostart split.
 
+- **Session preparation:** an interrupted session that is still initializing or
+  waiting for workspace setup stays deferred. Recovery rechecks that exact
+  startup candidate when its session preparation changes, without charging a
+  dispatch attempt while it waits. Shutdown or a new Gateway lifecycle cancels
+  the wait; replacing or resetting the session invalidates the old candidate.
+  Archived, expired, restart-tombstoned, and provider-review-blocked sessions
+  still require their normal operator action.
 - **Main-session attempt budget:** three charged automatic dispatch attempts
   per interrupted cycle. Exhaustion tombstones that session until it is
   inspected and replaced.
@@ -1013,10 +1092,14 @@ channels.start --params '{"channel":"<id>"}'`
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `agents/subagent-registry`
   subsystems. Every startup pass includes bounded skip counts by reason such as
-  `live_owner`, `work_start_blocked`, or `dispatch_target_unavailable`, even when
-  other sessions started. Each interrupted main candidate has a structured
-  decision line with boot/pass, session and source-run identity, outcome
+  `archived`, `live_owner`, `work_start_pending`, `work_start_blocked`, or
+  `dispatch_target_unavailable`, even when other sessions started. Each interrupted
+  main candidate has a structured decision line with boot/pass, session and source-run identity, outcome
   (`started`, `settled`, `deferred`, or `blocked`), and the next responsible owner.
+  Work-start decisions name the specific condition, such as
+  `initialization_pending`, `workspace_pending`, `archived`, or `provider_review`.
+  Archived sessions are deferred with no next owner, rather than reported as
+  blocked work requiring operator action.
 - **Reply hooks:** resumed turns run currently loaded `before_agent_reply`
   hooks under the normal user-trigger rules. Automatically delivered replies
   also run the normal `reply_payload_sending` hook before channel delivery,

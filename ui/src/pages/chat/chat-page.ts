@@ -272,7 +272,13 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       this.retainedSessions.settleRoute();
     }
     if (data && routeHandoffRendered) {
-      queueMicrotask(() => {
+      const pane = [...this.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
+        (candidate) =>
+          candidate.active &&
+          areUiSessionKeysEquivalent(candidate.sessionKey ?? "", data.sessionKey),
+      );
+      // Let the child apply this one-shot draft before clearing its route input.
+      void Promise.resolve(pane?.updateComplete).then(() => {
         if (
           this.isConnected &&
           this.presented &&
@@ -483,16 +489,14 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     if (!pane || (!this.layout && !pane.sessionKey)) {
       return;
     }
-    if (zone.kind === "center") {
-      if (pane.sessionKey === trimmed) {
-        return;
-      }
-      const active = setActivePane(layout, targetPaneId);
-      this.persistLayout(setPaneSession(active, targetPaneId, trimmed));
-      this.updateRoute(trimmed, true);
+    if (zone.kind === "center" && pane.sessionKey === trimmed) {
       return;
     }
-    this.persistLayout(insertPane(layout, targetPaneId, trimmed, zone.edge));
+    this.persistLayout(
+      zone.kind === "center"
+        ? setPaneSession(setActivePane(layout, targetPaneId), targetPaneId, trimmed)
+        : insertPane(layout, targetPaneId, trimmed, zone.edge),
+    );
     this.updateRoute(trimmed, true);
   }
 
@@ -526,9 +530,9 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     if (!pane || !areUiSessionKeysEquivalent(pane.sessionKey, sourceSessionKey)) {
       return false;
     }
-    // Canonical wire spelling must not erase the Home owner kept by a split.
+    // Canonical wire spelling must not replace the owned Home route and discard
+    // a pending route draft, including after a split collapses to one pane.
     if (
-      this.layout &&
       isUiGlobalSessionKey(trimmed) &&
       resolveUiGlobalAliasAgentId(
         {

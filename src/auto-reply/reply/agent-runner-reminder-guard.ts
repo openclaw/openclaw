@@ -1,6 +1,6 @@
 /** Detects reminder commitments that were not backed by scheduled cron jobs. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { loadCronJobsStore, resolveCronJobsStorePath } from "../../cron/store.js";
+import { loadCronJobsStore } from "../../cron/store.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -33,7 +33,7 @@ export function hasUnbackedReminderCommitment(text: string): boolean {
  */
 export async function hasSessionRelatedCronJobs(sessionKey: string | undefined): Promise<boolean> {
   try {
-    const store = await loadCronJobsStore(resolveCronJobsStorePath());
+    const store = await loadCronJobsStore();
     return Boolean(
       sessionKey && store.jobs.some((job) => job.enabled && job.sessionKey === sessionKey),
     );

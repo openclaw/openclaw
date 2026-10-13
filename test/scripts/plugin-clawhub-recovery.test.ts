@@ -23,6 +23,7 @@ function render(
   reason = "Parent failed after staging",
   releaseVersion = version,
   separator: string[] = [],
+  publicationState?: unknown,
 ) {
   const directory = directories.make("clawhub-recovery-");
   const paths = records.map((record, index) => {
@@ -30,9 +31,23 @@ function render(
     writeFileSync(path, JSON.stringify(record));
     return path;
   });
+  const transport = join(directory, "transport.mjs");
+  writeFileSync(
+    transport,
+    `globalThis.fetch = async (url, init) => {
+    if (init?.method === "POST") throw new Error("Unexpected mutation");
+    const name = decodeURIComponent(new URL(url).pathname.split("/")[4]);
+    if (name === "@openclaw/done") return Response.json({ name, version: ${JSON.stringify(releaseVersion)}, state: "published" });
+    return Response.json({ name, version: ${JSON.stringify(releaseVersion)},
+      ...${JSON.stringify(publicationState ?? { state: "failed", recoverable: true })},
+      ...(${JSON.stringify(publicationState === undefined)} ? { attemptId: name === "@openclaw/failed" ? "attempt-2" : "attempt-1" } : {}) });
+  };`,
+  );
   const result = spawnSync(
     process.execPath,
     [
+      "--import",
+      transport,
       "scripts/plugin-clawhub-recovery.mjs",
       ...separator,
       "--version",
@@ -61,7 +76,12 @@ describe("ClawHub staged publication recovery commands", () => {
     const result = render(
       [
         pending,
-        { ...pending, name: "@openclaw/done", publicationStatus: "published" },
+        {
+          ...pending,
+          name: "@openclaw/done",
+          publicationStatus: "published",
+          attemptId: undefined,
+        },
         {
           ...pending,
           name: "@openclaw/failed",
@@ -94,6 +114,8 @@ describe("ClawHub staged publication recovery commands", () => {
     ).toEqual(
       ["attempt-1", "attempt-2"].map((attempt) => [
         join(result.directory, "source checkout/packages/clawhub/src/cli.ts"),
+        "--registry",
+        "https://clawhub.ai",
         "--no-input",
         "package",
         "recover",
@@ -106,6 +128,32 @@ describe("ClawHub staged publication recovery commands", () => {
         "--json",
       ]),
     );
+  });
+
+  it.each([
+    { state: "pending", stage: "finalization", attemptId: pending.attemptId },
+    { state: "pending", stage: "finalization", attemptId: "successor-attempt" },
+    { state: "published" },
+  ])("does not generate recovery mutation for authoritative $state", (publication) => {
+    const result = render([pending], "Recovery", version, [], publication);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("package recover");
+    expect(result.stdout).toContain(publication.state === "pending" ? "finalizer" : "verified");
+    if (publication.state === "pending") {
+      expect(result.stdout).toContain(
+        `targeted prepublication worker for attempt ${publication.attemptId}.`,
+      );
+    }
+  });
+
+  it("refuses a terminal public failure before emitting a recovery command", () => {
+    const result = render([pending], "Recovery", version, [], {
+      state: "failed",
+      recoverable: false,
+      attemptId: pending.attemptId,
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
   });
 
   it.each([
@@ -203,6 +251,92 @@ describe("sealed ClawHub recovery manifest", () => {
       }),
     ).rejects.toThrow("was not staged and has no recoverable attempt");
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it.each(["pending", "published"])(
+    "verifies a recorded %s receipt against public state",
+    async (recorded) => {
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          name: pending.name,
+          version,
+          state: "failed",
+          recoverable: false,
+          attemptId: pending.attemptId,
+        }),
+      );
+      await expect(
+        executeClawHubRecoveryManifest({
+          manifest: createClawHubRecoveryManifest(transactions, [
+            { ...pending, publicationStatus: recorded },
+          ]),
+          reason: "Recovery",
+          token: "fixture-token",
+          fetchImpl,
+        }),
+      ).rejects.toThrow("not recoverable");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("explains recovery before sending its mutation", async () => {
+    const messages: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      if (init?.method === "POST") {
+        expect(messages.at(-1)).toContain(`recover sealed attempt ${pending.attemptId}`);
+        return Response.json({
+          name: pending.name,
+          version,
+          recoveredFromAttemptId: pending.attemptId,
+          attemptId: "attempt-2",
+          publicationStatus: "published",
+        });
+      }
+      return Response.json({
+        name: pending.name,
+        version,
+        state: "failed",
+        recoverable: true,
+        attemptId: pending.attemptId,
+      });
+    });
+    await executeClawHubRecoveryManifest({
+      manifest: createClawHubRecoveryManifest(transactions, [pending]),
+      reason: "Recovery",
+      token: "fixture-token",
+      fetchImpl,
+      report: (message: string) => messages.push(message),
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands pending finalization to the existing worker without creating a successor", async () => {
+    const messages: string[] = [];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          name: pending.name,
+          version,
+          state: "pending",
+          stage: "finalization",
+          attemptId: pending.attemptId,
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ name: pending.name, version, state: "published" }));
+    const result = await executeClawHubRecoveryManifest({
+      manifest: createClawHubRecoveryManifest(transactions, [pending]),
+      reason: "Recovery",
+      token: "fixture-token",
+      fetchImpl,
+      wait: async () => {},
+      report: (message: string) => messages.push(message),
+    });
+    expect(result).toEqual({ schemaVersion: 1, complete: true, recovered: [] });
+    expect(fetchImpl.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+    expect(messages.join("\n")).toContain("finalizer");
+    expect(messages.join("\n")).toContain("verified");
+    expect(messages.filter((message) => message.includes("finalizer"))).toHaveLength(1);
   });
 
   it("recovers with current publisher authority without private original attempt access", async () => {

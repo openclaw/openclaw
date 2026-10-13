@@ -432,6 +432,7 @@ it("disambiguates a created board and its sibling before pinning through a stale
 
 it("keeps accessories on the same recovered snapshot and retires pending activation reads", async () => {
   const fixture = workboardTestHost();
+  const hostListeners = fixture.listeners.size;
   const { host, connection, registrations } = fixture;
   connection.connected = true;
   const session = createGatewaySession();
@@ -478,7 +479,7 @@ it("keeps accessories on the same recovered snapshot and retires pending activat
     expect(vi.mocked(host.ui.invalidate).mock.calls.length).toBe(invalidations);
     expect(container.childElementCount).toBe(0);
     expect(fixture.events.get("plugin.workboard.changed")?.size).toBe(0);
-    expect(fixture.listeners.size).toBe(0);
+    expect(fixture.listeners.size).toBe(hostListeners);
   } finally {
     if (!disposed) {
       mounted?.dispose?.();

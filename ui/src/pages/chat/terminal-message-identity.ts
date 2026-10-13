@@ -98,17 +98,16 @@ export function reconcileAuthoritativeTerminalHistory<T>(options: {
   visibleMessages: T[];
 }): T[] {
   const terminal = authoritativeTerminals.get(options.host);
-  const historyContainsTerminal = Boolean(
-    terminal &&
-    areUiSessionKeysEquivalent(terminal.sessionKey, options.sessionKey) &&
-    options.visibleMessages.some((message) => {
+  if (
+    !terminal ||
+    !areUiSessionKeysEquivalent(terminal.sessionKey, options.sessionKey) ||
+    !options.visibleMessages.some((message) => {
       const identity = readSessionMessageIdentity(message);
       return (
         identity?.role === "assistant" && !identity.isImported && identity.id === terminal.messageId
       );
-    }),
-  );
-  if (!terminal || !historyContainsTerminal) {
+    })
+  ) {
     return options.previousMessages;
   }
   authoritativeTerminals.set(options.host, { ...terminal, historyApplied: true });

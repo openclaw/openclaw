@@ -153,6 +153,7 @@ const runtimeConsumers = [
     "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
+    "src/agents/prepared-model-catalog-worker.oauth-peers.integration.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.infra.config.ts"],
@@ -566,7 +567,7 @@ export async function prepareVitestRuntime(
     bin: process.execPath,
     args: ["scripts/ui.js", "build"],
     cwd,
-    env,
+    env: { ...env, OPENCLAW_CONTROL_UI_BUILD_ID: buildId },
     signal: options.signal,
   });
   if (code !== 0) {

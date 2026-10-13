@@ -163,8 +163,9 @@ export function resolveSessionActivity(params: {
   create?: boolean;
 }): SessionActivity | undefined {
   let activity = params.runId ? activityByRunId.get(params.runId) : undefined;
+  const refs = sessionRefs(params);
 
-  for (const ref of sessionRefs(params)) {
+  for (const ref of refs) {
     const byRef = activityByRef.get(ref);
     if (!byRef) {
       continue;
@@ -181,7 +182,8 @@ export function resolveSessionActivity(params: {
     return activity;
   }
 
-  if (!params.create) {
+  // Run-only signals can update existing activity, but cannot own session state.
+  if (!params.create || refs.length === 0) {
     return undefined;
   }
 

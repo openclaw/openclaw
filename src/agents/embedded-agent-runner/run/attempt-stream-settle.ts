@@ -15,9 +15,11 @@ import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscri
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { withPreparedSessionCapabilityRead } from "../../subagents/spawn/subagent-session-store.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -35,6 +37,7 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
+import { wrapStreamFnWithSessionFork } from "../session-fork.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -286,7 +289,7 @@ export async function settleEmbeddedAttemptStream(input: {
   let captured: ReturnType<typeof captureStreamSnapshot>;
   try {
     captured = await input.withOwnedTranscriptWrite(() =>
-      withSessionManagerWrite(sessionManager, async () => {
+      withSessionManagerAppend(sessionManager, async () => {
         const { timedOutDuringCompaction } = input.readLifecycleState();
         const compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
         const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
@@ -413,6 +416,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
   const streamExtraParamsOverride = {
     ...attempt.streamParams,
     fastMode: attempt.fastMode,
+    // Memory extraction must see the original history, not a provider summary.
+    ...(attempt.trigger === "memory"
+      ? { anthropicServerCompaction: false, responsesServerCompaction: false }
+      : {}),
   };
   const selectedAuth = attempt.runtimePlan?.auth;
   const auth = selectedAuth?.selectedAuthMode
@@ -444,9 +451,14 @@ export async function prepareEmbeddedAttemptTransport(input: {
     workspaceDir: input.workspaceDir,
     auth,
   });
+  const sessionFork = {
+    runId: attempt.runId,
+    sessionId: attempt.sessionId,
+    agentId: input.sessionAgentId,
+  };
   const directProviderStreamFn = providerStreamFn
     ? wrapStreamFnWithMessageTransform(
-        providerStreamFn,
+        wrapStreamFnWithSessionFork(providerStreamFn, sessionFork),
         (messages) => messages,
         async ({ context, ...provider }) => {
           assertRunCurrent?.();
@@ -491,6 +503,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: attempt.authStorage,
     assertCurrent: assertRunCurrent,
+    sessionFork,
   });
   session.agent.streamFn = streamFn;
   // Install inside provider/config wrappers so their full onPayload chain runs
@@ -544,23 +557,26 @@ export async function prepareEmbeddedAttemptTransport(input: {
     senderE164: attempt.senderE164,
   };
 
-  const { nativeWebSearchAllowedByToolPolicy } = applyExtraParamsToAgent(
-    session.agent,
-    attempt.config,
-    attempt.provider,
-    attempt.modelId,
-    streamExtraParamsOverride,
-    input.providerThinkingLevel,
-    input.sessionAgentId,
-    input.workspaceDir,
-    attempt.model,
-    input.agentDir,
-    resolvedTransport,
-    {
-      preparedExtraParams: effectiveExtraParams,
-      auth,
-      nativeWebSearchPolicyContext,
-    },
+  const { nativeWebSearchAllowedByToolPolicy } = await withPreparedSessionCapabilityRead(() =>
+    applyExtraParamsToAgent(
+      session.agent,
+      attempt.config,
+      attempt.provider,
+      attempt.modelId,
+      streamExtraParamsOverride,
+      input.providerThinkingLevel,
+      input.sessionAgentId,
+      input.workspaceDir,
+      attempt.model,
+      input.agentDir,
+      resolvedTransport,
+      {
+        preparedExtraParams: effectiveExtraParams,
+        modelCallUrgency: resolveModelCallUrgency(attempt),
+        auth,
+        nativeWebSearchPolicyContext,
+      },
+    ),
   );
   if (input.codeModeControlsEnabled) {
     session.agent.streamFn = createCodexNativeWebSearchWrapper(session.agent.streamFn, {
@@ -640,6 +656,11 @@ export async function prepareEmbeddedAttemptTransport(input: {
           baseUrl: model.baseUrl,
           ...observation,
         }),
+      {
+        runId: attempt.runId,
+        sessionId: attempt.sessionId,
+        accountRoute: selectedCredential.identityKey,
+      },
     );
   }
   return {

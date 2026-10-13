@@ -167,7 +167,11 @@ async function runCustomSetup(scenario: Scenario) {
     },
   };
   const configModule = await import("../config/config.js");
-  configModule.clearConfigCache();
+  configModule.clearRuntimeConfigSnapshot();
+  cleanupTasks.push(async () => {
+    configModule.clearRuntimeConfigSnapshot();
+  });
+  await configModule.captureRuntimeConfigAsyncReader()();
   const { activateSetupInference } = await import("../system-agent/setup-inference.js");
   const { runManualStage } = await import("./onboard-guided-manual.js");
   const activationResults: unknown[] = [];

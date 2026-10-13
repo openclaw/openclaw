@@ -521,7 +521,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
           },
         );
         expect(removalAttempts).toBeGreaterThan(0);
-        await expect(fs.access(stage.prefix)).resolves.toBeUndefined();
+        await fs.access(stage.prefix);
         await expectSiblingUntouched(fixture);
         if (phase === "pre-commit") {
           expectNoActivation(fixture);
@@ -532,9 +532,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
           );
           expect(result.failedStep?.advisory).toBeUndefined();
           expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
-          await expect(
-            fs.access(path.join(stage.packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH)),
-          ).resolves.toBeUndefined();
+          await fs.access(path.join(stage.packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
         } else {
           expect(fixture.params.beforeActivate).toHaveBeenCalledOnce();
           expect(fixture.params.onTransaction).toHaveBeenCalledOnce();
@@ -670,7 +668,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       failedStep: { name: "npm-package-lifecycle", exitCode: 1 },
       recovery: { serviceRestartSafe: true, version: "1.0.0" },
     });
-    expect(result.failedStep?.stderrTail).toContain("lock generation changed");
+    expect(result.failedStep?.stderrTail).toContain("package lifecycle ownership is uncertain");
     expect(lifecycleCalls).toEqual(["npm-package-preinstall"]);
     expectNoActivation(fixture);
     expect(await fs.readFile(path.join(stage.packageRoot, lockName), "utf8")).toBe(

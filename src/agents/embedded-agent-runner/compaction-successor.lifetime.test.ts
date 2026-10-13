@@ -138,7 +138,7 @@ it("preserves the accepted successor and both hook lifetimes when an identity ob
     if (!patch) {
       throw new Error("Expected a successor identity patch");
     }
-    options.assertCommitAllowed?.();
+    options.workerGuard?.source?.();
     row = { ...row, ...patch };
     try {
       options.onCommitted?.(structuredClone(row));

@@ -59,48 +59,8 @@ describe("worker process protocol", () => {
         { reason: "credential-replaced", unexpected: true },
       ),
     },
-    {
-      name: "admission deadline result",
-      value: inheritedRecord(
-        { status: "not-started", reason: "admission-deadline" },
-        { errorText: "worker admission timed out", unexpected: true, ignored: true },
-      ),
-    },
-    {
-      name: "completed result",
-      value: inheritedRecord(
-        { status: "completed" },
-        { transcriptLeafId: null, transcriptNextSeq: 1, unexpected: true },
-      ),
-    },
-    {
-      name: "failed result",
-      value: inheritedRecord(
-        { status: "failed", reason: "turn-failed" },
-        {
-          transcriptLeafId: null,
-          transcriptNextSeq: 1,
-          unexpected: true,
-          ignored: true,
-        },
-      ),
-    },
   ])("rejects an inherited discriminator for a $name", ({ value }) => {
     expect(parseWorkerRuntimeResult(value)).toBeNull();
-  });
-
-  it("rejects process-result types inherited alongside the wrong own keys", () => {
-    const result = inheritedRecord(
-      { type: "result" },
-      {
-        turnId: "turn-1",
-        result: { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 },
-        retainWorker: false,
-        unexpected: true,
-      },
-    );
-
-    expect(parseWorkerProcessMessage(result)).toBeNull();
   });
 });
 

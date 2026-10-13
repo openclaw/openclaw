@@ -29,32 +29,23 @@ import type {
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
-import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
-import type { HealthCheck, HealthRepairContext, HealthRepairEffect } from "./health-checks.js";
+import {
+  createDoctorHealthContribution,
+  legacyOwnedRepair,
+  recordDoctorHealthWarnings,
+} from "./doctor-health-contribution.js";
 
-function legacyOwnedRepair(
-  collectEffects: (ctx: HealthRepairContext) => Promise<readonly HealthRepairEffect[]>,
-  reason: string,
-): NonNullable<HealthCheck["repair"]> {
+function coreHealthRunner(checkId: string): DoctorHealthContribution["run"] {
   return async (ctx) => {
-    const effects = await collectEffects(ctx);
-    return ctx.dryRun === true
-      ? { status: "repaired", changes: [], effects }
-      : { status: "skipped", reason, changes: [], effects };
+    const { runCoreContributionHealth } = await import("./doctor-health-contribution-core.js");
+    await runCoreContributionHealth(ctx, [checkId]);
   };
 }
 
-async function runStaleRuntimeBuildHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { runCoreContributionHealth } = await import("./doctor-health-contribution-core.js");
-  await runCoreContributionHealth(ctx, ["core/doctor/stale-runtime-build"]);
-}
-
-async function runTelegramGeneralTopicConversationHealth(
-  ctx: DoctorHealthFlowContext,
-): Promise<void> {
-  const { runCoreContributionHealth } = await import("./doctor-health-contribution-core.js");
-  await runCoreContributionHealth(ctx, ["core/doctor/telegram-general-topic-conversations"]);
-}
+const runStaleRuntimeBuildHealth = coreHealthRunner("core/doctor/stale-runtime-build");
+const runTelegramGeneralTopicConversationHealth = coreHealthRunner(
+  "core/doctor/telegram-general-topic-conversations",
+);
 
 export function resolveInitialDoctorHealthContributions(params: {
   runStructuredHealthRepairs: (ctx: DoctorHealthFlowContext) => Promise<void>;
@@ -99,6 +90,22 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution("doctor:gateway-config", "Gateway config", {
       healthCheckIds: ["core/doctor/gateway-config"],
       run: params.runGatewayConfigHealth,
+    }),
+    createDoctorHealthContribution("doctor:database-engine", "Database engines", {
+      healthChecks: {
+        description: "Selected database engines and experimental PostgreSQL limitations.",
+        async detect(ctx) {
+          const { collectDatabaseEngineHealthFindings } =
+            await import("../commands/doctor-database-engine.js");
+          return collectDatabaseEngineHealthFindings(ctx.cfg);
+        },
+      },
+      async run(ctx) {
+        const { noteDatabaseEngines, collectDatabaseEngineHealthFindings } =
+          await import("../commands/doctor-database-engine.js");
+        noteDatabaseEngines(ctx.cfg);
+        recordDoctorHealthWarnings(ctx, collectDatabaseEngineHealthFindings(ctx.cfg));
+      },
     }),
     createDoctorHealthContribution("doctor:auth-profile-migration", "Auth profile migration", {
       updateWork: { kind: "startup" },

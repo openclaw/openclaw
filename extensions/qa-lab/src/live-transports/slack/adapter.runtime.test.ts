@@ -293,7 +293,7 @@ describe("Slack live adapter reconciliation", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("reuses a read-only capture reader for the exact candidate runtime environment", async () => {
+  it("does not acquire a capture reader before a capture is requested", async () => {
     const adapter = await createSlackQaTransportAdapter({
       messages: {
         addInboundMessage: vi.fn(),
@@ -317,8 +317,7 @@ describe("Slack live adapter reconciliation", () => {
     await adapter.cleanup?.();
     await adapter.cleanupAfterGatewayStop?.();
 
-    expect(mocks.createCaptureReader).toHaveBeenCalledOnce();
-    expect(mocks.createCaptureReader).toHaveBeenCalledWith({ env: runtimeEnv });
+    expect(mocks.createCaptureReader).not.toHaveBeenCalled();
     expect(mocks.acquireCaptureStore).not.toHaveBeenCalled();
     expect(mocks.captureRelease).not.toHaveBeenCalled();
     expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
@@ -401,6 +400,25 @@ describe("Slack live adapter reconciliation", () => {
 });
 
 describe("Slack agent E2E request settlement", () => {
+  it("captures final writes after the Gateway invalidates an earlier reader", async () => {
+    const f = await nativeAdapterFixture(() => undefined);
+    await f.driver.send({ text: "owned before restart" });
+    const previousReader = mocks.createCaptureReader.mock.results[0]?.value;
+    previousReader.getSessionEvents = async () => {
+      throw new Error("STATE_DATABASE_READ_ADMISSION_INVALIDATED");
+    };
+    mocks.createCaptureReader.mockReturnValue({
+      getSessionEvents: async () => [],
+      readBlob: async () => null,
+    });
+
+    await expect(f.adapter.captureBeforeGatewayCleanup?.()).resolves.toBeUndefined();
+    await f.cleanup();
+    expect((await f.artifact()).ownedMessages).toEqual([
+      expect.objectContaining({ deleted: true }),
+    ]);
+  });
+
   it("retains uncertain final Gateway writes while cleaning only known-owned receipts", async () => {
     const capturedEvents: Array<Record<string, unknown>> = [];
     const f = await nativeAdapterFixture(() => undefined, capturedEvents);

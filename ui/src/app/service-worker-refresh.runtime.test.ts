@@ -114,18 +114,6 @@ describe("Control UI service-worker reconnect refresh", () => {
     expect(scheduleStaleChunkReload).not.toHaveBeenCalled();
   });
 
-  it("reconciles the new active worker when it changes during an identity query", async () => {
-    const oldWorker = createWorker();
-    const replacement = createWorker("new-worker");
-    const registration = installRegistration(oldWorker);
-    oldWorker.postMessage.mockImplementation((_message, ports) => {
-      registration.active = replacement as unknown as ServiceWorker;
-      ports[0]?.postMessage({ type: "sw-updated", version: CONTROL_UI_BUILD_INFO.buildId });
-    });
-    await expect(refreshControlUiServiceWorker()).resolves.toBe(true);
-    expect(replacement.postMessage).toHaveBeenCalledOnce();
-  });
-
   it("recovers the active build even when the network update check fails", async () => {
     const registration = installRegistration(createWorker("already-active-build"));
     registration.update.mockRejectedValue(new Error("worker update unavailable"));

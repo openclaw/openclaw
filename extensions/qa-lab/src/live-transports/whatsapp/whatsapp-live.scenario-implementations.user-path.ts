@@ -1,23 +1,18 @@
-import { randomUUID } from "node:crypto";
 import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";
 import { waitForNoWhatsAppReply } from "./whatsapp-live.driver.js";
+import { callWhatsAppGatewaySend } from "./whatsapp-live.gateway.js";
 import {
-  callWhatsAppGatewaySend,
-  writeWhatsAppQaWorkspaceFixture,
-} from "./whatsapp-live.gateway.js";
-import {
-  sendWhatsAppQaMediaAndObserve,
+  runWhatsAppOutboundMediaChecks,
   WHATSAPP_QA_AUDIO_OGG_OPUS_MIME,
   WHATSAPP_QA_AUDIO_TRANSCRIPT_MARKER,
   WHATSAPP_QA_ONE_PIXEL_PNG,
   createWhatsAppQaAudioOggOpusBuffer,
-  createWhatsAppQaAudioWavBuffer,
-  createWhatsAppQaPdfBuffer,
 } from "./whatsapp-live.media.js";
 import {
   matchesWhatsAppSutReactionToTrigger,
   requireWhatsAppTriggerMessageId,
   waitForScenarioObservedMessage,
+  waitForWhatsAppQuotedMessage,
   waitForWhatsAppSutReactionToTrigger,
 } from "./whatsapp-live.observations.js";
 import { createWhatsAppMessageScenario } from "./whatsapp-live.scenario-builders.js";
@@ -125,21 +120,11 @@ export const whatsappUserPathScenarios = {
           message: `${token}_QUOTED`,
           replyToId: context.sent.messageId,
         });
-        await waitForScenarioObservedMessage(context, {
+        await waitForWhatsAppQuotedMessage(context, {
           observedAfter: quotedStartedAt,
-          diagnosticChecks: [
-            {
-              label: "textMarker",
-              match: (message) => message.text.includes(`${token}_QUOTED`),
-            },
-            {
-              label: "quotedMessageIdMatchesTrigger",
-              match: (message) => message.quoted?.messageId === context.sent.messageId,
-            },
-          ],
-          match: (message) =>
-            message.text.includes(`${token}_QUOTED`) &&
-            message.quoted?.messageId === context.sent.messageId,
+          textMarker: `${token}_QUOTED`,
+          quotedMessageId: context.sent.messageId,
+          diagnosticLabels: ["textMarker", "quotedMessageIdMatchesTrigger"],
         });
 
         const freshStartedAt = new Date();
@@ -200,62 +185,8 @@ export const whatsappUserPathScenarios = {
     posture: "direct-gateway",
     marker: "WHATSAPP_QA_OUTBOUND_MEDIA",
     buildRun: (token) => ({
-      afterReply: async (_reply, context) => {
-        const mediaRootToken = randomUUID().slice(0, 8);
-        const imagePath = await writeWhatsAppQaWorkspaceFixture(context, {
-          buffer: WHATSAPP_QA_ONE_PIXEL_PNG,
-          fileName: `whatsapp-qa-${mediaRootToken}.png`,
-        });
-        const documentPath = await writeWhatsAppQaWorkspaceFixture(context, {
-          buffer: createWhatsAppQaPdfBuffer(),
-          fileName: `whatsapp-qa-${mediaRootToken}.pdf`,
-        });
-        const audioPath = await writeWhatsAppQaWorkspaceFixture(context, {
-          buffer: createWhatsAppQaAudioWavBuffer(),
-          fileName: `whatsapp-qa-${mediaRootToken}.wav`,
-        });
-
-        await sendWhatsAppQaMediaAndObserve(context, {
-          kind: "image",
-          label: "image",
-          mediaUrl: imagePath,
-          message: `${token}_IMAGE`,
-        });
-
-        await sendWhatsAppQaMediaAndObserve(context, {
-          kind: "document",
-          label: "document",
-          mediaUrl: documentPath,
-          message: `${token}_DOCUMENT`,
-        });
-
-        await sendWhatsAppQaMediaAndObserve(context, {
-          kind: "audio",
-          label: "audio",
-          mediaUrl: audioPath,
-          message: `${token}_AUDIO`,
-        });
-
-        const multiStartedAt = new Date();
-        await callWhatsAppGatewaySend(context, {
-          label: "multi",
-          mediaUrls: [imagePath, documentPath],
-          message: `${token}_MULTI`,
-        });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: multiStartedAt,
-          match: (message) =>
-            message.kind === "media" && message.mediaType?.startsWith("image/") === true,
-        });
-        await waitForScenarioObservedMessage(context, {
-          observedAfter: multiStartedAt,
-          match: (message) =>
-            message.kind === "media" &&
-            (message.mediaType === "application/pdf" ||
-              message.mediaFileName?.endsWith(".pdf") === true),
-        });
-        return "gateway send delivered image, document, audio, and multi-media";
-      },
+      afterReply: async (_reply, context) =>
+        await runWhatsAppOutboundMediaChecks(context, token, "dm"),
       input: `Reply with only this exact marker before outbound media checks: ${token}`,
     }),
   }),

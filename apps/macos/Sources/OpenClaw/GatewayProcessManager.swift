@@ -483,11 +483,11 @@ final class GatewayProcessManager {
 
     private func resolveLaunchAgentReadinessFailure(
         port: Int,
-        startingPID: Int32?) async -> LaunchAgentReadinessFailure?
+        startingPID: Int32?,
+        freshInstall: Bool = false) async -> LaunchAgentReadinessFailure?
     {
-        guard let startingPID,
-              let pid = await self.reusableLaunchdPIDOwningPort(port: port),
-              pid == startingPID
+        guard let pid = await self.reusableLaunchdPIDOwningPort(port: port),
+              pid == startingPID || (startingPID == nil && freshInstall)
         else {
             return nil
         }
@@ -968,15 +968,15 @@ extension GatewayProcessManager {
 
     private func observeLaunchdGatewayReadiness(
         context: GatewayReadinessContext,
-        readinessWindow: TimeInterval = 6,
         // Fresh installs keep probing through the same first-run migration budget as the CLI.
-        firstInstallReadinessBudget: TimeInterval = GatewayLaunchAgentManager.startupMigrationTolerance) async
+        firstInstallReadinessBudget: TimeInterval = GatewayLaunchAgentManager.startupMigrationTolerance,
+        reusedLaunchdReadinessBudget: TimeInterval = GatewayLaunchAgentManager.reusedLaunchdColdStartTolerance) async
     {
+        let freshInstall = self.launchAgentFreshInstallGeneration == context.generation
         let terminal = await self.observeGatewayReadiness(
             context: context,
-            deadlinePolicy: .migration(
-                window: readinessWindow,
-                tolerance: firstInstallReadinessBudget),
+            deadlinePolicy: .startup(
+                timeout: freshInstall ? firstInstallReadinessBudget : reusedLaunchdReadinessBudget),
             clock: self.readinessClock)
         _ = await self.publishGatewayReadinessTerminal(terminal, context: context)
     }
@@ -987,37 +987,17 @@ extension GatewayProcessManager {
         clock: C) async -> GatewayReadinessTerminal where C.Duration == Duration
     {
         let startedAt = clock.now
-        let (initialWindow, totalBudget): (TimeInterval, TimeInterval) = switch deadlinePolicy {
-        case let .migration(window, tolerance): (window, max(window, tolerance))
-        case let .fixed(timeout): (timeout, timeout)
+        let timeout: TimeInterval = switch deadlinePolicy {
+        case let .startup(timeout), let .fixed(timeout): timeout
         }
-        let finalProbeDeadline = startedAt.advanced(by: .seconds(totalBudget))
-        var deadline = startedAt.advanced(by: .seconds(initialWindow))
+        // Slow cold starts receive their whole budget. A disappearing or replaced process may
+        // cost the remaining wait; ownership is still checked before publishing or repairing.
+        let deadline = startedAt.advanced(by: .seconds(timeout))
         var latestRetryDisposition: GatewayProbeFailureDisposition?
-        var readinessPID = context.readinessPID
-        var freshInstallGraceAuthorized = false
         var responsiveStartupProgressObserved = false
         var latestProbeError: Error?
-        readinessLoop: while true {
+        while clock.now < deadline {
             guard self.isCurrentGatewayReadiness(context) else { return .superseded }
-            while clock.now >= deadline {
-                guard let extensionDecision = deadlinePolicy.extensionDecision(
-                    deadline: deadline,
-                    finalProbeDeadline: finalProbeDeadline,
-                    responsiveStartupProgressObserved: responsiveStartupProgressObserved,
-                    freshInstallGraceAuthorized: freshInstallGraceAuthorized)
-                else { break readinessLoop }
-                let extensionAuthorization = await self.authorizeReadinessExtension(
-                    context: context,
-                    requiresLaunchdProof: extensionDecision.requiresLaunchdProof,
-                    readinessPID: readinessPID)
-                guard self.isCurrentGatewayReadiness(context) else { return .superseded }
-                guard extensionAuthorization.allowed else { break readinessLoop }
-                readinessPID = extensionAuthorization.readinessPID
-                freshInstallGraceAuthorized = true
-                deadline = extensionDecision.deadline
-                guard clock.now < finalProbeDeadline else { break readinessLoop }
-            }
             do {
                 let remaining = clock.now.duration(to: deadline).components
                 let remainingMs = max(1, Double(remaining.seconds) * 1000 + Double(remaining.attoseconds) / 1e15)
@@ -1027,7 +1007,7 @@ extension GatewayProcessManager {
                 guard self.isCurrentGatewayReadiness(context) else { return .superseded }
                 return .ready(
                     instance: instance,
-                    startingPID: readinessPID,
+                    startingPID: context.readinessPID,
                     snapshot: decodeHealthSnapshot(from: data))
             } catch {
                 guard self.isCurrentGatewayReadiness(context) else { return .superseded }
@@ -1056,8 +1036,7 @@ extension GatewayProcessManager {
             policy: deadlinePolicy,
             latestDisposition: latestRetryDisposition,
             latestError: latestProbeError,
-            responsiveStartupProgressObserved: responsiveStartupProgressObserved,
-            readinessPID: readinessPID)
+            responsiveStartupProgressObserved: responsiveStartupProgressObserved)
     }
 
     private func gatewayReadinessTimeout(
@@ -1065,14 +1044,13 @@ extension GatewayProcessManager {
         policy: GatewayReadinessDeadlinePolicy,
         latestDisposition: GatewayProbeFailureDisposition?,
         latestError: Error?,
-        responsiveStartupProgressObserved: Bool,
-        readinessPID: Int32?) async -> GatewayReadinessTerminal
+        responsiveStartupProgressObserved: Bool) async -> GatewayReadinessTerminal
     {
         guard self.isCurrentGatewayReadiness(context) else { return .superseded }
         if case .attach = context.purpose, let latestError {
             return await self.gatewayProbeFailureTerminal(latestError, context: context)
         }
-        let migration = if case .migration = policy {
+        let migration = if case .startup = policy {
             true
         } else {
             false
@@ -1089,7 +1067,8 @@ extension GatewayProcessManager {
         let failure: LaunchAgentReadinessFailure? = if migration || context.readinessCandidate != nil {
             await self.resolveLaunchAgentReadinessFailure(
                 port: context.port,
-                startingPID: readinessPID)
+                startingPID: context.readinessPID,
+                freshInstall: self.launchAgentFreshInstallGeneration == context.generation)
         } else {
             context.readinessFailure
         }
@@ -1109,31 +1088,6 @@ extension GatewayProcessManager {
         let reason = self.describeAttachFailure(error, port: context.port, instance: instance)
         if case .attach = context.purpose { return .failed(.attachProbe(reason)) }
         return .failed(.responsiveProbe(reason))
-    }
-
-    private func authorizeReadinessExtension(
-        context: GatewayReadinessContext,
-        requiresLaunchdProof: Bool,
-        readinessPID: Int32?) async -> (allowed: Bool, readinessPID: Int32?)
-    {
-        if case .child = context.purpose {
-            return (
-                self.isCurrentGatewayReadiness(context) &&
-                    self.childSupervisor.processIdentifier == readinessPID,
-                readinessPID)
-        }
-        if !requiresLaunchdProof {
-            return (self.isCurrentGatewayReadiness(context), readinessPID)
-        }
-        guard self.launchAgentFreshInstallGeneration == context.generation,
-              self.isCurrentGatewayReadiness(context)
-        else { return (false, nil) }
-        guard let reusablePID = await self.reusableLaunchdPIDOwningPort(port: context.port) else {
-            return (false, nil)
-        }
-        let allowed = self.launchAgentFreshInstallGeneration == context.generation &&
-            self.isCurrentGatewayReadiness(context)
-        return (allowed, allowed ? reusablePID : nil)
     }
 
     private func probeFailureDisposition(_ error: Error) -> GatewayProbeFailureDisposition {
@@ -1388,6 +1342,8 @@ extension GatewayProcessManager {
         where C.Duration == Duration
     {
         let connection = await self.connection
+        // Startup readiness owns retry cadence and deadline; boot-time refusals must not delay a ready Gateway.
+        await connection.clearConnectFailureBackoff()
         // Startup owns recovery and its monotonic deadline. A normal request can recursively
         // start the Gateway and spend several 30-second connect retries before its RPC timer begins.
         // Disable the inner RPC timer so it cannot race the owner's typed probe timeout.
@@ -1588,27 +1544,29 @@ extension GatewayProcessManager {
 
     func _testStartLaunchdGatewayReadiness(
         port: Int,
-        pid: Int32,
-        readinessWindow: TimeInterval,
-        firstInstallReadinessBudget: TimeInterval)
+        pid: Int32?,
+        firstInstallReadinessBudget: TimeInterval,
+        reusedLaunchdReadinessBudget: TimeInterval? = nil,
+        hasFreshInstallEvidence: Bool = true)
     {
         self.desiredActive = true
         self.status = .starting
         self.gatewayStartGeneration &+= 1
         let generation = self.gatewayStartGeneration
-        self.launchAgentInstallGeneration = generation
-        self.launchAgentFreshInstallGeneration = generation
+        // Without install evidence this models a PID launchd started on its own, e.g. at login.
+        self.launchAgentInstallGeneration = hasFreshInstallEvidence ? generation : nil
+        self.launchAgentFreshInstallGeneration = hasFreshInstallEvidence ? generation : nil
         let context = self.gatewayReadinessContext(
             purpose: .launchd,
             port: port,
             generation: generation,
             readinessPID: pid,
-            launchAgentInstalled: true)
+            launchAgentInstalled: hasFreshInstallEvidence)
         self.beginGatewayStartTask(generation: generation) { [weak self] in
             await self?.observeLaunchdGatewayReadiness(
                 context: context,
-                readinessWindow: readinessWindow,
-                firstInstallReadinessBudget: firstInstallReadinessBudget)
+                firstInstallReadinessBudget: firstInstallReadinessBudget,
+                reusedLaunchdReadinessBudget: reusedLaunchdReadinessBudget ?? firstInstallReadinessBudget)
         }
     }
 }

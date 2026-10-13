@@ -1,6 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
+import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import {
   listImageGenerationProviders,
@@ -127,6 +132,7 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   };
   return {
     complete: unavailable,
+    forkSession: unavailable,
     run: unavailable,
     waitForRun: unavailable,
     getSessionMessages: unavailable,
@@ -217,32 +223,107 @@ function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
 }
 
 function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["sandbox"] {
-  const resolveWorkspaceAuthority = (
+  const readCurrentEntry = (
     params: Parameters<PluginRuntime["sandbox"]["resolveWorkspaceAuthority"]>[0],
-  ) =>
-    resolveSandboxWorkspaceAuthority({
-      ...params,
-      sessionEntry: agent.session.getSessionEntry({
+    source: ReturnType<typeof captureIncognitoSessionSource>,
+  ) => {
+    source?.admissionSignal?.throwIfAborted();
+    if (!source) {
+      return agent.session.getSessionEntry({
         agentId: params.agentId,
         sessionKey: params.sessionKey,
-      }),
-    });
-  return {
-    resolveWorkspaceAuthority,
-    async prepareWorkspaceAuthority(params) {
-      const authority = resolveWorkspaceAuthority(params);
-      if (!authority.sandboxed || authority.confinementError) {
-        return authority;
-      }
-      const { resolveSandboxContext } = await import("../../agents/sandbox/context.js");
-      await resolveSandboxContext({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-        requireCurrentConfig: true,
+        ...(params.storePath ? { storePath: params.storePath } : {}),
       });
-      return authority;
+    }
+    if ("kind" in source) {
+      source.assertCurrent();
+      return undefined;
+    }
+    const key = resolveSqliteSessionKey(params.sessionKey, source.actor.agentId);
+    const entry = source.actor.sessions.readCapability(key);
+    return entry ? { ...entry, ...source.actor.sessions.readPolicy(key) } : undefined;
+  };
+  return {
+    resolveWorkspaceAuthority(params) {
+      const source = captureIncognitoSessionSource(params);
+      const sessionEntry = readCurrentEntry(params, source);
+      const preparedRuntimeStatus = resolveSandboxRuntimeStatus({
+        cfg: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        preparedSessionEntry: sessionEntry ?? null,
+      });
+      return resolveSandboxWorkspaceAuthority({ ...params, sessionEntry, preparedRuntimeStatus });
+    },
+    async prepareWorkspaceAuthority(input) {
+      const params = { ...input };
+      const source = captureIncognitoSessionSource(params);
+      const prepare = async () => {
+        const sessionEntry = await agent.session.getSessionEntryAsync({
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          ...(params.storePath ? { storePath: params.storePath } : {}),
+        });
+        const fields = [
+          "sessionId",
+          "lifecycleRevision",
+          "sandbox",
+          "sandboxMode",
+          "createdActor",
+          "execHost",
+          "execNode",
+          "model",
+          "modelProvider",
+          "modelOverride",
+          "providerOverride",
+        ] as const;
+        const expected = fields.map((field) => structuredClone(sessionEntry?.[field]));
+        const assertCurrent = () => {
+          const current = readCurrentEntry(params, source);
+          if (
+            fields.some((field, index) => !isDeepStrictEqual(expected[index], current?.[field]))
+          ) {
+            throw new Error("Session workspace authority changed during sandbox preparation.");
+          }
+        };
+        assertCurrent();
+        const preparedRuntimeStatus = resolveSandboxRuntimeStatus({
+          cfg: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          preparedSessionEntry: sessionEntry ?? null,
+        });
+        const authority = await withPreparedSessionCapabilityRead(() =>
+          resolveSandboxWorkspaceAuthority({
+            ...params,
+            sessionEntry,
+            preparedRuntimeStatus,
+          }),
+        );
+        if (!authority.sandboxed || authority.confinementError) {
+          return authority;
+        }
+        const { resolveSandboxContext } = await import("../../agents/sandbox/context.js");
+        assertCurrent();
+        const sandbox = await resolveSandboxContext({
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir,
+          requireCurrentConfig: true,
+          preparedRuntimeStatus,
+          assertCurrent,
+        });
+        try {
+          assertCurrent();
+          return authority;
+        } finally {
+          sandbox?.[Symbol.dispose]?.();
+        }
+      };
+      return source && !("kind" in source)
+        ? source.actor.sessions.withSharedState(prepare)
+        : prepare();
     },
   };
 }

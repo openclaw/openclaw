@@ -32,11 +32,11 @@ import {
   isDirectCdpWebSocketEndpoint,
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
+  resolveCdpWebSocketDiscovery,
   scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
   type CdpEndpointPin,
 } from "./cdp.helpers.js";
-import { normalizeCdpWsUrl } from "./cdp.js";
 import {
   type ChromeCdpDiagnostic,
   diagnoseChromeCdp,
@@ -254,9 +254,17 @@ function clearChromeSingletonArtifacts(userDataDir: string) {
   }
 }
 
-function clearStaleChromeSingletonLocks(userDataDir: string): boolean {
+function clearStaleChromeSingletonLocks(
+  userDataDir: string,
+  expectedOwner?: { pid: number; hostname: string },
+): boolean {
   const lock = readSingletonLockTarget(userDataDir);
-  if (lock.status !== "owner" || lock.hostname !== os.hostname() || isPidAlive(lock.pid)) {
+  if (
+    lock.status !== "owner" ||
+    lock.hostname !== (expectedOwner?.hostname ?? os.hostname()) ||
+    (expectedOwner && lock.pid !== expectedOwner.pid) ||
+    isPidAlive(lock.pid)
+  ) {
     return false;
   }
 
@@ -363,14 +371,23 @@ async function terminateOwnedStaleChromeProcess(
   return false;
 }
 
-function clearRecoveredChromeSingletonArtifacts(userDataDir: string, pid: number): boolean {
-  if (isPidAlive(pid)) {
+function clearRecoveredChromeSingletonArtifacts(
+  userDataDir: string,
+  stoppedPid: number,
+  expectedLock: ChromeSingletonLock,
+): boolean {
+  if (isPidAlive(stoppedPid)) {
     return false;
   }
-  // The stopped shell may have inherited a dead local full-Chromium lock.
+  if (readSingletonLockTarget(userDataDir).status === "missing") {
+    return true;
+  }
+  // A shell can inherit a dead full-Chromium lock with a different PID.
+  // Only the captured local owner may be cleared after the stopped process exits.
   return (
-    readSingletonLockTarget(userDataDir).status === "missing" ||
-    clearStaleChromeSingletonLocks(userDataDir)
+    expectedLock.status === "owner" &&
+    expectedLock.hostname === os.hostname() &&
+    clearStaleChromeSingletonLocks(userDataDir, expectedLock)
   );
 }
 
@@ -421,7 +438,10 @@ async function recoverOwnedStaleManagedChromeCdpListener(params: {
   ) {
     return false;
   }
-  if (!clearRecoveredChromeSingletonArtifacts(params.userDataDir, pid)) {
+  if (
+    !clearRecoveredChromeSingletonArtifacts(params.userDataDir, pid, lock) ||
+    (await managedChromeProfileReleaseReason(params.profile, params.userDataDir))
+  ) {
     return false;
   }
   log.warn(
@@ -677,37 +697,24 @@ export async function getChromeWebSocketEndpoint(
   const configuredPin = await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
   signal?.throwIfAborted();
   const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(cdpUrl, ssrfPolicy);
-  if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
-    // Handshake-ready direct WebSocket endpoint — the cdpUrl is already
-    // the WebSocket URL.
-    return { url: cdpUrl, lookup: configuredPin?.lookup };
-  }
-  // Either an http(s) endpoint or a bare ws/wss root; discover the
-  // actual WebSocket URL via /json/version. Normalise the scheme so
-  // fetch() can reach the endpoint.
-  const discoveryUrl = isWebSocketUrl(cdpUrl)
-    ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
-    : cdpUrl;
-  const version = await fetchChromeVersion(discoveryUrl, timeoutMs, cdpControlPolicy, signal);
-  const wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
-  if (!wsUrl) {
-    // /json/version unavailable or returned no WebSocket URL. For bare
-    // ws/wss inputs, the URL itself may be a direct WebSocket endpoint
-    // (e.g. Browserless/Browserbase-style providers without /json/version).
-    // The SSRF check on cdpUrl was already performed at the start of this
-    // function, so we can return it directly.
-    if (isWebSocketUrl(cdpUrl)) {
-      return { url: cdpUrl, lookup: configuredPin?.lookup };
-    }
+  const endpoint = await resolveCdpWebSocketDiscovery(cdpUrl, async (discoveryUrl) =>
+    normalizeOptionalString(
+      (await fetchChromeVersion(discoveryUrl, timeoutMs, cdpControlPolicy, signal))
+        ?.webSocketDebuggerUrl,
+    ),
+  );
+  if (!endpoint) {
     return null;
   }
-  const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, discoveryUrl);
-  const discoveredPin = await assertCdpEndpointAllowed(normalizedWsUrl, cdpControlPolicy, {
+  if (!endpoint.discovered) {
+    return { url: endpoint.url, lookup: configuredPin?.lookup };
+  }
+  const discoveredPin = await assertCdpEndpointAllowed(endpoint.url, cdpControlPolicy, {
     source: "discovered",
     configuredUrl: cdpUrl,
   });
   signal?.throwIfAborted();
-  return { url: normalizedWsUrl, lookup: discoveredPin?.lookup };
+  return { url: endpoint.url, lookup: discoveredPin?.lookup };
 }
 
 export async function isChromeCdpReady(
@@ -894,30 +901,23 @@ async function launchOpenClawChromeLocked(
     if (onStderr) {
       proc.stderr?.on("data", onStderr);
     }
-    if (proc.pid == null) {
-      try {
+    const releaseAbort = () => signal?.removeEventListener("abort", onAbort);
+    try {
+      if (proc.pid == null) {
         await once(proc, "spawn");
-      } catch (err) {
-        signal?.removeEventListener("abort", onAbort);
-        if (onStderr) {
-          proc.stderr?.off("data", onStderr);
-        }
-        throw err;
       }
-    }
-    const pid = proc.pid;
-    if (pid == null) {
-      signal?.removeEventListener("abort", onAbort);
+      const pid = proc.pid;
+      if (pid == null) {
+        throw new Error("Managed Chrome process spawned without a pid.");
+      }
+      return { pid, proc, releaseAbort };
+    } catch (err) {
+      releaseAbort();
       if (onStderr) {
         proc.stderr?.off("data", onStderr);
       }
-      throw new Error("Managed Chrome process spawned without a pid.");
+      throw err;
     }
-    return {
-      pid,
-      proc,
-      releaseAbort: () => signal?.removeEventListener("abort", onAbort),
-    };
   };
 
   const runningForProcess = (proc: ChildProcess, pid: number): RunningChrome => ({
@@ -1401,7 +1401,12 @@ async function stopOwnedOpenClawChromeLocked(
   ) {
     return { status: "unverified", reason: "The Chromium profile owner changed or did not stop" };
   }
-  clearRecoveredChromeSingletonArtifacts(userDataDir, pid);
+  if (!clearRecoveredChromeSingletonArtifacts(userDataDir, pid, lock)) {
+    return {
+      status: "unverified",
+      reason: "The Chromium profile lock changed or its owner is still running",
+    };
+  }
   const remainingReason = await managedChromeProfileReleaseReason(profile, userDataDir);
   if (remainingReason) {
     return { status: "unverified", reason: remainingReason };

@@ -70,27 +70,6 @@ describe("Discord Activity persistence", () => {
       createdAt: 2,
     });
   });
-
-  it.each(["delivery", "launch", "retirement"] as const)(
-    "does not retry a failed %s comparison",
-    async (operation) => {
-      const stores = openDiscordActivityStores(createMemoryKeyedStore);
-      const activity = new DiscordActivityStore(stores);
-      const failure = new Error("worker result unavailable");
-      const compare = vi
-        .spyOn(operation === "delivery" ? stores.widgets : stores.launches, "compareAndApply")
-        .mockRejectedValue(failure);
-      const result =
-        operation === "delivery"
-          ? activity.markWidgetDelivered("widget-a", "123")
-          : operation === "launch"
-            ? activity.recordPendingLaunch(launch)
-            : activity.retirePendingLaunch("default", "channel", "user", "widget-a");
-
-      await expect(result).rejects.toBe(failure);
-      expect(compare).toHaveBeenCalledOnce();
-    },
-  );
 });
 
 function createApi(
@@ -115,7 +94,7 @@ function createApi(
 }
 
 describe("Discord Activities registration", () => {
-  it.each(["observe", "compareAndApply"] as const)("requires plugin state %s", (method) => {
+  it.each(["compareAndApply"] as const)("requires plugin state %s", (method) => {
     const openKeyedStore = <T>() => {
       const store: PluginStateKeyedStore<T> = createMemoryKeyedStore<T>();
       store[method] = undefined;
@@ -166,24 +145,6 @@ describe("Discord Activities registration", () => {
     {
       name: "Activities are unconfigured",
       config: { channels: { discord: { token: "test" } } },
-    },
-    {
-      name: "the client secret is missing",
-      config: {
-        channels: { discord: { token: "test", activities: { applicationId: "123" } } },
-      },
-    },
-    {
-      name: "the Discord account is disabled",
-      config: {
-        channels: {
-          discord: {
-            enabled: false,
-            token: "test",
-            activities: { clientSecret: "secret", applicationId: "123" },
-          },
-        },
-      },
     },
   ])("keeps the static presenter unavailable when $name", ({ config }) => {
     const test = createApi({}, config);

@@ -134,7 +134,9 @@ describe("createChatRunState", () => {
     state.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
     state.toolEventRecipients.add("run-1", "conn-1");
     const run = state.getOrCreate("run-1");
+    const releaseBufferAuthority = vi.fn();
     Object.assign(run, {
+      releaseBufferAuthority,
       rawBuffer: "raw",
       buffer: "projected",
       planSnapshot: { steps: [{ step: "Inspect", status: "in_progress" }] },
@@ -155,6 +157,7 @@ describe("createChatRunState", () => {
     state.retireBuffer("run-1", ["reused"]);
     state.clearRun("run-1");
 
+    expect(releaseBufferAuthority).toHaveBeenCalledOnce();
     expect(state.registry.peek("run-1")?.clientRunId).toBe("client-1");
     expect(state.toolEventRecipients.get("run-1")).toEqual(new Set(["conn-1"]));
     expect(state.runs.get("run-1")).toEqual({
@@ -226,6 +229,41 @@ describe("createChatRunState", () => {
   );
 
   it.each(["full", "summary"] as const)(
+    "replays the current fallback transition until resumed %s activity",
+    (mode) => {
+      const state = createChatRunState();
+      const data = {
+        phase: "fallback_step",
+        fallbackStepFromModel: "primary/model",
+        fallbackStepToModel: "backup/model",
+        fallbackStepFinalOutcome: "next_fallback",
+      };
+      state.recordProgressEvent(
+        "run",
+        { runId: "run", stream: "lifecycle", seq: 1, ts: 100, data },
+        mode,
+      );
+      expect(state.runs.get("run")?.progressSnapshot?.events).toMatchObject([
+        { stream: "lifecycle", data },
+      ]);
+      state.recordProgressEvent(
+        "run",
+        {
+          runId: "run",
+          stream: "assistant",
+          seq: 2,
+          ts: 101,
+          data: { text: "Recovered" },
+        },
+        mode,
+      );
+      expect(state.runs.get("run")?.progressSnapshot?.events).toMatchObject([
+        { stream: "assistant", seq: 2 },
+      ]);
+    },
+  );
+
+  it.each(["full", "summary"] as const)(
     "retains retry waits after completed work and clears them on resumed %s activity",
     (mode) => {
       const state = createChatRunState();
@@ -244,6 +282,7 @@ describe("createChatRunState", () => {
           retryAttempt: 2,
           maxRetries: 8,
           delayMs: 2_000,
+          retryAt: 1_800_000_002_000,
         };
         event("run_status", retry);
         event("usage", { outputTokens: 100 });
@@ -279,6 +318,33 @@ describe("createChatRunState", () => {
           }),
         );
       }
+    },
+  );
+
+  it.each(["full", "summary"] as const)(
+    "retains permission notices for %s reconnect history",
+    (mode) => {
+      const state = createChatRunState();
+      const data = {
+        phase: "warning",
+        kind: "permission_missing",
+        permissionMissing: {
+          nodeId: "mac-node",
+          command: "screen.snapshot",
+          capabilities: ["screenRecording"],
+          state: "not-determined",
+        },
+      };
+      const event = {
+        runId: "run-permission",
+        seq: 1,
+        stream: "notice",
+        ts: 1_000,
+        sessionKey: "main",
+        data,
+      };
+      state.recordProgressEvent("run-permission", event, mode);
+      expect(state.runs.get("run-permission")?.progressSnapshot?.events).toEqual([event]);
     },
   );
 

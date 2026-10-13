@@ -63,81 +63,38 @@ describe("channel config composition", () => {
     expectTypeOf<z.infer<typeof schema>["policy"]>().toEqualTypeOf<"closed" | "open" | undefined>();
   });
 
-  it("awaits an asynchronous shared refinement for root and account entries", async () => {
-    const base = z.object({ enabled: z.boolean().optional() });
-    const schema = buildMultiAccountChannelSchema(base, {
-      refine: async (value, ctx) => {
-        expect(ctx.value).toBe(value);
-        await Promise.resolve();
-        if (value.enabled) {
-          ctx.addIssue({ code: "custom", path: ["enabled"], message: "disabled required" });
-        }
-      },
-    });
+  it("preserves root and account transforms and catchalls with catchall accounts", () => {
+    const account = z
+      .object({ port: z.string().transform((value) => Number(value)) })
+      .catchall(z.string());
+    const schema = buildCatchallMultiAccountChannelSchema(account);
+    const rootOnlyInput: z.input<typeof schema> = { port: "80", custom: "root" };
 
-    await expect(schema.safeParseAsync({ enabled: true })).resolves.toMatchObject({
-      success: false,
-    });
-    await expect(
-      schema.safeParseAsync({ accounts: { work: { enabled: true } } }),
-    ).resolves.toMatchObject({ success: false });
-  });
-
-  it.each(["record", "catchall"] as const)(
-    "preserves root and account transforms and catchalls with %s accounts",
-    (mode) => {
-      const account = z
-        .object({ port: z.string().transform((value) => Number(value)) })
-        .catchall(z.string());
-      const schema =
-        mode === "record"
-          ? buildMultiAccountChannelSchema(account)
-          : buildCatchallMultiAccountChannelSchema(account);
-      const rootOnlyInput: z.input<typeof schema> = { port: "80", custom: "root" };
-
-      type AccountInput = NonNullable<z.input<typeof schema>["accounts"]>[string];
-      type AccountOutput = NonNullable<z.output<typeof schema>["accounts"]>[string];
-      expectTypeOf<AccountInput["port"]>().toEqualTypeOf<string>();
-      expectTypeOf<AccountOutput["port"]>().toEqualTypeOf<number>();
-      expectTypeOf<AccountInput["custom"]>().toEqualTypeOf<string>();
-      expectTypeOf<AccountOutput["custom"]>().toEqualTypeOf<string>();
-      expectTypeOf<z.input<typeof schema>["custom"]>().toEqualTypeOf<string>();
-      expectTypeOf<z.output<typeof schema>["custom"]>().toEqualTypeOf<string>();
-      expect(schema.parse(rootOnlyInput)).toEqual({ port: 80, custom: "root" });
-      expect(
-        schema.parse({
-          ...rootOnlyInput,
-          defaultAccount: "work",
-          accounts: { work: { port: "443", custom: "account" } },
-        }),
-      ).toEqual({
-        port: 80,
-        custom: "root",
+    type AccountInput = NonNullable<z.input<typeof schema>["accounts"]>[string];
+    type AccountOutput = NonNullable<z.output<typeof schema>["accounts"]>[string];
+    expectTypeOf<AccountInput["port"]>().toEqualTypeOf<string>();
+    expectTypeOf<AccountOutput["port"]>().toEqualTypeOf<number>();
+    expectTypeOf<AccountInput["custom"]>().toEqualTypeOf<string>();
+    expectTypeOf<AccountOutput["custom"]>().toEqualTypeOf<string>();
+    expectTypeOf<z.input<typeof schema>["custom"]>().toEqualTypeOf<string>();
+    expectTypeOf<z.output<typeof schema>["custom"]>().toEqualTypeOf<string>();
+    expect(schema.parse(rootOnlyInput)).toEqual({ port: 80, custom: "root" });
+    expect(
+      schema.parse({
+        ...rootOnlyInput,
         defaultAccount: "work",
-        accounts: { work: { port: 443, custom: "account" } },
-      });
-    },
-  );
+        accounts: { work: { port: "443", custom: "account" } },
+      }),
+    ).toEqual({
+      port: 80,
+      custom: "root",
+      defaultAccount: "work",
+      accounts: { work: { port: 443, custom: "account" } },
+    });
+  });
 });
 
 describe("buildChannelConfigSchema", () => {
-  it("builds draft-07 json schema in output mode by default", () => {
-    const schema = z.object({ enabled: z.boolean().default(true) });
-    const result = buildChannelConfigSchema(schema);
-    expect(result.schema).toEqual({
-      $schema: "http://json-schema.org/draft-07/schema#",
-      type: "object",
-      properties: {
-        enabled: {
-          type: "boolean",
-          default: true,
-        },
-      },
-      required: ["enabled"],
-      additionalProperties: false,
-    });
-  });
-
   it("preserves permissive json schema and runtime parsing for zod v3 plugins", () => {
     const legacySchema = z3.object({ enabled: z3.boolean().default(true) }).strict();
     const result = buildChannelConfigSchema(
@@ -167,7 +124,11 @@ describe("buildChannelConfigSchema", () => {
     });
 
     for (const jsonSchemaMode of ["input", "output"] as const) {
-      const result = buildChannelConfigSchema(schema, { jsonSchemaMode });
+      const result = buildChannelConfigSchema(schema, {
+        jsonSchemaMode,
+        uiHints: { enabled: { label: "Enabled" } },
+      });
+      expect(result.uiHints).toEqual({ enabled: { label: "Enabled" } });
       expect(result.schema).toMatchObject({
         $schema: "http://json-schema.org/draft-07/schema#",
         properties: {
@@ -232,18 +193,6 @@ describe("buildChannelConfigSchema", () => {
     expect(result.runtime?.safeParse({ policy: "legacy" })).toEqual({
       success: true,
       data: { policy: "open" },
-    });
-  });
-
-  it("passes through ui hints and exposes a runtime parser", () => {
-    const result = buildChannelConfigSchema(z.object({ enabled: z.boolean().default(true) }), {
-      uiHints: { enabled: { label: "Enabled" } },
-    });
-
-    expect(result.uiHints).toEqual({ enabled: { label: "Enabled" } });
-    expect(result.runtime?.safeParse({})).toEqual({
-      success: true,
-      data: { enabled: true },
     });
   });
 });

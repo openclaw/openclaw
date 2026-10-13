@@ -10,7 +10,9 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
+import { logCodeModeFailure } from "./code-mode-diagnostic.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
+import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { applyLoggingConfig, getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
@@ -54,6 +56,38 @@ afterAll(async () => {
 });
 
 describe("createSubsystemLogger().isEnabled", () => {
+  it("records raw Code Mode causes and correlation ids without a debug flag", async () => {
+    const file = logPathTracker.nextPath();
+    setLoggerOverride({ level: "error", consoleLevel: "silent", file });
+    vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", "0");
+    const cause = new TypeError("synthetic failure token=example-fixture-value");
+    logCodeModeFailure(cause, {
+      failurePhase: "bridge",
+      sessionId: "session-fixture",
+      sessionKey: "agent:fixture:main",
+      runId: "agent-run-fixture",
+      codeModeRunId: "cell-fixture",
+      toolCallId: "call-fixture",
+      workerId: "worker-fixture",
+      bridgeRequestId: "bridge:callValue:1",
+      bridgeDispatchStarted: true,
+    });
+    await testApi.flushFileLogQueueForTests();
+    const raw = fs.readFileSync(file, "utf8");
+    expect(raw).toContain(cause.message);
+    expect(raw).toContain("TypeError");
+    expect(raw).toContain("subsystem.test.ts");
+    for (const id of [
+      "session-fixture",
+      "agent-run-fixture",
+      "cell-fixture",
+      "call-fixture",
+      "worker-fixture",
+      "bridge:callValue:1",
+    ]) {
+      expect(raw).toContain(id);
+    }
+  });
   it.each([
     { input: "WhatsApp: hello", subsystem: "whatsapp", expected: "[whatsapp] hello" },
     {
@@ -357,7 +391,7 @@ describe("createSubsystemLogger().isEnabled", () => {
   });
 
   it.each(["part/", "/", "1234/"])(
-    "getLogger.info retains malformed credential masking after %s",
+    "log tail masks raw malformed credentials after %s",
     async (prefix) => {
       const secret = prefix === "1234/" ? `${"Ab9Q".repeat(8)}Ab9` : "Ab9Q".repeat(10);
       const file = logPathTracker.nextPath();
@@ -366,8 +400,11 @@ describe("createSubsystemLogger().isEnabled", () => {
       await testApi.flushFileLogQueueForTests();
 
       const written = fs.readFileSync(file, "utf8");
-      expect(written).not.toContain(secret);
-      expect(written).toContain("@bucket");
+      expect(written).toContain(secret);
+      const tail = await readConfiguredLogTail();
+      expect(tail.lines).toHaveLength(1);
+      expect(tail.lines[0]).not.toContain(secret);
+      expect(tail.lines[0]).toContain("@bucket");
     },
   );
 
@@ -470,11 +507,66 @@ describe("createSubsystemLogger().isEnabled", () => {
     const warnLine = String(mockCall(warn)[0]);
     expect(warnLine).toContain("slow Codex catalog list phases");
     expect(warnLine).toContain(
-      'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" error=boom',
+      'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" error={"name":"Error","message":"boom"',
     );
     expect(warnLine).not.toContain("skipped=");
     expect(String(mockCall(error)[0])).toContain("catalog failed reason=timeout");
   });
+
+  it.each(["pretty", "json"] as const)(
+    "retains lifecycle error diagnostics in the file and %s console sinks",
+    async (consoleStyle) => {
+      const file = logPathTracker.nextPath();
+      setLoggerOverride({ level: "warn", consoleLevel: "warn", consoleStyle, file });
+      const warn = installConsoleMethodSpy("warn");
+      const failure = Object.assign(new Error("Pending input ownership ended"), {
+        name: "SessionPendingInputCustodyError",
+        code: "CUSTODY_ENDED",
+        syscall: "synthetic-settle",
+        requestId: "synthetic-request",
+        request: { body: "synthetic private completion" },
+        config: { data: "synthetic private tool input" },
+        stack:
+          "Error: Pending input ownership ended\n    at settle (fixture.ts:1:1)\n    at wake (fixture.ts:2:1)\n    at complete (fixture.ts:3:1)\n    at parent (fixture.ts:4:1)\n    at lifecycle (fixture.ts:5:1)\n    at omitted (fixture.ts:6:1)",
+      });
+      const expectedError = {
+        name: "SessionPendingInputCustodyError",
+        message: "Pending input ownership ended",
+        errorCode: "CUSTODY_ENDED",
+        stack: failure.stack.split("\n").slice(0, 6).join("\n"),
+      };
+
+      createSubsystemLogger("agents/subagent-registry").warn("lifecycle event handler failed", {
+        err: failure,
+        runId: "synthetic-child",
+      });
+      await testApi.flushFileLogQueueForTests();
+
+      const record = JSON.parse(fs.readFileSync(file, "utf8").trim());
+      expect(record["1"]).toEqual({
+        err: { ...expectedError, stack: failure.stack },
+        runId: "synthetic-child",
+      });
+      const consoleLine = String(mockCall(warn)[0]);
+      const consoleError = expectedError;
+      if (consoleStyle === "json") {
+        expect(JSON.parse(consoleLine)).toMatchObject({
+          err: consoleError,
+          runId: "synthetic-child",
+        });
+      } else {
+        const errorStart = consoleLine.indexOf("err=") + "err=".length;
+        expect(
+          JSON.parse(consoleLine.slice(errorStart, consoleLine.lastIndexOf(" runId="))),
+        ).toEqual(consoleError);
+        expect(consoleLine).toContain("runId=synthetic-child");
+      }
+      expect(consoleLine).not.toContain("omitted");
+      expect(fs.readFileSync(file, "utf8")).not.toContain("synthetic private");
+      expect(consoleLine).not.toContain("synthetic private");
+      expect(failure.stack).toContain("omitted");
+    },
+  );
 
   it("masks key-aware sensitive fields in the console tail", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "pretty" });

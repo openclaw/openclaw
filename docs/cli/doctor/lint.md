@@ -126,7 +126,7 @@ Bare `openclaw doctor --json` exits `0` once it emits a findings payload, includ
 
 `core/doctor/session-snapshots` reports stale paths in retained legacy session
 metadata as informational findings. It preserves the original files even under
-`--fix`; active sessions use canonical SQLite state and the current runtime skill
+`--fix`; active sessions use current SQLite state and the current runtime skill
 catalog. Historical snapshot paths do not require cleanup or a session reset.
 
 `core/doctor/local-audio-acceleration` reports the auto-selected local STT command, separate capable/requested/observed backend evidence, and fallback order without loading a speech model. It emits an informational finding, so include `--severity-min info` to display it.

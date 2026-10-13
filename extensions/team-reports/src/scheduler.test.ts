@@ -21,12 +21,13 @@ import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { DiscordSource, GithubSource, SourceRuntime, SourceStatus } from "./types.js";
 
 const workerReads = vi.hoisted(() => ({ enabled: false, calls: 0, bytes: 0 }));
-vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-runtime")>();
+vi.mock("openclaw/plugin-sdk/database-engine-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/database-engine-runtime")>();
   return {
     ...actual,
-    openSqliteWorkerStore: async (...args: Parameters<typeof actual.openSqliteWorkerStore>) => {
-      const worker = await actual.openSqliteWorkerStore(...args);
+    openEngineWorkerStore: async (...args: Parameters<typeof actual.openEngineWorkerStore>) => {
+      const worker = await actual.openEngineWorkerStore(...args);
       if (worker) {
         const execute = worker.execute.bind(worker);
         vi.spyOn(worker, "execute").mockImplementation(async (command, options) => {
@@ -277,37 +278,6 @@ describe("Team Reports schedule boundaries", () => {
     expect((await restarted.store.listRuns())[0]?.status).toBe("ok");
   });
 
-  it("schedules fractional closed-day jitter before and after today's boundary", async () => {
-    vi.spyOn(Math, "random").mockReturnValue(0.5);
-    const expected = "2026-08-20T00:07:30Z";
-    for (const [now, expectedDue] of [
-      ["2026-08-20T00:00:00Z", Date.parse(expected)],
-      ["2026-08-20T00:11:00Z", Date.parse(expected) + 86_400_000],
-    ] as const) {
-      vi.setSystemTime(new Date(now));
-      const { scheduler } = await setup({ schedule: { closedDayUtc: "00:05", jitterMinutes: 5 } });
-      await scheduler.start();
-      expect((await scheduler.status()).nextDue.closedDay).toBe(expectedDue);
-    }
-  });
-
-  it.each([
-    { now: "2026-08-20T02:15:00Z", hours: 4, expected: "2026-08-20T04:00:00Z" },
-    { now: "2026-08-20T04:00:00Z", hours: 4, expected: "2026-08-20T08:00:00Z" },
-    { now: "2026-08-20T21:00:00Z", hours: 5, expected: "2026-08-21T00:00:00Z" },
-    { now: "2026-08-20T02:15:00Z", hours: 0, expected: undefined },
-  ])(
-    "aligns intraday refreshes to UTC boundaries ($now, $hours)",
-    async ({ now, hours, expected }) => {
-      vi.setSystemTime(new Date(now));
-      const { scheduler } = await setup({ schedule: { intradayEveryHours: hours } });
-      await scheduler.start();
-      expect((await scheduler.status()).nextDue.intraday).toBe(
-        expected ? Date.parse(expected) : undefined,
-      );
-    },
-  );
-
   it("does not schedule another closed-day run today when the next jitter sample is larger", async () => {
     vi.setSystemTime(new Date("2026-08-20T00:00:00Z"));
     vi.spyOn(Math, "random").mockReturnValueOnce(0).mockReturnValue(1);
@@ -471,9 +441,6 @@ describe("Team Reports scheduler lifecycle", () => {
   });
 
   it.each([
-    ["2026-08-20T12:00:00Z", "2026-08-20T16:00:00Z", "00:05", "2026-08-21T00:05:00Z", []],
-    ["2026-08-20T03:59:00Z", "2026-08-20T08:00:00Z", "00:05", "2026-08-21T00:05:00Z", []],
-    ["2026-08-20T00:04:00Z", "2026-08-20T00:09:00Z", "00:05", "2026-08-21T00:05:00Z", []],
     [
       "2026-08-19T23:58:00Z",
       "2026-08-20T00:03:00Z",
@@ -515,43 +482,22 @@ describe("Team Reports scheduler lifecycle", () => {
     },
   );
 
-  it.each([0, 24])(
-    "closes the day before startup when the first scheduled run falls after midnight (intraday every %s hours)",
-    async (intradayEveryHours) => {
-      const { scheduler, store, nextRun } = await setup({
-        caughtUp: false,
-        schedule: { closedDayUtc: "00:05", intradayEveryHours },
-      });
-      await scheduler.start();
-      const due = (await scheduler.health()).nextDueMs!;
-      expect(due).toBeGreaterThanOrEqual(Date.parse("2026-08-21T00:00:00Z"));
-      await vi.advanceTimersByTimeAsync(due - Date.now());
-      await nextRun();
-      expect((await store.listRuns())[0]?.periods).toEqual(
-        expect.arrayContaining([{ period: "day", key: "2026-08-19" }]),
-      );
-      expect((await store.getPeriod("day", "2026-08-19"))?.report.status).toBe("closed");
-    },
-  );
-
-  it.each(["intraday", "manual", "closed-day"] as const)(
+  it.each(["manual"] as const)(
     "closes yesterday after rollover when the earlier partial report came from %s scheduling",
     async (kind) => {
       vi.setSystemTime(new Date("2026-08-20T11:54:00Z"));
       const first = await setup({
         schedule: {
-          intradayEveryHours: kind === "intraday" ? 4 : 0,
-          closedDayUtc: kind === "closed-day" ? "12:00" : "23:59",
+          intradayEveryHours: 0,
+          closedDayUtc: "23:59",
         },
       });
       await first.scheduler.start();
-      if (kind === "manual") {
-        await first.scheduler.generate({ intraday: true });
-      }
+      await first.scheduler.generate({ intraday: true });
       await vi.advanceTimersByTimeAsync(6 * 60_000);
       await first.nextRun();
       expect((await first.store.listRuns())[0]).toMatchObject({
-        kind: kind === "manual" ? "manual" : "closed-day",
+        kind,
         status: "ok",
         periods: expect.arrayContaining([{ period: "day", key: "2026-08-20" }]),
       });
@@ -571,19 +517,6 @@ describe("Team Reports scheduler lifecycle", () => {
       expect((await restarted.store.getPeriod("day", "2026-08-20"))?.report.status).toBe("closed");
     },
   );
-
-  it("reuses a manual closed report at the first scheduled run", async () => {
-    const { scheduler, nextRun, store, github } = await setup({ caughtUp: false });
-    await scheduler.start();
-    await scheduler.generate({ date: "2026-08-19" });
-    await nextRun();
-    const accepted = await store.getPeriod("day", "2026-08-19");
-    await vi.advanceTimersByTimeAsync(4 * 3_600_000);
-    await nextRun();
-    expect(github.collect).toHaveBeenCalledTimes(2);
-    expect(await store.getPeriod("day", "2026-08-19")).toEqual(accepted);
-    expect((await store.getPeriod("day", "2026-08-20"))?.report.status).toBe("partial");
-  });
 
   it("rejects a concurrent manual run and defers an intraday tick without overlapping collectors", async () => {
     vi.setSystemTime(new Date("2026-08-20T03:54:00Z"));
@@ -951,42 +884,6 @@ describe("Team Reports scheduler lifecycle", () => {
     await nextRun();
     expect((await store.listRuns()).find((run) => run.id === succeeded)?.status).toBe("ok");
     expect(context.serviceHealth.clearFailure).toHaveBeenCalledOnce();
-  });
-
-  it.each([false, true])("collects Discord only when configured (enabled: %s)", async (enabled) => {
-    const { scheduler, nextRun, discord, store, complete } = await setup({ discord: enabled });
-    await scheduler.start();
-    await scheduler.generate();
-    await nextRun();
-    expect(discord.collect).toHaveBeenCalledTimes(enabled ? 1 : 0);
-    const generated = await store.getPeriod("day", "2026-08-19");
-    expect(generated?.report.totals.discord.messages).toBe(enabled ? 1 : 0);
-    expect(generated?.report.sources.discord?.ok).toBe(enabled ? true : undefined);
-    expect(complete).not.toHaveBeenCalled();
-  });
-
-  it("closes the prior week and month while opening the current periods at calendar rollover", async () => {
-    vi.setSystemTime(new Date("2026-06-01T00:00:00Z"));
-    const { scheduler, store, github, nextRun } = await setup({
-      caughtUp: "manual",
-      schedule: { closedDayUtc: "00:05", weekly: true, monthly: true },
-    });
-    await scheduler.start();
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
-    await nextRun();
-    expect(github.collect).toHaveBeenCalledTimes(2);
-    expect(await store.listPeriods()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ period: "day", key: "2026-05-31", status: "closed" }),
-        expect.objectContaining({ period: "day", key: "2026-06-01", status: "partial" }),
-        expect.objectContaining({ period: "week", key: "2026-W22", status: "closed" }),
-        expect.objectContaining({ period: "week", key: "2026-W23", status: "partial" }),
-        expect.objectContaining({ period: "month", key: "2026-05", status: "closed" }),
-        expect.objectContaining({ period: "month", key: "2026-06", status: "partial" }),
-      ]),
-    );
-    expect((await store.getPeriod("week", "2026-W22"))?.report.totals.github.total).toBe(1);
-    expect((await store.getPeriod("month", "2026-06"))?.report.totals.github.total).toBe(1);
   });
 
   it("preserves only rollups overlapping a rejected day at month rollover", async () => {

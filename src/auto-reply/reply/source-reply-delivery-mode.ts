@@ -13,6 +13,7 @@ import { resolveCommandTurnContext } from "../command-turn-context.js";
 import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { MsgContext } from "../templating.js";
+import type { FollowupRun } from "./queue/types.js";
 
 export type SourceReplyDeliveryModeContext = Pick<
   MsgContext,
@@ -127,6 +128,19 @@ export function resolveSourceReplyExpectation(params: {
     return "optional";
   }
   return "required";
+}
+
+export function resolveFollowupReplyExpectation(queued: FollowupRun, cfg: OpenClawConfig) {
+  return (
+    queued.run.terminalReplyExpectation ??
+    resolveSourceReplyExpectation({
+      ctx: {
+        InboundEventKind: queued.currentInboundEventKind,
+        InputProvenance: queued.run.inputProvenance,
+      },
+      cfg,
+    })
+  );
 }
 
 export function resolveSourceReplyVisibilityPolicy(params: {

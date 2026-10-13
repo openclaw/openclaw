@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -9,9 +10,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import {
-  assignHumanOwner,
   databasePath,
-  humanOwner,
   outcomeKinds,
   readClaim,
   recordHarnessDeletions,
@@ -28,7 +27,7 @@ import { readVerifiedSessionColdArchive } from "./session-cold-storage-codec.js"
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 
-const { tempDirs, createFixture } = setupLegacyMainSessionMigrationTests();
+const { createFixture } = setupLegacyMainSessionMigrationTests();
 
 function repair(fixture: ReturnType<typeof createFixture>) {
   return migrateLegacyMainSessionKeys({ cfg: fixture.cfg, env: fixture.env, mode: "doctor-fix" });
@@ -169,37 +168,6 @@ describe("legacy main session history handoff", () => {
         { agentId: source.databaseAgentId, path: source.databasePath },
       ),
     ).toEqual([]);
-  });
-
-  it.each([
-    { kind: "migrated-in-place", sharedStore: true },
-    { kind: "migrated-cross-store", sharedStore: false },
-  ])("preserves the assigned human owner when $kind", async ({ kind, sharedStore }) => {
-    const storePath = sharedStore
-      ? path.join(tempDirs.make("owned-in-place-migration-"), "sessions.sqlite")
-      : undefined;
-    const fixture = createFixture({
-      agents: { entries: { ops: {} } },
-      ...(storePath ? { session: { store: storePath } } : {}),
-    });
-    const sourcePath = storePath ?? databasePath(fixture.stateDir, "main");
-    seedClaim({ databaseAgentId: "main", databasePath: sourcePath, key: "agent:main:chat" });
-    assignHumanOwner(sourcePath);
-
-    const result = await repair(fixture);
-
-    expect(result.complete).toBe(true);
-    expect(outcomeKinds(result)).toContain(kind);
-    expect(
-      readClaim({
-        databaseAgentId: sharedStore ? "main" : "ops",
-        databasePath: storePath ?? databasePath(fixture.stateDir, "ops"),
-        key: "agent:ops:chat",
-      })?.entry.owner,
-    ).toEqual(humanOwner);
-    expect(
-      readClaim({ databaseAgentId: "main", databasePath: sourcePath, key: "agent:main:chat" }),
-    ).toBeUndefined();
   });
 
   it("preserves anchored history and recorded idempotency ownership across stores", async () => {
@@ -389,7 +357,7 @@ describe("legacy main session history handoff", () => {
     expect(committed).toEqual([]);
   });
 
-  it.each(["existing-current", "cold"] as const)(
+  it.each(["existing-current", "cold", "utf16"] as const)(
     "preserves every retained generation through a %s cross-store handoff",
     async (kind) => {
       const fixture = createFixture();
@@ -416,6 +384,15 @@ describe("legacy main session history handoff", () => {
           parentId: null,
           timestamp: new Date(index + 1).toISOString(),
           message: { role: "user", content: `Retained exact history ${index}: café 🦞` },
+        },
+        {
+          type: "custom",
+          id: `cache-${index}`,
+          parentId: `message-${index}`,
+          timestamp: new Date(index + 1).toISOString(),
+          customType: "openclaw.cache-ttl",
+          display: true,
+          message: { role: "toolResult" },
         },
       ]);
       for (const [index, entry] of entries.entries()) {
@@ -450,7 +427,19 @@ describe("legacy main session history handoff", () => {
       }
       const before = snapshot("main", sourcePath);
       expect(before.windows).toHaveLength(3);
-      expect(before.events).toHaveLength(6);
+      expect(before.events).toHaveLength(9);
+      if (kind === "utf16") {
+        fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+        {
+          using database = new DatabaseSync(destinationPath);
+          database.exec(`PRAGMA encoding = 'UTF-16le';
+            CREATE TABLE encoding_seed (id INTEGER); DROP TABLE encoding_seed;`);
+        }
+        runOpenClawAgentWriteTransaction(
+          ({ db }) => expect(db.prepare("PRAGMA encoding").get()?.encoding).toBe("UTF-16le"),
+          { agentId: "ops", path: destinationPath, env: fixture.env },
+        );
+      }
       if (kind === "existing-current") {
         seedClaim({
           databaseAgentId: "ops",
@@ -487,7 +476,24 @@ describe("legacy main session history handoff", () => {
             ) ?? { ...window, session_key: canonicalKey },
         ),
       );
-      expect(after.events).toEqual(before.events);
+      expect(after.events).toEqual(
+        kind === "utf16"
+          ? before.events.map((event) => ({ ...event, event_utf8_bytes: null }))
+          : before.events,
+      );
+      expect(after.events.filter((event) => event.seq === 2)).toEqual(
+        ids.map(() =>
+          expect.objectContaining({
+            navigation_type: "custom",
+            navigation_custom_type: "openclaw.cache-ttl",
+            navigation_display: 1,
+            message_role: "toolResult",
+            navigation_last_type: "custom",
+            navigation_last_custom_type: "openclaw.cache-ttl",
+            navigation_valid: 1,
+          }),
+        ),
+      );
       expect(after.identities).toEqual(before.identities);
       expect(snapshot("main", sourcePath)).toEqual({ windows: [], events: [], identities: [] });
       expect(

@@ -35,6 +35,7 @@ import {
   NODE_WORKER_PORTAL_STREAM_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../infra/node-runner-inventory.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   coerceNodeInvokeCancelPayload,
   coerceNodeInvokePayload,
@@ -438,26 +439,17 @@ async function runSessionPortalProof(signal: AbortSignal) {
             const publish = createDeferred();
             const targetConnected = createDeferred();
             const onTargetConnection = () => targetConnected.resolve();
-            const runOperation = stateWorkerStore.runOpenClawStateWorkerOperation;
-            const activity = vi
-              .spyOn(stateWorkerStore, "runOpenClawStateWorkerOperation")
-              .mockImplementation((workerContext, operation, options) =>
-                runOperation(
-                  workerContext,
-                  (scope) =>
-                    operation({
-                      execute: async (command, executeOptions) => {
-                        const result = await scope.execute(command, executeOptions);
-                        if (command.type === "workerEnvironments.reconcileSharedHost") {
-                          committed.resolve();
-                          await publish.promise;
-                        }
-                        return result;
-                      },
-                    }),
-                  options,
-                ),
-              );
+            const activity = probe.command(
+              stateWorkerStore,
+              async (command, executeOptions, scope) => {
+                const result = await scope.execute(command, executeOptions);
+                if (command.type === "workerEnvironments.reconcileSharedHost") {
+                  committed.resolve();
+                  await publish.promise;
+                }
+                return result;
+              },
+            );
             const maintenance = store.reconcileSharedHost({
               environmentId,
               state: reconciled!.state,

@@ -2,12 +2,15 @@ import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contrac
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import type {
   SessionEntryPatchCommit,
+  SessionEntryPatchCommitObserver,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import { publishIncognitoSessionEntry } from "./session-incognito-binding.js";
 import type { IncognitoEntryPatchResult } from "./session-incognito-entry-patch-contract.js";
 import {
+  acceptSessionSourceValidation,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
   type SessionSourceAssertion,
@@ -25,7 +28,8 @@ export function patchIncognitoSessionEntry(params: {
   shouldCommit?: () => boolean;
   source?: SessionSourceAssertion;
   prepare(snapshot: SqliteLifecycleTargetSnapshot): Promise<SessionEntryPatchCommit | undefined>;
-  onCommitted?: (entry: InternalSessionEntry) => void;
+  onCommitted?: SessionEntryPatchCommitObserver;
+  onCommittedSource?: (source: CapturedSessionEntryReadSource, entry: InternalSessionEntry) => void;
 }): Promise<IncognitoEntryPatchResult> {
   const { actor, sessionKey } = params;
   const selection = structuredClone(params.selection);
@@ -88,18 +92,32 @@ export function patchIncognitoSessionEntry(params: {
           (result) => {
             if (result.wrote && result.entry) {
               try {
-                params.onCommitted?.(structuredClone(result.entry));
+                const entry = structuredClone(result.entry);
+                if (result.transcriptPredicate) {
+                  params.onCommitted?.(entry, result.transcriptPredicate);
+                } else {
+                  params.onCommitted?.(entry);
+                }
+                params.onCommittedSource?.(
+                  {
+                    agentId: actor.agentId,
+                    path: actor.path,
+                    databaseIdentity: actor.identity.incarnation,
+                  },
+                  structuredClone(result.entry),
+                );
               } finally {
                 publishIncognitoSessionEntry(actor, sessionKey, prepared[0]?.entry, result.entry);
               }
             }
           },
           undefined,
-          (refusedSource) => {
+          (refusedSource, validation) => {
             if (refusedSource) {
               source.checks[refusedSource.index]?.refuse(refusedSource.facts);
               throw new Error("Session source refusal omitted its prepared assertion");
             }
+            acceptSessionSourceValidation(source, validation);
             params.assertCommitAllowed?.();
             source.assertCurrent();
           },

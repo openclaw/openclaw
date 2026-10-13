@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEventForTest } from "../../audit/message-audit-events.test-support.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -13,7 +13,7 @@ import {
 import { updateDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
 import { resolveDeliveryQueueStateEnv } from "../delivery-queue-state-context.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
-import { settleDurableDelivery } from "./delivery-completion.js";
+import * as deliveryCompletionRuntime from "./delivery-completion.js";
 import * as mediaSpool from "./delivery-queue-media-spool.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { renewDeliveryPlatformSendLease } from "./delivery-queue-platform-lease.js";
@@ -239,7 +239,7 @@ describe("exhausted delivery producer recovery", () => {
           status: "suppressed",
           reason: "no_visible_payload",
         });
-        vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockRejectedValueOnce(
+        vi.spyOn(deliveryCompletionRuntime, "settleDurableDelivery").mockRejectedValueOnce(
           new Error("synthetic rejection projection failure"),
         );
         throw new PlatformMessageNotDispatchedError("synthetic permanent rejection", {
@@ -327,7 +327,11 @@ describe("exhausted delivery producer recovery", () => {
     if (!staged) {
       throw new Error("Expected settlement owner");
     }
-    await settleDurableDelivery(completion, { platformSendStarted: true }, tmpDir());
+    await deliveryCompletionRuntime.settleDurableDelivery(
+      completion,
+      { platformSendStarted: true },
+      tmpDir(),
+    );
     expect(await queueStorage.finalizeDeliveryFailureSettlement(staged, tmpDir())).toBe(true);
     expect(
       await queueStorage.stageDeliveryFailureSettlement(staged, staged.settlement!, tmpDir()),
@@ -339,12 +343,14 @@ describe("exhausted delivery producer recovery", () => {
     await preparePendingFinal(id);
     const entered = createDeferred();
     const release = createDeferred();
-    const update = sessionAccessor.patchSessionEntryCore;
-    vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(async (...args) => {
-      entered.resolve();
-      await release.promise;
-      return update(...args);
-    });
+    const settle = deliveryCompletionRuntime.settleDurableDelivery;
+    vi.spyOn(deliveryCompletionRuntime, "settleDurableDelivery").mockImplementationOnce(
+      async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return settle(...args);
+      },
+    );
     const audits: string[] = [];
     const unsubscribe = onTrustedMessageAuditEventForTest((event) => {
       if (event.action === "message.outbound.finished") {
@@ -353,7 +359,11 @@ describe("exhausted delivery producer recovery", () => {
     });
     const startup = recover("startup");
     try {
-      await entered.promise;
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        startup,
+        "Recovery finished before entering durable settlement",
+      );
       await recover("recurring");
       expect(audits).toEqual([]);
     } finally {
@@ -376,7 +386,7 @@ describe("exhausted delivery producer recovery", () => {
     await fs.writeFile(artifact, "audio-bytes");
     const completion = await preparePendingFinal(id, [{ text: "reply", mediaUrl: artifact }]);
     const fault = vi
-      .spyOn(sessionAccessor, "patchSessionEntryCore")
+      .spyOn(deliveryCompletionRuntime, "settleDurableDelivery")
       .mockRejectedValueOnce(new Error("synthetic owner fault"));
     await recover("startup");
     expect(await queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({

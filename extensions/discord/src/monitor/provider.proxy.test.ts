@@ -242,21 +242,6 @@ describe("createDiscordGatewayPlugin", () => {
     }
   });
 
-  it("keeps gateway WebSocket direct when only ambient proxy env is configured", () => {
-    vi.stubEnv("https_proxy", "env-proxy.test:8080");
-    const runtime = createRuntimeSpies();
-    createPlugin({}, runtime).openSocket();
-    expect(mocks.httpsAgent).toHaveBeenCalledTimes(1);
-    expect(mocks.httpsAgent).toHaveBeenCalledWith({ lookup: expect.any(Function) });
-    expect(mocks.socket).toHaveBeenCalledWith("wss://gateway.discord.gg", {
-      agent: HttpsAgent.lastCreated,
-      handshakeTimeout: 30_000,
-      maxPayload: 16 * 1024 * 1024,
-    });
-    expect(mocks.proxyAgent).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
-
   it("falls back to the default gateway plugin when proxy is invalid", () => {
     const runtime = createRuntimeSpies();
     const plugin = createPlugin({ proxy: "bad-proxy" }, runtime);

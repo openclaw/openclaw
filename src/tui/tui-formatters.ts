@@ -69,9 +69,7 @@ export function formatTuiFooter(params: {
 }
 
 export function sanitizeTerminalControlsAndBinary(text: string): string {
-  const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
-  const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
-  const withoutControlChars = withoutAnsi.replace(RENDER_CONTROL_CHARS_RE, "");
+  const withoutControlChars = stripAnsi(text).replace(RENDER_CONTROL_CHARS_RE, "");
   const withoutBidiControls = BIDI_CONTROL_RE.test(withoutControlChars)
     ? withoutControlChars.replace(BIDI_CONTROL_GLOBAL_RE, "")
     : withoutControlChars;
@@ -438,9 +436,6 @@ export function isCommandMarkedMessage(message: unknown): boolean {
 }
 
 function formatTokens(total?: number | null, context?: number | null) {
-  if (total == null && context == null) {
-    return "tokens ?";
-  }
   const totalLabel = total == null ? "?" : formatTokenCount(total);
   if (context == null) {
     return `tokens ${totalLabel}`;
@@ -497,10 +492,7 @@ export function formatContextUsageLine(params: {
 }
 
 export function formatPrimitiveString(value: unknown, fallback = ""): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
   return fallback;

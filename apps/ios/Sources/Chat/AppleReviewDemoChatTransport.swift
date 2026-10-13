@@ -15,6 +15,10 @@ enum AppleReviewDemoMode {
 }
 
 enum ScreenshotFixtureMode {
+    static var progressBarEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-progress-bar-fixture")
+    }
+
     static let gatewayName = "OpenClaw Gateway"
     static let gatewayAddress = "Gateway on local network"
     static let gatewayID = "screenshot-fixture-gateway"
@@ -233,6 +237,20 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         try await self.store.history(sessionKey: sessionKey)
     }
 
+    func fetchProgressCard(sessionKey: String, agentID _: String?) async throws -> ProgressCard? {
+        guard ScreenshotFixtureMode.progressBarEnabled else { return nil }
+        return ProgressCard(
+            sessionkey: sessionKey,
+            revision: 1,
+            updatedat: 0,
+            markdown: """
+            <progress aria-label="Sample tasks · 3/5" value="3" max="5"></progress>
+
+            Now: reading the sample diff.
+            """,
+            steps: [])
+    }
+
     func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
         guard ScreenshotFixtureMode.reactionsEnabled else { return nil }
         let store = self.store
@@ -327,6 +345,17 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     {
         let response = try await store.sessions()
         var sessions = response.sessions
+        if self.fixture.sessionIDPrefix == "screenshot-fixture",
+           ProcessInfo.processInfo.arguments.contains("--openclaw-subagent-wait-fixture")
+        {
+            sessions[0].hasActiveSubagentRun = true
+            sessions.append(OpenClawChatSessionEntry(
+                key: "agent:main:subagent:fixture-helper",
+                displayName: "Project helper",
+                parentSessionKey: self.fixture.sessionKey,
+                status: "running",
+                hasActiveRun: true))
+        }
         if archived {
             sessions = []
         }
@@ -473,15 +502,31 @@ private actor LocalFixtureChatStore {
     }
 
     func history(sessionKey: String) throws -> OpenClawChatHistoryPayload {
+        let owner = ScreenshotFixtureMode.progressBarEnabled ? self.fixture.defaultAgentID : nil
         let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
+        let historyMessages: [OpenClawChatMessage] = if self.fixture.sessionIDPrefix == "screenshot-fixture",
+                                                        ProcessInfo.processInfo.arguments
+                                                            .contains("--openclaw-subagent-wait-fixture"),
+                                                            normalizedSessionKey == "agent:main:subagent:fixture-helper"
+        {
+            [Self.message(
+                role: "assistant",
+                text: "OPENCLAW_HELPER_SESSION",
+                timestamp: 1,
+                transcriptMessageID: "fixture-helper-answer")]
+        } else {
+            self.messages
+        }
         return try OpenClawChatHistoryPayload(
             sessionKey: normalizedSessionKey,
             sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
-            messages: JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(self.messages)),
+            messages: JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(historyMessages)),
             thinkingLevel: self.thinkingLevel,
             sessionInfo: OpenClawChatSessionInfo(
                 hasActiveRun: self.activeRunID != nil,
-                activeRunIds: self.activeRunID.map { [$0] }),
+                activeRunIds: self.activeRunID.map { [$0] },
+                key: owner.map { "agent:\($0):\(normalizedSessionKey)" },
+                agentId: owner),
             inFlightRun: self.duplicateReplaySessionKey.flatMap { _ in
                 self.activeRunID.map { OpenClawChatInFlightRun(runId: $0, text: "") }
             } ?? (ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")

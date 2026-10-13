@@ -7,7 +7,7 @@ import {
 } from "../agents/prepared-model-runtime.test-harness.js";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import {
@@ -169,134 +169,144 @@ describe("catalog renewal metadata broadcasts", () => {
     }
   });
 
-  it.each(["usage", "removed", "failed"] as const)(
-    "publishes only settled visible changes for a renewal (%s)",
-    async (change) => {
-      const harness = await createRenewalLifecycle();
-      const entered = createDeferred();
-      const release = createDeferred();
-      const original = owner.readFullModelCatalog!()!;
-      const publications =
-        vi.fn<Parameters<typeof registerPreparedModelRuntimePublicationListener>[0]>();
-      const unregister = registerPreparedModelRuntimePublicationListener(publications);
-      const next = structuredClone(harness.inventory);
-      if (change === "removed") {
-        next.entries = next.entries.filter(({ id }) => id !== "second");
-      }
-      if (change === "usage") {
-        const auth = getPreparedModelFullCatalogAuth(original)!;
-        setPreparedModelFullCatalogAuth(next, {
-          ...auth,
-          authStore: {
-            ...auth.authStore,
-            lastGood: { custom: "custom:default" },
-            usageStats: { "custom:default": { lastUsed: 42 } },
-          },
+  for (const change of ["usage", "removed", "failed"] as const) {
+    it(
+      "publishes only settled visible changes for a renewal (" + change + ")",
+      async ({ signal }) => {
+        const harness = await createRenewalLifecycle();
+        const entered = createDeferred();
+        const release = createDeferred();
+        const original = owner.readFullModelCatalog!()!;
+        const publications =
+          vi.fn<Parameters<typeof registerPreparedModelRuntimePublicationListener>[0]>();
+        const renewal = createDeferred<string>();
+        const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+          publications(event);
+          if (event.phase === "catalog-failed" || event.phase === "catalog-published") {
+            renewal.resolve(event.phase);
+          }
         });
-      }
-      mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        if (change === "failed") {
-          throw new Error("synthetic renewal failure");
+        const next = structuredClone(harness.inventory);
+        if (change === "removed") {
+          next.entries = next.entries.filter(({ id }) => id !== "second");
         }
-        return next;
-      });
-      const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
-      inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 0;
-      owner.refreshExpiredModelCatalog!();
-      let renewal: Promise<unknown> | undefined;
-      try {
-        await entered.promise;
-        const pendingCatalog = structuredClone(original);
-        expect(pendingCatalog.pendingProviders).toEqual(["custom"]);
-        // An unrelated refresh during discovery must not turn progress into a metadata change.
-        await harness.lifecycle.refresh();
-        await harness.lifecycle.read({ agentId: "main" });
-        expect.soft(harness.broadcast.mock.calls.length).toBe(0);
-        expect.soft(buildCommands.mock.calls.length).toBe(0);
-        expect.soft(buildProjection.mock.calls.length).toBe(0);
-        renewal = owner.loadFullModelCatalog!({ refresh: true, providerIds: ["custom"] }).catch(
-          (error: unknown) => error,
-        );
-        release.resolve();
-        await renewal;
-        await nextEventLoopTurn();
-        const result = await harness.lifecycle.read({ agentId: "main" });
-        expect(
-          publications.mock.calls
-            .map(([event]) => event)
-            .filter((event) => event.phase === "catalog-published"),
-        ).toEqual(
-          change === "failed"
-            ? []
-            : [
-                {
-                  phase: "catalog-published",
-                  modelFactsChanged: change !== "usage",
-                  refreshStatusChanged: true,
-                },
-              ],
-        );
-        expect(harness.broadcast.mock.calls).toEqual([
-          [
-            "chat.metadata.changed",
-            {
-              modelCatalogChanged: true,
-              authChanged: change !== "usage" && change !== "failed",
-              commandsChanged: false,
-            },
-            { dropIfSlow: true },
-          ],
-        ]);
-        expect(harness.observedCatalogs).toHaveLength(1);
-        const observedCatalog = harness.observedCatalogs[0];
-        if (!observedCatalog) {
-          throw new Error("Expected the settled catalog notification");
-        }
-        expect(observedCatalog.pendingProviders).toBeUndefined();
-        // The pending reply remains pending until the consumer receives the settlement signal.
-        expect(pendingCatalog.pendingProviders).toEqual(["custom"]);
-        const modelChanges = change === "usage" ? 0 : 1;
-        expect(buildCommands).toHaveBeenCalledTimes(modelChanges);
-        expect(buildProjection).toHaveBeenCalledTimes(modelChanges);
         if (change === "usage") {
-          expect(owner.readFullModelCatalog!()).toBe(original);
-          expect(observedCatalog.entries).toEqual(pendingCatalog.entries);
-          expect(owner.isCurrent()).toBe(true);
-          expect(getPreparedModelFullCatalogAuth(original)?.authStore.lastGood).toEqual({
-            custom: "custom:default",
+          const auth = getPreparedModelFullCatalogAuth(original)!;
+          setPreparedModelFullCatalogAuth(next, {
+            ...auth,
+            authStore: {
+              ...auth.authStore,
+              lastGood: { custom: "custom:default" },
+              usageStats: { "custom:default": { lastUsed: 42 } },
+            },
           });
-        } else if (change === "removed") {
-          expect(result.models?.map(({ id }) => id).toSorted()).toEqual(
-            next.entries.map(({ id }) => id).toSorted(),
-          );
-        } else {
-          expect(owner.readFullModelCatalog!()?.refreshFailed).toBe(true);
-          await owner.loadFullModelCatalog!({ refresh: true, providerIds: ["custom"] });
-          await nextEventLoopTurn();
-          await harness.lifecycle.read({ agentId: "main" });
-          expect(owner.readFullModelCatalog!()?.refreshFailed).toBeUndefined();
-          expect(harness.broadcast).toHaveBeenCalledTimes(2);
-          expect(buildCommands).toHaveBeenCalledTimes(2);
+        }
+        mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
           if (change === "failed") {
-            expect(publications).toHaveBeenLastCalledWith({
-              phase: "catalog-published",
-              modelFactsChanged: false,
-              refreshStatusChanged: true,
+            throw new Error("synthetic renewal failure");
+          }
+          return next;
+        });
+        const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+        inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 0;
+        owner.refreshExpiredModelCatalog!();
+        try {
+          await entered.promise;
+          const pendingCatalog = structuredClone(original);
+          expect(pendingCatalog.pendingProviders).toEqual(["custom"]);
+          // An unrelated refresh during discovery must not turn progress into a metadata change.
+          await harness.lifecycle.refresh();
+          await harness.lifecycle.read({ agentId: "main" });
+          expect.soft(harness.broadcast.mock.calls.length).toBe(0);
+          expect.soft(buildCommands.mock.calls.length).toBe(0);
+          expect.soft(buildProjection.mock.calls.length).toBe(0);
+          // Explicit refresh is a separate acquisition, not a join of expiry renewal.
+          release.resolve();
+          expect(await withinTest(renewal.promise, signal)).toBe(
+            change === "failed" ? "catalog-failed" : "catalog-published",
+          );
+          await nextEventLoopTurn();
+          const result = await harness.lifecycle.read({ agentId: "main" });
+          expect(
+            publications.mock.calls
+              .map(([event]) => event)
+              .filter((event) => event.phase === "catalog-published"),
+          ).toEqual(
+            change === "failed"
+              ? []
+              : [
+                  {
+                    phase: "catalog-published",
+                    modelFactsChanged: change !== "usage",
+                    refreshStatusChanged: true,
+                  },
+                ],
+          );
+          expect(harness.broadcast.mock.calls).toEqual([
+            [
+              "chat.metadata.changed",
+              {
+                modelCatalogChanged: true,
+                authChanged: change !== "usage" && change !== "failed",
+                commandsChanged: false,
+              },
+              { dropIfSlow: true },
+            ],
+          ]);
+          expect(harness.observedCatalogs).toHaveLength(1);
+          const observedCatalog = harness.observedCatalogs[0];
+          if (!observedCatalog) {
+            throw new Error("Expected the settled catalog notification");
+          }
+          expect(observedCatalog.pendingProviders).toBeUndefined();
+          // The pending reply remains pending until the consumer receives the settlement signal.
+          expect(pendingCatalog.pendingProviders).toEqual(["custom"]);
+          const modelChanges = change === "usage" ? 0 : 1;
+          expect(buildCommands).toHaveBeenCalledTimes(modelChanges);
+          expect(buildProjection).toHaveBeenCalledTimes(modelChanges);
+          if (change === "usage") {
+            expect(owner.readFullModelCatalog!()).toBe(original);
+            expect(observedCatalog.entries).toEqual(pendingCatalog.entries);
+            expect(owner.isCurrent()).toBe(true);
+            expect(getPreparedModelFullCatalogAuth(original)?.authStore.lastGood).toEqual({
+              custom: "custom:default",
             });
+          } else if (change === "removed") {
+            expect(result.models?.map(({ id }) => id).toSorted()).toEqual(
+              next.entries.map(({ id }) => id).toSorted(),
+            );
+          } else {
+            expect(owner.readFullModelCatalog!()?.refreshFailed).toBe(true);
+            await owner.loadFullModelCatalog!({ refresh: true, providerIds: ["custom"] });
+            await nextEventLoopTurn();
+            await harness.lifecycle.read({ agentId: "main" });
+            expect(owner.readFullModelCatalog!()?.refreshFailed).toBeUndefined();
+            expect(harness.broadcast).toHaveBeenCalledTimes(2);
+            expect(buildCommands).toHaveBeenCalledTimes(2);
+            if (change === "failed") {
+              expect(publications).toHaveBeenLastCalledWith({
+                phase: "catalog-published",
+                modelFactsChanged: false,
+                refreshStatusChanged: true,
+              });
+            }
+          }
+          const broadcasts = harness.broadcast.mock.calls.length;
+          await harness.lifecycle.refresh();
+          await harness.lifecycle.read({ agentId: "main" });
+          expect(harness.broadcast).toHaveBeenCalledTimes(broadcasts);
+        } finally {
+          release.resolve();
+          try {
+            await withinTest(renewal.promise, signal);
+          } finally {
+            unregister();
+            await harness.stop();
           }
         }
-        const broadcasts = harness.broadcast.mock.calls.length;
-        await harness.lifecycle.refresh();
-        await harness.lifecycle.read({ agentId: "main" });
-        expect(harness.broadcast).toHaveBeenCalledTimes(broadcasts);
-      } finally {
-        release.resolve();
-        await renewal;
-        unregister();
-        await harness.stop();
-      }
-    },
-  );
+      },
+    );
+  }
 });

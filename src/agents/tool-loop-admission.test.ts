@@ -338,11 +338,11 @@ describe("whole-batch tool-loop admission", () => {
     expectRecoveryStop(messages);
   });
 
-  it("runs a corrected call after repeated argument-validation failures", async () => {
+  it("runs a corrected call before the repeated-error retry budget is exhausted", async () => {
     const { messages, execExecute } = await runComposedLoop("run-corrected", (turn) =>
-      turn <= 12
+      turn <= 2
         ? [{ type: "toolCall", id: `exec-${turn}`, name: "exec", arguments: {} }]
-        : turn === 13
+        : turn === 3
           ? [{ type: "toolCall", id: "exec-fixed", name: "exec", arguments: { command: "ls" } }]
           : [],
     );

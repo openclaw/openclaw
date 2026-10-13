@@ -1,13 +1,13 @@
 {
-  "originHash" : "2b780cf14ef45930ad219a830f954e4a98a1f09ef56604ea1192c6a5297644d1",
+  "originHash" : "2fc226742c2cde426e707d3d671841bf47a675f8cd66f4f16418f064154ba7cc",
   "pins" : [
     {
       "identity" : "axorcist",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openclaw/AXorcist.git",
       "state" : {
-        "revision" : "1b12b55d61c01363f913f17a2e1db732bbb203a3",
-        "version" : "0.2.1"
+        "revision" : "6322e77a934e42f95ec912a32bdc9af014b5524e",
+        "version" : "0.2.2"
       }
     },
     {
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openclaw/Peekaboo.git",
       "state" : {
-        "revision" : "7020aedd362038043e4fc1988a8634657270e476",
-        "version" : "4.9.0"
+        "revision" : "959665e5f59358da5b15ddb726970d3e022efd41",
+        "version" : "4.9.2"
       }
     },
     {
@@ -123,8 +123,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-subprocess.git",
       "state" : {
-        "revision" : "b3937ab85dd32f6e9435914599c1519074769c1a",
-        "version" : "1.0.0"
+        "revision" : "55d30558b8b12c0343793421328fe81a4919c776",
+        "version" : "1.0.1"
       }
     },
     {

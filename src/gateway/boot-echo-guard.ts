@@ -6,9 +6,15 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 const MIN_ECHO_CHARS = 80;
 const ECHO_WINDOW_LENGTHS = [MIN_ECHO_CHARS, MIN_ECHO_CHARS + 1];
 
-function sliceEchoWindow(input: string, start: number, length: number): string | undefined {
-  const window = sliceUtf16Safe(input, start, start + length);
-  return window.length === length ? window : undefined;
+function* echoWindows(input: string) {
+  for (let start = 0; start <= input.length - MIN_ECHO_CHARS; start++) {
+    for (const length of ECHO_WINDOW_LENGTHS) {
+      const window = sliceUtf16Safe(input, start, start + length);
+      if (window.length === length) {
+        yield window;
+      }
+    }
+  }
 }
 
 type BootEchoContext = {
@@ -28,15 +34,7 @@ function getBootPromptChunks(normalizedBootPrompt: string): Set<string> {
   if (cached) {
     return cached;
   }
-  const chunks = new Set<string>();
-  for (let i = 0; i <= normalizedBootPrompt.length - MIN_ECHO_CHARS; i += 1) {
-    for (const length of ECHO_WINDOW_LENGTHS) {
-      const chunk = sliceEchoWindow(normalizedBootPrompt, i, length);
-      if (chunk) {
-        chunks.add(chunk);
-      }
-    }
-  }
+  const chunks = new Set(echoWindows(normalizedBootPrompt));
   bootChunksByNormalizedPrompt.set(normalizedBootPrompt, chunks);
   return chunks;
 }
@@ -78,12 +76,9 @@ function containsSubstantialBootEcho(outboundText: string, bootPrompt: string): 
     return false;
   }
   const bootChunks = getBootPromptChunks(needle);
-  for (let i = 0; i <= haystack.length - MIN_ECHO_CHARS; i += 1) {
-    for (const length of ECHO_WINDOW_LENGTHS) {
-      const chunk = sliceEchoWindow(haystack, i, length);
-      if (chunk && bootChunks.has(chunk)) {
-        return true;
-      }
+  for (const chunk of echoWindows(haystack)) {
+    if (bootChunks.has(chunk)) {
+      return true;
     }
   }
   return false;

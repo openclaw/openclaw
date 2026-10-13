@@ -5,6 +5,10 @@ import { registerConfigCli } from "../cli/config-cli.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as schemas from "../plugins/schema-validator.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as metadata from "./io.plugin-metadata.js";
 import type { OpenClawConfig } from "./types.js";
@@ -54,6 +58,30 @@ async function validateThroughCli(
   });
   return { output: output.at(-1), schemaValidation };
 }
+
+it("validates existing state through a private read-only snapshot", async () => {
+  const output: unknown[] = [];
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
+    output.push(value);
+  });
+  vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  await withOpenClawTestState({ prefix: "config-validation-existing-state-" }, async (state) => {
+    await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
+    const before = fs.readFileSync(state.configPath, "utf8");
+    openOpenClawStateDatabase({ env: state.env });
+    await closeOpenClawStateDatabaseAsync();
+    const program = new Command();
+    program.exitOverride();
+    registerConfigCli(program);
+    try {
+      await program.parseAsync(["config", "validate", "--json"], { from: "user" });
+    } catch (error) {
+      expect(error).toMatchObject({ name: "ExitError", code: 1 });
+    }
+    expect(output.at(-1)).toMatchObject({ valid: true });
+    expect(fs.readFileSync(state.configPath, "utf8")).toBe(before);
+  });
+});
 
 it.each([
   { rootPath: "/synthetic", valid: true, calls: 1 },

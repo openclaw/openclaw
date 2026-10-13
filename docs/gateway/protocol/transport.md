@@ -80,6 +80,18 @@ after reconnect; the Gateway sends a complete snapshot with the next text frame
 for each observed run. Run-local payload sequences can skip numbers because text
 is paced and coalesced; they are not the outer connection sequence.
 
+Canonical `agent` events with `stream: "item"` and `data.kind: "preamble"`
+include optional `preamble` metadata. When the item replaces a live preview,
+`preamble.retainedText` supplies the producer's remaining answer projection,
+including an empty string when no answer prefix remains. An empty `preamble`
+object means this event carries no new retirement projection. Earlier preview
+credit can still cover later item IDs and completion echoes. Append-only clients
+can preserve a preview they already delivered, carry its credit across those
+identities, and rebase their final-answer state. Chat and raw assistant
+frames are paced independently; their arrival order and payload sequence numbers
+are not a reclassification identity. Older clients can ignore this additive
+metadata. ACP commentary reconciliation requires an updated Gateway and bridge.
+
 Retirement uses assistant occurrence identity, never text-prefix matching.
 Producers correlate live occurrences with committed transcript idempotency keys
 or the host's exact source receipts. Native harnesses that persist part of a
@@ -174,7 +186,7 @@ unbound action. Requests that omit `expectedProfileId` retain existing behavior.
 
 `expectedProfileId` is an optional opaque string of 1 to 128 characters on an
 authenticated request frame. The Gateway compares it exactly with the current
-canonical profile ID of the authenticated principal. It does not trim, fold
+primary profile ID of the authenticated principal. It does not trim, fold
 case, or follow merge aliases on the expected value. Obtain the ID from
 `users.self`; a Gateway URL, account label, agent ID, or session key is not a
 profile ID. A missing authenticated profile cannot satisfy the precondition.
@@ -197,7 +209,7 @@ the earlier outcome before retrying uncertain work. Ordinary socket disconnects
 do not cancel already-accepted work.
 
 On authenticated operator broadcasts, optional `recipientProfileId` identifies
-the recipient's canonical profile at publication. It is a per-recipient frame
+the recipient's primary profile at publication. It is a per-recipient frame
 fact, not the event's origin, a run-owner identity, or an authorization grant.
 Existing event permissions and subscriptions still govern delivery. Bind the
 consumer to both its physical Gateway connection and selected profile; if the

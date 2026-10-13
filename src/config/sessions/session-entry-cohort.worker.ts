@@ -1,20 +1,29 @@
+import type { DatabaseSync } from "node:sqlite";
+import { hasAgentAuthProfileSourceInDatabase } from "../../agents/auth-profiles/sqlite-json.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
   assertOpenClawAgentDatabaseIdentity,
-  isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
 import {
   withOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
-import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
-import { readTranscriptHeaderFromDatabase } from "./session-accessor.sqlite-transcript-metadata-read.js";
+import { readExactSessionEntryFactsInDatabase } from "./session-accessor.sqlite-entry-facts.worker.js";
+import { readSessionKeyBySessionIdInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import {
+  sessionColdArchiveMetadataColumns,
+  type SessionColdArchive,
+} from "./session-cold-storage-state.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
 import type {
   SessionEntryCohortRequest,
@@ -22,7 +31,25 @@ import type {
   SessionExactEntriesWorkerInput,
   SessionExactEntriesWorkerResult,
 } from "./session-entry-read.types.js";
+import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "./session-transcript-worker.types.js";
+
+/** The entry cohort bounds this selection and owns its fresh snapshot. */
+function readSessionColdTranscripts(
+  db: DatabaseSync,
+  sessionIds: readonly string[],
+): Array<Omit<SessionColdArchive, "archive_blob">> {
+  if (sessionIds.length === 0) {
+    return [];
+  }
+  return executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<DB>(db)
+      .selectFrom("session_transcript_cold_archives")
+      .select(sessionColdArchiveMetadataColumns)
+      .where("session_id", "in", sqliteStringSet(sessionIds)),
+  ).rows;
+}
 
 /** Captured cohorts retain their native handle and snapshot; standalone reads keep admission. */
 export function createSessionEntryReadScope(capturedDatabase?: OpenClawAgentReadOnlyDatabase) {
@@ -59,11 +86,19 @@ export function readSessionEntryCohort(
   input: SessionEntryCohortRequest,
   readEntries: (request: SessionExactEntriesWorkerInput) => SessionExactEntriesWorkerResult,
 ): SessionEntryCohortResult {
-  const { expected, transcript, ...selection } = input;
+  const {
+    expected,
+    transcript,
+    runtimeTarget,
+    includeAuthProfileSource,
+    includeColdMetadata,
+    ...selection
+  } = input;
   const count =
     input.sessionKeys.length +
     (input.replyInitializationSessionKey ? 1 : 0) +
-    (transcript?.entryIds.length ?? 0);
+    (transcript?.entryIds.length ?? 0) +
+    (runtimeTarget ? 1 : 0);
   if (
     count > MAX_SESSION_ROW_FACTS_KEYS ||
     (expected?.sessions.length ?? 0) > MAX_SESSION_ROW_FACTS_KEYS
@@ -72,36 +107,47 @@ export function readSessionEntryCohort(
       `Session entry cohorts support at most ${MAX_SESSION_ROW_FACTS_KEYS} selected facts`,
     );
   }
+  if (runtimeTarget && !input.sessionKeys.includes(runtimeTarget.sessionKey)) {
+    throw new Error("Session runtime target must belong to its entry cohort");
+  }
   const source = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof source.identity !== "string" || !isOpenClawAgentDatabasePathCurrent(database)) {
+  if (typeof source.identity !== "string") {
     throw new Error("Session entry cohort requires its admitted durable owner");
   }
   const identity = source.identity;
-  const assertSource = () => {
-    assertExistingDatabaseIdentity(database.path, `file:${identity}`, source.birthtime);
-    const current = readOpenClawAgentDatabaseIdentity(database);
-    if (
-      current.incarnation !== source.incarnation ||
-      !isOpenClawAgentDatabasePathCurrent(database) ||
-      (expected && current.incarnation !== expected.incarnation)
-    ) {
-      throw new SessionEntryChangedDuringReadError();
-    }
-  };
-  assertSource();
+  const requiresSnapshot = Boolean(
+    transcript ||
+    includeAuthProfileSource ||
+    includeColdMetadata ||
+    input.replyInitializationSessionKey,
+  );
+  if (expected && source.incarnation !== expected.incarnation) {
+    throw new SessionEntryChangedDuringReadError();
+  }
+  // This synchronous read stays on its admitted handle; replacement is checked at admission.
   const read = (): SessionEntryCohortResult => {
-    assertSource();
     const sharedHeader =
       transcript?.includeHeader && transcript.sessionKey === input.lifecycleSessionKey;
-    const result = readEntries({
-      ...selection,
-      kind: "session-exact-entries",
-      database: { agentId: database.agentId, path: database.path },
-      env: {},
-      projection: "full",
-      includeAuthorization: true,
-      ...(sharedHeader ? { lifecycleSessionKey: undefined } : {}),
-    });
+    const result: SessionExactEntriesWorkerResult =
+      requiresSnapshot || input.lifecycleSessionKey
+        ? readEntries({
+            ...selection,
+            kind: "session-exact-entries",
+            database: { agentId: database.agentId, path: database.path },
+            env: {},
+            projection: "full",
+            includeAuthorization: true,
+            ...(sharedHeader ? { lifecycleSessionKey: undefined } : {}),
+          })
+        : {
+            kind: "session-exact-entries",
+            ...readExactSessionEntryFactsInDatabase(
+              database,
+              input.sessionKeys,
+              input.snapshotFields ?? "full",
+            ),
+            lifecycleTimestamps: {},
+          };
     for (const selected of expected?.sessions ?? []) {
       const entry = result.entries.find(
         ({ sessionKey }) => sessionKey === selected.sessionKey,
@@ -117,33 +163,47 @@ export function readSessionEntryCohort(
     const entry =
       transcript &&
       result.entries.find(({ sessionKey }) => sessionKey === transcript.sessionKey)?.entry;
-    let header: unknown;
-    if (transcript?.includeHeader && entry) {
-      try {
-        header = readTranscriptHeaderFromDatabase(database, entry.sessionId);
-      } catch {
-        // Lifecycle header metadata remains best effort; source and row identity are mandatory.
-      }
-    }
-    const anchors =
+    const transcriptFacts =
       transcript && entry
-        ? [...new Set(transcript.entryIds)].flatMap(
-            (entryId) =>
-              readActiveTranscriptEntryAnchorInTransaction({
-                database,
-                resolved: {
-                  agentId: database.agentId,
-                  path: database.path,
-                  sessionKey: transcript.sessionKey,
-                  sessionId: entry.sessionId,
-                },
-                entryId,
-              }) ?? [],
+        ? readSessionTranscriptAnchorFactsInDatabase(
+            database,
+            {
+              agentId: transcript.agentId ?? database.agentId,
+              path: database.path,
+              sessionKey: transcript.sessionKey,
+              sessionId: entry.sessionId,
+            },
+            { ...transcript, entryIds: [...new Set(transcript.entryIds)] },
+            undefined,
+            undefined,
+            entry,
           )
-        : [];
-    assertSource();
+        : { anchors: [] };
+    const authProfileSource = includeAuthProfileSource
+      ? hasAgentAuthProfileSourceInDatabase(database.db)
+      : undefined;
+    // A historical target may observe a newer key; live run admission owns the effect.
+    const preparedRuntimeTarget = runtimeTarget && {
+      ...runtimeTarget,
+      sessionKey:
+        result.entries.find(
+          ({ entry: selectedEntry }) => selectedEntry.sessionId === runtimeTarget.sessionId,
+        )?.sessionKey ??
+        readSessionKeyBySessionIdInDatabase(database, runtimeTarget.sessionId) ??
+        runtimeTarget.sessionKey,
+      storePath: database.path,
+    };
     return {
       ...result,
+      ...(preparedRuntimeTarget ? { runtimeTarget: preparedRuntimeTarget } : {}),
+      ...(includeColdMetadata
+        ? {
+            coldArchives: readSessionColdTranscripts(
+              database.db,
+              result.entries.map(({ entry: selectedEntry }) => selectedEntry.sessionId),
+            ),
+          }
+        : {}),
       source: {
         agentId: database.agentId,
         path: database.path,
@@ -157,17 +217,16 @@ export function readSessionEntryCohort(
               entry,
               agentId: database.agentId,
               sessionKey: input.lifecycleSessionKey,
-              readHeader: () => header,
+              readHeader: () => transcriptFacts.header,
             }),
           }
         : {}),
-      ...(transcript
-        ? { transcript: { anchors, ...(transcript.includeHeader ? { header } : {}) } }
-        : {}),
+      ...(transcript ? { transcript: transcriptFacts } : {}),
+      ...(includeAuthProfileSource ? { authProfileSource } : {}),
     };
   };
-  // The transaction owner performs the one fresh probe after BEGIN; nested kernels share it.
-  return database.db.isTransaction
+  // A single statement owns simple facts; richer cohorts retain one shared snapshot.
+  return database.db.isTransaction || !requiresSnapshot
     ? runSqliteReadOperationSync(database.db, read)
     : runSqliteDeferredTransactionSync(database.db, read);
 }
@@ -182,18 +241,7 @@ export function readSessionEntryDataInDatabase(
   if (typeof identity !== "string") {
     throw new Error("Session entry read requires its admitted durable owner");
   }
-  const assertSource = () => {
-    assertExistingDatabaseIdentity(database.path, `file:${identity}`, source.birthtime);
-    if (
-      readOpenClawAgentDatabaseIdentity(database).incarnation !== source.incarnation ||
-      !isOpenClawAgentDatabasePathCurrent(database)
-    ) {
-      throw new Error("Session entry read changed its admitted physical owner");
-    }
-  };
-  assertSource();
-  const entry = readSessionEntryRow(database, sessionKey)?.entry;
-  assertSource();
+  const facts = readExactSessionEntryFactsInDatabase(database, [sessionKey]);
   return {
     kind: "session-exact-entries",
     source: {
@@ -203,7 +251,7 @@ export function readSessionEntryDataInDatabase(
       databaseBirthtime: source.birthtime,
     },
     databaseIdentity: { ...source, identity },
-    entries: entry ? [{ sessionKey, entry }] : [],
+    ...facts,
     lifecycleTimestamps: {},
   };
 }

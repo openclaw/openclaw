@@ -8,7 +8,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as databaseIdentity from "../infra/sqlite-worker-identity.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   detectSharedAuthStoreMigration,
   migrateSharedAuthStore,
@@ -24,6 +26,7 @@ import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { resolveAgentDir } from "./agent-scope.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
+import { upsertAuthProfileAsync } from "./auth-profiles/profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -41,7 +44,12 @@ import {
 } from "./auth-profiles/sqlite.test-support.js";
 import {
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreForLocalUpdateAsync,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
+  findPersistedAuthProfileCredentialAsync,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreForRuntime,
   saveAuthProfileStore,
 } from "./auth-profiles/store-runtime.js";
@@ -75,6 +83,69 @@ describe("auth profile sqlite store", () => {
 
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
+  });
+
+  it("refreshes async auth reads after concurrent profile writes without losing neighbors", async () => {
+    await withAgentDirEnv("openclaw-auth-async-upsert-", async (agentDir) => {
+      await upsertAuthProfileAsync({
+        agentDir,
+        profileId: "test:original",
+        credential: { type: "api_key", provider: "test", key: "original-key" },
+      });
+      const options = {
+        allowKeychainPrompt: false,
+        externalCli: { mode: "none" as const },
+      };
+      expect((await ensureAuthProfileStoreAsync(agentDir, options)).profiles).toHaveProperty(
+        "test:original",
+      );
+      expect(
+        (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, options)).profiles,
+      ).toHaveProperty("test:original");
+      await Promise.all([
+        upsertAuthProfileAsync({
+          agentDir,
+          profileId: "test:original",
+          credential: { type: "api_key", provider: "test", key: "replacement-key" },
+        }),
+        upsertAuthProfileAsync({
+          agentDir,
+          profileId: "test:neighbor",
+          credential: { type: "api_key", provider: "test", key: "neighbor-key" },
+        }),
+      ]);
+      const expected = {
+        "test:original": { type: "api_key", provider: "test", key: "replacement-key" },
+        "test:neighbor": { type: "api_key", provider: "test", key: "neighbor-key" },
+      };
+      expect((await ensureAuthProfileStoreAsync(agentDir, options)).profiles).toEqual(expected);
+      expect(
+        (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, options)).profiles,
+      ).toEqual(expected);
+      expect(
+        (await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir, options)).profiles,
+      ).toEqual(expected);
+      expect((await ensureAuthProfileStoreForLocalUpdateAsync(agentDir)).profiles).toEqual(
+        expected,
+      );
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: {
+            version: 1,
+            profiles: {
+              "test:original": { type: "api_key", provider: "shadow", key: "shadow-key" },
+            },
+          },
+        },
+      ]);
+      expect(
+        (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, options)).profiles,
+      ).toEqual(expected);
+      await expect(
+        findPersistedAuthProfileCredentialAsync({ agentDir, profileId: "test:original" }),
+      ).resolves.toEqual(expected["test:original"]);
+    });
   });
 
   it.each([true, false])(
@@ -217,25 +288,13 @@ describe("auth profile sqlite store", () => {
   it("memoizes legacy inspection and follows Doctor's ownership flip", async () => {
     await withAgentDirEnv("openclaw-auth-shared-memo-", async (agentDir, stateDir) => {
       writePersistedAuthProfileStoreRaw(apiKeyStore("sk-legacy"), agentDir);
-      const runOperation = stateWorker.runOpenClawStateWorkerOperation;
       let sourceInspections = 0;
-      const inspection = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation((context, operation, options) =>
-          runOperation(
-            context,
-            (scope) =>
-              operation({
-                execute(command, executeOptions) {
-                  if (command.type === "authProfiles.bootstrap") {
-                    sourceInspections += 1;
-                  }
-                  return scope.execute(command, executeOptions);
-                },
-              }),
-            options,
-          ),
-        );
+      const inspection = probe.command(stateWorker, (command, executeOptions, scope) => {
+        if (command.type === "authProfiles.bootstrap") {
+          sourceInspections += 1;
+        }
+        return scope.execute(command, executeOptions);
+      });
 
       try {
         for (const key of ["sk-first", "sk-second"]) {
@@ -317,7 +376,7 @@ describe("auth profile sqlite store", () => {
       const inspection = vi
         .spyOn(databaseIdentity, "inspectDatabasePathIdentitySync")
         .mockImplementation((pathname) => {
-          if (path.resolve(pathname) === path.resolve(sourcePath)) {
+          if (!sourceInspectionFailed && path.resolve(pathname) === path.resolve(sourcePath)) {
             sourceInspectionFailed = true;
             throw Object.assign(new Error("permission denied"), { code: "EACCES" });
           }
@@ -397,9 +456,9 @@ describe("auth profile sqlite store", () => {
     });
   });
 
-  it("keeps auth schema classifications fresh after external schema changes", async () => {
+  it("keeps auth schema classifications fresh after owner schema changes", async () => {
     await withAgentDirEnv("openclaw-auth-sqlite-invalid-schema-", (agentDir) => {
-      const database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
+      const database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(agentDir));
       const createTable = `
         CREATE TABLE auth_profile_store (
           store_key TEXT NOT NULL PRIMARY KEY,

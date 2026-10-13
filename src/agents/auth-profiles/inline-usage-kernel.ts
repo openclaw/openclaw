@@ -3,11 +3,13 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { mergePersistedAuthProfileState } from "./persisted.js";
-import { inspectAuthProfileJsonCell, writeAuthProfileJsonCell } from "./sqlite-json.js";
+import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
+import { inspectAuthProfileJsonCell } from "./sqlite-json.js";
 import { prepareAuthProfileStateMutation } from "./store-mutation.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import type {
   AuthProfileUsageInput,
+  AuthProfileUsageReceipt,
   AuthProfileUsageResult,
   AuthStoreUpdateOperations,
 } from "./store.worker-contract.js";
@@ -28,13 +30,7 @@ export type InlineAuthFailureReceipt = {
   previousStats?: ProfileUsageStats;
   nextStats: ProfileUsageStats;
   now: number;
-  publication: {
-    credentialsChanged: boolean;
-    profileSetChanged: boolean;
-    stateChanged: boolean;
-    selectionChanged: boolean;
-    profileIds: string[];
-  };
+  publication: AuthProfileUsageReceipt["publication"];
 };
 
 type InlineAuthFailureResult =

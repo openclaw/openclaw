@@ -21,6 +21,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   deleteWebPushApprovalDeliveryTargets,
@@ -136,6 +137,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
@@ -332,8 +334,13 @@ describe("subscription CRUD", () => {
     ]);
   });
 
-  it("keeps legacy unbound rows test-only until browser reconciliation", async () => {
+  it("retains bound-subscription presence until registration or removal changes it", async () => {
+    const execute = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
     expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    execute.mockClear();
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
     await registerSubscription(endpoint);
     expect(await readBoundSubscriptions(tmpDir)).toEqual([]);
     expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
@@ -348,6 +355,9 @@ describe("subscription CRUD", () => {
       binding: { deviceId: "browser-device", userProfileId: null },
     });
     expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
+    execute.mockClear();
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
     expect(await readBoundSubscriptions(tmpDir)).toEqual([
       {
         ...rebound,
@@ -356,6 +366,24 @@ describe("subscription CRUD", () => {
         devicePreferences: defaultDevicePreferences,
       },
     ]);
+    await registerSubscription(endpoint);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    await registerSubscription(endpoint, {
+      binding: { deviceId: "browser-device", userProfileId: null },
+    });
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
+    expect(
+      await clearBoundWebPushSubscription({
+        endpoint,
+        expectedDeviceId: "browser-device",
+        expectedUserProfileId: null,
+        baseDir: tmpDir,
+      }),
+    ).toBe(true);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    execute.mockClear();
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("preserves bindings when an older writer updates only the original columns", async () => {
@@ -874,6 +902,40 @@ describe("sending", () => {
     );
   });
 
+  it.each([410, 503, undefined])(
+    "keeps successful sends alongside a failed delivery (status=%s)",
+    async (statusCode) => {
+      const failed = await registerSubscription("https://push.example.com/failed");
+      const delivered = await registerSubscription("https://push.example.com/delivered");
+      vi.mocked(webPush.sendNotification).mockImplementation(async (subscription) => {
+        if (subscription.endpoint === failed.endpoint) {
+          throw Object.assign(new Error("delivery failed"), { statusCode });
+        }
+        return { statusCode: 201, body: "", headers: {} };
+      });
+
+      const results = await broadcastWebPush({ title: "Mixed broadcast" }, tmpDir);
+
+      expect(results).toHaveLength(2);
+      expect(results).toEqual(
+        expect.arrayContaining([
+          {
+            ok: false,
+            subscriptionId: failed.subscriptionId,
+            statusCode,
+            error: "delivery failed",
+          },
+          { ok: true, subscriptionId: delivered.subscriptionId, statusCode: 201 },
+        ]),
+      );
+      const remaining = await listWebPushSubscriptions(tmpDir);
+      expect(remaining).toEqual(
+        statusCode === 410 ? [delivered] : expect.arrayContaining([failed, delivered]),
+      );
+      expect(remaining).toHaveLength(statusCode === 410 ? 1 : 2);
+    },
+  );
+
   it("does not delete a subscription re-registered during an expired send", async ({ signal }) => {
     const endpoint = "https://push.example.com/reregistered";
     await registerSubscription(endpoint);
@@ -885,6 +947,20 @@ describe("sending", () => {
     await broadcast.finish();
 
     expect(await listWebPushSubscriptions(tmpDir)).toEqual([replacement]);
+  });
+
+  it("refreshes bound-subscription presence after expired-delivery cleanup", async () => {
+    await registerSubscription("https://push.example.com/expired-bound", {
+      binding: { deviceId: "browser-device", userProfileId: null },
+    });
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
+    vi.mocked(webPush.sendNotification).mockRejectedValueOnce(
+      Object.assign(new Error("gone"), { statusCode: 410 }),
+    );
+    expect(await broadcastWebPush({ title: "Expired" }, tmpDir)).toEqual([
+      expect.objectContaining({ ok: false, statusCode: 410 }),
+    ]);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
   });
 
   it("does not delete an expired subscription after a legacy claim appears", async ({ signal }) => {

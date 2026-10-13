@@ -147,38 +147,6 @@ export async function inspectGatewayRestart(params: {
     // Startup cannot conceal a previous install or a definitive plugin/channel failure.
     reachability = await loadReachability();
   }
-  if (!startupPhase && portUsage.status === "busy" && runtime.status !== "running") {
-    const reachable = (reachability ??= await loadReachability());
-    if (reachable.reachable) {
-      return finalizeGatewayRestartSnapshot(
-        {
-          runtime,
-          portUsage,
-          healthy: true,
-          staleGatewayPids: [],
-          gatewayVersion: reachable.gatewayVersion,
-          ...(reachable.gatewayBootId ? { gatewayBootId: reachable.gatewayBootId } : {}),
-          gatewayBuildId: reachable.gatewayBuildId,
-          ...(reachable.activatedPluginErrors.length > 0
-            ? { activatedPluginErrors: reachable.activatedPluginErrors }
-            : {}),
-          ...(reachable.unavailablePlugins.length > 0
-            ? { unavailablePlugins: reachable.unavailablePlugins }
-            : {}),
-          ...(reachable.channelProbeErrors.length > 0
-            ? { channelProbeErrors: reachable.channelProbeErrors }
-            : {}),
-          ...(reachable.channelProbeTimeouts?.length
-            ? { channelProbeTimeouts: reachable.channelProbeTimeouts }
-            : {}),
-        },
-        expectedVersion,
-        expectedBuildId,
-        params.requirePluginHealth !== false,
-      );
-    }
-  }
-
   const gatewayListeners =
     portUsage.status === "busy"
       ? portUsage.listeners.filter((listener) => classifyPortListener(listener) === "gateway")
@@ -192,19 +160,19 @@ export async function inspectGatewayRestart(params: {
           listenerOwnedByRuntimePid({ listener, runtimePid }),
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
-  let healthy = running && ownsPort && !startupPhase;
+  let healthy = false;
   if (
     !startupPhase &&
-    running &&
     portUsage.status === "busy" &&
-    (requiresGatewayProbe ? healthy : !healthy)
+    (!running || !requiresGatewayProbe || ownsPort)
   ) {
     const reachable = (reachability ??= await loadReachability());
     healthy = reachable.reachable;
   }
   // Read after probes: an owner can acquire the coordinator while health is unavailable.
+  const unmanagedHealthy = healthy && !running;
   const owner =
-    portUsage.status === "busy"
+    !unmanagedHealthy && portUsage.status === "busy"
       ? readGatewayOwnerLease({
           env,
           port: params.port,
@@ -215,20 +183,21 @@ export async function inspectGatewayRestart(params: {
       : undefined;
   // A recorded owner is never stale by PID inference; other listeners are foreign.
   // 2026.9.3 Gateways have no row and retain the installed-runtime ownership path.
-  const staleGatewayPids = owner
-    ? []
-    : Array.from(
-        new Set(
-          gatewayListeners.flatMap((listener) =>
-            typeof listener.pid === "number" &&
-            Number.isFinite(listener.pid) &&
-            (!running ||
-              (runtimePid != null && !listenerOwnedByRuntimePid({ listener, runtimePid })))
-              ? [listener.pid]
-              : [],
+  const staleGatewayPids =
+    unmanagedHealthy || owner
+      ? []
+      : Array.from(
+          new Set(
+            gatewayListeners.flatMap((listener) =>
+              typeof listener.pid === "number" &&
+              Number.isFinite(listener.pid) &&
+              (!running ||
+                (runtimePid != null && !listenerOwnedByRuntimePid({ listener, runtimePid })))
+                ? [listener.pid]
+                : [],
+            ),
           ),
-        ),
-      );
+        );
 
   const {
     gatewayBootId,
@@ -240,6 +209,7 @@ export async function inspectGatewayRestart(params: {
     unavailablePlugins,
     channelProbeErrors,
     channelProbeTimeouts,
+    channelRuntimeWarnings,
   } = reachability ?? {};
   return finalizeGatewayRestartSnapshot(
     {
@@ -257,6 +227,7 @@ export async function inspectGatewayRestart(params: {
       ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),
       ...(channelProbeErrors?.length ? { channelProbeErrors } : {}),
       ...(channelProbeTimeouts?.length ? { channelProbeTimeouts } : {}),
+      ...(channelRuntimeWarnings?.length ? { channelRuntimeWarnings } : {}),
     },
     expectedVersion,
     expectedBuildId,

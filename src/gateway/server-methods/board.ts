@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   type BoardSnapshot,
   type GatewayCoreRequestParams,
@@ -23,6 +24,7 @@ import type { BoardSessionTarget, BoardStore } from "../../boards/board-store.js
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "../../boards/github-actions-capability.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { buildWidgetDocument } from "../../canvas/wrap.js";
+import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import {
   resolveBoardWidgetContentKind,
@@ -126,6 +128,7 @@ export function createBoardHandlers(
   return {
     "board.get": defineBoardMethod("board.get", validateBoardGetParams, async (invocation) => {
       const { params: boardParams, respond, context, client } = invocation;
+      const ingress = client?.remoteControlUiIngress;
       const authority = captureBoardRequestAuthority(invocation);
       const boardSession = resolveBoardSession(boardParams, context, respond);
       if (!boardSession) {
@@ -179,7 +182,10 @@ export function createBoardHandlers(
                 },
               }
             : {}),
-          authority: authority.ticketAuthority,
+          authority: {
+            ...authority.ticketAuthority,
+            remoteIngressPrincipal: client?.internal?.remoteIngressPrincipal,
+          },
         });
         if (registration) {
           widget.kindLabel = registration.definition.label;
@@ -189,6 +195,9 @@ export function createBoardHandlers(
           name: widget.name,
           ticket,
         });
+        if (ingress) {
+          widget.frameUrl = new URL(widget.frameUrl, ingress.publicOrigin).href;
+        }
         widget.viewTicket = ticket;
         widget.viewTicketTtlMs = BOARD_VIEW_TICKET_TTL_MS;
         widget.viewGeneration = viewMetadata.viewGeneration;
@@ -197,9 +206,13 @@ export function createBoardHandlers(
             ...viewMetadata,
             ...(resourceOrigins ? { resourceOrigins } : {}),
           });
+          if (ingress) {
+            widget.sandboxUrl = new URL(widget.sandboxUrl, ingress.sandboxOrigin).href;
+          }
           widget.sandboxPort = sandboxPort;
           if (sandboxOrigin === null) {
-            const configuredOrigin = context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
+            const configuredOrigin =
+              ingress?.sandboxOrigin ?? context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
             sandboxOrigin = configuredOrigin ? new URL(configuredOrigin).origin : undefined;
           }
           if (sandboxOrigin) {
@@ -249,6 +262,8 @@ export function createBoardHandlers(
         if (!boardSession) {
           return;
         }
+        const incognito = captureIncognitoSessionOperation(boardSession);
+        const claim = incognito?.actor.sessions.captureCurrent(boardSession.sessionKey);
         const { declared: requestDeclared, ...requestWithoutDeclared } = requestParams;
         let content: BoardWidgetMaterializedPutParams["content"];
         let declared = requestDeclared;
@@ -408,43 +423,92 @@ export function createBoardHandlers(
               },
             ),
           });
-        let snapshot = identity ? await identity.start(putWidget) : await putWidget();
-        authority.assertActive();
-        const widget = snapshot.widgets.find(
-          (candidate) => candidate.name === snapshot.resolvedWidgetName,
-        );
-        if (widget?.grantState === "pending") {
-          const decision = await resolveBoardWidgetApproval({
-            cfg: context.getRuntimeConfig(),
-            ...boardSession,
-            name: snapshot.resolvedWidgetName,
-            content: materializedContent,
-            declared: declared ?? {},
-          });
+        const putAndApprove = async () => {
+          claim?.assertCurrent();
+          let snapshot = identity ? await identity.start(putWidget) : await putWidget();
           authority.assertActive();
-          if (decision) {
-            snapshot = {
-              ...(await store.grant(
-                boardSession,
-                snapshot.resolvedWidgetName,
-                decision,
-                widget.revision,
-                widget.instanceId,
-                { assertCurrent: authority.assertActive },
-              )),
-              resolvedWidgetName: snapshot.resolvedWidgetName,
-            };
+          const widget = snapshot.widgets.find(
+            (candidate) => candidate.name === snapshot.resolvedWidgetName,
+          );
+          if (widget?.grantState === "pending") {
+            const source = incognito
+              ? await incognito.actor.sessions.read(
+                  { assertCurrent: authority.assertActive },
+                  { sessionKey: boardSession.sessionKey },
+                  incognito.admissionSignal,
+                )
+              : undefined;
+            claim?.assertCurrent();
+            const decision = await resolveBoardWidgetApproval({
+              cfg: context.getRuntimeConfig(),
+              ...boardSession,
+              name: snapshot.resolvedWidgetName,
+              content: materializedContent,
+              declared: declared ?? {},
+              ...(source ? { incognitoSession: { agentId: boardSession.agentId, ...source } } : {}),
+            });
+            authority.assertActive();
+            claim?.assertCurrent();
+            source?.snapshot.assertCurrent();
+            if (decision) {
+              snapshot = {
+                ...(await store.grant(
+                  boardSession,
+                  snapshot.resolvedWidgetName,
+                  decision,
+                  widget.revision,
+                  widget.instanceId,
+                  {
+                    assertCurrent: composeSessionSourceAssertion(
+                      [authority.assertActive],
+                      (assertSources) => {
+                        assertSources();
+                        claim?.assertCurrent();
+                        if (source && incognito) {
+                          const policy = incognito.actor.sessions.readPolicy(
+                            boardSession.sessionKey,
+                          );
+                          const fields = [
+                            "sandbox",
+                            "sandboxMode",
+                            "createdActor",
+                            "execHost",
+                            "execNode",
+                            "permissionMode",
+                          ] as const;
+                          if (
+                            fields.some(
+                              (field) => !isDeepStrictEqual(policy?.[field], source.entry?.[field]),
+                            )
+                          ) {
+                            throw new BoardValidationError(
+                              "invalid_operation",
+                              "board approval policy changed; retry",
+                            );
+                          }
+                        }
+                      },
+                    ),
+                  },
+                )),
+                resolvedWidgetName: snapshot.resolvedWidgetName,
+              };
+            }
           }
-        }
-        authority.assertActive();
-        snapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
-        emitSessionsChanged(context, {
-          sessionKey: boardSession.sessionKey,
-          agentId: boardSession.agentId,
-          reason: "board",
-        });
-        broadcastBoardChanged(context, boardSession, snapshot, snapshot.resolvedWidgetName);
-        respond(true, snapshot);
+          authority.assertActive();
+          claim?.assertCurrent();
+          snapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
+          emitSessionsChanged(context, {
+            sessionKey: boardSession.sessionKey,
+            agentId: boardSession.agentId,
+            reason: "board",
+          });
+          broadcastBoardChanged(context, boardSession, snapshot, snapshot.resolvedWidgetName);
+          respond(true, snapshot);
+        };
+        await (incognito
+          ? incognito.actor.sessions.withSharedState(putAndApprove)
+          : putAndApprove());
       },
     ),
     "board.widget.grant": defineBoardMethod(

@@ -2,6 +2,7 @@ import {
   WORKSPACE_SEED_RETENTION,
   WORKSPACE_SEED_RETENTION_JS,
 } from "../../worker/workspace-seed-retention.js";
+import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH } from "./node-toolchain.js";
 import {
   PREPARE_PROJECT_WORKSPACE_JS,
   type PreparedProjectVerification,
@@ -30,7 +31,7 @@ type ProjectSeedScriptInput = {
 
 /** Only immutable Git content and non-secret preparation metadata enter the machine image. */
 export function createProjectSeedScript(input: ProjectSeedScriptInput): string {
-  return `set -eu
+  return `${DEFAULT_NODE_TOOLCHAIN_SETUP_SH}
 node <<'PROJECT_SEED_SCRIPT'
 const fs = require("node:fs");
 const path = require("node:path");

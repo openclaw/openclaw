@@ -214,6 +214,35 @@ function makeTool(parameters: TSchema, overrides: Partial<AnyAgentTool> = {}): A
 }
 
 describe("normalizeToolParameters", () => {
+  it("keeps deeply nested plugin tools callable through argument validation", async () => {
+    let metadata: TSchema = { type: "string" };
+    for (let depth = 0; depth < 5_000; depth++) {
+      metadata = { type: "object", properties: { next: metadata } };
+    }
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { called: true } });
+    const normalized = normalizeToolParameters(
+      makeTool(
+        {
+          type: "object",
+          properties: { message: { type: "string" }, metadata },
+          required: ["message"],
+        },
+        { execute },
+      ),
+    );
+
+    const { messages } = await runToolCall(
+      normalized,
+      { type: "toolCall", id: "deep-call", name: normalized.name, arguments: { message: "proof" } },
+      "Call the tool",
+    );
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(messages.find((message) => message.role === "toolResult")).toMatchObject({
+      isError: false,
+    });
+  });
+
   it("preserves before_tool_call wrapper metadata", () => {
     const source = makeTool(Type.Object({ value: Type.String() }));
     const hookContext = { agentId: "main", sessionId: "session-before-normalize" };

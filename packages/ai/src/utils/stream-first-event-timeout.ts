@@ -104,19 +104,12 @@ export function withFirstStreamEventTimeout<T>(
             clearTimeout(timer);
           }
         });
-        if (first.done) {
-          completed = true;
-          return;
-        }
-        yield first.value;
-        for (;;) {
-          const next = await iterator.next();
-          if (next.done) {
-            completed = true;
-            return;
-          }
+        let next = first;
+        while (!next.done) {
           yield next.value;
+          next = await iterator.next();
         }
+        completed = true;
       } finally {
         if (!completed) {
           void iterator.return?.().catch(() => undefined);

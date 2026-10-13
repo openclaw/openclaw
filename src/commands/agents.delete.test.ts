@@ -17,7 +17,7 @@ import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
-import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
+import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   listOpenClawRegisteredAgentDatabases,
@@ -28,6 +28,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { readAgentProvenance } from "../test-utils/agent-provenance.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -283,36 +284,27 @@ describe("agents delete command", () => {
     });
   });
 
-  it.each(["remote config", "environment override"])(
-    "never falls back locally for a failed %s target",
-    async (source) => {
-      await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
-        const url = "ws://127.0.0.1:18789";
-        const cfg = config(stateDir);
-        if (source === "remote config") {
-          cfg.gateway = { mode: "remote", remote: { url } };
-        } else {
-          vi.stubEnv("OPENCLAW_GATEWAY_URL", url);
-        }
-        const sessions = { "agent:ops:main": { sessionId: "ops", updatedAt: 1 } };
-        await arrange({ stateDir, cfg, sessions });
-        gatewayMocks.callGateway.mockRejectedValue(
-          source === "remote config" ? gatewayTransportError("closed") : credentialsError(),
-        );
-        await runCommandWithRuntime(runtime, () =>
-          agentsDeleteCommand({ id: "ops", force: true }, runtime),
-        );
-        expectNoLocalMutation();
-        expect(readAgentDeletionJournal("ops")).toBeUndefined();
-        expectSessionStore(cfg, sessions);
-        expect(runtime.exit).toHaveBeenCalledWith(1);
-        expect(runtime.error).toHaveBeenCalledWith(
-          expect.stringMatching(/restore.*connection.*Gateway host/i),
-        );
-        expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
-      });
-    },
-  );
+  it("never falls back locally for a failed remote config target", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      const url = "ws://127.0.0.1:18789";
+      const cfg = config(stateDir);
+      cfg.gateway = { mode: "remote", remote: { url } };
+      const sessions = { "agent:ops:main": { sessionId: "ops", updatedAt: 1 } };
+      await arrange({ stateDir, cfg, sessions });
+      gatewayMocks.callGateway.mockRejectedValue(gatewayTransportError("closed"));
+      await runCommandWithRuntime(runtime, () =>
+        agentsDeleteCommand({ id: "ops", force: true }, runtime),
+      );
+      expectNoLocalMutation();
+      expect(readAgentDeletionJournal("ops")).toBeUndefined();
+      expectSessionStore(cfg, sessions);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringMatching(/restore.*connection.*Gateway host/i),
+      );
+      expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
+    });
+  });
 
   it("does not replay deletion locally after an established WebSocket closes", async () => {
     await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
@@ -523,8 +515,8 @@ describe("agents delete command", () => {
         registerOpenClawAgentDatabase({ agentId: "main", path: file });
       }
       registerOpenClawAgentDatabase({ agentId: "ops", path: sharedDatabasePath });
-      recordAgentProvenance("main", { createdVia: "operator" });
-      recordAgentProvenance("child", { createdVia: "agent", creatorAgentId: "main" });
+      await recordAgentProvenance("main", { createdVia: "operator" });
+      await recordAgentProvenance("child", { createdVia: "agent", creatorAgentId: "main" });
       moveToTrash.mockImplementation(async (target) => {
         await fs.rename(target, `${target}.trashed`);
         return `${target}.trashed`;

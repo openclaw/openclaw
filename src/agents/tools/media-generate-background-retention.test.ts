@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
@@ -8,9 +9,11 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import * as entryReader from "../../config/sessions/session-entry-read-runtime.js";
 import * as transcript from "../../config/sessions/transcript.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as sessionDelivery from "../../infra/session-delivery-queue-storage.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -53,9 +56,11 @@ describe("undelivered generated media", () => {
         const sessionKey = "agent:main:media-retention";
         const sessionId = "original-media-requester";
         const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
-        await state.writeConfig({
+        const cfg: OpenClawConfig = {
           agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
-        });
+        };
+        await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const scope = { agentId: "main", sessionKey, storePath };
         await replaceSessionEntry(scope, {
           sessionId,
@@ -82,17 +87,13 @@ describe("undelivered generated media", () => {
               retaining = false;
             }
           });
-          const create = admission.createSqliteWorkerOperationAdmission;
-          vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-            (callback, attachment) =>
-              create((request, grant) => {
-                if (retaining && request.stage === "commit") {
-                  revokedAtCommit = true;
-                  rotateAgentEventLifecycleGeneration();
-                }
-                callback(request, grant);
-              }, attachment),
-          );
+          probe.admission(admission, (request, grant, callback) => {
+            if (retaining && request.stage === "commit") {
+              revokedAtCommit = true;
+              rotateAgentEventLifecycleGeneration();
+            }
+            callback(request, grant);
+          });
         }
         if (requesterState === "retired-during-append") {
           appendSpy.mockImplementationOnce(async (params) => {
@@ -196,7 +197,9 @@ describe("undelivered generated media", () => {
 describe("media admission after requester lookup", () => {
   it("detaches through the durable transcript while keeping each requesting peer's ownership", async () => {
     await withOpenClawTestState({ prefix: "media-shared-main-" }, async (state) => {
-      await state.writeConfig({ agents: { ownership: "explicit", entries: { main: {} } } });
+      const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const requesterRunSessionKey = "agent:main:main";
       const firstKey = "agent:main:discord:default:direct:peer-a";
       const secondKey = "agent:main:discord:default:direct:peer-b";
@@ -285,7 +288,9 @@ describe("media admission after requester lookup", () => {
 
   it("keeps a missing requester inline while retaining native operation tracking", async () => {
     await withOpenClawTestState({ prefix: "media-missing-requester-" }, async (state) => {
-      await state.writeConfig({ agents: { ownership: "explicit", entries: { main: {} } } });
+      const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const sessionKey = "agent:main:missing-requester";
       const schedule = vi.fn();
       const run = vi.fn(async (handle) => {
@@ -333,7 +338,9 @@ describe("media admission after requester lookup", () => {
     async (revocation) => {
       await withOpenClawTestState({ prefix: "media-admission-authority-" }, async (state) => {
         const sessionKey = "agent:main:media-admission";
-        await state.writeConfig({ agents: { ownership: "explicit", entries: { main: {} } } });
+        const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+        await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
         await replaceSessionEntry(
           { agentId: "main", storePath, sessionKey },

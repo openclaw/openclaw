@@ -115,6 +115,36 @@ describe("new-session model metadata lifecycle", () => {
     control.reset();
   });
 
+  it("keeps a personal account when Default uses the role-permitted provider rather than the agent default", async () => {
+    const { control, neutral, connected, preview, draw, chooseAccount, agent } =
+      retainedAccountDraft();
+    agent.model.primary = "openai/other";
+    const policy = { restricted: true as const, defaultModel: "anthropic/model" };
+    neutral.modelSelectionPolicy = policy;
+    connected.modelSelectionPolicy = policy;
+    const alternate = {
+      id: "alternate",
+      name: "Alternate",
+      provider: "anthropic",
+      available: true,
+    };
+    neutral.models.push(alternate);
+    connected.models.push(alternate);
+    const { completion } = await chooseAccount();
+    preview.resolve(connected);
+    await completion;
+    draw()
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/alternate"]')!
+      .click();
+    expect(control.modelForSubmission()).toBe(
+      "anthropic/alternate@personal:person-a:anthropic:one",
+    );
+    draw().querySelector<HTMLButtonElement>('[data-chat-model-default="true"]')!.click();
+    expect(control.modelForSubmission()).toBe("anthropic/model@personal:person-a:anthropic:one");
+    expect(control.accountSelectionReady()).toBe(true);
+    control.reset();
+  });
+
   it("keeps a deliberate provider switch when leaving a personal account for a cached catalog", async () => {
     const {
       context,
@@ -550,7 +580,7 @@ describe("new-session model metadata lifecycle", () => {
     control.reset();
   });
 
-  it("retires a control immediately and gives its remount a fresh result after pending work finishes", async () => {
+  it("retires a control immediately and gives its remount a fresh result", async () => {
     const models: ModelCatalogEntry[] = [
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
     ];
@@ -565,7 +595,7 @@ describe("new-session model metadata lifecycle", () => {
     request.mockResolvedValueOnce({ models });
     const remountedControl = new NewSessionModelControl(() => undefined);
     remountedControl.load(context, "main", true);
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
     pending.resolve({ models: [] });
 
     await vi.waitFor(() => {
@@ -642,7 +672,7 @@ describe("model selection policy", () => {
       async ({ event, payload, clearsChoices }) => {
         const { context, request, emitCatalogChanged } = contextWith(models);
         const ready = deferred();
-        const failed = deferred();
+        let failed = deferred();
         const control = new NewSessionModelControl(() => {
           const container = renderControl(control, context, "main", agent);
           if (container.querySelector('[data-chat-model-option="fixture/permitted"]')) {
@@ -681,6 +711,33 @@ describe("model selection policy", () => {
               ),
             ),
           ).toBe(!clearsChoices);
+          expect(control.modelSelectionBlockedReason(agent)).toBe(
+            clearsChoices ? "Models unavailable" : undefined,
+          );
+
+          failed = deferred();
+          const replacement = deferred<ModelCatalogResult>();
+          request.mockReturnValueOnce(replacement.promise);
+          emitCatalogChanged(event, payload);
+          const checking = renderControl(control, context, "main", agent);
+          expect(checking.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
+          expect(checking.querySelector(".btn__spinner")).not.toBeNull();
+          if (clearsChoices) {
+            expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+          } else {
+            expect(
+              checking.querySelector('[data-chat-model-option="fixture/permitted"]'),
+            ).not.toBeNull();
+          }
+          const rechecked = loadModelCatalog(context.gateway.snapshot.client!, scope);
+          replacement.reject(new Error("Catalog still unavailable"));
+          await expect(rechecked).rejects.toThrow("Catalog still unavailable");
+          await failed.promise;
+          expect(
+            renderControl(control, context, "main", agent).querySelector(
+              '[data-chat-model-catalog-state="error"]',
+            ),
+          ).not.toBeNull();
           expect(control.modelSelectionBlockedReason(agent)).toBe(
             clearsChoices ? "Models unavailable" : undefined,
           );

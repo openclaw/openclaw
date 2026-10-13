@@ -13,6 +13,7 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
 const sessionFixture = vi.hoisted(() => ({ updatedAt: 50 }));
 
@@ -20,21 +21,6 @@ vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../infra/heartbeat-visibility.js", () => ({
   resolveHeartbeatVisibility: () => ({ showOk: false, showAlerts: true, useIndicator: true }),
 }));
-vi.mock("./session-utils.js", async () => {
-  const { resolveSessionStoreIdentity } = await import("./session-store-key.js");
-  return {
-    loadGatewaySessionEntryReadOnly: (sessionKey: string, options?: { agentId?: string }) => {
-      const cfg = { agents: { entries: { main: {}, delivery: {} } } };
-      const identity = resolveSessionStoreIdentity({ cfg, sessionKey, agentId: options?.agentId });
-      return {
-        cfg,
-        ...identity,
-        store: {},
-        entry: { sessionId: "session", verboseLevel: "off", updatedAt: sessionFixture.updatedAt },
-      };
-    },
-  };
-});
 
 describe("retired execution event projection", () => {
   beforeEach(() => {
@@ -49,7 +35,20 @@ describe("retired execution event projection", () => {
     const chatRunState = createChatRunState();
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
     sessionMessageSubscribers.subscribe("selected", "agent:delivery:late");
+    const projection = createSessionRowProjectionFixture({
+      cfg: { agents: { entries: { main: {}, delivery: {} } } },
+      agentId: "delivery",
+      store: {
+        global: { sessionId: "session", verboseLevel: "off", updatedAt: sessionFixture.updatedAt },
+        "agent:delivery:late": {
+          sessionId: "session",
+          verboseLevel: "off",
+          updatedAt: sessionFixture.updatedAt,
+        },
+      },
+    });
     const handler = createAgentEventHandler({
+      getSessionRowProjection: () => projection,
       broadcast,
       broadcastToConnIds,
       nodeHasSessionSubscribers: () => true,
@@ -76,6 +75,7 @@ describe("retired execution event projection", () => {
         await unsubscribe();
       } finally {
         await handler.dispose();
+        projection.dispose();
       }
     }
     return { broadcast, broadcastToConnIds, nodeSendToSession };
@@ -159,47 +159,40 @@ describe("retired execution event projection", () => {
     },
   );
 
-  it.each([false, undefined])(
-    "keeps heartbeat alias suppression separate from source flags (%s)",
-    async (sourceFlag) => {
-      const receiver = await withReceiver((chatRunState) => {
-        registerAgentRunContext("client", {
-          agentId: "delivery",
-          sessionKey: "agent:delivery:late",
-          isHeartbeat: true,
-        });
-        registerAgentRunContext("source", {
-          agentId: "delivery",
-          sessionKey: "agent:delivery:late",
-          isHeartbeat: sourceFlag,
-          verboseLevel: "full",
-        });
-        registerChatRun(chatRunState, "source", "agent:delivery:late", "client", {
-          agentId: "delivery",
-        });
-        emitAgentEvent({
-          runId: "source",
-          stream: "assistant",
-          data: { text: "A source event", delta: "A source event" },
-        });
-        emitToolResult("source", "late");
+  it("keeps heartbeat alias suppression separate from explicit source flags", async () => {
+    const receiver = await withReceiver((chatRunState) => {
+      registerAgentRunContext("client", {
+        agentId: "delivery",
+        sessionKey: "agent:delivery:late",
+        isHeartbeat: true,
       });
-      const source = receiver.broadcast.mock.calls.find(
-        ([name, payload]) => name === "agent" && payload.stream === "assistant",
-      )?.[1];
-      expect(source).toBeDefined();
-      if (sourceFlag === undefined) {
-        expect(source).not.toHaveProperty("isHeartbeat");
-      } else {
-        expect(source).toHaveProperty("isHeartbeat", sourceFlag);
-      }
-      expect(
-        receiver.nodeSendToSession.mock.calls.filter(
-          ([, name, payload]) => name === "agent" && payload.stream === "tool",
-        ),
-      ).toEqual([]);
-    },
-  );
+      registerAgentRunContext("source", {
+        agentId: "delivery",
+        sessionKey: "agent:delivery:late",
+        isHeartbeat: false,
+        verboseLevel: "full",
+      });
+      registerChatRun(chatRunState, "source", "agent:delivery:late", "client", {
+        agentId: "delivery",
+      });
+      emitAgentEvent({
+        runId: "source",
+        stream: "assistant",
+        data: { text: "A source event", delta: "A source event" },
+      });
+      emitToolResult("source", "late");
+    });
+    const source = receiver.broadcast.mock.calls.find(
+      ([name, payload]) => name === "agent" && payload.stream === "assistant",
+    )?.[1];
+    expect(source).toBeDefined();
+    expect(source).toHaveProperty("isHeartbeat", false);
+    expect(
+      receiver.nodeSendToSession.mock.calls.filter(
+        ([, name, payload]) => name === "agent" && payload.stream === "tool",
+      ),
+    ).toEqual([]);
+  });
 
   it("uses the selected agent for newer global-session verbosity", async () => {
     sessionFixture.updatedAt = 200;

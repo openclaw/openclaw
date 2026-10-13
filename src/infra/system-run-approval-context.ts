@@ -121,15 +121,20 @@ export function resolveSystemRunApprovalRequestContext(params: {
     ? (normalizedPlan.commandPreview ?? normalizeNonEmptyString(fallbackCommand))
     : null;
   const commandPreview = preview && preview !== commandText ? preview : null;
-  const plan = normalizedPlan ? { ...normalizedPlan, commandPreview } : null;
+  const cwd = normalizedPlan?.cwd ?? normalizeNonEmptyString(params.cwd);
+  const agentId = normalizedPlan?.agentId ?? normalizeNonEmptyString(params.agentId);
+  const sessionKey = normalizedPlan?.sessionKey ?? normalizeNonEmptyString(params.sessionKey);
+  const plan = normalizedPlan
+    ? { ...normalizedPlan, commandPreview, cwd, agentId, sessionKey }
+    : null;
   return {
     plan,
     commandArgv: plan?.argv ?? (fallbackArgv.length > 0 ? fallbackArgv : undefined),
     commandText,
     commandPreview,
-    cwd: plan?.cwd ?? normalizeNonEmptyString(params.cwd),
-    agentId: plan?.agentId ?? normalizeNonEmptyString(params.agentId),
-    sessionKey: plan?.sessionKey ?? normalizeNonEmptyString(params.sessionKey),
+    cwd,
+    agentId,
+    sessionKey,
   };
 }
 

@@ -132,7 +132,7 @@ export function inspectSharedAuthStoreOwnership(
   );
 }
 
-/** Update the process-stable cache after this process commits the ownership row. */
+/** Install a committed shared-store ownership fact without rereading SQLite. */
 export function noteCommittedSharedAuthStoreOwnership(
   ownership: SharedAuthStoreOwnership,
   env: NodeJS.ProcessEnv = process.env,

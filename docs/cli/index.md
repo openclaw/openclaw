@@ -55,7 +55,7 @@ Place command-specific options after their command name, for example `openclaw s
 
 Unknown root options fail with an option error and a help hint instead of starting onboarding or the TUI.
 
-A named `--profile` replaces canonical state and config paths inherited from
+A named `--profile` replaces standard state and config paths inherited from
 another profile, including a running Gateway service. Explicitly customized
 state directories and config paths remain unchanged.
 
@@ -100,6 +100,10 @@ also record the accepted `runId` and `origin: "gateway"` beside the envelope, so
 scripts can report the in-flight run. Failure messages are sanitized. Human-readable
 diagnostics may also be written to stderr, so scripts should parse stdout and still
 check the exit status.
+
+Onboarding and setup failures retain `phase` and the top-level `message` beside
+the envelope. Use `error.message` for the shared failure description and `phase`
+for onboarding-specific recovery.
 
 ## Color palette
 

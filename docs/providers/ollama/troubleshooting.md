@@ -53,9 +53,8 @@ sidebarTitle: "Troubleshooting"
 
   <Accordion title="Ollama not detected">
     Confirm Ollama is running and is in the agent's model scope. For ambient
-    localhost discovery, set `OLLAMA_API_KEY` (or an auth profile). A nonempty
-    manual model list skips discovery; an explicit self-hosted endpoint with
-    `models: []` does not:
+    localhost discovery, set `OLLAMA_API_KEY` (or an auth profile). An explicit
+    self-hosted endpoint is discovered whether or not it lists models:
 
     ```bash
     ollama serve
@@ -124,6 +123,35 @@ sidebarTitle: "Troubleshooting"
 
     If a small local model still fails on tool schemas, set
     `compat.supportsTools: false` on that model entry and retest.
+
+  </Accordion>
+
+  <Accordion title="Repeated tool errors stop the turn">
+    With `tools.toolSearch` unset, embedded runs using native local Ollama expose
+    policy-approved `web_search` and `web_fetch` directly. Explicit Tool Search
+    settings keep their configured behavior. Direct exposure does not enable a
+    denied tool or configure a web-search provider.
+
+    OpenClaw stops after three consecutive identical failures for the same tool
+    and arguments, including repeated unknown tool IDs. This protection is always
+    active; enabling `tools.loopDetection` is not required.
+
+    Ollama 0.40's generic parser can mistake a chat-template marker for an
+    advertised tool name. Tool Search uses the collision-free `dispatch_action`
+    name across providers, with the same name in instructions, requests, and
+    new session history. It no longer needs an `openclaw_tool_call` wire alias.
+    Directly exposed names that still collide, such as `ls`, `name`, and
+    `function`, retain transport-only aliases such as `openclaw_ls`. Execution
+    and session history keep those tools' original names.
+
+    These remaining aliases cover native Ollama and the Ollama plugin's identified
+    OpenAI-compatible chat-completions route. Other providers are unchanged.
+    Custom Ollama templates with different markers may need separate diagnosis.
+
+    Check the arguments in the recorded error. If the model repeatedly invents
+    tool names or cannot use the exposed schemas, switch to a model with native
+    tool calling and start a new turn. Changed errors and successful retries
+    reset the count. See [Tool-loop detection](/tools/loop-detection).
 
   </Accordion>
 

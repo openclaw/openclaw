@@ -1,5 +1,8 @@
 /** Collects core config secret refs during runtime preparation. */
-import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import {
@@ -49,73 +52,64 @@ type ConfigCollectorParams = {
   context: ResolverContext;
 };
 
-function collectModelProviderAssignments(params: {
-  providers: Record<string, ProviderLike>;
+function collectModelOrSkillAssignments(params: {
+  entries: Record<string, ProviderLike>;
+  kind: "model" | "skill";
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
   const collect = createConfigSecretInputCollector(params);
-  for (const [providerId, provider] of Object.entries(params.providers)) {
-    const providerIsActive = provider.enabled !== false;
-    const providerPath = appendConfigPathSegment("models.providers", providerId);
-    const owner = {
-      ownerKind: "provider",
-      ownerId: normalizeOptionalLowercaseString(providerId) ?? providerId,
-      requiredForGateway: false,
-      disposition: "isolate",
-      contract: provider,
-    } satisfies SecretAssignmentOwner;
+  const isModel = params.kind === "model";
+  const pathPrefix = isModel ? "models.providers" : "skills.entries";
+  for (const [id, entry] of Object.entries(params.entries)) {
+    const active = entry.enabled !== false;
+    const entryPath = appendConfigPathSegment(pathPrefix, id);
     const activity = {
-      active: providerIsActive,
-      inactiveReason: "provider is disabled.",
-      owner,
+      active,
+      inactiveReason: isModel ? "provider is disabled." : "skill entry is disabled.",
+      owner: {
+        ownerKind: isModel ? "provider" : "capability",
+        // Skill identity is also consumed by prompt filtering and env injection.
+        ownerId: isModel ? (normalizeOptionalLowercaseString(id) ?? id) : `skill:${id}`,
+        requiredForGateway: false,
+        disposition: "isolate",
+        contract: entry,
+      } satisfies SecretAssignmentOwner,
     };
-    collect(provider, "apiKey", `${providerPath}.apiKey`, activity);
-    const headers = isRecord(provider.headers) ? provider.headers : undefined;
+    const usesManagedLocalService =
+      isModel && params.context.managedSyntheticAuthProviders?.has(normalizeProviderId(id));
+    collect(entry, "apiKey", `${entryPath}.apiKey`, {
+      ...activity,
+      active: active && !usesManagedLocalService,
+      inactiveReason: usesManagedLocalService
+        ? "managed local services use provider-owned authentication."
+        : activity.inactiveReason,
+    });
+    if (!isModel) {
+      continue;
+    }
+    const headers = isRecord(entry.headers) ? entry.headers : undefined;
     if (headers) {
       for (const headerKey of Object.keys(headers)) {
         collect(
           headers,
           headerKey,
-          appendConfigPathSegment(`${providerPath}.headers`, headerKey),
+          appendConfigPathSegment(`${entryPath}.headers`, headerKey),
           activity,
         );
       }
     }
 
-    const request = isRecord(provider.request) ? provider.request : undefined;
+    const request = isRecord(entry.request) ? entry.request : undefined;
     if (request) {
       collectProviderRequestAssignments({
         request,
-        pathPrefix: `${providerPath}.request`,
+        pathPrefix: `${entryPath}.request`,
         defaults: params.defaults,
         context: params.context,
         ...activity,
       });
     }
-  }
-}
-
-function collectSkillAssignments(params: {
-  entries: Record<string, SkillEntryLike>;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
-  const collect = createConfigSecretInputCollector(params);
-  for (const [skillKey, entry] of Object.entries(params.entries)) {
-    collect(entry, "apiKey", `${appendConfigPathSegment("skills.entries", skillKey)}.apiKey`, {
-      active: entry.enabled !== false,
-      inactiveReason: "skill entry is disabled.",
-      // Keep this id aligned with isSkillSecretOwnerUnavailable so a failed key
-      // removes only its owning skill from prompts and runtime env injection.
-      owner: {
-        ownerKind: "capability",
-        ownerId: `skill:${skillKey}`,
-        requiredForGateway: false,
-        disposition: "isolate",
-        contract: entry,
-      },
-    });
   }
 }
 
@@ -458,10 +452,30 @@ export function collectCoreConfigAssignments(params: {
   context: ResolverContext;
   agentId?: string;
 }): void {
+  const database = params.config.database;
+  if (database?.postgres) {
+    createConfigSecretInputCollector(params)(
+      database.postgres,
+      "connection",
+      "database.postgres.connection",
+      {
+        active: database.engine === "postgres",
+        inactiveReason: "database.engine is not postgres.",
+        owner: {
+          ownerKind: "gateway",
+          ownerId: "database",
+          requiredForGateway: true,
+          disposition: "fail-closed",
+          contract: database,
+        },
+      },
+    );
+  }
   const providers = params.config.models?.providers as Record<string, ProviderLike> | undefined;
   if (providers) {
-    collectModelProviderAssignments({
-      providers,
+    collectModelOrSkillAssignments({
+      entries: providers,
+      kind: "model",
       defaults: params.defaults,
       context: params.context,
     });
@@ -469,8 +483,9 @@ export function collectCoreConfigAssignments(params: {
 
   const skillEntries = params.config.skills?.entries as Record<string, SkillEntryLike> | undefined;
   if (skillEntries) {
-    collectSkillAssignments({
+    collectModelOrSkillAssignments({
       entries: skillEntries,
+      kind: "skill",
       defaults: params.defaults,
       context: params.context,
     });

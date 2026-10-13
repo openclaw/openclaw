@@ -40,7 +40,6 @@ import {
   normalizeStringEntries,
   readNonEmptyStringPreservingWhitespace,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeLineAllowEntry } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { resolveLineMentionStrippedText } from "./mentions.js";
@@ -108,29 +107,14 @@ export function getLineSourceInfo(source: EventSource): LineSourceInfo {
   return { userId, groupId, roomId, isGroup };
 }
 
-function buildPeerId(source: EventSource): string {
-  if (!source) {
-    return "unknown";
-  }
-  const groupKey =
-    normalizeOptionalString(source.type === "group" ? source.groupId : undefined) ??
-    normalizeOptionalString(source.type === "room" ? source.roomId : undefined);
-  if (groupKey) {
-    return groupKey;
-  }
-  if (source.type === "user" && source.userId) {
-    return source.userId;
-  }
-  return "unknown";
-}
-
 export async function prepareLineInboundRoute(params: {
   source: EventSource;
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
 }): Promise<PreparedLineInboundRoute> {
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(params.source);
-  const peerId = buildPeerId(params.source);
+  const peerId =
+    normalizeOptionalString(groupId ?? roomId) ?? (!isGroup && userId ? userId : "unknown");
   const routeInput = {
     channel: "line",
     accountId: params.account.accountId,
@@ -440,15 +424,12 @@ async function finalizeLineInboundContext<Event extends MessageEvent | PostbackE
     sessionKey: params.route.sessionKey,
   });
   if (shouldLogVerbose()) {
-    const preview = truncateUtf16Safe(body, 200).replace(/\n/g, "\\n");
     const mediaInfo =
       params.verboseLog.kind === "inbound" && (params.verboseLog.mediaCount ?? 0) > 1
         ? ` mediaCount=${params.verboseLog.mediaCount}`
         : "";
     const label = params.verboseLog.kind === "inbound" ? "line inbound" : "line postback";
-    logVerbose(
-      `${label}: from=${ctxPayload.From} len=${body.length}${mediaInfo} preview="${preview}"`,
-    );
+    logVerbose(`${label}: from=${ctxPayload.From} len=${body.length}${mediaInfo}`);
   }
 
   return {

@@ -79,6 +79,45 @@ function displayParser(handlers: ReturnType<typeof createCliEventHandlers>) {
 }
 
 describe("cli tool result events", () => {
+  it.each([undefined, "side-question"] as const)(
+    "keeps input progress separate from execution in %s mode",
+    (executionMode) => {
+      const context = buildContext(`input-${executionMode ?? "normal"}`);
+      context.params.executionMode = executionMode;
+      context.params.onExecutionPhase = vi.fn();
+      const tracking = buildToolTracking();
+      const { handlers, events, dispose } = eventFixture(context, tracking);
+      try {
+        handlers.emitCliToolInputDelta({
+          toolCallId: "write",
+          name: "write",
+          diff: { added: 2, removed: 0 },
+        });
+        handlers.finalizeParsedTools();
+        expect(context.params.onExecutionPhase).not.toHaveBeenCalled();
+        expect(tracking.handleCliToolUseStart).not.toHaveBeenCalled();
+        expect(handlers.hasObservedCliActivity()).toBe(true);
+        expect(events.map(({ stream, data }) => ({ stream, data }))).toEqual(
+          executionMode
+            ? []
+            : [
+                {
+                  stream: "tool",
+                  data: {
+                    phase: "input_delta",
+                    toolCallId: "write",
+                    name: "write",
+                    diff: { added: 2, removed: 0 },
+                  },
+                },
+              ],
+        );
+      } finally {
+        dispose();
+      }
+    },
+  );
+
   it.each([
     ["poll", "kill", false],
     ["kill", "poll", true],

@@ -2,13 +2,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { twitchPlugin } from "../extensions/twitch/api.js";
 import { isDeliveredMessagingToolResult } from "../src/agents/embedded-agent-message-tool-source-reply.js";
-import { installMessageToolOnlyTerminalHook } from "../src/agents/embedded-agent-runner/run/message-tool-terminal.js";
+import { installMessageToolTerminalHook } from "../src/agents/embedded-agent-runner/run/message-tool-terminal.js";
 import type { Agent, AfterToolCallContext } from "../src/agents/runtime/index.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import type { TrustedMessageAuditEvent } from "../src/audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest } from "../src/audit/message-audit-events.test-support.js";
 import { buildThreadingToolContext } from "../src/auto-reply/reply/agent-runner-utils.js";
 import { formatMessageCliText } from "../src/commands/message-format.js";
+import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import { loadUnfinishedDeliveries } from "../src/infra/outbound/delivery-queue-storage.js";
 import { runMessageAction } from "../src/infra/outbound/message-action-runner.js";
 import { sendMessage } from "../src/infra/outbound/message.js";
@@ -96,6 +97,7 @@ describe("Twitch message-tool delivery", () => {
                 },
           },
         };
+        setRuntimeConfigSnapshot(cfg);
         const sent = expected.length > 0;
         const custodyAtSend: Awaited<ReturnType<typeof loadUnfinishedDeliveries>>[] = [];
         manager.sendMessage.mockImplementation(async () => {
@@ -204,7 +206,7 @@ describe("Twitch message-tool delivery", () => {
 
           const agent = {} as Agent;
           const delivered = vi.fn();
-          installMessageToolOnlyTerminalHook({
+          installMessageToolTerminalHook({
             agent,
             config: cfg,
             currentProvider: "twitch",
@@ -275,6 +277,7 @@ describe("Twitch core send defaults and failures", () => {
           },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       setActivePluginRegistry(
         createTestRegistry([{ pluginId: "twitch", source: "test", plugin: twitchPlugin }]),
       );
@@ -314,6 +317,7 @@ describe("Twitch core send defaults and failures", () => {
           },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       setActivePluginRegistry(
         createTestRegistry([{ pluginId: "twitch", source: "test", plugin: twitchPlugin }]),
       );

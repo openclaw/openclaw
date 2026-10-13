@@ -10,11 +10,17 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import {
   connectUserModelAccount,
   readSelectedUserModelAccount,
@@ -29,6 +35,7 @@ import { createOAuthManager } from "./oauth-manager.js";
 import { isSettledOAuthRefreshFailure, OAuthManagerRefreshError } from "./oauth-refresh-failure.js";
 import { isOAuthRefreshFence, isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
+import { withPersonalAuthProfileStore } from "./personal-store.js";
 import { removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
@@ -38,7 +45,21 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "./store-runtime.js";
+import { captureAuthProfileStorePersistenceSnapshot } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
+
+function retainPersistedCredential(agentDir: string, selectedProfileId: string) {
+  const shared = openOpenClawStateDatabase();
+  const { databasePath } = captureAuthProfileStorePersistenceSnapshot(agentDir).owner;
+  const source = readDatabasePathIdentitySync(databasePath);
+  const authority = captureAuthProfileCredentialAuthority(
+    captureOpenClawStateWorkerContext({ path: shared.path }),
+    { databasePath, identity: `${source.key}:${source.birthtime ?? ""}` },
+    selectedProfileId,
+  );
+  authority.observe(loadPersistedAuthProfileStore(agentDir)?.profiles[selectedProfileId]);
+  return authority;
+}
 
 function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
   return {
@@ -214,11 +235,19 @@ describe("createOAuthManager", () => {
         },
       });
 
-      const resolved = await manager.resolveOAuthAccess({
-        store: ensureAuthProfileStore(agentDir, { profileId }),
-        profileId,
-        credential,
-        agentDir,
+      const resolved = await withPersonalAuthProfileStore(profileId, async (personalStore) => {
+        await personalStore.read();
+        const readPrepared = personalStore.readCurrentCredential;
+        const result = await manager.resolveOAuthAccess({
+          personalStore,
+          store: ensureAuthProfileStore(agentDir, { profileId }),
+          profileId,
+          credential,
+          agentDir,
+        });
+        expect(readPrepared).toThrow("Personal model account authority is unavailable");
+        expect(personalStore.readCurrentCredential()).toEqual(reconnected);
+        return result;
       });
       expect(resolved?.apiKey).toBe("reconnected-access");
       expect(readUserModelAuthProfile(profileId)?.credential).toEqual(reconnected);
@@ -242,6 +271,7 @@ describe("createOAuthManager", () => {
       });
       saveCredential(profileId, subCredential, agentDir);
       saveCredential(profileId, mainCredential, mainAgentDir);
+      const authority = retainPersistedCredential(mainAgentDir, profileId);
       externalAuthTesting.setResolveExternalAuthProfilesForTest(() => [
         {
           profileId,
@@ -257,6 +287,8 @@ describe("createOAuthManager", () => {
 
       const refreshCredential = vi.fn(async (credential: OAuthCredential) => {
         expect(credential.access).toBe("expired-main-access");
+        const pending = authority.readCurrentCredential();
+        expect(pending?.type === "oauth" && isPendingOAuthRefreshFence(pending)).toBe(true);
         return {
           access: "rotated-main-access",
           refresh: "rotated-main-refresh",
@@ -281,6 +313,10 @@ describe("createOAuthManager", () => {
       if (!result) {
         throw new Error("Expected refreshed main-store OAuth result");
       }
+      expect(authority.readCurrentCredential()).toMatchObject({
+        access: "rotated-main-access",
+        refresh: "rotated-main-refresh",
+      });
       expect(result.apiKey).toBe("rotated-main-access");
       expect(result.credential.access).toBe("rotated-main-access");
       expect(result.credential.refresh).toBe("rotated-main-refresh");
@@ -551,12 +587,13 @@ describe("createOAuthManager", () => {
           accountId: "acct-123",
         });
         saveCredential(profileId, managedCredential, agentDir);
+        const authority = retainPersistedCredential(agentDir, profileId);
         let refreshRejected = false;
         const recoveryError = new Error(`OAuth main recovery ${recovery} failed`);
-        const readMain = authProfileStoreRuntime.ensureAuthProfileStoreWithoutExternalProfiles;
+        const readMain = authProfileStoreRuntime.ensureAuthProfileStoreWithoutExternalProfilesAsync;
         const recoveryRead = vi
-          .spyOn(authProfileStoreRuntime, "ensureAuthProfileStoreWithoutExternalProfiles")
-          .mockImplementation((selectedDir, options) => {
+          .spyOn(authProfileStoreRuntime, "ensureAuthProfileStoreWithoutExternalProfilesAsync")
+          .mockImplementation(async (selectedDir, options) => {
             if (refreshRejected && selectedDir === undefined) {
               if (recovery === "main validation") {
                 return {
@@ -574,6 +611,8 @@ describe("createOAuthManager", () => {
             return readMain(selectedDir, options);
           });
         const refreshCredential = vi.fn(() => {
+          const pending = authority.readCurrentCredential();
+          expect(pending?.type === "oauth" && isPendingOAuthRefreshFence(pending)).toBe(true);
           refreshRejected = true;
           // oxlint-disable-next-line prefer-promise-reject-errors -- providers can reject with unknown non-Error values.
           return Promise.reject(undefined);
@@ -625,6 +664,7 @@ describe("createOAuthManager", () => {
         expect(fenced.refresh).toMatch(
           /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:refresh:[a-f0-9]{64}$/,
         );
+        expect(authority.readCurrentCredential()).toEqual(fenced);
         expect(JSON.stringify(fenced)).not.toContain("managed-expired-access");
         expect(JSON.stringify(fenced)).not.toContain("managed-refresh");
         if (recovery === "settled") {

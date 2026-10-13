@@ -168,12 +168,12 @@ describe("tool name allowlists", () => {
       }),
     );
 
-    expect(visibleAllowlist).toEqual(["exec", TOOL_CALL_RAW_TOOL_NAME]);
+    expect(visibleAllowlist).toEqual([TOOL_CALL_RAW_TOOL_NAME, "exec"]);
     expect(replayAllowlist).toEqual([
       "client_pick_file",
+      TOOL_CALL_RAW_TOOL_NAME,
       "exec",
       "fake_plugin_tool",
-      TOOL_CALL_RAW_TOOL_NAME,
     ]);
   });
 });

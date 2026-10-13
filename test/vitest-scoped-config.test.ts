@@ -325,6 +325,9 @@ describe("scoped vitest configs", () => {
     expect(testConfig.runner).toBeUndefined();
     expect(testConfig.dir).toBe(process.cwd());
     expect(testConfig.include).toEqual(["src/infra/**/*.test.ts", ...databaseWorkerCoreTestFiles]);
+    const imageAuthFile = "src/agents/tools/image-generate-tool.auth.test.ts";
+    expect(testConfig.include).toContain(imageAuthFile);
+    expect(agentVitestProjectOwners.tools.exclude).toContain(imageAuthFile);
     const recoveryFile = "src/wizard/setup.inference-recovery.integration.test.ts";
     expect(testConfig.include?.filter((file) => file === recoveryFile)).toEqual([recoveryFile]);
     expect(requireTestConfig(defaultWizardConfig).exclude).toContain(

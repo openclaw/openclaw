@@ -71,7 +71,7 @@ export type GitWorktreeOperations = {
     output: { paths: string[]; estimatedBytes: number };
   };
   "worktree.git-size": {
-    input: { repoRoot: string; ref: string; replacementRefBase?: string };
+    input: { repoRoot: string; ref: string; replacementRefBase?: string; preparationKey?: string };
     output: number;
   };
   "worktree.checkout-transition-size": {

@@ -22,9 +22,11 @@ import {
   transcriptLibrarySession as session,
 } from "./library.store.test-support.js";
 import { readTranscriptLibraryStatus } from "./status.js";
+import { deriveMeetingTranscriptSummaryColumns } from "./store-columns.js";
 import {
   cursorScope,
   encodeCursor,
+  iterateTranscriptExport,
   queryTranscriptReadEntries,
   readLatestTranscriptEntry,
   readTranscriptEntry,
@@ -84,6 +86,20 @@ function observeArchiveReads(
   vi.spyOn(store, "readLibraryEntry").mockImplementation(async (params) =>
     readTranscriptLibraryEntry(database, params),
   );
+  vi.spyOn(store, "streamExport").mockImplementation(async (selector, includeNotes, consume) => {
+    const rows = iterateTranscriptExport(database, selector, includeNotes);
+    try {
+      for (let step = rows.next(); ; step = rows.next()) {
+        if (step.done) {
+          return step.value;
+        }
+        await consume([step.value]);
+      }
+    } catch (error) {
+      rows.throw(error);
+      throw error;
+    }
+  });
   vi.spyOn(store, "readSummarySnapshot").mockImplementation(async (descriptor, maxUtterances) =>
     readTranscriptSummarySnapshot(database, descriptor, maxUtterances),
   );
@@ -191,6 +207,7 @@ describe("transcript library SQLite query budgets", () => {
       await store.appendUtteranceForSession(later, { text: "Summarize this speech" });
       const db = database();
       seedExportBookkeeping(db);
+      const malformedSummaryColumns = deriveMeetingTranscriptSummaryColumns("{malformed");
       executeSqliteQuerySync(
         db,
         meetingTranscriptDb(db)
@@ -200,6 +217,7 @@ describe("transcript library SQLite query budgets", () => {
               session_id: target.sessionId,
               session_started_at: target.startedAt,
               summary_json: "{malformed",
+              overview: malformedSummaryColumns.overview,
               utterance_count: 0,
             })),
           ),
@@ -450,11 +468,12 @@ describe("transcript library SQLite query budgets", () => {
     };
     await store.writeSummary({ ...summary, transcript: [] }, target);
     const db = database();
+    const summaryJson = JSON.stringify(summary);
     executeSqliteQuerySync(
       db,
       meetingTranscriptDb(db)
         .updateTable("meeting_transcript_summaries")
-        .set({ summary_json: JSON.stringify(summary) })
+        .set({ summary_json: summaryJson, ...deriveMeetingTranscriptSummaryColumns(summaryJson) })
         .where("session_id", "=", target.sessionId)
         .where("session_started_at", "=", target.startedAt),
     );

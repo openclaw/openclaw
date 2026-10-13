@@ -12,7 +12,7 @@ read_when:
 
 Use when Gateway startup fails with `Invalid config` or hot reload logs say it skipped an invalid edit.
 
-Startup automatically migrates deterministic legacy keys in eligible single-file
+Startup automatically migrates legacy keys with known replacements in eligible single-file
 configs and continues only if the entire result validates, including plugins. It
 keeps the previous config in the `.bak` ring. Configs using `$include`, Nix-managed
 configs, configs written by a newer version, and configs that still fail validation

@@ -293,33 +293,24 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         channel: "matrix",
         accountId: _route.accountId,
       });
+      const sendTyping = async (isTyping: boolean) => {
+        const { sendTypingMatrix } = await loadMatrixSendModule();
+        await sendTypingMatrix(roomId, isTyping, { client });
+      };
+      const onTypingError = (action: "start" | "stop", error: unknown) => {
+        logTypingFailure({
+          log: logVerboseMessage,
+          channel: "matrix",
+          action,
+          target: roomId,
+          error,
+        });
+      };
       const typingCallbacks = createTypingCallbacks({
-        start: async () => {
-          const { sendTypingMatrix } = await loadMatrixSendModule();
-          await sendTypingMatrix(roomId, true, { client });
-        },
-        stop: async () => {
-          const { sendTypingMatrix } = await loadMatrixSendModule();
-          await sendTypingMatrix(roomId, false, { client });
-        },
-        onStartError: (err) => {
-          logTypingFailure({
-            log: logVerboseMessage,
-            channel: "matrix",
-            action: "start",
-            target: roomId,
-            error: err,
-          });
-        },
-        onStopError: (err) => {
-          logTypingFailure({
-            log: logVerboseMessage,
-            channel: "matrix",
-            action: "stop",
-            target: roomId,
-            error: err,
-          });
-        },
+        start: () => sendTyping(true),
+        stop: () => sendTyping(false),
+        onStartError: (err) => onTypingError("start", err),
+        onStopError: (err) => onTypingError("stop", err),
       });
       // Matrix drafts are provider-visible before outbound modifiers run. Keep them off when a
       // hook can rewrite or cancel so the original payload cannot escape the delivery gate.
@@ -563,16 +554,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
       const { dispatchResult } = turnResult;
       const { queuedFinal } = dispatchResult;
-      if (draftController.previewLifecycle.finalFailed) {
+      const failedDeliveryKind = draftController.previewLifecycle.finalFailed
+        ? "final"
+        : !queuedFinal && replyDispatcher.nonFinalReplyDeliveryFailed()
+          ? "non-final"
+          : undefined;
+      if (failedDeliveryKind) {
         logVerboseMessage(
-          `matrix: final reply delivery failed room=${roomId} id=${messageId}; keeping replay committed`,
-        );
-        await commitInboundEventIfClaimed();
-        return;
-      }
-      if (!queuedFinal && replyDispatcher.nonFinalReplyDeliveryFailed()) {
-        logVerboseMessage(
-          `matrix: non-final reply delivery failed room=${roomId} id=${messageId}; keeping replay committed`,
+          `matrix: ${failedDeliveryKind} reply delivery failed room=${roomId} id=${messageId}; keeping replay committed`,
         );
         await commitInboundEventIfClaimed();
         return;

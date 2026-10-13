@@ -5,7 +5,7 @@ import { afterEach, expect, it } from "vitest";
 // Control UI E2E tests cover session-list event scope through the Gateway WebSocket.
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -89,6 +89,8 @@ suite.define(() => {
     await gateway.deferNext("sessions.list", allAgentsQuery);
     const requestsBeforeEvent = await gateway.getRequests("sessions.list");
 
+    await currentPage.clock.install();
+    await pauseVirtualClock(currentPage);
     await gateway.emitGatewayEvent("sessions.changed", {
       sessionKey: "agent:local:hidden",
       reason: "create",
@@ -99,11 +101,14 @@ suite.define(() => {
       archived: false,
     });
 
+    // Cross the full event window while keeping the response explicitly deferred.
+    await currentPage.clock.runFor(5_000);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(requestsBeforeEvent.length);
     expect((await gateway.getRequests("sessions.list")).at(-1)?.params).toEqual(allAgentsQuery);
     expect(await currentPage.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
+    await currentPage.clock.resume();
     await gateway.resolveDeferred("sessions.list", {
       count: 1,
       defaults: { contextTokens: null, model: null, modelProvider: null },
@@ -218,7 +223,7 @@ suite.define(() => {
       includeLastMessage: true,
       includeUnknown: true,
       limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      rowMode: "compact",
+      rowMode: "sidebar",
       source: "sidebar",
     });
     expect

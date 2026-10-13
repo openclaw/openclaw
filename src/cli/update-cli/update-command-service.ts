@@ -17,6 +17,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -39,6 +40,7 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 import {
   recordServiceReconciliationWarning,
   recordServiceReconciliationWarnings,
+  recordServiceTimedStep,
 } from "./update-command-result.js";
 import {
   DEFINITION_DENIAL,
@@ -226,6 +228,7 @@ export async function maybeRestartService(params: {
     assertCurrent,
     onWarnings: (warnings: string[]) =>
       recordServiceReconciliationWarnings(params.result, warnings, run, assertCurrent),
+    onTimedStep: (step: UpdateStepResult) => recordServiceTimedStep(params.result, step, run),
   };
   const verdict = activation.serviceUpdateVerdict;
   let preserveDefinition =
@@ -244,6 +247,8 @@ export async function maybeRestartService(params: {
       (activation.refreshServiceEnv ||
         activation.serviceInstallEnv === null ||
         activation.requireRunningServiceAfterRestart));
+  const serviceUsesUpdatedRoot = () =>
+    gatewayServiceCommandUsesRoot({ root: activation.result.root, env: activation.serviceEnv });
   if (preserveDefinition && !params.definitionRecovery?.backup) {
     defaultRuntime.error(
       "Gateway service definition left unchanged; ask its deployment owner to repair stale metadata if needed.",
@@ -395,8 +400,9 @@ export async function maybeRestartService(params: {
           env: activation.serviceEnv,
         });
         assertReadinessCurrent();
-        if (recovery.launchAgentRecovery?.attempted) {
-          activationAccepted = recovery.launchAgentRecovery.recovered;
+        const nativeRecovery = recovery.launchAgentRecovery;
+        if (nativeRecovery?.status === "recovered" || nativeRecovery?.status === "failed") {
+          activationAccepted = nativeRecovery.status === "recovered";
         }
         return recovery;
       },
@@ -571,13 +577,7 @@ export async function maybeRestartService(params: {
           updatedInstallRestartNeedsServiceRootProof = !canVerifyUpdatedGatewayByVersion;
         }
       }
-      if (
-        requiresInstallRootRefresh &&
-        (await gatewayServiceCommandUsesRoot({
-          root: activation.result.root,
-          env: activation.serviceEnv,
-        })) !== true
-      ) {
+      if (requiresInstallRootRefresh && (await serviceUsesUpdatedRoot()) !== true) {
         recordServiceReconciliationWarning(
           activation.result,
           activation.serviceEnv,
@@ -615,13 +615,7 @@ export async function maybeRestartService(params: {
       );
       restarted = true;
       activationAccepted = restart === "accepted";
-      if (
-        updatedInstallRestartNeedsServiceRootProof &&
-        (await gatewayServiceCommandUsesRoot({
-          root: activation.result.root,
-          env: activation.serviceEnv,
-        })) !== true
-      ) {
+      if (updatedInstallRestartNeedsServiceRootProof && (await serviceUsesUpdatedRoot()) !== true) {
         if (!activation.opts.json) {
           defaultRuntime.log(
             theme.warn("Gateway service did not point at the updated install after restart."),

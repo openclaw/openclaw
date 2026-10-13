@@ -66,6 +66,12 @@ Client replies with `connect`:
 
 Gateway responds with `hello-ok`:
 
+The default connect deadline is 30 seconds, allowing authentication and profile
+preparation to finish on busy or slower hosts. It is a total deadline, not an idle
+timeout: progress does not extend it. The client connect watchdog and server
+preauth timeout share this default. Operators can override the server budget with
+`OPENCLAW_HANDSHAKE_TIMEOUT_MS`; configure connecting clients with the same budget.
+
 ```json
 {
   "type": "res",

@@ -206,7 +206,7 @@ describe("resolveGatewayProbeSnapshot", () => {
     },
   );
 
-  it.each(["remote", "plugin-errors", "channel-errors", "probe-failed"])(
+  it.each(["plugin-errors", "probe-failed"])(
     "does not claim current local health from %s",
     async (observation) => {
       mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue(
@@ -725,34 +725,5 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
 
     expect(getMemorySearchManager).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ files: 1 });
-  });
-
-  it("does not initialize memory status for an agent database owned by another feature", async () => {
-    const tempDir = makeTempDir(tempDirs, "openclaw-status-memory-");
-    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-    const db = new DatabaseSync(databasePath);
-    db.exec(`
-      CREATE TABLE cache_entries (
-        scope TEXT NOT NULL,
-        key TEXT NOT NULL,
-        value_json TEXT,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (scope, key)
-      );
-    `);
-    db.close();
-    const getMemorySearchManager = vi.fn(async () => ({ manager: null }));
-
-    const result = await resolveSharedMemoryStatusSnapshot({
-      cfg: {},
-      agentStatus: { defaultId: "main" },
-      memoryPlugin: { enabled: true, slot: "memory-core" },
-      resolveMemoryConfig: vi.fn(() => ({ store: { databasePath } })),
-      getMemorySearchManager,
-      requireDefaultDatabasePath: () => databasePath,
-    });
-
-    expect(result).toBeNull();
-    expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,8 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { BroadcastChannel, getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -55,6 +58,75 @@ function execute(source: string, overrides: Partial<CodeModeExecutorStartInput> 
 }
 
 describe("Node Code Mode executor", () => {
+  it("reports heap exhaustion after dispatch with the native cause and recovers", async () => {
+    // Vitest runs inside a Worker whose inherited heap flags can override resourceLimits.
+    // A standalone process exercises native OOM without changing the test runner's V8 flags.
+    const probe = `
+      import { nodeCodeModeExecutor } from ${JSON.stringify(new URL("./code-mode-node.ts", import.meta.url).href)};
+      import { registerSealedRuntimeProcessEntrypoint } from ${JSON.stringify(new URL("../infra/runtime-process-url.ts", import.meta.url).href)};
+      import { LegacyPluginSdkResourceHost } from ${JSON.stringify(new URL("../plugins/legacy-sdk-resource-host.ts", import.meta.url).href)};
+      import { createTestGatewayScheduler } from ${JSON.stringify(new URL("../test-utils/gateway-scheduler-clock.ts", import.meta.url).href)};
+      registerSealedRuntimeProcessEntrypoint("codeModeNode", new URL(${JSON.stringify(runtimeProcess.resolveRuntimeProcessEntrypointUrl("codeModeNode").href)}));
+      const host = new LegacyPluginSdkResourceHost();
+      const scheduler = createTestGatewayScheduler();
+      host.bindScheduler(scheduler);
+      let boundaries = 0;
+      let failure;
+      try {
+        const config = ${JSON.stringify(config)};
+        const result = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config, catalog: [], namespaces: [],
+          source: "await yield_control(); const data = []; for (let i = 0; i < 2_000_000; i++) data.push({ i, value: String(i) }); return data.length;",
+        }, { timeoutMs: 7000, inlineHost: {
+          onBoundary: async (boundary, context) => {
+            boundaries++;
+            return { kind: "continue", timeoutMs: Math.min(1000, context.maxTimeoutMs), pendingRequests: [],
+              settledRequests: boundary.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })) };
+          },
+          onFailure: (error, phase, workerId) => {
+            failure = { code: error.cause?.code, stack: error.cause?.stack, phase, workerId };
+          },
+        } }));
+        const recovered = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config, catalog: [], namespaces: [], source: "return 42",
+        }, { timeoutMs: 7000 }));
+        console.log(JSON.stringify({ result, recovered, boundaries, failure }));
+      } finally {
+        await host.close();
+        await scheduler.stop();
+      }
+    `;
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+        "--input-type=module",
+        "-e",
+        probe,
+      ],
+      { env: { ...process.env, NODE_OPTIONS: "" }, timeout: 20_000 },
+    );
+    const observed: unknown = JSON.parse(stdout);
+    expect(observed).toMatchObject({
+      boundaries: 1,
+      result: {
+        status: "failed",
+        code: "runtime_unavailable",
+        error: expect.stringContaining("exhausted its 64 MiB JavaScript heap"),
+      },
+      failure: {
+        code: "ERR_WORKER_OUT_OF_MEMORY",
+        stack: expect.any(String),
+        phase: "host",
+        workerId: expect.stringMatching(/^code-mode-node:/),
+      },
+      recovered: { status: "completed", value: { json: "42" } },
+    });
+    expect(observed).toMatchObject({
+      result: { error: expect.stringContaining("Inspect any completed actions before retrying") },
+    });
+  });
   it.each(["alternating limits", "concurrent continuations"] as const)(
     "keeps workers warm across %s",
     async (scenario) => {

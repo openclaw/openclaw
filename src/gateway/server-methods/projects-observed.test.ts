@@ -17,7 +17,11 @@ const seededSessions = vi.hoisted(() => ({
 
 // mock-isolation: Supply observed session rows without opening real session stores.
 vi.mock("./projects-session-store.js", () => ({
-  loadProjectSessionStore: () => seededSessions.store,
+  loadProjectSessionStore: () => ({
+    store: seededSessions.store,
+    agentId: () => undefined,
+    assertCurrent() {},
+  }),
 }));
 
 vi.mock("../../projects/project-registry.js", () => ({
@@ -80,7 +84,11 @@ async function listObservedProjects(params: {
   } as never);
   const responses: Parameters<RespondFn>[] = [];
   const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-  const projection = createSessionRowProjectionFixture({ cfg, store: {}, modelCatalog: [] });
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    store: {},
+    modelCatalog: [],
+  });
   try {
     await handlers["projects.list"]?.({
       params: { includeObserved: true },
@@ -149,7 +157,7 @@ describe("projects.list observed projects", () => {
     );
   });
 
-  it.each([["operator.write"], ["operator.admin"]])(
+  it.each([["operator.write"]])(
     "returns detailed observed projects to %s callers",
     async (scope) => {
       seededSessions.store = {

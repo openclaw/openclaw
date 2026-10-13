@@ -89,6 +89,7 @@ it.each([
       },
       subagent: {
         complete: vi.fn<PluginRuntime["subagent"]["complete"]>(),
+        forkSession: vi.fn<PluginRuntime["subagent"]["forkSession"]>(),
         run: vi.fn<PluginRuntime["subagent"]["run"]>(),
         waitForRun: vi.fn<PluginRuntime["subagent"]["waitForRun"]>(),
         getSessionMessages: async () => ({ messages: [owner] }),

@@ -199,19 +199,15 @@ async function validateResetAuthChoice(params: {
       `Auth choice "${authChoice}" was not matched to a provider setup flow. Run ${formatCliCommand("openclaw onboard")} to choose interactively.`,
     );
   }
+  const providerLookup = {
+    config: params.baseConfig,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+    includeUntrustedWorkspacePlugins: false,
+  };
   const providerAuthChoices: Array<ProviderAuthChoiceMetadata & { providerAliases?: string[] }> = [
-    ...resolveManifestProviderAuthChoices({
-      config: params.baseConfig,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      includeUntrustedWorkspacePlugins: false,
-    }),
-    ...resolveProviderInstallCatalogEntries({
-      config: params.baseConfig,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      includeUntrustedWorkspacePlugins: false,
-    }),
+    ...resolveManifestProviderAuthChoices(providerLookup),
+    ...resolveProviderInstallCatalogEntries(providerLookup),
   ];
   const isGenericProviderChoice = GENERIC_PROVIDER_AUTH_CHOICES.includes(authChoice);
   const normalizedTokenProvider = normalizeTokenProviderInput(params.opts.tokenProvider);

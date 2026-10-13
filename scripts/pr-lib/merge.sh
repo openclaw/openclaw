@@ -92,9 +92,11 @@ verify_prior_ci_admin() {
   actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1
   proof=$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" verify "$MERGE_ADMIN_EVIDENCE" "$MERGE_REPO_NAME" "$pr" "$head" "$actor" "$PR_MAIN_SHA") || return 1
   review_ci=$(read_prepared_ci_failure) || return 1
+  # Full proofs (and retained outcomes containing them) travel over stdin, not
+  # one exec argument: large path inventories exceed Linux MAX_ARG_STRLEN.
   if [ "$(printf '%s\n' "$proof" | jq -r .changeKind)" = pre-existing-failure ]; then
-    [ -n "$review_ci" ] && printf '%s\n' "$review_ci" | jq -e --argjson proof "$proof" \
-      '.head == $proof.head and .runId == $proof.runId and .runAttempt == $proof.runAttempt' >/dev/null || {
+    [ -n "$review_ci" ] && printf '%s\n%s\n' "$review_ci" "$proof" | jq -se \
+      'select(length == 2) | .[1] as $proof | .[0] | .head == $proof.head and .runId == $proof.runId and .runAttempt == $proof.runAttempt' >/dev/null || {
       echo "Pre-existing CI admission requires matching failed-run attribution in the prepared review." >&2; return 1;
     }
   elif [ -n "$review_ci" ]; then
@@ -106,37 +108,6 @@ verify_prior_ci_admin() {
     return 1
   fi
   MERGE_PRIOR_CI_PROOF="$proof"
-}
-
-fetch_clawsweeper_review_comments() {
-  local pr="$1" repo_name="$2" repo_host="$3"
-  if ! CLAWSWEEPER_REVIEW_COMMENTS=$(pr_gh_plain issue-comments "$repo_name" "$repo_host" "$pr"); then
-    echo "ClawSweeper review gate failed: unable to read current issue comments." >&2
-    return 1
-  fi
-}
-
-validate_clawsweeper_review_comments() {
-  local pr="$1" head_sha="$2" evidence
-  if ! evidence=$(printf '%s\n' "$CLAWSWEEPER_REVIEW_COMMENTS" |
-    node "$script_parent_dir/pr-lib/clawsweeper-review-gate.mjs" "$pr" "$head_sha"); then
-    unset CLAWSWEEPER_REVIEW_COMMENTS
-    return 1
-  fi
-  unset CLAWSWEEPER_REVIEW_COMMENTS
-  CLAWSWEEPER_REVIEW_EVIDENCE="$evidence"
-  echo "ClawSweeper completed review: comment $(printf '%s\n' "$evidence" | jq -r .commentId), reviewed $(printf '%s\n' "$evidence" | jq -r .reviewedAt)"
-}
-
-require_clawsweeper_review() {
-  local pr="$1" head_sha="$2" repo_name="${3:-}" repo_host="${4:-}" repo_json
-  if [ -z "$repo_name" ] || [ -z "$repo_host" ]; then
-    repo_json=$(pr_gh_plain repo view --json nameWithOwner,url) || return 1
-    repo_name=$(printf '%s\n' "$repo_json" | jq -er '.nameWithOwner | select(type == "string" and length > 0)') || return 1
-    repo_host=$(printf '%s\n' "$repo_json" | jq -er '.url | capture("^https://(?<host>[^/]+)/").host') || return 1
-  fi
-  fetch_clawsweeper_review_comments "$pr" "$repo_name" "$repo_host" || return 1
-  validate_clawsweeper_review_comments "$pr" "$head_sha"
 }
 
 # Return 0 for relevant drift, 1 for unrelated drift, and 2 for failed evaluation.
@@ -218,6 +189,26 @@ verify_merge_candidate_tree() {
     echo "NO NET CHANGE: squash produces the current main tree. PR lifecycle is unresolved; no merge, comment, or cleanup. Inspect main history and PR intent."
     return 1
   fi
+}
+
+# A recalculated projection can change after main advances. Recheck the selected
+# route rather than treating its old projection as policy or changing routes.
+verify_merge_route_projection() {
+  local pr="$1" observation="$2" route="$3" allowed_status="not DIRTY"
+  if [ "${4:-false}" = true ] && ! printf '%s\n' "$observation" | jq -e '.pr.mergeable == "MERGEABLE" and .pr.mergeStateStatus == "CLEAN"' >/dev/null; then
+    merge_outcome_stop "qualified refusal recovery requires MERGEABLE/CLEAN immediate admission"; return 1
+  fi
+  if printf '%s\n' "$observation" | jq -e --arg route "$route" '
+    .pr | .mergeable == "MERGEABLE" and .mergeStateStatus != "UNKNOWN" and
+    (.isMergeQueueEnabled or
+      (.mergeStateStatus != "DIRTY" and
+       ($route != "immediate" or (.mergeStateStatus | IN("BLOCKED", "BEHIND") | not))))
+  ' >/dev/null; then
+    return 0
+  fi
+  [ "$route" != immediate ] || allowed_status="not BLOCKED|BEHIND|DIRTY"
+  merge_outcome_diagnose "$pr" "$observation" null "$allowed_status" "MERGEABLE"
+  merge_outcome_stop "selected merge route is blocked by policy, branch drift, or a dirty merge projection; inspect current PR state"
 }
 
 merge_verify() {
@@ -324,8 +315,6 @@ merge_verify() {
 
   fetch_pr_head "$pr" "$PREP_HEAD_SHA" "refs/heads/pr-$pr" "$json" || return 1
   json="$PR_HEAD_OBSERVATION"
-  require_clawsweeper_review "$pr" "$pr_head_sha" \
-    "${MERGE_REPO_NAME:-}" "${MERGE_REPO_HOST:-}" || return 1
   mark_pr_operation_side_effects_started || return 1
   if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
     verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
@@ -410,7 +399,8 @@ merge_verify() {
   if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
     # Only the independently qualified current CI failure may use the failure
     # variant. Other checks and the original prior-green route stay strict.
-    printf '%s\n' "$checks_json" | jq -e --argjson proof "$MERGE_PRIOR_CI_PROOF" 'all(.[]; .bucket == "pass" or
+    printf '%s\n%s\n' "$checks_json" "$MERGE_PRIOR_CI_PROOF" | jq -se '
+      select(length == 2) | .[1] as $proof | .[0] | all(.[]; .bucket == "pass" or
       (.name == "openclaw/ci-gate" and
         (if $proof.changeKind == "pre-existing-failure" then (.bucket == "fail" or .bucket == "cancel")
          else (.bucket == "pending" or .bucket == "skipping") end)))' >/dev/null || return 1
@@ -561,6 +551,9 @@ verify_merge_recovery_artifacts() (
       [ "$LOCAL_PREP_HEAD_SHA" = "$(pr_git rev-parse HEAD)" ] &&
       [ "$(pr_git rev-parse "$LOCAL_PREP_HEAD_SHA^{tree}")" = "$(pr_git rev-parse "$head^{tree}")" ] || return 1
     require_correction_publication_gates "$pr" "$LOCAL_PREP_HEAD_SHA" || return 1
+    local GATES_MODE=""
+    source .local/gates.env || return 1
+    [ "$GATES_MODE" != github_pending ] || [ "$qualified_pending_recovery" = true ] || return 1
     return 0
   fi
   local PR_NUMBER="" PR_HEAD_SHA="" PR_HEAD_SHA_BEFORE=""
@@ -597,9 +590,9 @@ merge_run() {
   local recovery_artifact_head="$replacement_head"
   local body_path="${5:-}" captured_body="" merge_body_snapshot=""
   local legacy_directory="${6:-}" legacy_refusal="" legacy_captures=()
-  local cancel_auto="${7:-false}"
+  local cancel_auto="${7:-false}" merged_head="${11:-}" observed_head="${12:-}"
   local refusal_directory="${8:-}" refusal="" qualified_refusal=false
-  local provider_rejection="" stale_head_retirement="" qualified_pending_recovery=false
+  local provider_rejection="" stale_head_retirement="" async_failure="" qualified_pending_recovery=false
   local retired_auto_admin=false stale_admin_head=false
   local MERGE_REFUSAL_DIRECTORY=""
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
@@ -621,12 +614,28 @@ merge_run() {
     echo "Replacement head requires an exact recovery outcome and full lowercase 40-character SHA." >&2
     return 2
   fi
+  if [ -n "$merged_head" ] && ! [[ "$merged_head" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Merged head requires a full lowercase 40-character SHA." >&2
+    return 2
+  fi
+  if [ -n "$observed_head" ]; then
+    [ "$cancel_auto" = true ] && [ -n "$recovery_oid" ] &&
+      [[ "$observed_head" =~ ^[0-9a-f]{40}$ ]] &&
+      [ -z "$replacement_head$merged_head$body_path$legacy_directory$refusal_directory$MERGE_ADMIN_EVIDENCE" ] &&
+      [ "$auto_merge_requested" = false ] && [ "$confirmed_admin" = false ] || return 2
+  fi
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
   local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_ENTRY_OBSERVATION MERGE_TRANSPORT=rest
   merge_outcome_init "$pr" || return 1
   if [ "$cancel_auto" = true ]; then
     [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] && [ "$auto_merge_requested" = false ] || return 2
-    merge_outcome_cancel_auto "$pr" "$recovery_oid"
+    merge_outcome_cancel_auto "$pr" "$recovery_oid" "$observed_head"
+    return
+  fi
+  if [ -n "$merged_head" ]; then
+    [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory$MERGE_ADMIN_EVIDENCE" ] &&
+      [ "$auto_merge_requested" = false ] && [ "$cancel_auto" = false ] && [ "$confirmed_admin" = false ] || return 2
+    merge_outcome_accept_head_drift "$pr" "$recovery_oid" "$merged_head"
     return
   fi
   if [ -n "$legacy_directory" ]; then
@@ -647,7 +656,11 @@ merge_run() {
           .priorCiAdmin.dispatchTransport == "rest" and .head != $replacement
          else (.accepted == false and (.route == "immediate" or
             ($refusal != "" and .route == "auto" and .method == "squash"))) or
-          (.route == "auto" and .cancellation.state == "confirmed") end)
+          (.route == "auto" and .cancellation.state == "confirmed") or
+          ($replacement == "" and $refusal == "" and .accepted == true and
+            .route == "immediate" and .transport == "rest" and
+            .asyncMerge.status == "failed" and .asyncMerge.sha == null and
+            (.asyncMerge.uuid | type == "string")) end)
       ' >/dev/null; then
       if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
         merge_outcome_stop "operator admin recovery requires an exact qualified prior-CI intent or a confirmed auto cancellation with an explicit selected head; no attempt was authorized"
@@ -657,6 +670,7 @@ merge_run() {
       return 1
     fi
     recovery_record="$MERGE_OUTCOME_RECORD"
+    async_failure=$(printf '%s\n' "$recovery_record" | jq -c 'select(.asyncMerge.status == "failed") | .asyncMerge') || return 1
   elif [ -n "$refusal_directory" ]; then
     merge_outcome_stop "pre-dispatch qualification requires explicit operator recovery"; return 1
   elif [ -n "$MERGE_OUTCOME_OID" ]; then
@@ -699,8 +713,8 @@ merge_run() {
   if [ -n "$recovery_oid" ] && [ "$auto_merge_requested" = true ] &&
     [ -n "$replacement_head" ] &&
     printf '%s\n' "$recovery_record" | jq -e '.route == "admin"' >/dev/null; then
-    stale_head_retirement=$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" \
-      stale-head-retirement "$recovery_record" "$recovery_oid" "$replacement_head" .local) || return 1
+    stale_head_retirement=$(printf '%s\n' "$recovery_record" | node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" \
+      stale-head-retirement "$recovery_oid" "$replacement_head" .local) || return 1
     stale_admin_head=true
     qualified_pending_recovery=true
   elif [ -n "$recovery_oid" ] && [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
@@ -709,7 +723,7 @@ merge_run() {
       # still passes both live admin checks before the successor intent is written.
       retired_auto_admin=true
     else
-      provider_rejection=$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection "$recovery_record" .local) || return 1
+      provider_rejection=$(printf '%s\n' "$recovery_record" | node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection .local) || return 1
       recovery_artifact_head=$(printf '%s\n' "$recovery_record" | jq -er .head) || return 1
     fi
     qualified_pending_recovery=true
@@ -842,8 +856,8 @@ merge_run() {
     fi
   fi
 
-  local crabbox_final_main_sha="" route=immediate
-  local MERGE_ADMISSION_ACTIVE=true MERGE_PRIOR_CI_OBSERVED_MAIN=""
+  local crabbox_final_main_sha="" crabbox_verified_main="" route=immediate
+  local MERGE_ADMISSION_ACTIVE=true MERGE_OBSERVED_MAIN=""
   local admission_attempt previous_observation=""
   # Only fresh admission waits for calculation; retained intent reconciles immediately.
   # Pin PR/policy facts and each projection as soon as it becomes known.
@@ -854,8 +868,9 @@ merge_run() {
       merge_outcome_stop "REST fallback supports ordinary immediate squash only; auto, queue, and admin routes require GraphQL"
       return 1
     fi
-    if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg head "$PREP_HEAD_SHA" \
-      --argjson source "$MERGE_ENTRY_OBSERVATION" --argjson recovery "${recovery_record:-null}" '
+    if ! printf '%s\n%s\n' "$MERGE_OBSERVATION" "${recovery_record:-null}" | jq -se --arg head "$PREP_HEAD_SHA" \
+      --argjson source "$MERGE_ENTRY_OBSERVATION" '
+      select(length == 2) | .[1] as $recovery | .[0] |
       .pr.state == "OPEN" and .pr.headRefOid == $head and .pr.baseRefName == "main" and
       .pr.headRefOid == $source.headRefOid and ($source.headRefName | type == "string" and length > 0) and
       .pr.isDraft == false and .pr.mergeable != "CONFLICTING" and
@@ -868,14 +883,14 @@ merge_run() {
       merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
       return 1
     fi
-    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" --argjson admin "$MERGE_USE_CRABBOX_ADMIN_BYPASS" '
-      def facts: del(.pr.mergeable,.pr.mergeStateStatus) |
-        if $admin then . else del(.main) end;
+    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" '
+      def facts: del(.main,.pr.mergeable,.pr.mergeStateStatus);
       (if .transport != $previous.transport then
          (facts | del(.transport,.restPolicy)) == ($previous | facts | del(.transport,.restPolicy))
        else facts == ($previous | facts) end) and
-      ($previous.pr.mergeable == "UNKNOWN" or .pr.mergeable == $previous.pr.mergeable) and
-      ($previous.pr.mergeStateStatus == "UNKNOWN" or .pr.mergeStateStatus == $previous.pr.mergeStateStatus)
+      (.main != $previous.main or
+       (($previous.pr.mergeable == "UNKNOWN" or .pr.mergeable == $previous.pr.mergeable) and
+        ($previous.pr.mergeStateStatus == "UNKNOWN" or .pr.mergeStateStatus == $previous.pr.mergeStateStatus)))
     ' >/dev/null; then
       local pinned_observation
       pinned_observation=$(printf '%s\n' "$previous_observation" | jq -c --argjson current "$MERGE_OBSERVATION" '
@@ -886,11 +901,9 @@ merge_run() {
       merge_outcome_stop "PR or main changed while waiting for mergeability; stopped before intent/dispatch"
       return 1
     fi
-    if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] && [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = false ]; then
-      verify_prior_ci_main_advance \
-        "$(printf '%s\n' "${previous_observation:-$MERGE_OBSERVATION}" | jq -r .main)" \
-        "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" || return 1
-    fi
+    verify_merge_main_advance \
+      "$(printf '%s\n' "${previous_observation:-$MERGE_OBSERVATION}" | jq -r .main)" \
+      "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" || return 1
     if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.mergeable != "UNKNOWN" and .pr.mergeStateStatus != "UNKNOWN"' >/dev/null; then
       break
     fi
@@ -966,21 +979,7 @@ merge_run() {
     merge_outcome_stop "ordinary squash requires the captured merge body; queue policy changed during admission"
     return 1
   fi
-  if [ "$qualified_refusal" = true ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.mergeable == "MERGEABLE" and .pr.mergeStateStatus == "CLEAN"' >/dev/null; then
-    merge_outcome_stop "qualified refusal recovery requires MERGEABLE/CLEAN immediate admission"; return 1
-  fi
-  # gh skips local status refusals for queue-enabled PRs; admin bypasses BLOCKED/BEHIND.
-  # Reject known client-side refusals before recording non-retryable intent.
-  if printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg route "$route" '
-    .pr | .isMergeQueueEnabled == false and
-    (.mergeStateStatus == "DIRTY" or ($route == "immediate" and (.mergeStateStatus | IN("BLOCKED", "BEHIND"))))
-  ' >/dev/null; then
-    local allowed_status="not DIRTY"
-    [ "$route" != immediate ] || allowed_status="not BLOCKED|BEHIND|DIRTY"
-    merge_outcome_diagnose "$pr" "$MERGE_OBSERVATION" null "$allowed_status"
-    merge_outcome_stop "selected merge route is blocked by policy, branch drift, or a dirty merge projection; inspect current PR state"
-    return 1
-  fi
+  verify_merge_route_projection "$pr" "$MERGE_OBSERVATION" "$route" "$qualified_refusal" || return 1
   local observed_main
   observed_main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)
   if [ "$merge_method" = squash ] && [ "$route" != queue ]; then
@@ -990,24 +989,17 @@ merge_run() {
     recovery_actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1
     [ -n "$recovery_actor" ] || { merge_outcome_stop "cannot identify the operator recovery actor"; return 1; }
   fi
-  # Ordinary squash has one final authority observation after comment collection.
+  # Ordinary squash has one final authority observation before intent.
   # Special routes retain their separate admission and admin authority windows.
   if [ "$route" != immediate ] || [ "$merge_method" != squash ]; then
     merge_outcome_stable "$pr" || return 1
   fi
-  if [ "$route" = admin ] && [ "$MERGE_USE_PRIOR_CI_ADMIN" != true ]; then
-    verify_crabbox_admin_merge_bypass "$pr" "$PREP_HEAD_SHA" || return 1
-    crabbox_final_main_sha=$(jq -er '.mainSha | select(type == "string" and test("^[0-9a-f]{40}$"))' .local/merge-crabbox-bypass.json) || return 1
-    [ "$crabbox_final_main_sha" = "$observed_main" ] || {
-      merge_outcome_stop "main changed during final admin admission"; return 1;
-    }
-  fi
-  fetch_clawsweeper_review_comments "$pr" "$MERGE_REPO_NAME" "$MERGE_REPO_HOST" || return 1
-  if ! merge_outcome_stable "$pr"; then
-    unset CLAWSWEEPER_REVIEW_COMMENTS
+  if [ -n "$async_failure" ] &&
+    [ "$async_failure" != "$(merge_rest merge-result "$pr" "$(printf '%s\n' "$async_failure" | jq -r .uuid)" "$PREP_HEAD_SHA")" ]; then
+    merge_outcome_stop "async failure is unavailable or changed; no recovery attempt was authorized"
     return 1
   fi
-  validate_clawsweeper_review_comments "$pr" "$PREP_HEAD_SHA" || return 1
+  merge_outcome_stable "$pr" || return 1
   if [ -n "$merge_body_snapshot" ] &&
     [ "$merge_body_snapshot" != "$(snapshot_merge_body "$merge_body_file")" ]; then
     merge_outcome_stop "merge body changed during admission; no request was dispatched"
@@ -1051,9 +1043,32 @@ merge_run() {
     [ "$correction_gates_oid" = "$(pr_git hash-object --no-filters .local/gates.env)" ] || return 1
     require_correction_publication_gates "$pr" "$(pr_git rev-parse HEAD)" || return 1
   fi
-  if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-    local authority_round authority_result expected_prior_ci_proof="$MERGE_PRIOR_CI_PROOF"
+  if [ "$route" = admin ]; then
+    local authority_round authority_result expected_prior_ci_proof="$MERGE_PRIOR_CI_PROOF" crabbox_main_sha
     for authority_round in 1 2 3; do
+      if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ]; then
+        # Materialization and projection settlement invalidate live authority.
+        # Reuse the bounded qualification loop and finish with the full verifier.
+        rm -f .local/merge-crabbox-bypass.json || return 1
+        merge_outcome_stable "$pr" false "" "$crabbox_verified_main" || return 1
+        verify_crabbox_admin_merge_bypass "$pr" "$PREP_HEAD_SHA" || return 1
+        crabbox_main_sha=$(jq -er '.mainSha | select(type == "string" and test("^[0-9a-f]{40}$"))' .local/merge-crabbox-bypass.json) || return 1
+        crabbox_final_main_sha=$(jq -er '.finalMainSha | select(type == "string" and test("^[0-9a-f]{40}$"))' .local/merge-crabbox-bypass.json) || return 1
+        if [ "$crabbox_main_sha" = "$MERGE_OBSERVED_MAIN" ] && [ "$crabbox_final_main_sha" = "$MERGE_OBSERVED_MAIN" ]; then
+          break
+        fi
+        # Discard this decision before any fetch or candidate-tree work.
+        rm -f .local/merge-crabbox-bypass.json || return 1
+        if [ "$authority_round" -eq 3 ]; then
+          merge_outcome_stop "Crabbox main kept advancing after 3 authority rounds; stopped before intent/dispatch"
+          return 1
+        fi
+        verify_merge_main_advance "$MERGE_OBSERVED_MAIN" "$crabbox_main_sha" || return 1
+        verify_merge_main_advance "$crabbox_main_sha" "$crabbox_final_main_sha" || return 1
+        crabbox_verified_main="$crabbox_final_main_sha"
+        echo "Requalifying Crabbox admission after main $crabbox_verified_main (round $((authority_round + 1))/3)."
+        continue
+      fi
       # Retain only the equality fingerprint, never a prior live authority decision.
       MERGE_PRIOR_CI_PROOF=""
       merge_outcome_stable "$pr" false requalify-prior-ci || return 1
@@ -1072,7 +1087,7 @@ merge_run() {
         fi
         echo "Requalifying prior-CI admission after main $MERGE_PRIOR_CI_REMATERIALIZE_MAIN (round $((authority_round + 1))/3)."
         # The previous authority decision is discarded before any materialization.
-        verify_prior_ci_main_advance "$MERGE_PRIOR_CI_OBSERVED_MAIN" "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" || return 1
+        verify_merge_main_advance "$MERGE_OBSERVED_MAIN" "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" || return 1
         continue
       fi
       [ "$authority_result" -eq 0 ] || return 1
@@ -1081,18 +1096,20 @@ merge_run() {
       fi
       break
     done
-    # No awaited operation may replace the operator's bytes after validation.
-    node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \
-      "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" >/dev/null || return 1
+    if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
+      # No awaited operation may replace the operator's bytes after validation.
+      node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \
+        "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" >/dev/null || return 1
+    fi
     crabbox_final_main_sha="$observed_main"
   fi
   if [ -n "$provider_rejection" ] &&
-    [ "$provider_rejection" != "$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection "$recovery_record" .local)" ]; then
+    [ "$provider_rejection" != "$(printf '%s\n' "$recovery_record" | node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection .local)" ]; then
     merge_outcome_stop "provider rejection evidence changed during admission"; return 1
   fi
   if [ -n "$stale_head_retirement" ] &&
-    [ "$stale_head_retirement" != "$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" \
-      stale-head-retirement "$recovery_record" "$recovery_oid" "$replacement_head" .local)" ]; then
+    [ "$stale_head_retirement" != "$(printf '%s\n' "$recovery_record" | node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" \
+      stale-head-retirement "$recovery_oid" "$replacement_head" .local)" ]; then
     merge_outcome_stop "stale-head retirement evidence changed during admission"; return 1
   fi
   if [ -n "$recovery_artifact_head" ]; then
@@ -1106,15 +1123,15 @@ merge_run() {
   attempt=$(node -e 'process.stdout.write(require("node:crypto").randomUUID())') || return 1
   intent=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -c --argjson repo "$MERGE_REPO" \
     --arg method "$merge_method" --arg route "$route" --arg attempt "$attempt" \
-    --arg localHead "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}" --arg transport "$MERGE_TRANSPORT" \
-    --argjson review "$CLAWSWEEPER_REVIEW_EVIDENCE" '
+    --arg localHead "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}" --arg transport "$MERGE_TRANSPORT" '
     {version:1,repo:$repo,pr:.pr.number,prId:.pr.id,base:.pr.baseRefName,head:.pr.headRefOid,
      localHead:$localHead,
-     main:.main,method:$method,route:$route,attempt:$attempt,phase:"intent",accepted:false,landed:null,
-     clawsweeperReview:$review} + (if $transport == "rest" then {transport:"rest"} else {} end)
+     main:.main,method:$method,route:$route,attempt:$attempt,phase:"intent",accepted:false,landed:null}
+     + (if $transport == "rest" then {transport:"rest"} else {} end)
   ') || return 1
   if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-    intent=$(printf '%s\n' "$intent" | jq -c --argjson proof "$MERGE_PRIOR_CI_PROOF" '.priorCiAdmin=$proof') || return 1
+    intent=$(printf '%s\n%s\n' "$intent" "$MERGE_PRIOR_CI_PROOF" | jq -cse '
+      select(length == 2) | .[1] as $proof | .[0] | .priorCiAdmin=$proof') || return 1
   fi
   local async_dispatch=false
   if [ "$MERGE_TRANSPORT" = rest ] && [ "$route" = immediate ]; then
@@ -1126,9 +1143,9 @@ merge_run() {
   elif [ -n "$recovery_oid" ]; then
     # The CAS consumes this explicit operator decision and retains the old intent.
     # A separately qualified provider rejection never authorizes automatic retries.
-    intent=$(printf '%s\n' "$intent" | jq -c --arg outcome "$recovery_oid" \
-      --argjson previous "$recovery_record" --arg actor "$recovery_actor" --arg replacement "$replacement_head" \
-      '.recovery=({outcome:$outcome,attempt:$previous.attempt,actor:$actor,reason:"explicit-operator-recovery"} +
+    intent=$(printf '%s\n%s\n' "$intent" "$recovery_record" | jq -cse --arg outcome "$recovery_oid" \
+      --arg actor "$recovery_actor" --arg replacement "$replacement_head" \
+      'select(length == 2) | .[1] as $previous | .[0] | .recovery=({outcome:$outcome,attempt:$previous.attempt,actor:$actor,reason:"explicit-operator-recovery"} +
         if $replacement == "" then {} else {replacementHead:$replacement} end)') || return 1
   fi
   if [ -n "$refusal" ]; then
@@ -1136,6 +1153,9 @@ merge_run() {
   fi
   if [ -n "$provider_rejection" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson rejection "$provider_rejection" '.recovery.providerRejection=$rejection') || return 1
+  fi
+  if [ -n "$async_failure" ]; then
+    intent=$(printf '%s\n' "$intent" | jq -c --argjson failure "$async_failure" '.recovery.asyncFailure=$failure') || return 1
   fi
   if [ -n "$stale_head_retirement" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson retirement "$stale_head_retirement" '.recovery.staleHeadRetirement=$retirement') || return 1

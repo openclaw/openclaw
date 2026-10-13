@@ -5,16 +5,6 @@ import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
-async function closeEmbeddingProviderWithRetry(provider: {
-  close?: () => Promise<void> | void;
-}): Promise<void> {
-  try {
-    await provider.close?.();
-  } catch {
-    await provider.close?.();
-  }
-}
-
 export function registerEmbeddingCapabilityCommands(capability: Command): void {
   const embeddingCommand = capability
     .command("embedding")
@@ -69,10 +59,12 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
           embeddings = await provider.embedBatch(texts, { inputType: "document" });
         } catch (err) {
           // Cleanup failure must not replace the embedding error.
-          await closeEmbeddingProviderWithRetry(provider).catch(() => {});
+          await Promise.resolve()
+            .then(() => provider.close?.())
+            .catch(() => {});
           throw err;
         }
-        await closeEmbeddingProviderWithRetry(provider);
+        await provider.close?.();
         return {
           ok: true,
           capability: "embedding.create",
