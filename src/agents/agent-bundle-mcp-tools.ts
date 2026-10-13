@@ -1,4 +1,8 @@
 /** Public facade for bundle MCP tool materialization and session-scoped runtime management. */
+export type {
+  McpProtectedRequestMetaFactory,
+  McpToolInvocation,
+} from "./agent-bundle-mcp-types.js";
 export {
   disposeAllSessionMcpRuntimes,
   reloadSessionMcpRuntimes,

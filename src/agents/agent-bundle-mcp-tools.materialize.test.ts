@@ -131,6 +131,41 @@ describe("createBundleMcpToolRuntime", () => {
     expect(disposeRuntime).toHaveBeenCalledOnce();
   });
 
+  it("attaches host-protected request metadata after exact tool selection", async () => {
+    const runtime = makeToolRuntime();
+    runtime.callTool = vi.fn(async () => ({
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+    }));
+    const createProtectedRequestMeta = vi.fn(async () => ({
+      "example.test/context": "signed",
+    }));
+    const materialized = await materializeBundleMcpToolsForRun({
+      runtime,
+      createProtectedRequestMeta,
+    });
+
+    await expectDefined(materialized.tools[0], "materialized.tools[0] test invariant").execute(
+      "call-protected",
+      { value: 7 },
+      undefined,
+      undefined,
+    );
+
+    expect(createProtectedRequestMeta).toHaveBeenCalledWith({
+      serverName: "bundleProbe",
+      toolName: "bundle_probe",
+      toolCallId: "call-protected",
+      input: { value: 7 },
+    });
+    expect(runtime.callTool).toHaveBeenCalledWith(
+      "bundleProbe",
+      "bundle_probe",
+      { value: 7 },
+      { _meta: { "example.test/context": "signed" } },
+    );
+  });
+
   it.each([{ failureAt: "synchronous-join" }, { failureAt: "synchronous-dispose" }] as const)(
     "replays a combined owner's $failureAt failure in each final caller",
     async ({ failureAt }) => {

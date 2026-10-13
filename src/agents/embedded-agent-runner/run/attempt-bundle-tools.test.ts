@@ -62,6 +62,28 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       .mockImplementation((tools: unknown[]) => ({ tools, diagnostics: [] }));
   });
 
+  it("forwards the trusted per-run MCP metadata factory to materialization", async () => {
+    const input = createInput([], []);
+    const createMcpProtectedRequestMeta = vi.fn();
+    input.attempt.createMcpProtectedRequestMeta = createMcpProtectedRequestMeta;
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime: {},
+      releaseLease: () => {},
+    });
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [],
+      dispose: vi.fn(),
+    });
+
+    await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(mocks.materializeBundleMcpToolsForRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        createProtectedRequestMeta: createMcpProtectedRequestMeta,
+      }),
+    );
+  });
+
   function createInput(inheritedToolAllowlist: string[], toolsRaw: unknown[]) {
     return {
       agentDir: "/tmp/agent",

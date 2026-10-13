@@ -9,6 +9,7 @@ import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { SkillLibraryAuthoringCapability } from "../../../skills/library/authoring.js";
 import type { ExplicitSkillSelection } from "../../../skills/types.js";
+import type { McpProtectedRequestMetaFactory } from "../../agent-bundle-mcp-tools.js";
 import type { ModelFallbackAvailability } from "../../agent-scope.js";
 import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.types.js";
 import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
@@ -71,6 +72,8 @@ export type RunEmbeddedAgentParams = {
   sandboxAgentId?: string;
   /** Out-of-band plugin bindings attached by the run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
+  /** Trusted host hook for protected per-call MCP metadata; never derived from model arguments. */
+  createMcpProtectedRequestMeta?: McpProtectedRequestMetaFactory;
   /** Raw peer observed by the inbound routing owner, before identity linking. */
   conversationRoutePeerId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */

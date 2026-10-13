@@ -24,6 +24,7 @@ import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js"
 import type {
   BundleMcpToolRuntime,
   McpCatalogTool,
+  McpProtectedRequestMetaFactory,
   McpAppRequesterIdentity,
   McpToolCatalog,
   SessionMcpRuntime,
@@ -388,6 +389,8 @@ export async function materializeBundleMcpToolsForRun(params: {
   /** Transfer the lease admitted by the manager before returning this runtime. */
   releaseLease?: () => void;
   disposeRuntime?: () => Promise<void>;
+  /** Trusted host hook evaluated after tool selection; model arguments cannot supply request `_meta`. */
+  createProtectedRequestMeta?: McpProtectedRequestMetaFactory;
 }): Promise<BundleMcpToolRuntime> {
   const runtime = params.runtime;
   let disposal: Promise<void> | undefined;
@@ -459,7 +462,19 @@ export async function materializeBundleMcpToolsForRun(params: {
           }
           runtime.markUsed();
           const { serverName, toolName } = tool;
-          const invoke = () => runtime.callTool(serverName, toolName, input);
+          const protectedRequestMeta = await params.createProtectedRequestMeta?.({
+            serverName,
+            toolName,
+            toolCallId,
+            input,
+          });
+          const invoke = () =>
+            runtime.callTool(
+              serverName,
+              toolName,
+              input,
+              protectedRequestMeta === undefined ? undefined : { _meta: protectedRequestMeta },
+            );
           const result = await (runtime.sessionKey
             ? runWithMcpElicitationHandler(
                 createMcpClientElicitationHandler({

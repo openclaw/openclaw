@@ -23,6 +23,17 @@ export type SessionMcpConfigReload = {
   reloadPlugins?: boolean;
 };
 
+export type McpToolInvocation = {
+  serverName: string;
+  toolName: string;
+  toolCallId: string;
+  input: unknown;
+};
+
+export type McpProtectedRequestMetaFactory = (
+  invocation: McpToolInvocation,
+) => Promise<Record<string, unknown> | undefined>;
+
 /** Materialized MCP tools plus diagnostics and cleanup handle for one run. */
 export type BundleMcpToolRuntime = {
   tools: AnyAgentTool[];
