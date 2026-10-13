@@ -29,18 +29,11 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
     await useDesktopViewport();
     render(
       html`
-        <div class="shell shell--nav-collapsed" style="animation: none">
+        <div
+          class="shell shell--navigation-rail shell--nav-collapsed"
+          style="animation: none; --shell-nav-rail-width: 52px"
+        >
           <div class="shell-chrome-controls">
-            <button
-              class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
-              type="button"
-              aria-label="Expand navigation"
-            ></button>
-            <button
-              class="shell-chrome-controls__button shell-chrome-controls__new-thread"
-              type="button"
-              aria-label="New session"
-            ></button>
             <button
               class="shell-chrome-controls__button shell-chrome-controls__search"
               type="button"
@@ -70,7 +63,7 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
       document.querySelectorAll<HTMLElement>(".shell-chrome-controls__button"),
     );
     expect(refreshCard).not.toBeNull();
-    expect(buttons).toHaveLength(3);
+    expect(buttons).toHaveLength(1);
 
     const cardBounds = refreshCard!.getBoundingClientRect();
     const buttonBounds = buttons.map((button) => button.getBoundingClientRect());

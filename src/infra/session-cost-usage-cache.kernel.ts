@@ -1,6 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { isMainThread } from "node:worker_threads";
-import { expressionBuilder, type AliasableExpression } from "kysely";
+import { expressionBuilder } from "kysely";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -14,7 +13,6 @@ import { withSqliteDatabaseWriteScope } from "./sqlite-database-admission.js";
 
 const LEGACY_CACHE_SCOPE = "session-cost-usage";
 const LEGACY_CACHE_KEY = "cache";
-const REFRESH_LOCK_KEY = "refresh-lock";
 const RETIRED_ROLLUP_SCOPES = ["session-cost-usage-rollup-v1", "session-cost-usage-rollup-v2"];
 const ROLLUP_PRUNE_BATCH_SIZE = 32;
 
@@ -25,10 +23,6 @@ export type SessionCostUsageRollupRow = {
   key: string;
   updatedAt: number;
   valueJson: string;
-};
-
-export type SessionCostUsageRollupByteRow = Omit<SessionCostUsageRollupRow, "valueJson"> & {
-  valueJson: Uint8Array;
 };
 
 type SessionCostUsageJson = string | Uint8Array;
@@ -43,47 +37,10 @@ function cacheJsonText(value: SessionCostUsageJson) {
     : cacheExpressions.cast<string>(cacheExpressions.val(value), "text");
 }
 
-export function readSessionCostUsageRefreshLockInDatabase(db: DatabaseSync): string | null {
-  const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-  const row = executeSqliteQuerySync(
-    db,
-    kysely
-      .selectFrom("cache_entries")
-      .select("value_json")
-      .where("scope", "=", LEGACY_CACHE_SCOPE)
-      .where("key", "=", REFRESH_LOCK_KEY)
-      .limit(1),
-  ).rows[0];
-  return row?.value_json ?? null;
-}
-
 export function readSessionCostUsageRollupRowsInDatabase(
   db: DatabaseSync,
   filePaths?: readonly string[],
 ): SessionCostUsageRollupRow[] {
-  return readSessionCostUsageRollupValuesInDatabase(
-    db,
-    filePaths,
-    cacheExpressions.ref("value_json"),
-  );
-}
-
-export function readSessionCostUsageRollupByteRowsInDatabase(
-  db: DatabaseSync,
-  filePaths?: readonly string[],
-): SessionCostUsageRollupByteRow[] {
-  return readSessionCostUsageRollupValuesInDatabase(
-    db,
-    filePaths,
-    cacheExpressions.cast<Uint8Array | null>("value_json", "blob"),
-  );
-}
-
-function readSessionCostUsageRollupValuesInDatabase<Value extends string | Uint8Array>(
-  db: DatabaseSync,
-  filePaths: readonly string[] | undefined,
-  valueJson: AliasableExpression<Value | null>,
-) {
   const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
   // Bound SQL parameters even when a historical family contains many instances.
   const batches = filePaths ? chunkItems([...new Set(filePaths)], 500) : [undefined];
@@ -91,7 +48,7 @@ function readSessionCostUsageRollupValuesInDatabase<Value extends string | Uint8
     .flatMap((keys) => {
       const query = kysely
         .selectFrom("cache_entries")
-        .select(["key", valueJson.as("value_json"), "updated_at"])
+        .select(["key", "value_json", "updated_at"])
         .where("scope", "=", ROLLUP_SCOPE);
       return executeSqliteQuerySync(db, keys ? query.where("key", "in", keys) : query).rows;
     })
@@ -159,8 +116,7 @@ export function pruneSessionCostUsageRollupsInDatabase(
 ): void {
   return withSqliteDatabaseWriteScope(db, [ROLLUP_SCOPE], () => {
     const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-    // Native incognito has no durable partitions; its legacy cache stays process-held.
-    if (!isMainThread && existing.length > 0) {
+    if (existing.length > 0) {
       pruneSessionCostUsagePartitionsInDatabase(db, existing);
     }
     for (const batch of chunkItems(existing, ROLLUP_PRUNE_BATCH_SIZE)) {
@@ -202,53 +158,4 @@ export function pruneSessionCostUsageRollupsInDatabase(
       kysely.deleteFrom("cache_entries").where("scope", "in", RETIRED_ROLLUP_SCOPES),
     );
   });
-}
-
-export function deleteSessionCostUsageRefreshLockInDatabase(
-  db: DatabaseSync,
-  valueJson: string,
-): void {
-  const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .deleteFrom("cache_entries")
-      .where("scope", "=", LEGACY_CACHE_SCOPE)
-      .where("key", "=", REFRESH_LOCK_KEY)
-      .where("value_json", "=", valueJson),
-  );
-}
-
-export function acquireSessionCostUsageRefreshLockInDatabase(
-  db: DatabaseSync,
-  params: {
-    previousRaw: string | null;
-    previousOwnerIsRunning: boolean;
-    lockJson: string;
-    startedAt: number;
-  },
-): boolean {
-  const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-  const currentRaw = readSessionCostUsageRefreshLockInDatabase(db);
-  if (currentRaw !== params.previousRaw || params.previousOwnerIsRunning) {
-    return false;
-  }
-  const values = {
-    value_json: params.lockJson,
-    blob: null,
-    expires_at: null,
-    updated_at: params.startedAt,
-  };
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .insertInto("cache_entries")
-      .values({
-        scope: LEGACY_CACHE_SCOPE,
-        key: REFRESH_LOCK_KEY,
-        ...values,
-      })
-      .onConflict((conflict) => conflict.columns(["scope", "key"]).doUpdateSet(values)),
-  );
-  return true;
 }

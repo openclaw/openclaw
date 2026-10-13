@@ -4,6 +4,7 @@ import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { showToast } from "../lib/toast.ts";
+import "../lib/toast-host.ts";
 import {
   afterModalHidden,
   getRenderedModalDialog,

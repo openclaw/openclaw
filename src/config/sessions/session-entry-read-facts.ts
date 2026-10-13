@@ -20,7 +20,6 @@ import type {
   SessionExactEntriesWorkerRequest,
   SessionExactEntriesWorkerResult,
 } from "./session-entry-read.types.js";
-import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import { runLockedSessionTranscriptRead } from "./session-transcript-execution-read.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import {
@@ -180,7 +179,7 @@ export function readRetainedSessionEntryFacts(
     ) {
       return undefined;
     }
-    const facts = readSessionActorEntryFacts(target);
+    const facts = readSessionActorEntryFacts(target, projection);
     if (
       !facts ||
       (request.projection === "sharing" && (!facts.entry || facts.members === undefined)) ||
@@ -211,7 +210,7 @@ export function readRetainedSessionEntryFacts(
     if (facts.entry) {
       entries.push({
         sessionKey: key,
-        entry: attachSessionEntrySnapshots(facts.entry, {}, projection),
+        entry: facts.entry,
       });
       if (facts.members) {
         members[key] = facts.members;

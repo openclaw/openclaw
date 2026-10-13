@@ -90,7 +90,7 @@ suite.define(() => {
           } else {
             await page.locator(".shell--nav-collapsed").waitFor();
             await saveFrame(page, `${prefix}-sidebar-collapsed`, [shell]);
-            await page.locator(".shell-chrome-controls__nav-toggle:visible").click();
+            await page.locator('[data-navigation-view="sessions"]').click();
             await expect
               .poll(() => shell.getAttribute("class"))
               .not.toContain("shell--nav-collapsed");

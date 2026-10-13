@@ -130,7 +130,10 @@ export async function readWorkerPlacementModelSource(
   },
   key: string,
 ): Promise<SessionEntry | undefined> {
-  const metadata = captureSessionEntryMetadataRead({ sessionKey: key, agentId: params.agentId });
+  const metadata = captureSessionEntryMetadataRead(
+    { sessionKey: key, agentId: params.agentId },
+    () => params.assertCurrent?.(),
+  );
   if (metadata) {
     return metadata.readCurrent();
   }

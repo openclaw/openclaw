@@ -1,10 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { resolveSessionStoreIdentity } from "../../gateway/session-store-key.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { collectCanonicalSessionLookupKeys } from "./main-session-key.js";
 import { resolveSessionStorePathCore } from "./paths.js";
+import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import type {
   LogicalSessionAccessScope,
   ResolvedSessionEntryAccessTarget,
@@ -12,11 +11,7 @@ import type {
   SessionEntrySummary,
 } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
-import {
-  readSessionEntryReadOnlyInWorker,
-  withSessionEntriesFromStoresInWorker,
-} from "./session-entry-read-runtime.js";
-import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "./session-store-target-runtime.js";
 import { listConfiguredSessionStoreAgentIds, type SessionStoreTarget } from "./targets.js";
@@ -95,24 +90,15 @@ export async function readResolvedSessionStoreTargetsInWorker(
       env: actorEnv,
       sessionKey: canonicalKey,
     };
-    const binding = captureIncognitoSessionBinding(actorScope);
-    if (binding || isIncognitoSessionKey(canonicalKey)) {
+    const memory = captureMemoryExactSessionReader({ ...actorScope, agentId });
+    if (memory) {
       result.set(requestedKey, {
         agentId,
         canonicalKey,
         requestedKey,
         storeKey: canonicalKey,
-        storePath:
-          binding?.actor.path ??
-          resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: scope.env }),
-        entry: await readSessionEntryReadOnlyInWorker({
-          ...actorScope,
-          agentId,
-          // Unbound incognito still belongs to its process-local native owner.
-          ...(!binding && {
-            storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: scope.env }),
-          }),
-        }),
+        storePath: memory.path,
+        entry: memory.read(canonicalKey, projection === "worktree" ? "list" : undefined),
       });
       continue;
     }

@@ -44,6 +44,7 @@ describe("Team-shaped fixture CLI", () => {
       stdio: "ignore",
     });
     const originalConfig = fs.readFileSync(path.join(sentinel, ".git", "config"), "utf8");
+    const originalEnv = process.env;
     const environment = captureFullEnv();
     try {
       process.env.GIT_DIR = path.join(sentinel, ".git");
@@ -67,6 +68,7 @@ describe("Team-shaped fixture CLI", () => {
           "1",
         ]),
       );
+      expect(process.env === originalEnv).toBe(true);
       expect(generated.env).toMatchObject({
         OPENCLAW_PROFILE: "team-shape-40967",
         OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-team-shape-40967",

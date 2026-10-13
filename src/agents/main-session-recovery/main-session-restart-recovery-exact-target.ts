@@ -3,16 +3,13 @@ import {
   hasMainSessionRecoveryClaim,
   isMainRestartRecoveryCandidate,
 } from "../../config/sessions/restart-recovery-state.js";
-import { loadExactSessionEntry } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import {
-  readSessionEntryReadOnlyInWorker,
   withSessionEntriesFromStoreInWorker,
   withSessionStoreReaderInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { ExpectedRestartRecoveryTarget } from "./main-session-restart-recovery-shared.js";
 import { resolveRestartRecoveryDispatchIdentity } from "./main-session-restart-recovery-target.js";
 
@@ -64,33 +61,11 @@ export async function prepareExpectedRestartRecoveryCurrent(
       storePath: params.storePath,
     }).agentId,
   };
-  const source = captureIncognitoSessionSource(target);
-  if (source && "kind" in source) {
-    return {
-      isCurrent: () => {
-        source.assertCurrent();
-        return false;
-      },
-      release() {},
-    };
-  }
+  const source = captureSessionEntryMetadataRead(target, () => {});
   if (source) {
-    const claim = source.actor.sessions.captureCurrent(target.sessionKey);
     return {
       isCurrent: () => {
-        source.admissionSignal?.throwIfAborted();
-        claim.assertCurrent();
-        const current = source.actor.sessions.readSteering(target.sessionKey);
-        return matchesExpectedRecoveryTarget(current, expected, current?.hasRecoveryClaim === true);
-      },
-      release() {},
-    };
-  }
-  if (isIncognitoSessionKey(target.sessionKey)) {
-    return {
-      isCurrent: () => {
-        const exact = loadExactSessionEntry({ ...target, readConsistency: "latest" });
-        const current = exact?.sessionKey === target.sessionKey ? exact.entry : undefined;
+        const current = source.readCurrent();
         return matchesExpectedRecoveryTarget(
           current,
           expected,
@@ -143,7 +118,7 @@ export async function loadExpectedRestartRecoveryTarget(
     storePath: params.storePath,
     readConsistency: "latest" as const,
   };
-  const source = captureIncognitoSessionSource(target);
+  const source = captureSessionEntryMetadataRead(target, () => {});
   const exact = source
     ? undefined
     : await withSessionStoreReaderInWorker(target, ({ reader, database, continuation }) =>
@@ -154,7 +129,7 @@ export async function loadExpectedRestartRecoveryTarget(
         }),
       );
   const entry = source
-    ? await readSessionEntryReadOnlyInWorker(target)
+    ? source.readCurrent()
     : exact?.entries.find(({ sessionKey }) => sessionKey === target.sessionKey)?.entry;
   return matchesExpectedRecoveryTarget(entry, target, hasMainSessionRecoveryClaim(entry))
     ? entry

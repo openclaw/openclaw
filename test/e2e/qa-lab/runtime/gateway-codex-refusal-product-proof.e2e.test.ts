@@ -52,9 +52,8 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
       firstTurnStartCount: 1,
       totalTurnStartCount: 2,
       visibleReplies: [LATER_TURN_TEXT],
-      failureNotices: [
+      terminalFailureSummary:
         "Your request couldn't be completed: The provider refused this request (category: bio). Revise the request and try again.",
-      ],
     },
     {
       failureKind: "cyber",
@@ -62,9 +61,8 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
       firstTurnStartCount: 1,
       totalTurnStartCount: 2,
       visibleReplies: [LATER_TURN_TEXT],
-      failureNotices: [
+      terminalFailureSummary:
         "Your request couldn't be completed: The provider refused this request (category: cyber). Revise the request and try again.",
-      ],
     },
     {
       failureKind: "misalignment",
@@ -72,9 +70,8 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
       firstTurnStartCount: 1,
       totalTurnStartCount: 1,
       visibleReplies: [],
-      failureNotices: [
+      terminalFailureSummary:
         "Your request couldn't be completed: Chat stopped as a precaution. Review the findings in chat before continuing.",
-      ],
     },
     {
       failureKind: "retryable",
@@ -82,7 +79,7 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
       firstTurnStartCount: 2,
       totalTurnStartCount: 3,
       visibleReplies: [LATER_TURN_TEXT, LATER_TURN_TEXT],
-      failureNotices: [],
+      terminalFailureSummary: undefined,
     },
   ])(
     "$failureKind preserves terminal, review, and retry behavior on the same native thread",
@@ -175,10 +172,12 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
             { timeoutMs: 65_000 },
           );
           console.log(`[gateway Codex terminal] ${JSON.stringify({ message, terminal })}`);
-          return terminal.status;
+          return { runId: started.runId, status: terminal.status };
         };
 
-        const firstStatus = await send("Exercise the harmless synthetic protocol failure.");
+        const { runId: firstRunId, status: firstStatus } = await send(
+          "Exercise the harmless synthetic protocol failure.",
+        );
         const firstEntries = (await fs.readFile(requestLog, "utf8"))
           .trim()
           .split("\n")
@@ -207,7 +206,7 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
           );
           expect(paused.session.providerReview).toMatchObject({ canContinue: false });
         } else {
-          laterStatus = await send("Complete this ordinary later turn.");
+          laterStatus = (await send("Complete this ordinary later turn.")).status;
         }
         const history = await client.request<{
           messages?: Array<{ role?: unknown; content?: unknown }>;
@@ -216,10 +215,6 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
           .filter((message) => message.role === "assistant")
           .map((message) => messageText(message.content))
           .filter(Boolean);
-        const failureNotices = (history.messages ?? []).flatMap((message) => {
-          const notice = readRunFailureNotice(message);
-          return notice ? [notice.summary] : [];
-        });
         const allEntries = (await fs.readFile(requestLog, "utf8"))
           .trim()
           .split("\n")
@@ -234,7 +229,7 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
           ).length,
           firstStatus,
           visibleReplies: assistantTexts,
-          failureNotices,
+          failureNotices: (history.messages ?? []).map(readRunFailureNotice).filter(Boolean),
           laterStatus,
           totalTurnStartCount: allTurnStarts.length,
           threadStartCount: allEntries.filter((entry) => entry.method === "thread/start").length,
@@ -249,7 +244,9 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
           compactionRequestCount: 0,
           firstStatus: scenario.firstStatus,
           visibleReplies: scenario.visibleReplies,
-          failureNotices: scenario.failureNotices,
+          failureNotices: scenario.terminalFailureSummary
+            ? [{ runId: firstRunId, summary: scenario.terminalFailureSummary }]
+            : [],
           laterStatus: scenario.failureKind === "misalignment" ? "blocked" : "ok",
           totalTurnStartCount: scenario.totalTurnStartCount,
           threadStartCount: 1,

@@ -9,10 +9,7 @@ import {
   waitForSessionTranscriptProjection,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-import {
-  captureIncognitoSessionHistoryBinding,
-  captureIncognitoSessionSource,
-} from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionActorTranscriptRead } from "../../config/sessions/session-actor-transcript-read.js";
 import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
@@ -303,10 +300,16 @@ async function loadCliSessionEntries({
   if (!sessionTarget) {
     return [];
   }
+  const memory = captureSessionActorTranscriptRead(sessionTarget, abortSignal);
+  if (memory?.missing) {
+    return [];
+  }
   const admission = resolveSessionTranscriptReadFence(sessionTarget);
-  const { restoreSessionColdTranscript } =
-    await import("../../config/sessions/session-cold-storage.js");
-  await restoreSessionColdTranscript(sessionTarget, () => abortSignal?.throwIfAborted());
+  if (!memory) {
+    const { restoreSessionColdTranscript } =
+      await import("../../config/sessions/session-cold-storage.js");
+    await restoreSessionColdTranscript(sessionTarget, () => abortSignal?.throwIfAborted());
+  }
   await waitForSessionTranscriptProjection(sessionTarget, abortSignal);
   // Normalize bounded cuts with opaque ancestry before rebuilding CLI context.
   try {
@@ -342,10 +345,8 @@ export async function hasCliSessionTranscript({
   if (sessionManager) {
     return sessionManager.getEntries().length > 0;
   }
-  const source = sessionTarget && captureIncognitoSessionSource(sessionTarget);
-  if (source && "kind" in source) {
-    abortSignal?.throwIfAborted();
-    source.assertCurrent();
+  const memory = sessionTarget && captureSessionActorTranscriptRead(sessionTarget, abortSignal);
+  if (memory?.missing) {
     return false;
   }
   return (
@@ -369,19 +370,16 @@ export async function loadCliSessionHistoryMessages({
   if (!sessionTarget) {
     return [];
   }
-  const source = captureIncognitoSessionSource(sessionTarget);
-  if (source && "kind" in source) {
-    source.assertCurrent();
+  const memory = captureSessionActorTranscriptRead(sessionTarget, abortSignal);
+  if (memory?.missing) {
     return [];
   }
-  const incognito = captureIncognitoSessionHistoryBinding(sessionTarget);
-  const target = {
-    ...sessionTarget,
-    ...(incognito ? { storePath: incognito.actor.path } : {}),
-  };
-  const { restoreSessionColdTranscript } =
-    await import("../../config/sessions/session-cold-storage.js");
-  await restoreSessionColdTranscript(target, () => abortSignal?.throwIfAborted());
+  const target = memory?.target ?? sessionTarget;
+  if (!memory) {
+    const { restoreSessionColdTranscript } =
+      await import("../../config/sessions/session-cold-storage.js");
+    await restoreSessionColdTranscript(target, () => abortSignal?.throwIfAborted());
+  }
   await waitForSessionTranscriptProjection(target, abortSignal);
   // Hooks retain history across compactions; only reset closes their history window.
   const { readSessionTranscriptBoundedMessageTailPageAsync } =
@@ -394,7 +392,6 @@ export async function loadCliSessionHistoryMessages({
       offset: 0,
     },
     abortSignal,
-    incognito,
   );
   if (page.events.length < page.scannedMessages) {
     cliBackendLog.warn(

@@ -12,6 +12,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
@@ -140,6 +141,7 @@ vi.mock("../config/sessions/session-cold-storage-read.js", async (importOriginal
 afterAll(() => observed.timers.mockRestore());
 
 afterEach(async () => {
+  memorySessionActorOwners.reset();
   observed.dispatch = undefined;
   observed.restoration = undefined;
   await Promise.all(
@@ -190,6 +192,11 @@ it.each([false, true])(
       if (incognito) {
         expect(observed.workers).toHaveLength(workersBefore);
         expect(fs.existsSync(databasePath)).toBe(false);
+        memorySessionActorOwners.closeDatabase({ agentId: "main", path: databasePath });
+        expect(await read()).toBe(false);
+        await replaceSessionEntry(target, { sessionId: "replacement-memory-owner", updatedAt: 2 });
+        expect(await read()).toBe(true);
+        expect(observed.workers).toHaveLength(workersBefore);
       } else {
         expect(observed.workers.length).toBeGreaterThan(workersBefore);
         target.storePath = path.join(state.agentDir(), "replacement.sqlite");

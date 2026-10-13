@@ -66,7 +66,7 @@ type ProjectionDeleteChunkResult = {
   owned: boolean;
 };
 
-export type SessionTranscriptProjectionRow = {
+type SessionTranscriptProjectionRow = {
   event_json: string;
   seq: number;
   created_at: number;
@@ -259,22 +259,6 @@ function prepareProjectionSource(
     ftsRow: (row) => ftsRows.push(row),
   });
   return metadata ? { ...metadata, activeRows, ftsRows } : undefined;
-}
-
-/** The worker owns these ordered raw rows; memory-backed transcripts never reopen a path. */
-export function prepareMemorySessionTranscriptProjection(
-  sessionId: string,
-  transcriptUpdatedAt: number | null,
-  rows: ReadonlyMap<number, SessionTranscriptProjectionRow>,
-  transcriptGeneration: string | null = null,
-): PreparedSessionTranscriptProjection | undefined {
-  return prepareProjectionSource({
-    sessionId,
-    transcriptGeneration,
-    transcriptUpdatedAt,
-    rows: () => rows.values(),
-    row: (seq) => rows.get(seq),
-  });
 }
 
 /** Reads and resolves one projection on a worker-owned SQLite snapshot. */

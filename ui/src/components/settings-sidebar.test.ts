@@ -4,6 +4,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../i18n/index.ts";
 import { pt_BR } from "../i18n/locales/pt-BR.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { AgentSelect } from "./agent-select.ts";
 import { renderSettingsSidebar } from "./settings-sidebar.ts";
 import "./tooltip.ts";
@@ -648,9 +649,17 @@ describe("Settings agent selector", () => {
       expect(
         selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label"),
       ).toContain("Main");
+      for (const item of selector.querySelectorAll<HTMLElement>('[role="menuitemradio"]')) {
+        item.scrollIntoView = vi.fn();
+      }
+      const trigger = selector.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
+      trigger.click();
+      await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
       const research = selector.querySelector<HTMLElement>('[aria-label="Research"]')!;
       research.click();
-      expect(props.settingsAgentSelection.set).toHaveBeenCalledWith("research");
+      await waitForSolid(() =>
+        expect(props.settingsAgentSelection.set).toHaveBeenCalledWith("research"),
+      );
       expect(props.onNavigate).not.toHaveBeenCalled();
     },
   );
